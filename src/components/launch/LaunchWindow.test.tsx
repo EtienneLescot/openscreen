@@ -114,6 +114,11 @@ vi.mock("@/native", () => ({
 	},
 }));
 
+const appInfoState = vi.hoisted(() => ({
+	value: { version: "1.9.6", canCheckForUpdates: true },
+}));
+const updateCheckMock = vi.hoisted(() => vi.fn(async () => undefined));
+
 const i18nState = vi.hoisted(() => ({
 	value: {
 		locale: "en",
@@ -132,7 +137,7 @@ vi.mock("@/i18n/loader", () => ({
 
 vi.mock("@/contexts/I18nContext", () => ({
 	useI18n: () => i18nState.value,
-	useScopedT: () => (key: string) => {
+	useScopedT: () => (key: string, vars?: Record<string, string | number>) => {
 		const translations: Record<string, string> = {
 			"sourceSelector.defaultSourceName": "Screen",
 			"recording.selectSource": "Please select a source to record",
@@ -158,6 +163,10 @@ vi.mock("@/contexts/I18nContext", () => ({
 			"deviceSettings.noMicrophones": "No microphone found",
 			"deviceSettings.preview": "Preview",
 			"deviceSettings.previewUnavailable": "Preview unavailable",
+			"deviceSettings.about": "About",
+			"deviceSettings.version": "Version {{version}}",
+			"deviceSettings.checkForUpdates": "Check for updates",
+			"deviceSettings.checkingForUpdates": "Checking…",
 			"audio.inputDevice": "Input device",
 			"webcam.cameraDevice": "Camera device",
 			"cursor.useEditableCursor": "Use editable cursor",
@@ -177,7 +186,11 @@ vi.mock("@/contexts/I18nContext", () => ({
 			"softwareEncoderFallback.dismiss": "Got it",
 			"softwareEncoderFallback.dontShowAgain": "Don't show again",
 		};
-		return translations[key] ?? key;
+		const value = translations[key] ?? key;
+		if (!vars) return value;
+		return value.replace(/\{\{(\w+)\}\}/g, (_, name: string) =>
+			String(vars[name] ?? `{{${name}}}`),
+		);
 	},
 }));
 
@@ -209,6 +222,8 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 			success: true,
 			available: linuxHelperAvailable.value,
 		})),
+		getAppInfo: vi.fn(async () => appInfoState.value),
+		checkForUpdates: updateCheckMock,
 		setHudOverlaySize: vi.fn(),
 		setHudOverlayIgnoreMouseEvents: vi.fn(),
 		onHudOverlayCursor: vi.fn((callback) => {
@@ -289,6 +304,9 @@ function resetLaunchMocks() {
 	i18nState.value.dismissSystemLocaleSuggestion.mockClear();
 	i18nState.value.resolveSystemLocaleSuggestion.mockClear();
 	linuxHelperAvailable.value = true;
+	appInfoState.value = { version: "1.9.6", canCheckForUpdates: true };
+	updateCheckMock.mockReset();
+	updateCheckMock.mockResolvedValue(undefined);
 	stubElectronAPI(vi.fn(async () => null));
 }
 
@@ -915,6 +933,64 @@ describe("LaunchWindow device settings", () => {
 		renderLaunchWindow();
 
 		expect(await screen.findByTestId("launch-device-settings-button")).toBeDisabled();
+	});
+
+	it("shows the running version and hands the update check to the main process", async () => {
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-device-settings-button"));
+		const panel = await screen.findByTestId("hud-device-settings");
+
+		expect(await within(panel).findByText("Version 1.9.6")).toBeInTheDocument();
+
+		fireEvent.click(within(panel).getByTestId("hud-check-for-updates"));
+
+		expect(updateCheckMock).toHaveBeenCalledTimes(1);
+	});
+
+	// A Microsoft Store, Flathub, Snap or Nix copy is kept current by its package manager, and
+	// pointing its user at a GitHub download starts a second, parallel install that then drifts
+	// forever. The version still shows — it is the answer to "what am I running?", not an offer.
+	it("offers no update check where a package manager owns the update", async () => {
+		appInfoState.value = { version: "1.9.6", canCheckForUpdates: false };
+
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-device-settings-button"));
+		const panel = await screen.findByTestId("hud-device-settings");
+
+		expect(await within(panel).findByText("Version 1.9.6")).toBeInTheDocument();
+		expect(within(panel).queryByTestId("hud-check-for-updates")).not.toBeInTheDocument();
+	});
+
+	it("reads as checking until the main process reports a verdict", async () => {
+		let settleCheck: (() => void) | undefined;
+		updateCheckMock.mockImplementation(
+			() =>
+				new Promise<undefined>((resolve) => {
+					settleCheck = () => resolve(undefined);
+				}),
+		);
+
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-device-settings-button"));
+		const panel = await screen.findByTestId("hud-device-settings");
+		const button = await within(panel).findByTestId("hud-check-for-updates");
+
+		fireEvent.click(button);
+
+		await waitFor(() => {
+			expect(button).toBeDisabled();
+		});
+		expect(button).toHaveTextContent("Checking…");
+
+		await act(async () => {
+			settleCheck?.();
+		});
+
+		expect(button).toBeEnabled();
+		expect(button).toHaveTextContent("Check for updates");
 	});
 });
 

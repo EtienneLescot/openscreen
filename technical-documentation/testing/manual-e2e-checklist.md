@@ -323,6 +323,17 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 - [ ] Select a different aspect ratio from the timeline aspect-ratio menu and confirm the preview frame changes shape.
 - [ ] Press `Esc` or click outside an open menu, popover, or dialog and confirm it closes.
 
+### App menu, About, and updates
+
+- [ ] On macOS, open the application menu and confirm About OpenScreen is followed by Check for Updates.
+- [ ] On Windows and Linux, open the Help menu and confirm it lists Check for Updates and About OpenScreen.
+- [ ] Open About and confirm it names the running version, the Electron/Chromium/Node versions, and the install channel.
+- [ ] On Windows and Linux, press Copy in the About box and confirm the clipboard holds that same block.
+- [ ] Open the HUD's device-settings panel and confirm its About row reports the same version.
+- [ ] Run Check for Updates from the menu, from the tray, and from the HUD panel, and confirm each reaches the same result dialog.
+- [ ] Start a second check while one is still running and confirm no second dialog appears.
+- [ ] On a Microsoft Store, Flathub, Snap, or Nix install, confirm no update affordance appears in the menu, the tray, or the HUD panel, while the version still shows.
+
 ### New effects and controls — v1.8.0
 
 - [ ] Set a zoom's custom scale beyond the preset levels, commit it, and confirm the preview scale and the retained value both follow.
