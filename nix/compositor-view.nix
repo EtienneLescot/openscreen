@@ -11,7 +11,8 @@
   ffmpeg,
   symlinkJoin,
   pkg-config,
-  patchelf,
+  rustfmt,
+  patchelfUnstable,
   binutils,
 }:
 
@@ -61,8 +62,18 @@ rustPlatform.buildRustPackage {
     # entry has no `force = true`, so the environment wins and this hook's value
     # is what applies here.
     rustPlatform.bindgenHook
+    # bindgen shells out to rustfmt and merely warns when it cannot find it.
+    # That warning is load-bearing here: prefix_ffmpeg_symbols in
+    # crates/compositor/build.rs matches lines beginning with exactly
+    # "    pub fn ", which is rustfmt's output and not bindgen's raw emission,
+    # so without it nothing gets prefixed and the build.rs assertion fires.
+    rustfmt
     pkg-config
-    patchelf
+    # patchelfUnstable, not patchelf: --rename-dynamic-symbols arrived in
+    # 0.18 and nixpkgs' stable patchelf is 0.15.2, which does not recognise the
+    # flag and quietly treats it as a filename --
+    #   patchelf: getting info about '--rename-dynamic-symbols': No such file
+    patchelfUnstable
     binutils # nm, for reading the ffmpeg symbol table
   ];
 
@@ -118,6 +129,11 @@ rustPlatform.buildRustPackage {
     for so in "$stage"/lib/*.so.*; do
       chmod u+w "$so"
       patchelf --rename-dynamic-symbols "$map" "$so"
+      # The unversioned name the linker resolves -lavformat through. Without it
+      # nothing links against these copies, and a cdylib tolerates undefined
+      # symbols, so the build succeeds and dlopen fails much later with
+      # "undefined symbol: osff_avformat_open_input" -- which is what happened.
+      ln -sf "$(basename "$so")" "$stage/lib/$(basename "$so" | sed 's/\.so\..*/.so/')"
     done
 
     # Headers from the real tree, libraries from the renamed one.
