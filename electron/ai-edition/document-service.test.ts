@@ -367,6 +367,23 @@ describe("DocumentService", () => {
 			const created = await service.createProject("P");
 			const withA = await service.addAsset(created.project.id, { path: "/tmp/a.mp4" });
 			const withB = await service.addAsset(created.project.id, { path: "/tmp/b.mp4" });
+			// Four clips that differ only in id / asset / four numbers.
+			const clip = (
+				id: string,
+				assetId: string,
+				[sourceStartSec, sourceEndSec]: [number, number],
+				[timelineStartSec, timelineEndSec]: [number, number],
+			) => ({
+				id,
+				assetId,
+				sourceStartSec,
+				sourceEndSec,
+				timelineStartSec,
+				timelineEndSec,
+				wordRefs: [],
+				origin: "user" as const,
+				reason: "test",
+			});
 			const assetA = withA.assets[0]?.id ?? "";
 			const assetB = withB.assets[1]?.id ?? "";
 			expect(assetA).toBeTruthy();
@@ -377,50 +394,10 @@ describe("DocumentService", () => {
 				timeline: {
 					...withB.timeline,
 					clips: [
-						{
-							id: "a_1",
-							assetId: assetA,
-							sourceStartSec: 0,
-							sourceEndSec: 2,
-							timelineStartSec: 0,
-							timelineEndSec: 2,
-							wordRefs: [],
-							origin: "user",
-							reason: "test",
-						},
-						{
-							id: "b_1",
-							assetId: assetB,
-							sourceStartSec: 10,
-							sourceEndSec: 14,
-							timelineStartSec: 2,
-							timelineEndSec: 6,
-							wordRefs: [],
-							origin: "user",
-							reason: "test",
-						},
-						{
-							id: "a_2",
-							assetId: assetA,
-							sourceStartSec: 2,
-							sourceEndSec: 3,
-							timelineStartSec: 6,
-							timelineEndSec: 7,
-							wordRefs: [],
-							origin: "user",
-							reason: "test",
-						},
-						{
-							id: "b_2",
-							assetId: assetB,
-							sourceStartSec: 20,
-							sourceEndSec: 22,
-							timelineStartSec: 7,
-							timelineEndSec: 9,
-							wordRefs: [],
-							origin: "user",
-							reason: "test",
-						},
+						clip("a_1", assetA, [0, 2], [0, 2]),
+						clip("b_1", assetB, [10, 14], [2, 6]),
+						clip("a_2", assetA, [2, 3], [6, 7]),
+						clip("b_2", assetB, [20, 22], [7, 9]),
 					],
 				},
 				zoomRanges: [
@@ -431,6 +408,18 @@ describe("DocumentService", () => {
 						sourceEndSec: 21.5,
 						startMs: 7500,
 						endMs: 8500,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+					},
+					// Bare `clipId`, no source range: not an anchor, so removing the asset that owns
+					// `a_2` must NOT take it. This is what routes #249's fix through `removeAsset`
+					// -- the fully-anchored zoom above survives either way, so on its own it pins
+					// nothing about the predicate.
+					{
+						id: "zoom_partial_a_2",
+						clipId: "a_2",
+						startMs: 6000,
+						endMs: 7000,
 						depth: 3,
 						focus: { cx: 0.5, cy: 0.5 },
 					},
@@ -445,6 +434,9 @@ describe("DocumentService", () => {
 			]);
 			expect(after.zoomRanges).toEqual([
 				expect.objectContaining({ id: "zoom_b_2", startMs: 4500, endMs: 5500 }),
+				// Survives, and keeps its raw ms untouched -- now past the end of a 6s timeline.
+				// That is the documented trade-off in `removeClip`: unreachable beats deleted.
+				expect.objectContaining({ id: "zoom_partial_a_2", startMs: 6000, endMs: 7000 }),
 			]);
 		});
 
