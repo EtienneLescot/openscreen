@@ -293,6 +293,96 @@ final class AudioTrackMixerTests: XCTestCase {
 		}
 	}
 
+	// MARK: - What the take reports about its sources
+
+	/// The numbers that answer the ScreenCaptureKit gapping question have to measure what the
+	/// source *delivered*, not what came out of the mixer.
+	///
+	/// `SourceTimeline.ingest` zero-fills a hole up to `maxSilencePadFrames` into the source's
+	/// own buffer, so a hole read off the mixed output comes back as covered — and that is the
+	/// reading that would report "the tap streams silence" about a tap that had stopped for a
+	/// second and a half, which is the one thing this measurement exists to tell apart. Both
+	/// bursts are ingested before the clock moves, so the padding path is the one taken.
+	func testASubTwoSecondDeliveryHoleIsReportedAsUndelivered() {
+		let sink = RecordingSink()
+		let clock = TestClock(.zero)
+		let mixer = makeMixer(sink: sink, clock: clock, includesMicrophone: false)
+		mixer.beginTimeline(at: clock.now)
+
+		mixer.ingest(
+			makeSourceBuffer(burst(seconds: 0.5, left: 0.5, right: 0.5), at: .zero, nonInterleaved: true),
+			from: .system
+		)
+		mixer.ingest(
+			makeSourceBuffer(
+				burst(seconds: 0.5, left: 0.5, right: 0.5),
+				at: CMTime(seconds: 1.5, preferredTimescale: 48_000),
+				nonInterleaved: true
+			),
+			from: .system
+		)
+
+		clock.advance(seconds: 3)
+		mixer.finish(atSourceTime: clock.now)
+
+		let report = mixer.deliveryReport(for: .system)
+		XCTAssertEqual(report.trackSeconds, 3.0, accuracy: 0.011)
+		// The 1.0 s hole between the bursts plus the 1.0 s tail after the second one. Measured
+		// off the mixed output instead, the padded hole would vanish and this would read 1.0.
+		XCTAssertEqual(report.undeliveredSeconds, 2.0, accuracy: 0.011)
+		XCTAssertEqual(report.longestHoleSeconds, 1.0, accuracy: 0.011)
+		XCTAssertEqual(report.droppedSeconds, 0, accuracy: 0.011)
+	}
+
+	/// A source that never delivers anything reports the whole take as undelivered — the
+	/// reading that would say ScreenCaptureKit gaps its silence outright.
+	func testASourceThatNeverDeliversReportsTheWholeTakeUndelivered() {
+		let sink = RecordingSink()
+		let clock = TestClock(.zero)
+		let mixer = makeMixer(sink: sink, clock: clock, includesMicrophone: false)
+		mixer.beginTimeline(at: clock.now)
+
+		clock.advance(seconds: 2)
+		mixer.finish(atSourceTime: clock.now)
+
+		let report = mixer.deliveryReport(for: .system)
+		XCTAssertEqual(report.undeliveredSeconds, 2.0, accuracy: 0.011)
+		XCTAssertEqual(report.longestHoleSeconds, 2.0, accuracy: 0.011)
+	}
+
+	/// Audio that arrives after the cursor has already emitted its span cannot be placed, and
+	/// that is the one path here that loses captured sound. It is reported rather than silent,
+	/// because anything above zero means the grace is too short for that capture path.
+	func testAudioArrivingAfterItsChunkWentOutIsCountedAsDropped() {
+		let sink = RecordingSink()
+		let clock = TestClock(.zero)
+		let mixer = makeMixer(sink: sink, clock: clock, includesMicrophone: false)
+		mixer.beginTimeline(at: clock.now)
+
+		mixer.ingest(
+			makeSourceBuffer(burst(seconds: 0.5, left: 0.5, right: 0.5), at: .zero, nonInterleaved: true),
+			from: .system
+		)
+		// Long enough past the grace that the source is written off and the cursor runs on.
+		clock.advance(seconds: 2)
+		mixer.tick()
+
+		// …and only now does it hand over the span it went quiet for, which is already behind
+		// the cursor and cannot be placed.
+		mixer.ingest(
+			makeSourceBuffer(
+				burst(seconds: 0.5, left: 0.5, right: 0.5),
+				at: CMTime(seconds: 0.6, preferredTimescale: 48_000),
+				nonInterleaved: true
+			),
+			from: .system
+		)
+		clock.advance(seconds: 1)
+		mixer.finish(atSourceTime: clock.now)
+
+		XCTAssertEqual(mixer.deliveryReport(for: .system).droppedSeconds, 0.5, accuracy: 0.011)
+	}
+
 	// MARK: - Pause
 
 	/// A pause stops the clock instead of resetting it. `ScreenCaptureRecorder.timelineNow()`

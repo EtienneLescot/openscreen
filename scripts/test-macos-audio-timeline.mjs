@@ -226,9 +226,23 @@ function armPlaybackOnce() {
 	}, PLAY_AT_MS);
 }
 
-function consume(chunk) {
-	helperOutput += chunk.toString();
-	for (const line of chunk.toString().split("\n")) {
+/**
+ * Reassembles the helper's NDJSON across chunk boundaries.
+ *
+ * A `data` chunk is whatever the pipe had ready, not a whole line, so splitting each chunk on
+ * its own newlines drops any event a read happened to bisect — both halves parse as neither.
+ * Losing `recording-started` that way leaves the tone unarmed and the run hangs until the
+ * 30 s timeout kills the helper, which reads as "the helper never started" rather than as a
+ * framing bug. Only stdout carries events; stderr is diagnostics and is kept as raw text.
+ */
+let stdoutTail = "";
+function consumeStdout(chunk) {
+	const text = chunk.toString();
+	helperOutput += text;
+	stdoutTail += text;
+	const lines = stdoutTail.split("\n");
+	stdoutTail = lines.pop() ?? "";
+	for (const line of lines) {
 		const trimmed = line.trim();
 		if (!trimmed.startsWith("{")) continue;
 		try {
@@ -239,8 +253,10 @@ function consume(chunk) {
 	}
 	armPlaybackOnce();
 }
-proc.stdout.on("data", consume);
-proc.stderr.on("data", consume);
+proc.stdout.on("data", consumeStdout);
+proc.stderr.on("data", (chunk) => {
+	helperOutput += chunk.toString();
+});
 
 // If the helper never announces itself, nothing would ever stop it.
 const startTimeout = setTimeout(() => {
@@ -321,6 +337,15 @@ function firstAudibleSecond() {
 
 proc.on("close", (code, signal) => {
 	clearTimeout(startTimeout);
+	// The summary is the last thing the helper writes, so a final line without its newline
+	// would otherwise sit in the tail buffer and never be read.
+	if (stdoutTail.trim().startsWith("{")) {
+		try {
+			helperEvents.push(JSON.parse(stdoutTail.trim()));
+		} catch {
+			// Truncated on exit; nothing to recover.
+		}
+	}
 	const problems = [];
 	if (!playbackArmed) problems.push("recording never started, so no tone was played");
 	if (spawnError) problems.push(`could not start the helper: ${spawnError}`);
@@ -352,11 +377,19 @@ proc.on("close", (code, signal) => {
 		);
 	}
 
-	// The mixer's own account of how much of the track it filled with silence because no
-	// source covered it. On a take where nothing plays, this is the measurement that says
-	// whether ScreenCaptureKit's system-audio output is silence-gapped the way the WASAPI
-	// loopback tap is, or whether it streams silence continuously.
+	// The mixer's own account of what the system-audio tap actually handed over. On a take
+	// where nothing plays, this is the measurement that says whether ScreenCaptureKit's
+	// system-audio output is silence-gapped the way the WASAPI loopback tap is, or whether it
+	// streams silence continuously — and `droppedSeconds` is the cost side: audio the tap
+	// delivered too late to place, which should be zero.
 	const summary = helperEvents.findLast((event) => event.event === "audio-timeline");
+	const system = summary?.system;
+	const dropped = Number(system?.droppedSeconds ?? 0);
+	if (dropped > 0) {
+		problems.push(
+			`${dropped.toFixed(2)}s of captured audio arrived too late to be placed — the emission grace is too short for this tap`,
+		);
+	}
 
 	fs.rmSync(outputPath, { force: true });
 	console.log(
@@ -364,12 +397,17 @@ proc.on("close", (code, signal) => {
 			`video=${video?.toFixed(2) ?? "(none)"}s  ` +
 			`tone at ${toneAt === null ? "(none)" : `${toneAt.toFixed(2)}s`}, played at ${playedAt.toFixed(2)}s`,
 	);
-	if (summary) {
+	if (system) {
+		const track = Number(summary.trackSeconds ?? 0);
+		const undelivered = Number(system.undeliveredSeconds ?? 0);
 		console.log(
-			`      system audio delivered nothing for ${Number(summary.systemUncoveredSeconds ?? 0).toFixed(2)}s ` +
-				`of a ${Number(summary.trackSeconds ?? 0).toFixed(2)}s track ` +
-				`(near the whole track means ScreenCaptureKit gaps its silence, like WASAPI loopback;\n` +
-				`       near zero means it streams silence and only the take's edges needed the clock)`,
+			`      system audio delivered nothing for ${undelivered.toFixed(2)}s of a ${track.toFixed(2)}s ` +
+				`track, longest hole ${Number(system.longestHoleSeconds ?? 0).toFixed(2)}s\n` +
+				`      => ${
+					undelivered > track / 2
+						? "ScreenCaptureKit GAPS its silence, like WASAPI loopback"
+						: "ScreenCaptureKit STREAMS silence; only the take's edges needed the clock"
+				}`,
 		);
 	}
 	for (const problem of problems) console.log(`      -> ${problem}`);
