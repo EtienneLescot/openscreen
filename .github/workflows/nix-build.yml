@@ -25,11 +25,7 @@ name: Nix build
 on:
   workflow_dispatch:
   push:
-    # claude/agitated-dijkstra-d63315 is back on the list for the compositor
-    # work: the derivation gains a Rust build that cannot be exercised from a
-    # Windows workstation, and CI is the only loop available until nix is
-    # installed locally. Take it off again when that work lands.
-    branches: [main, claude/agitated-dijkstra-d63315]
+    branches: [main]
   schedule:
     # Mondays, 06:00 UTC. Drift here comes from the lockfile and from the app's
     # own build requirements, neither of which respects a release cadence.
