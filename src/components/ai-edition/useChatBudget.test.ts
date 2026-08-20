@@ -57,19 +57,31 @@ describe("useChatBudget", () => {
 		expect(chatBudgetMock).not.toHaveBeenCalled();
 	});
 
-	it("keeps the transcript estimate when native usage is unavailable", async () => {
+	it("tracks the transcript while native usage has never arrived", async () => {
+		// The transcript has to keep MOVING, not just happen to match: asserting 100
+		// before and after a null answer cannot tell "fell back correctly" apart from
+		// "the effect never ran".
 		chatBudgetMock.mockResolvedValue(undefined);
-		const visibleMessages = message("x".repeat(400));
-		const { result } = renderHook(() =>
-			useChatBudget({ projectId: "project_1", sessionId: "session_1", messages: visibleMessages }),
+		const { result, rerender } = renderHook(
+			({ messages }) => useChatBudget({ projectId: "project_1", sessionId: "session_1", messages }),
+			{ initialProps: { messages: message("x".repeat(400)) } },
 		);
-
 		await waitFor(() => expect(chatBudgetMock).toHaveBeenCalledTimes(1));
-		await act(async () => Promise.resolve());
 		expect(result.current.usedTokens).toBe(100);
+
+		rerender({ messages: message("x".repeat(800)) });
+		await waitFor(() => expect(result.current.usedTokens).toBe(200));
+		expect(chatBudgetMock).toHaveBeenCalledTimes(2);
 	});
 
-	it("falls back to the transcript estimate when native usage rejects", async () => {
+	it("keeps the last native number when a refresh fails, instead of swapping quantity", async () => {
+		// The two numbers are not interchangeable. After a compaction the native one is
+		// roughly half the transcript estimate, so silently substituting the transcript
+		// on a failed refresh made the compaction visibly un-happen -- the PR's own
+		// premise turned against it. A stale native number is the honest answer here.
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {
+			// swallowed: the point is that it is CALLED, not what it prints
+		});
 		chatBudgetMock
 			.mockResolvedValueOnce({
 				usedTokens: 12,
@@ -85,8 +97,36 @@ describe("useChatBudget", () => {
 		await waitFor(() => expect(result.current.usedTokens).toBe(12));
 
 		rerender({ messages: message("x".repeat(800)) });
-		await waitFor(() => expect(result.current.usedTokens).toBe(200));
-		expect(chatBudgetMock).toHaveBeenCalledTimes(2);
+		await waitFor(() => expect(chatBudgetMock).toHaveBeenCalledTimes(2));
+		await act(async () => Promise.resolve());
+		expect(result.current.usedTokens).toBe(12);
+		// And it is not silent: renaming the bridge action must leave a trace.
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("drops a native number when the session changes", async () => {
+		// The kept-on-failure number belongs to one conversation. Session 2's first
+		// refresh never answering must not leave session 1's number on screen.
+		const pending = deferred<never>();
+		chatBudgetMock
+			.mockResolvedValueOnce({
+				usedTokens: 12,
+				budgetTokens: 80_000,
+				ratio: 0.00015,
+				fillPercent: 0.015,
+			})
+			.mockReturnValueOnce(pending.promise);
+		const visibleMessages = message("x".repeat(400));
+		const { result, rerender } = renderHook(
+			({ sessionId }) =>
+				useChatBudget({ projectId: "project_1", sessionId, messages: visibleMessages }),
+			{ initialProps: { sessionId: "session_1" } },
+		);
+		await waitFor(() => expect(result.current.usedTokens).toBe(12));
+
+		rerender({ sessionId: "session_2" });
+		expect(result.current.usedTokens).toBe(100);
 	});
 
 	it("ignores a late response from the previously selected session", async () => {
