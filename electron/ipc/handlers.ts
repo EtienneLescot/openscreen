@@ -72,6 +72,7 @@ import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/rec
 import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { toHelperRect } from "../native-bridge/helperCoordinates";
+import { scoreDeviceNameMatch } from "../recording/deviceNameMatching";
 import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
@@ -960,40 +961,6 @@ function isWindowsGraphicsCaptureOsSupported() {
 	return Number.isFinite(build) && build >= 19041;
 }
 
-function normalizeNativeDeviceName(value: string) {
-	return value
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, " ")
-		.trim();
-}
-
-function scoreNativeDeviceName(candidateName: string, candidateId: string, requestedName?: string) {
-	const candidate = normalizeNativeDeviceName(candidateName);
-	const id = normalizeNativeDeviceName(candidateId);
-	const requested = normalizeNativeDeviceName(requestedName ?? "");
-	if (!requested) {
-		return 0;
-	}
-	if (candidate === requested) {
-		return 1000;
-	}
-	if (candidate.includes(requested) || requested.includes(candidate)) {
-		return 900;
-	}
-	if (id.includes(requested) || requested.includes(id)) {
-		return 800;
-	}
-
-	return requested
-		.split(/\s+/)
-		.filter((word) => word.length > 1 && !["camera", "webcam", "video", "input"].includes(word))
-		.reduce((score, word) => {
-			if (candidate.includes(word)) return score + 100;
-			if (id.includes(word)) return score + 50;
-			return score;
-		}, 0);
-}
-
 function queryDirectShowVideoInputRegistry() {
 	return new Promise<string>((resolve) => {
 		const proc = spawn(
@@ -1038,7 +1005,7 @@ async function resolveDirectShowWebcamClsid(deviceName?: string) {
 	let best: { clsid: string; friendlyName?: string; score: number } | null = null;
 	for (const entry of entries) {
 		if (!entry.clsid) continue;
-		const score = scoreNativeDeviceName(entry.friendlyName ?? "", entry.clsid, deviceName);
+		const score = scoreDeviceNameMatch(entry.friendlyName ?? "", entry.clsid, deviceName);
 		if (!best || score > best.score) {
 			best = { clsid: entry.clsid, friendlyName: entry.friendlyName, score };
 		}

@@ -71,6 +71,7 @@
 		"test:wgc-mixed-audio:win": "node scripts/test-windows-wgc-helper.mjs --system-audio --microphone",
 		"test:wgc-audio-timeline:win": "node scripts/test-windows-audio-timeline.mjs",
 		"test:wgc-webcam:win": "node scripts/test-windows-wgc-helper.mjs --webcam",
+		"test:wgc-camera-selection:win": "node scripts/test-windows-camera-selection.mjs",
 		"test:wgc-full:win": "node scripts/test-windows-wgc-helper.mjs --webcam --system-audio --microphone",
 		"capture:openscreen-preview": "node scripts/capture-openscreen-preview.mjs",
 		"inspect:cursor-click-bounce": "node scripts/inspect-native-cursor-click-bounce.mjs",
