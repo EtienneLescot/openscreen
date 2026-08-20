@@ -141,13 +141,19 @@ export function LaunchWindow() {
 	// on its very first frame, and that `webcamDeviceId` is already the default
 	// device when the button is clicked — so enabling the camera acquires the
 	// right stream once instead of acquiring the default and then re-acquiring.
+	//
+	// Passing `webcamDeviceId` as the preferred device is what keeps the pick the
+	// user made in the editor's Rec stage: this window is destroyed and rebuilt
+	// for every recording, so the enumeration default would otherwise revert the
+	// camera to whatever the OS lists first on each take.
 	const {
 		devices: cameraDevices,
+		selectedDevice: selectedCamera,
 		selectedDeviceId: selectedCameraId,
 		setSelectedDeviceId: setSelectedCameraId,
 		isLoading: isCameraDevicesLoading,
 		error: cameraDevicesError,
-	} = useCameraDevices(true);
+	} = useCameraDevices(true, webcamDeviceId);
 	// The microphone list stays lazy: enumerating it asks for mic permission,
 	// which would light the OS "in use" indicator just for opening the HUD.
 	const {
@@ -163,12 +169,18 @@ export function LaunchWindow() {
 		}
 	}, [selectedMicId, micDevices, setMicrophoneDeviceId, setMicrophoneDeviceName]);
 
+	// Keyed on the chosen device's own fields, never on the `cameraDevices` array.
+	// That array is rebuilt on every `devicechange`, and mirroring the selection
+	// back on each rebuild put this effect in a tug-of-war with the preference
+	// adoption inside `useCameraDevices`: the two wrote each other's value on
+	// every commit and the HUD spun without ever settling.
+	const selectedCameraLabel = selectedCamera?.label;
 	useEffect(() => {
 		if (selectedCameraId) {
 			setWebcamDeviceId(selectedCameraId);
-			setWebcamDeviceName(cameraDevices.find((d) => d.deviceId === selectedCameraId)?.label);
+			setWebcamDeviceName(selectedCameraLabel);
 		}
-	}, [selectedCameraId, cameraDevices, setWebcamDeviceId, setWebcamDeviceName]);
+	}, [selectedCameraId, selectedCameraLabel, setWebcamDeviceId, setWebcamDeviceName]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -628,10 +640,31 @@ export function LaunchWindow() {
 		setMicrophoneEnabled(!microphoneEnabled);
 	}, [controlsLocked, microphoneEnabled, setMicrophoneEnabled]);
 
+	/**
+	 * Write a camera choice back to the main-process recording prefs.
+	 *
+	 * The HUD used to be a reader of that SSOT and never a writer, while being
+	 * destroyed and rebuilt for every recording — so a camera picked here lived
+	 * exactly as long as one take, and the editor's Rec stage kept showing the
+	 * previous device. Best-effort on purpose: failing to persist a preference
+	 * must not stop a recording.
+	 */
+	const persistCameraPrefs = useCallback(
+		(patch: { camEnabled?: boolean; camDeviceId?: string }) => {
+			void window.electronAPI?.setRecordingPrefs?.(patch).catch((error) => {
+				console.warn("Failed to persist the camera preference:", error);
+			});
+		},
+		[],
+	);
+
 	const toggleWebcam = useCallback(() => {
 		if (controlsLocked) return;
-		void setWebcamEnabled(!webcamEnabled);
-	}, [controlsLocked, setWebcamEnabled, webcamEnabled]);
+		const next = !webcamEnabled;
+		void setWebcamEnabled(next).then((ok) => {
+			if (ok) persistCameraPrefs({ camEnabled: next });
+		});
+	}, [controlsLocked, persistCameraPrefs, setWebcamEnabled, webcamEnabled]);
 
 	// Selecting a device never switches it on. If the device is already live the
 	// recorder re-acquires on the id change; if it isn't, this just records which
@@ -650,8 +683,9 @@ export function LaunchWindow() {
 			setSelectedCameraId(device.deviceId);
 			setWebcamDeviceId(device.deviceId);
 			setWebcamDeviceName(device.label);
+			persistCameraPrefs({ camDeviceId: device.deviceId });
 		},
-		[setSelectedCameraId, setWebcamDeviceId, setWebcamDeviceName],
+		[persistCameraPrefs, setSelectedCameraId, setWebcamDeviceId, setWebcamDeviceName],
 	);
 
 	const toggleDeviceSettings = useCallback(() => {
