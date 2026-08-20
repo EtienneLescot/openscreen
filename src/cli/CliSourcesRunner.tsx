@@ -56,8 +56,13 @@ async function enumerateMicrophones(): Promise<{
 	// indistinguishable from a genuinely mic-less machine for anyone reading the
 	// -o file. The sentinel keeps "we stopped asking" separate from "there are
 	// none", and reports it the way a denied permission already reports it.
+	// The .catch for the same reason as the re-enumeration below: withTimeout is a
+	// Promise.race, so it adopts a rejection and the fallback applies only to
+	// silence. A backend that answers with an error rather than not answering is
+	// the same situation from the caller's side -- no device list -- and must not
+	// take the displays and windows down with it.
 	const initialInputs = await withTimeout<MediaDeviceInfo[] | null>(
-		listInputs(),
+		listInputs().catch(() => null),
 		null,
 		"device enumeration",
 		MICROPHONE_TIMEOUT_MS,

@@ -445,11 +445,25 @@ export function runCli(command: CliCommand): void {
 						// the ENOENT lands in the catch below, which clears result.success
 						// and so skips printSources and the `done` payload alike.
 						await fs.mkdir(path.dirname(command.jsonOutPath), { recursive: true });
-						await fs.writeFile(
-							command.jsonOutPath,
-							`${JSON.stringify(result.sources, null, 2)}\n`,
-							"utf8",
-						);
+						// Write beside the target and rename over it. writeFile truncates
+						// first, so a failure part-way through -- a full disk is the easy
+						// case -- would leave a half-written file where docs/cli.md promises
+						// an earlier run's result is untouched by a later failure. rename is
+						// atomic within a directory, so the reader sees the old file or the
+						// new one and never a torn one.
+						const tmpOutPath = `${command.jsonOutPath}.${process.pid}.tmp`;
+						try {
+							await fs.writeFile(
+								tmpOutPath,
+								`${JSON.stringify(result.sources, null, 2)}\n`,
+								"utf8",
+							);
+							await fs.rename(tmpOutPath, command.jsonOutPath);
+						} catch (writeError) {
+							// Best-effort: the original error is what the caller needs to see.
+							await fs.rm(tmpOutPath, { force: true }).catch(() => undefined);
+							throw writeError;
+						}
 					}
 				} catch (error) {
 					result.success = false;

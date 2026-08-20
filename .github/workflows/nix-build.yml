@@ -66,6 +66,11 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          # checkout writes the job token into .git/config by default. This job
+          # builds the checked-out tree and then *runs the produced binary*, so a
+          # persisted token sits within reach of that code. Nothing here pushes.
+          persist-credentials: false
 
       - uses: cachix/install-nix-action@v27
         with:
@@ -101,8 +106,16 @@ jobs:
           # check that exists to catch drift, and one that can redden the export
           # assertion for a reason unrelated to nix/package.nix.
           MESA=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#mesa)
+          # --print-out-paths prints one line per output. Keep the first, or a
+          # multi-output mesa turns $MESA into a newline-joined argument and the
+          # find below fails on a path that does not exist -- taking the step down
+          # before the diagnostic branch can say why.
+          MESA=${MESA%%$'\n'*}
           echo "mesa: $MESA"
-          ICD=$(find "$MESA" -name 'lvp_icd*.json' | head -1)
+          # -print -quit rather than `| head -1`: find stops itself at the first
+          # match, so there is no pipe whose status pipefail can propagate into the
+          # assignment and no SIGPIPE to reason about.
+          ICD=$(find "$MESA" -name 'lvp_icd*.json' -print -quit)
           if [ -z "$ICD" ]; then
             echo "ICDs actually present:"
             find "$MESA" -name '*_icd*.json' || true
@@ -198,6 +211,9 @@ jobs:
           # nothing at all, so the question is how far the main process got, and
           # the last milestone before the kill is the answer.
           ATTEMPTS=5
+          # Named once so the invocation and the message that reports a kill
+          # cannot drift apart -- they already had.
+          SOURCES_TIMEOUT=120
           HUNG=0
           OK=0
           FAILED=0
@@ -210,14 +226,14 @@ jobs:
             # path), and 60 left barely 25s for a cold Electron start under Xvfb
             # from a 1.7G closure -- so the outer kill could fire while every
             # internal bound was working.
-            CLI_TIMEOUT=120 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>"/tmp/sources.$i.err" || RC=$?
+            CLI_TIMEOUT=$SOURCES_TIMEOUT OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>"/tmp/sources.$i.err" || RC=$?
             # Every non-zero outcome is a failure. The kill is tracked on top of
             # that rather than instead of it, because it says something different:
             # the run never got far enough to report a reason at all.
             if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
               FAILED=$((FAILED + 1))
               HUNG=$((HUNG + 1))
-              echo "HUNG after 60s. Milestones reached:"
+              echo "HUNG after ${SOURCES_TIMEOUT}s. Milestones reached:"
               # Read from stdout, not stderr. The probe above shows this host's
               # xvfb-run folds the command's stderr into stdout, so the stderr
               # capture is empty and every milestone lands in the other file.
