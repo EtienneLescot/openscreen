@@ -284,6 +284,54 @@ jobs:
           cd crates
           cargo build -p compositor-view-napi --release
 
+  # The Linux capture helper is a SEPARATE cargo workspace (its Cargo.toml
+  # declares its own empty `[workspace]`, see the rationale at the top of that
+  # file), so `cargo test` from `crates/` never reaches it and the job above
+  # cannot cover it. Until this existed, nothing in CI compiled
+  # `csrc/pw_shim.c` or ran a single one of the crate's tests: the shim is the
+  # code that bounds-checks pixel buffers a compositor writes into our address
+  # space, and a plain C compile error in it would have merged green.
+  #
+  # No libpipewire package is installed on purpose. The shim resolves every
+  # libpipewire symbol with dlsym at runtime and compiles against the vendored
+  # headers, which is exactly what makes the crate buildable on a machine that
+  # has never seen libpipewire-0.3-dev — this job proves that property holds.
+  # The one test that does need a live daemon skips itself without one.
+  rust-linux-pipewire-helper:
+    name: Rust test (Linux PipeWire helper)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # No ./.github/actions/setup: `fetch-ffmpeg.mjs` imports only node
+      # builtins, so `npm ci` would be a minute of install for nothing.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      # libclang-dev, not libclang1: bindgen needs libclang to read the ffmpeg
+      # headers, and it is the -dev package that ALSO ships clang's built-in
+      # headers. Without them bindgen fails on `stddef.h file not found`.
+      - name: Install libclang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libclang-dev
+      # The crate links ffmpeg (it encodes H.264 in-process); build.rs points
+      # RUNPATH at the vendored lib dir, so no LD_LIBRARY_PATH is needed to run
+      # the test binary afterwards.
+      - name: Vendor the pinned ffmpeg SDK
+        run: npm run fetch:ffmpeg:sdk
+      - name: Resolve libclang for bindgen
+        run: |
+          # `sort -V | tail -1`, not `find | head -1`: the runner image carries
+          # several LLVMs and filesystem order is not sorted, so we could pick a
+          # different version from the one apt just installed. clang's built-in
+          # headers are tied to the libclang version, so the symptom would have
+          # been `stddef.h file not found`, which does not name its cause.
+          libclang=$(ls -1 /usr/lib/llvm-*/lib/libclang.so 2>/dev/null | sort -V | tail -1)
+          test -n "$libclang" || { echo "libclang not found after install"; exit 1; }
+          echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
+      - name: cargo test (PipeWire helper)
+        run: cargo test --manifest-path electron/native/pipewire-capture/Cargo.toml
+
   semantic-pr:
     name: Validate PR title (semantic)
     runs-on: ubuntu-latest
