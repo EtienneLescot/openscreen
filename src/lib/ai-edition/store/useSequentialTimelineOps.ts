@@ -12,6 +12,20 @@
 // reject the promise handed to the caller; both call sites `void` it, so those remain
 // unhandled rejections. They are also the two failures that mean the code is broken
 // rather than the disk, so they belong in the console.
+//
+// The chain is exposed as `enqueue` as well as `apply`, because the race
+// belongs to the DOCUMENT, not to AxcutTimelineOperation: every timeline
+// edit is a read-modify-write of the whole document, so a mutation that
+// serialises on its own second queue still clobbers one running on this
+// one. `insertClipAt` is the case in point — it can't be expressed as an
+// operation, since it carries a background duration probe, but it has to
+// share the queue with the ops. Anything that reads the doc and saves it
+// back belongs here.
+//
+// Errors are swallowed when advancing the queue ref so a failed save
+// doesn't poison the queue (the next call still has a resolved promise
+// to chain off). The original promise returned to the caller is NOT
+// swallowed — the caller can await it and observe the rejection.
 
 import { useCallback, useRef } from "react";
 import type { AxcutTimelineOperation } from "@/lib/ai-edition/document/operations";
@@ -32,6 +46,17 @@ export interface SequentialTimelineOps {
 	 * caller that needs to tell them apart has to widen this return type first.
 	 */
 	apply: (op: AxcutTimelineOperation) => Promise<AxcutDocument | null>;
+
+	/**
+	 * Queue a document mutation that isn't an `AxcutTimelineOperation` on
+	 * the same chain `apply` uses, so the two can't overwrite each other.
+	 *
+	 * `task` runs only once the previous queued call has settled. Read the
+	 * document — and anything derived from it, an append index included —
+	 * inside `task` rather than closing over it: a value captured at call
+	 * time is the pre-mutation one, which is the whole race.
+	 */
+	enqueue: <T>(task: () => Promise<T> | T) => Promise<T>;
 }
 
 export function useSequentialTimelineOps(options: {
@@ -44,30 +69,35 @@ export function useSequentialTimelineOps(options: {
 	const { fallbackDocument, saveDocument } = options;
 	const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
 
+	const enqueue = useCallback(<T>(task: () => Promise<T> | T): Promise<T> => {
+		const queued = saveQueueRef.current.then(() => task());
+		// Swallow rejection when advancing the queue so a failed save
+		// doesn't poison the queue — the next call still has a
+		// resolved promise to chain off. The original `queued` is
+		// returned to the caller, who can await it and observe the
+		// rejection.
+		saveQueueRef.current = queued.then(
+			() => undefined,
+			() => undefined,
+		);
+		return queued;
+	}, []);
+
 	const apply = useCallback(
-		(op: AxcutTimelineOperation): Promise<AxcutDocument | null> => {
-			const queued = saveQueueRef.current
-				.then(() => import("@/lib/ai-edition/document/operations"))
-				.then(async ({ applyTimelineOperation }) => {
-					// Read the doc inside the chain. The store holds the
-					// latest committed state because the previous call's
-					// save has already resolved by the time this .then
-					// runs — see the file header for the race this fixes.
-					const doc = useProjectStore.getState().document ?? fallbackDocument;
-					if (!doc) return null;
-					const applied = applyTimelineOperation(doc, op);
-					return (await saveDocument(applied.document)) ? applied.document : null;
-				});
-			// Keep operation/import errors from poisoning the queue -- the next call still
-			// needs a resolved promise to chain off. Save failures already resolve to null.
-			saveQueueRef.current = queued.then(
-				() => undefined,
-				() => undefined,
-			);
-			return queued;
-		},
-		[fallbackDocument, saveDocument],
+		(op: AxcutTimelineOperation): Promise<AxcutDocument | null> =>
+			enqueue(async () => {
+				const { applyTimelineOperation } = await import("@/lib/ai-edition/document/operations");
+				// Read the doc inside the chain. The store holds the
+				// latest committed state because the previous call's
+				// save has already resolved by the time this runs —
+				// see the file header for the race this fixes.
+				const doc = useProjectStore.getState().document ?? fallbackDocument;
+				if (!doc) return null;
+				const applied = applyTimelineOperation(doc, op);
+				return (await saveDocument(applied.document)) ? applied.document : null;
+			}),
+		[enqueue, fallbackDocument, saveDocument],
 	);
 
-	return { apply };
+	return { apply, enqueue };
 }
