@@ -2,8 +2,8 @@ import { ArrowLeft, Check, Film, Loader2, MessageSquare, Plus, Search, X } from 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
+import { useEditorDialogActions, useEditorDialogSection } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
-import { useProviderSettings } from "@/contexts/ProviderSettingsContext";
 import type { AxcutAsset } from "@/lib/ai-edition/schema";
 import {
 	applyAgentDocumentIfCurrent,
@@ -738,8 +738,11 @@ function ChatStripPanel() {
 	const [busy, setBusy] = useState(false);
 	const [llmConfig, setLlmConfig] = useState<AiEditionLlmConfig | null>(null);
 	// The dialog itself is mounted in App.tsx so the app menu can reach it from every mode
-	// (issue #420); this panel only asks for it to be opened.
-	const { isProviderSettingsOpen, openProviderSettings } = useProviderSettings();
+	// (issue #420); this panel only asks for it to be opened, and watches it close.
+	const dialogSection = useEditorDialogSection();
+	const { openDialog } = useEditorDialogActions();
+	const providerSettingsOpen = dialogSection === "providers";
+	const openProviderSettings = useCallback(() => openDialog("providers"), [openDialog]);
 	const [chatsOpen, setChatsOpen] = useState(false);
 	const [sessions, setSessions] = useState<
 		Array<{ id: string; title: string; messageCount: number; createdAt: string }>
@@ -811,19 +814,13 @@ function ChatStripPanel() {
 		}
 	}, []);
 
+	// On mount, and again every time the provider dialog closes. Connecting a provider there is
+	// what makes the composer usable here and what fills the model pill, and the dialog no
+	// longer hangs off this component, so there is no onClose to do it from. "Not open" covers
+	// both events at once, which is why there is no ref here watching for the falling edge.
 	useEffect(() => {
-		void refreshLlm();
-	}, [refreshLlm]);
-
-	// Re-read after the dialog closes. Connecting a provider there is what makes the composer
-	// usable here, and the dialog no longer hangs off this component, so there is no onClose to
-	// do it from — the falling edge of the lifted state is the same event.
-	const providerSettingsWasOpen = useRef(isProviderSettingsOpen);
-	useEffect(() => {
-		const wasOpen = providerSettingsWasOpen.current;
-		providerSettingsWasOpen.current = isProviderSettingsOpen;
-		if (wasOpen && !isProviderSettingsOpen) void refreshLlm();
-	}, [isProviderSettingsOpen, refreshLlm]);
+		if (!providerSettingsOpen) void refreshLlm();
+	}, [providerSettingsOpen, refreshLlm]);
 
 	// ponytail: subscribe to streamed chat events so the reasoning trace (and
 	// any future streaming text deltas) lands live instead of arriving all at

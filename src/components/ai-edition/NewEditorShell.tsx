@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
+import { useEditorDialogActions } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
-import { useProviderSettings } from "@/contexts/ProviderSettingsContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import {
 	migrateProjectDataToAxcutDocument,
@@ -130,8 +130,12 @@ export function NewEditorShell() {
 		action: "close" | "new" | "open" | "record";
 		resolve: (choice: UnsavedChoice) => void;
 	} | null>(null);
-	const { shortcuts, isMac, openConfig: openShortcutsConfig } = useShortcuts();
-	const { openProviderSettings } = useProviderSettings();
+	const { shortcuts, isMac, isConfigOpen, openConfig: openShortcutsConfig } = useShortcuts();
+	// The actions half of the dialog context, not the section: this component only ever *opens*
+	// one, and subscribing it to the open state would re-render the whole editor — timeline,
+	// preview, transport — twice per dialog interaction. `isDialogOpen` answers the keyboard
+	// handler below from a ref, which is why it can live in a value that never changes.
+	const { openDialog, isDialogOpen } = useEditorDialogActions();
 	// Transcription is local and every transcript-driven feature (Smart cuts,
 	// captions, the transcript pane) needs one, so the editor produces them by
 	// itself instead of waiting for the user to find the button. This hook is
@@ -854,6 +858,12 @@ export function NewEditorShell() {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
 			if (e.target instanceof HTMLElement && e.target.isContentEditable) return;
+			// A modal owns the screen. Its own controls are buttons, not text fields, so the two
+			// guards above let every editor shortcut through underneath it: Delete destroyed the
+			// selected region behind the backdrop, Ctrl+O stacked a second `aria-modal` dialog on
+			// top, and `?` stacked the shortcuts dialog. Both flags are reachable now that the
+			// open state is lifted out of the components that used to own it (#420).
+			if (isDialogOpen() || isConfigOpen) return;
 			const ctrl = e.ctrlKey || e.metaKey;
 			if (ctrl && e.key === "s") {
 				e.preventDefault();
@@ -1039,6 +1049,8 @@ export function NewEditorShell() {
 		saveDocument,
 		copiedClipId,
 		openShortcutsConfig,
+		isConfigOpen,
+		isDialogOpen,
 		shortcuts,
 		isMac,
 		togglePlay,
@@ -1138,7 +1150,7 @@ export function NewEditorShell() {
 					openSettings: handleOpenSettings,
 					renameProject: handleRenameProject,
 					toggleChat: () => setChatOpen((v) => !v),
-					openProviderSettings,
+					openProviderSettings: () => openDialog("providers"),
 					showAbout: handleShowAbout,
 					checkForUpdates: handleCheckForUpdates,
 				}}

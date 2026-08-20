@@ -81,6 +81,7 @@ function useEscape(open: boolean, onClose: () => void) {
 export function ModalShell({
 	open,
 	onClose,
+	closeOnEscape = true,
 	title,
 	subtitle,
 	wide,
@@ -89,13 +90,26 @@ export function ModalShell({
 	title: string;
 	subtitle?: string;
 	wide?: boolean;
+	/** Off for a dialog that handles Escape itself — two listeners both fire for one
+	 *  keypress, and this one's `onClose` wins whatever order they registered in. */
+	closeOnEscape?: boolean;
 	children: ReactNode;
 }) {
 	const tc = useScopedT("common");
-	useEscape(open, onClose);
+	const dialogRef = useRef<HTMLDivElement | null>(null);
+	useEscape(open && closeOnEscape, onClose);
+	// Move focus into the dialog as it opens. The app menu closes without restoring focus to
+	// its trigger — right for a pointer user — so otherwise the opener is left on
+	// document.body: Tab then walks the editor *behind* the backdrop, and a screen reader is
+	// never told a dialog appeared.
+	useEffect(() => {
+		if (open) dialogRef.current?.focus();
+	}, [open]);
 	if (!open) return null;
 	return (
 		<div
+			ref={dialogRef}
+			tabIndex={-1}
 			className={`${styles.modal} ${open ? styles.isOpen : ""}`}
 			role="dialog"
 			aria-modal="true"
