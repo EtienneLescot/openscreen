@@ -40,6 +40,11 @@ export type CliCommand = (
 	 *
 	 * A named file is a channel no wrapper can redirect into. It also sidesteps
 	 * shell quoting and encoding, which matters more on Windows than on POSIX.
+	 *
+	 * Note the shapes differ, and docs/cli.md says so: stdout carries the payload
+	 * inside the NDJSON `done` envelope because it is one event in a stream, while
+	 * the file carries the bare payload because a file is not a stream. Written on
+	 * success only.
 	 */
 	jsonOutPath?: string;
 };

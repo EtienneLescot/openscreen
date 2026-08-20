@@ -106,7 +106,18 @@ Other launchers and log collectors do the same.
 
 `-o <file>` writes the result somewhere no wrapper can redirect. It also avoids
 shell quoting and encoding differences, which is worth more on Windows than on
-POSIX.
+POSIX. The file is written only on a successful run; a file left by an earlier
+run is not touched when a later one fails, so check the exit code rather than the
+file's presence.
+
+**The two channels carry different shapes.** `--json` on stdout wraps the payload
+in the NDJSON `done` envelope, because it is one event in a stream. `-o` writes
+the payload on its own, because a file is not a stream:
+
+```bash
+openscreen sources --json | jq '.sources.displays'   # stdout: inside the envelope
+openscreen sources -o s.json && jq '.displays' s.json # file: the payload itself
+```
 
 `--json` emits the payload on the final `done` event:
 
