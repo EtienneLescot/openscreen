@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
 import { HUD_BAR_BOTTOM, HUD_POPOVER_GAP, HUD_POPOVER_MAX_HEIGHT } from "./hudGeometry";
@@ -481,6 +482,37 @@ describe("LaunchWindow record button", () => {
 		} finally {
 			Reflect.deleteProperty(document, "elementFromPoint");
 		}
+	});
+
+	// The mount effect's cleanup used to send `ignore=false` straight down the
+	// bridge, bypassing the wrapper that owns `hudIgnoreMouseEventsRef`. That left
+	// the mirror claiming the HUD was click-through while the main process had just
+	// been told the opposite, and the next run then deduped against the stale value
+	// and sent nothing at all — so the HUD stayed interactive with no way for the
+	// renderer to ask again. StrictMode runs mount → cleanup → mount on every mount,
+	// which makes dev the one environment where the click-through path never ran.
+	it("keeps the main process and the renderer's mirror in step across a remount", async () => {
+		platformState.value = "win32";
+
+		render(
+			<StrictMode>
+				<TooltipProvider>
+					<LaunchWindow />
+				</TooltipProvider>
+			</StrictMode>,
+		);
+
+		// The whole sequence, not its tail: because the wrapper dedupes, a cleanup
+		// that is deleted outright and a cleanup that asks for the wrong value both
+		// collapse to a lone [true] and would satisfy an assertion on the last call.
+		// Only mount → hand input back → mount again distinguishes the three.
+		await waitFor(() => {
+			expect(vi.mocked(window.electronAPI.setHudOverlayIgnoreMouseEvents).mock.calls).toEqual([
+				[true],
+				[false],
+				[true],
+			]);
+		});
 	});
 
 	it("unsubscribes from the pushed cursor when the HUD unmounts", async () => {

@@ -295,22 +295,79 @@ impl FrameMailbox {
 /// only as a backstop against a consumer that has stopped consuming entirely —
 /// 48 kHz stereo f32 is 384 KB/s, so two seconds is under a megabyte.
 ///
-/// Overflow drops the OLDEST samples. If the encoder is that far behind, the
-/// recent audio is the part still worth keeping, and the alternative — refusing
-/// new samples — would freeze the track at the moment of the stall and leave
-/// everything after it misaligned.
+/// Overflow drops the OLDEST samples and OWES THE SAME NUMBER BACK AS SILENCE.
+/// Dropping the oldest is the easy half: if the encoder is that far behind, the
+/// recent audio is the part still worth keeping, and refusing new samples
+/// instead would freeze the track at the moment of the stall.
+///
+/// The silence is the half that matters, because a drop here leaves no hole.
+/// The encoder's presentation time is a running count of the samples handed to
+/// it (`AudioEncoder::next_pts`, encoder.rs), so removing samples does not shift
+/// the ones after them late — it pulls them EARLY, by the dropped duration, for
+/// the rest of the take. Every later sound would then sit before the picture it
+/// belongs to, permanently and by an amount nothing records. Standing in
+/// silence of exactly the dropped length keeps that count right, so an overflow
+/// costs a gap where it happened and nothing after it. The debt is a counter
+/// until someone drains, which is also the only thing that can stop it growing —
+/// and it stops being exact at [`MAX_SILENCE_SECONDS`], which is where a bounded
+/// allocation starts to matter more than sync nobody can still use.
+/// How much silence the ring will stand in for before it stops trying.
+///
+/// The debt costs a counter while it is owed and only becomes memory when
+/// someone drains — 384 KB per second of it, at 48 kHz stereo f32. A drain runs
+/// on every tick of the main loop, heartbeat included (`Capture::advance` from
+/// the `RecvTimeoutError::Timeout` arm in main.rs), so a debt worth seconds
+/// means the loop itself has stopped. There is no bound on how long a stopped
+/// loop stays stopped, and one that comes back materialises the whole stall in a
+/// single allocation — which is also the one place the ring's own two-second cap
+/// does not reach. There is a second, quieter way to get there: nothing drains
+/// before the first video frame either, so the debt grows for as long as the
+/// portal picker is up. That normally ends in `clear` rather than a drain, but
+/// not if staging that first frame fails, and the stop path flushes the ring.
+///
+/// Thirty seconds is far past any stall a recording survives, and past it the
+/// take has a hole half a minute wide — the cap trades sync that is already lost
+/// for an allocation that stays bounded. `dropped_samples` keeps counting the
+/// whole loss regardless, so the `audio-dropped` warning still reports what
+/// really happened rather than what could be paid back.
+const MAX_SILENCE_SECONDS: usize = 30;
+
 #[derive(Debug)]
 pub struct AudioRing {
-    inner: std::sync::Mutex<std::collections::VecDeque<f32>>,
+    inner: std::sync::Mutex<RingInner>,
     capacity: usize,
+    /// Ceiling on `RingInner::silence_owed`. See [`MAX_SILENCE_SECONDS`].
+    max_silence_owed: usize,
     dropped: std::sync::atomic::AtomicU64,
+}
+
+/// Everything the ring's correctness rests on, under one lock: the queue, the
+/// silence owed in front of it, and whether samples are being taken at all.
+///
+/// `accepting` LIVES HERE rather than in an atomic beside the mutex, and that is
+/// not a matter of taste. Read before the lock, a producer could pass the check,
+/// wait for a whole `pause` to run, and only then append — putting audio from
+/// the far side of a pause into the take, where a pause-then-stop would flush it
+/// into the file. Under the lock, "pause has returned" and "no further sample
+/// can enter" are the same instant.
+#[derive(Debug)]
+struct RingInner {
+    queue: std::collections::VecDeque<f32>,
+    /// Samples dropped on overflow and not yet stood in for.
+    silence_owed: usize,
+    accepting: bool,
 }
 
 impl AudioRing {
     pub fn new(seconds: usize, sample_rate: usize, channels: usize) -> Self {
         Self {
-            inner: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            inner: std::sync::Mutex::new(RingInner {
+                queue: std::collections::VecDeque::new(),
+                silence_owed: 0,
+                accepting: true,
+            }),
             capacity: seconds * sample_rate * channels,
+            max_silence_owed: MAX_SILENCE_SECONDS * sample_rate * channels,
             dropped: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -318,43 +375,94 @@ impl AudioRing {
     fn push(&self, samples: &[f32]) {
         use std::sync::atomic::Ordering;
 
-        let Ok(mut queue) = self.inner.lock() else {
+        let Ok(mut inner) = self.inner.lock() else {
             self.dropped.fetch_add(samples.len() as u64, Ordering::Relaxed);
             return;
         };
-        queue.extend(samples.iter().copied());
-        if queue.len() > self.capacity {
-            let excess = queue.len() - self.capacity;
-            queue.drain(..excess);
+        // Paused: refused at the door rather than queued and discarded later.
+        // See `pause` for why the discard had to go.
+        if !inner.accepting {
+            return;
+        }
+        inner.queue.extend(samples.iter().copied());
+        if inner.queue.len() > self.capacity {
+            let excess = inner.queue.len() - self.capacity;
+            inner.queue.drain(..excess);
+            // Capped, so one drain can never be asked for more than the ring's
+            // own capacity plus this. The tally below is NOT capped: what the
+            // warning reports is the loss, not the part of it that was paid for.
+            inner.silence_owed = (inner.silence_owed + excess).min(self.max_silence_owed);
             self.dropped.fetch_add(excess as u64, Ordering::Relaxed);
         }
     }
 
-    /// Moves everything queued into `out`, appending.
+    /// Moves everything queued into `out`, appending — behind any silence the
+    /// ring owes for samples it had to drop.
     pub fn drain_into(&self, out: &mut Vec<f32>) {
-        let Ok(mut queue) = self.inner.lock() else {
+        let Ok(mut inner) = self.inner.lock() else {
             return;
         };
-        out.reserve(queue.len());
-        out.extend(queue.drain(..));
+        let owed = std::mem::take(&mut inner.silence_owed);
+        out.reserve(owed + inner.queue.len());
+        out.resize(out.len() + owed, 0.0);
+        out.extend(inner.queue.drain(..));
     }
 
     /// Discards everything queued, and forgets any overflow so far.
     ///
-    /// Called when the video epoch is set and on resume: audio captured before
-    /// the first frame, or during a pause, belongs to no part of the recording,
-    /// and keeping it would offset the whole track.
+    /// Called when the video epoch is set: audio captured before the first frame
+    /// belongs to no part of the recording, and keeping it would offset the
+    /// whole track.
     ///
     /// Resetting `dropped` is the point, not an afterthought. The stream is
     /// opened before the portal picker is raised, so it records for however long
     /// the user takes to click — easily past the ring's two-second cap. Counting
     /// that overflow would report "the encoder could not keep up" on every
-    /// single recording, for audio that was always going to be thrown away.
+    /// single recording, for audio that was always going to be thrown away. The
+    /// reset happens under the lock with the rest: outside it, a producer could
+    /// slip an overflow between the queue being emptied and the tally being
+    /// forgiven, and have a real loss forgiven along with the pre-roll.
     pub fn clear(&self) {
-        if let Ok(mut queue) = self.inner.lock() {
-            queue.clear();
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.queue.clear();
+            inner.silence_owed = 0;
+            self.dropped.store(0, std::sync::atomic::Ordering::Relaxed);
         }
-        self.dropped.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Stops taking samples. WHAT IS ALREADY QUEUED STAYS.
+    ///
+    /// Audio arriving while the recording is paused belongs to no part of it —
+    /// the video timeline does not advance across a pause, so keeping it would
+    /// push every later sample out of sync by the pause's length. Refusing it at
+    /// the door is what makes a discard at resume unnecessary, and the discard
+    /// is what did the damage. It threw away three things at once, all of them
+    /// from BEFORE the pause and all of them part of the take:
+    ///
+    ///   * the overflow tally, so a real mid-take drop never reached the
+    ///     `audio-dropped` warning (main.rs) — the only place a user is ever
+    ///     told a recording lost audio;
+    ///   * the silence owed for that drop, so the gap went unfilled and every
+    ///     later sample moved early anyway, which is the desync this ring
+    ///     exists to prevent;
+    ///   * and the queued samples themselves, up to a drain's worth of real
+    ///     recorded sound.
+    ///
+    /// With nothing able to enter while paused, what the ring holds at resume is
+    /// exactly what it held at pause, and the first drain after resume places it
+    /// where it belongs: the pause is spliced out of the video timeline too, so
+    /// the two sides join with no gap on either.
+    pub fn pause(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.accepting = false;
+        }
+    }
+
+    /// Takes samples again, from now.
+    pub fn resume(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.accepting = true;
+        }
     }
 
     pub fn dropped_samples(&self) -> u64 {
@@ -1071,5 +1179,135 @@ mod source_tests {
             println!("  {}  <-  {}", source.name, source.description);
         }
         assert!(!sources.is_empty(), "a desktop session always has at least one capture node");
+    }
+}
+
+#[cfg(test)]
+mod audio_ring_tests {
+    use super::AudioRing;
+
+    /// Capacity 16 samples — small enough to overflow by hand, and the unit the
+    /// ring counts in is interleaved samples, not frames.
+    fn ring() -> AudioRing {
+        AudioRing::new(1, 8, 2)
+    }
+
+    #[test]
+    fn overflow_is_stood_in_for_by_silence_rather_than_pulling_the_take_earlier() {
+        // THE regression. The encoder's timestamps are a running count of the
+        // samples it was handed (`AudioEncoder::next_pts`), so samples removed
+        // from the middle of the stream do not leave a hole — every later sound
+        // arrives that much earlier than the picture it belongs to, for the rest
+        // of the take, and nothing in the file records that it happened.
+        let ring = ring();
+        ring.push_for_test(&vec![1.0; 40]);
+        assert_eq!(ring.dropped_samples(), 24, "40 samples into a 16-sample ring drops 24");
+
+        let mut out = Vec::new();
+        ring.drain_into(&mut out);
+
+        assert_eq!(out.len(), 40, "the drain must cover as much time as was pushed");
+        assert!(out[..24].iter().all(|sample| *sample == 0.0), "the drop reads as silence");
+        assert!(out[24..].iter().all(|sample| *sample == 1.0), "the survivors are the newest");
+    }
+
+    #[test]
+    fn the_silence_owed_stops_growing_before_the_allocation_does() {
+        // A drain turns the debt into real samples, and nothing else bounds how
+        // large it can get: the loop can stop for an unbounded stretch and then
+        // come back. `ring()` is 8 Hz stereo, so the cap is 30 s = 480 samples.
+        let ring = ring();
+        ring.push_for_test(&vec![1.0; 5_000]);
+
+        let mut out = Vec::new();
+        ring.drain_into(&mut out);
+        assert_eq!(
+            out.len(),
+            480 + 16,
+            "a drain may never be asked for more than the cap plus the ring's own capacity"
+        );
+        assert_eq!(
+            ring.dropped_samples(),
+            4_984,
+            "and the tally still reports the whole loss, not the part paid back"
+        );
+    }
+
+    #[test]
+    fn the_silence_owed_is_paid_once() {
+        let ring = ring();
+        ring.push_for_test(&vec![1.0; 40]);
+        let mut first = Vec::new();
+        ring.drain_into(&mut first);
+
+        ring.push_for_test(&[0.5, 0.5]);
+        let mut second = Vec::new();
+        ring.drain_into(&mut second);
+        assert_eq!(second, vec![0.5, 0.5], "a settled debt must not be paid again");
+    }
+
+    #[test]
+    fn a_pause_refuses_what_arrives_and_keeps_what_was_already_there() {
+        // Both halves matter. What arrives during a pause must not enter — the
+        // video timeline does not advance across one, so encoding it would push
+        // every later sample out by the pause's length. What was already queued
+        // must not leave: it was captured BEFORE the pause and is take audio.
+        let ring = ring();
+        ring.push_for_test(&[1.0; 10]);
+
+        ring.pause();
+        ring.push_for_test(&[0.75; 400]);
+        assert_eq!(ring.dropped_samples(), 0, "a pause discards, it does not drop");
+
+        ring.resume();
+        let mut out = Vec::new();
+        ring.drain_into(&mut out);
+        assert_eq!(out, vec![1.0; 10], "the pre-pause audio is still there, and only it");
+
+        // `drain_into` appends, so this asks the question of a fresh buffer.
+        let mut after = Vec::new();
+        ring.push_for_test(&[0.25, 0.25]);
+        ring.drain_into(&mut after);
+        assert_eq!(after, vec![0.25, 0.25], "and the ring takes samples again after it");
+    }
+
+    #[test]
+    fn a_drop_before_a_pause_is_still_stood_in_for_after_it() {
+        // The pause used to clear the ring, which deleted the silence owed for
+        // an overflow that had happened before it while LEAVING the tally that
+        // reports it. Both halves were wrong at once: the recording lost the
+        // compensation, so everything after the pause moved early, and the
+        // `audio-dropped` warning claimed a silence that was never written.
+        let ring = ring();
+        ring.push_for_test(&vec![1.0; 40]);
+        assert_eq!(ring.dropped_samples(), 24);
+
+        ring.pause();
+        ring.resume();
+
+        let mut out = Vec::new();
+        ring.drain_into(&mut out);
+        assert_eq!(out.len(), 40, "the pause must not eat the time the drop stands for");
+        assert!(out[..24].iter().all(|sample| *sample == 0.0));
+        assert_eq!(
+            ring.dropped_samples(),
+            24,
+            "and what the warning reports still matches what the track got"
+        );
+    }
+
+    #[test]
+    fn clearing_forgets_the_overflow_and_the_silence_it_owed() {
+        // The pre-roll case: everything captured before the first video frame is
+        // thrown away wholesale, so neither the drop nor the gap it left is part
+        // of any recording.
+        let ring = ring();
+        ring.push_for_test(&vec![1.0; 40]);
+        ring.clear();
+        assert_eq!(ring.dropped_samples(), 0);
+
+        let mut out = Vec::new();
+        ring.drain_into(&mut out);
+        assert!(out.is_empty(), "a cleared ring owes no silence");
     }
 }
