@@ -264,6 +264,15 @@ export function patchCaptionSettings(
 	patch: CaptionSettingsPatch,
 ): AxcutDocument {
 	const next: CaptionSettings = { ...getCaptionSettings(doc), ...patch };
+	// Re-clamp against the geometry the patch just produced, not the one it
+	// replaced: `width`, `fontSize`, `backgroundEnabled` and `verticalPosition` all
+	// move the reachable span, so a patch to any of them can strand an offset
+	// outside it. `getCaptionSettings` would pull it back on the next read, but
+	// until then the document would hold a number the band never draws — and the
+	// next patch would write that stale number back out.
+	const range = captionOffsetRange(next);
+	next.offsetY = clamp(next.offsetY, range.y.min, range.y.max);
+	next.offsetX = clamp(next.offsetX, range.x.min, range.x.max);
 	return {
 		...doc,
 		legacyEditor: {
