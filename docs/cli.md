@@ -92,7 +92,15 @@ GUI picker uses — so scripts and agents can choose `--display`, `--window`, an
 ```bash
 openscreen sources          # human-readable
 openscreen sources --json
+openscreen sources -o sources.json   # straight to a file
 ```
+
+On a host with no D-Bus and no GPU — a container, a CI runner, a server —
+Chromium and ANGLE write their own diagnostics to this process's stdout, ahead
+of anything the CLI emits, and no Chromium switch silences all of them: some of
+that output never passes through Chromium's logging at all. Piping `--json` into
+a parser therefore fails in exactly the environments `--json` exists for. Pass
+`-o <file>` there: the file is a channel nothing else can write to.
 
 `--json` emits the payload on the final `done` event:
 

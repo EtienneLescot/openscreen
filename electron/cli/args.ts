@@ -27,6 +27,15 @@ export type CliCommand = (
 ) & {
 	/** Machine-readable NDJSON output on stdout instead of human progress. */
 	json?: boolean;
+	/**
+	 * Write the machine-readable result here instead of trusting stdout with it.
+	 * On a host without dbus or a GPU -- a container, a CI runner, a server --
+	 * Chromium and ANGLE write diagnostics straight to the process's stdout, ahead
+	 * of anything this CLI emits, and no Chromium switch reaches all of them: some
+	 * of that output does not go through Chromium's logging at all. A file is the
+	 * one channel nothing else can reach.
+	 */
+	jsonOutPath?: string;
 };
 
 const SUBCOMMANDS = new Set([
@@ -46,7 +55,7 @@ export const CLI_USAGE = `OpenScreen CLI
 Usage:
   openscreen export <project.openscreen> [options]   Render a project to MP4/GIF
   openscreen record [options]                        Record the screen headlessly
-  openscreen sources [--json]                        List displays, windows and microphones
+  openscreen sources [--json] [-o <file>]            List displays, windows and microphones
   openscreen pack <project.openscreen> --out <dir>   Copy project + media into one portable folder
   openscreen captions <project.openscreen>           Add auto-captions (on-device Whisper) to a project
                      [--min-words <n>] [--max-words <n>]
@@ -131,7 +140,7 @@ export function parseCliArgs(
 	try {
 		if (sub === "export") return parseExport(args.slice(1), cwd);
 		if (sub === "record") return parseRecord(args.slice(1), cwd);
-		if (sub === "sources") return parseSources(args.slice(1));
+		if (sub === "sources") return parseSources(args.slice(1), cwd);
 		if (sub === "pack") return parsePack(args.slice(1), cwd);
 		if (sub === "captions") return parseCaptions(args.slice(1), cwd);
 		return parseInfo(args.slice(1), cwd);
@@ -344,16 +353,22 @@ function parseRecord(args: string[], cwd: string): CliCommand {
 	return request;
 }
 
-function parseSources(args: string[]): CliCommand {
+function parseSources(args: string[], cwd: string): CliCommand {
 	let json = false;
-	for (const arg of args) {
+	let jsonOutPath: string | undefined;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
 		if (arg === "--json") {
 			json = true;
+		} else if (arg === "-o" || arg === "--out") {
+			const [value, next] = takeValue(args, i, arg);
+			jsonOutPath = resolvePath(value, cwd);
+			i = next;
 		} else {
 			throw new Error(`Unknown sources option: ${arg}`);
 		}
 	}
-	return { kind: "sources", json };
+	return { kind: "sources", json, jsonOutPath };
 }
 
 export interface CliPackCommand {

@@ -116,43 +116,37 @@ jobs:
 
           # `sources` enumerates displays, windows and microphones, so it
           # exercises the capture stack rather than proving that a usage string
-          # can be printed. Its output is the assertion: well-formed, non-empty.
-          # Streams kept apart on purpose. A previous run piped both together and
-          # the parse died on "[10767:0819/...:ERROR:dbus/bus.cc:405]" -- Chromium
-          # diagnostics, which a headless host produces in quantity (no dbus, no
-          # GPU). Whether those land on stdout decides whether this is a flaw in
-          # the test or in the CLI: anything consuming `--json` breaks if they do,
-          # and headless is exactly where a --json flag earns its keep.
-          echo "--- openscreen sources --json ---"
+          # can be printed.
+          #
+          # Read through -o, not through stdout. This host has no dbus and no
+          # GPU, so Chromium and ANGLE write their own diagnostics to stdout
+          # ahead of anything the CLI emits, and no switch silences all of them:
+          # --disable-logging was tried and the wall survived it, because part of
+          # that output never passes through Chromium's logging. The file is the
+          # only channel the process fully owns. stdout is still captured, as the
+          # evidence for why the flag exists.
+          echo "--- openscreen sources -o ---"
           RC=0
-          run_cli $SANDBOX sources --json >/tmp/sources.json 2>/tmp/sources.err || RC=$?
+          run_cli $SANDBOX sources -o /tmp/sources.json >/tmp/sources.out 2>/tmp/sources.err || RC=$?
 
-          # Both streams get reported before anything decides the outcome. The
-          # previous shape returned early on a timeout and threw away the very
-          # thing the run was for: a hang left stdout unseen, so a run that cost
-          # a runner slot said nothing about whether the logging fix had worked.
-          # Whatever the process wrote before it was killed is still on disk.
-          echo "--- stdout, first 400 bytes ---"
-          head -c 400 /tmp/sources.json; echo
+          echo "--- stdout, first 300 bytes (expected to be noisy) ---"
+          head -c 300 /tmp/sources.out; echo
           echo "--- stderr, first 3 lines ---"
           head -3 /tmp/sources.err || true
 
           if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
-            echo "::error::openscreen sources --json did not return within 120s. A CLI that hangs on a headless host cannot be scripted, and headless is what --json is for."
+            echo "::error::openscreen sources did not return within 120s. A CLI that hangs on a headless host cannot be scripted."
             exit 1
           fi
 
+          echo "--- the -o file ---"
+          cat /tmp/sources.json
+
           python3 <<'PY'
           import json
-          raw = open("/tmp/sources.json").read().strip()
-          if not raw:
-              raise SystemExit("sources --json produced no output")
-          try:
-              json.loads(raw)
-              print("parsed as a single JSON document")
-          except json.JSONDecodeError:
-              lines = [l for l in raw.splitlines() if l.strip()]
-              for l in lines:
-                  json.loads(l)
-              print(f"parsed as NDJSON, {len(lines)} record(s)")
+          doc = json.load(open("/tmp/sources.json"))
+          missing = [k for k in ("displays", "windows", "microphones") if k not in doc]
+          if missing:
+              raise SystemExit(f"-o file is missing {missing}")
+          print(f"displays={len(doc['displays'])} windows={len(doc['windows'])} microphones={len(doc['microphones'])}")
           PY
