@@ -340,6 +340,12 @@ export function VirtualPreview({
 			audioContextCloseTimerRef.current = null;
 		}
 		return () => {
+			// Nothing to tear down means nothing to schedule. WebAudio is unavailable
+			// under jsdom and under a denied audio policy, so this ref is often still
+			// null — and an unmount that leaves a timer behind for a context that was
+			// never created is both waste and a lie to anyone counting timers to prove
+			// this component cleans up after itself (see VirtualPreview.mediaError).
+			if (!audioContextRef.current) return;
 			audioContextCloseTimerRef.current = setTimeout(() => {
 				audioContextCloseTimerRef.current = null;
 				const context = audioContextRef.current;
