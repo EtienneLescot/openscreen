@@ -101,10 +101,19 @@ describe("readWebcamUnavailable", () => {
 });
 
 describe("readMicrophoneDefaulted", () => {
-	it("sees the helper falling back to the default input", () => {
+	// The helper keys the event on the OUTCOME — it ended up on the default input
+	// — not on which lookup failed, so both routes to that fallback land here.
+	it("sees the fallback when no microphone name was supplied", () => {
+		const output =
+			'{"event":"warning","code":"microphone-defaulted","message":"The requested microphone could not be resolved; capturing the default input"}\n' +
+			"Recording started\n";
+		expect(readMicrophoneDefaulted(output)).toBe(true);
+	});
+
+	it("sees it when a supplied name matched no endpoint", () => {
 		const output =
 			"WARNING: Could not resolve microphone by name; using default capture endpoint\n" +
-			'{"event":"warning","code":"microphone-defaulted","message":"No microphone name was supplied; capturing the default input"}\n';
+			'{"event":"warning","code":"microphone-defaulted","message":"The requested microphone could not be resolved; capturing the default input"}\n';
 		expect(readMicrophoneDefaulted(output)).toBe(true);
 	});
 
