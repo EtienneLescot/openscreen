@@ -186,6 +186,23 @@ rustPlatform.buildRustPackage {
     # defines osff_-prefixed symbols, so they have to sit beside it and be found
     # from there rather than through any system path.
     cp "$NIX_BUILD_TOP"/ffmpeg-renamed/lib/*.so.* "$out/lib/"
+
+    # Each copy still carries the RUNPATH it inherited from the original ffmpeg
+    # output, which is where the UN-renamed libraries live -- so libavcodec's own
+    # osff_swr_init would resolve against a libswresample that defines swr_init.
+    # It only works today because all five happen to be direct DT_NEEDED of the
+    # addon, so $ORIGIN is searched first; the day --as-needed drops one the
+    # loader falls through to the store copy and dlopen fails on an undefined
+    # osff_ symbol. Put $ORIGIN in front so the renamed set can only resolve
+    # against itself, and keep what was there for their non-ffmpeg deps (zlib,
+    # openh264) -- the same reason the addon below gets --add-rpath rather than a
+    # replacement.
+    for so in "$out"/lib/*.so.*; do
+      chmod u+w "$so"
+      prev=$(patchelf --print-rpath "$so")
+      patchelf --set-rpath '$ORIGIN'"''${prev:+:$prev}" "$so"
+    done
+
     chmod u+w "$out/lib/compositor_view.node"
 
     # --add-rpath, not --set-rpath: the latter replaces what nixpkgs' ld-wrapper
