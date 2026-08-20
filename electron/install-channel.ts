@@ -117,6 +117,27 @@ export function platformOwnsUpdates(channel: InstallChannel): boolean {
 
 /** Read the real environment. `process.windowsStore` is typed as an optional `true`, so it is
  *  normalised to a boolean here rather than at each call site. */
+/** The single rule every update affordance keys off — app menu, Help menu, tray, HUD and the
+ *  IPC handler — so it cannot be asked two different ways. `platformOwnsUpdates` is the
+ *  permanent veto (a Store/Flathub/Snap/Nix copy is offered nothing at all, not even a disabled
+ *  item); `recording` is the transient one. Pure, so the whole matrix can be pinned in a test
+ *  from a Linux-only CI. */
+export function offersUpdateCheck(
+	channel: InstallChannel,
+	state: { readonly recording: boolean },
+): boolean {
+	return !platformOwnsUpdates(channel) && !state.recording;
+}
+
+/** Memoized: `probeInstall()` touches the filesystem, and the answer cannot change while the
+ *  process lives. Lives here rather than in main.ts so the diagnostic handler can ask too. */
+let cachedChannel: InstallChannel | null = null;
+
+export function getInstallChannel(): InstallChannel {
+	if (cachedChannel === null) cachedChannel = classifyInstall(probeInstall());
+	return cachedChannel;
+}
+
 export function probeInstall(): InstallProbe {
 	return {
 		platform: process.platform,

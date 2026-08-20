@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { type AboutFacts, COPYRIGHT, formatAboutDetail, WEBSITE_URL } from "./about";
+import {
+	type AboutFacts,
+	COPYRIGHT,
+	formatAboutDetail,
+	usesNativeAboutPanel,
+	WEBSITE_URL,
+} from "./about";
 
 function facts(overrides: Partial<AboutFacts> = {}): AboutFacts {
 	return {
@@ -40,5 +46,18 @@ describe("formatAboutDetail", () => {
 		expect(
 			formatAboutDetail(facts({ platform: "linux", arch: "x64", channel: "appimage" })),
 		).toContain("linux x64 · appimage");
+	});
+});
+
+// CI is Linux-only, so the platform is pinned rather than read from `process` — the macOS
+// branch is the one no automated run would otherwise ever execute.
+describe("usesNativeAboutPanel", () => {
+	it("sends macOS to its own panel", () => {
+		expect(usesNativeAboutPanel("darwin")).toBe(true);
+	});
+
+	it("leaves every other platform on the message box we build", () => {
+		expect(usesNativeAboutPanel("win32")).toBe(false);
+		expect(usesNativeAboutPanel("linux")).toBe(false);
 	});
 });

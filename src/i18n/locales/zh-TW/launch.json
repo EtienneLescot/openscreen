@@ -94,7 +94,6 @@
 		"previewUnavailable": "預覽無法使用",
 		"about": "關於",
 		"version": "版本 {{version}}",
-		"checkForUpdates": "檢查更新",
 		"checkingForUpdates": "檢查中…"
 	}
 }

@@ -94,7 +94,6 @@
 		"previewUnavailable": "Vista previa no disponible",
 		"about": "Acerca de",
 		"version": "Versión {{version}}",
-		"checkForUpdates": "Buscar actualizaciones",
 		"checkingForUpdates": "Buscando…"
 	}
 }

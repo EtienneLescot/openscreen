@@ -16,12 +16,19 @@ import {
 	Tray,
 } from "electron";
 import { ShortcutBinding } from "../src/lib/shortcuts";
-import { type AboutFacts, COPYRIGHT, formatAboutDetail } from "./about";
+import {
+	type AboutFacts,
+	COPYRIGHT,
+	formatAboutDetail,
+	PRODUCT_NAME,
+	usesNativeAboutPanel,
+} from "./about";
 import {
 	blockedFromInstalling,
 	checkForSelfUpdate,
 	downloadSelfUpdate,
 	installSelfUpdate,
+	type UpdateOutcome,
 } from "./auto-updater";
 import { parseCliArgs } from "./cli/args";
 import { runCli } from "./cli/cliMain";
@@ -32,12 +39,7 @@ import {
 	unregisterAllGlobalShortcuts,
 } from "./globalShortcut";
 import { mainT, setMainLocale } from "./i18n";
-import {
-	classifyInstall,
-	type InstallChannel,
-	platformOwnsUpdates,
-	probeInstall,
-} from "./install-channel";
+import { getInstallChannel, offersUpdateCheck } from "./install-channel";
 import { getSelectedDesktopSource, registerIpcHandlers } from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
 import { registerSttIpc, shutdownStt } from "./stt";
@@ -393,21 +395,34 @@ function getTrayIcon(filename: string, size: number) {
 }
 
 let updateCheckInFlight = false;
-let installChannel: InstallChannel | null = null;
 /** Aborted on quit so a pending check cannot outlive the app and pop a dialog on the way out —
  *  or reject into `main-process-errors`, which re-throws and would take the process with it. */
 let updateCheckAbort: AbortController | null = null;
 
-function getInstallChannel(): InstallChannel {
-	if (installChannel === null) installChannel = classifyInstall(probeInstall());
-	return installChannel;
-}
-
 /** Every update affordance in the app keys off this one answer, so that the rule in
  *  install-channel.ts — a Store/Flathub/Snap/Nix copy is offered nothing at all, not even a
- *  disabled item — cannot be asked two different ways by the menu, the tray and the HUD. */
+ *  disabled item — cannot be asked two different ways by the menu, the tray and the HUD.
+ *
+ *  Recording is part of the same answer. The tray used to enforce it structurally — its
+ *  recording template holds nothing but "Stop Recording" — but the app and Help menus are
+ *  built once and would otherwise stay live mid-take, and `blockedFromInstalling` only vetoes
+ *  the install, i.e. after a 240 MB download has already competed with the encoder. Every
+ *  surface is rebuilt when the flag flips (see `setupApplicationMenu`/`updateTrayMenu`). */
 function canOfferUpdateCheck(): boolean {
-	return !platformOwnsUpdates(getInstallChannel());
+	return offersUpdateCheck(getInstallChannel(), { recording: isRecording });
+}
+
+/** Message boxes must be owned by a window. The HUD is `alwaysOnTop` and `skipTaskbar`
+ *  (electron/windows.ts), so an unowned dialog opens *behind* it on Windows and most Linux
+ *  WMs, with no taskbar entry to recover it — the user sees a button flash and nothing else.
+ *  Mirrors what ipc/handlers.ts already does for its own dialogs. */
+function showMessageBox(options: Electron.MessageBoxOptions) {
+	const visible = (win: BrowserWindow | null) =>
+		win && !win.isDestroyed() && win.isVisible() ? win : null;
+	// A modal owned by a hidden window may never be drawn, so an unowned dialog is the safer
+	// fallback when the HUD has been closed to the tray.
+	const parent = visible(BrowserWindow.getFocusedWindow()) ?? visible(mainWindow);
+	return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
 }
 
 function aboutFacts(): AboutFacts {
@@ -426,10 +441,10 @@ function aboutFacts(): AboutFacts {
  *  is the window its users expect; this is the only chance to put our facts in it. Nothing
  *  here is translated, so it needs no re-run when the locale changes. */
 function configureAboutPanel() {
-	if (process.platform !== "darwin") return;
+	if (!usesNativeAboutPanel(process.platform)) return;
 	const facts = aboutFacts();
 	app.setAboutPanelOptions({
-		applicationName: app.name,
+		applicationName: PRODUCT_NAME,
 		applicationVersion: facts.version,
 		// Rendered in parentheses after the version, where a build number would go. The install
 		// channel is worth more there than a second copy of the version.
@@ -445,8 +460,8 @@ function configureAboutPanel() {
 async function showAboutDialog() {
 	const facts = aboutFacts();
 	const detail = `${formatAboutDetail(facts)}\n${COPYRIGHT}`;
-	const heading = `${app.name} ${facts.version}`;
-	const choice = await dialog.showMessageBox({
+	const heading = `${PRODUCT_NAME} ${facts.version}`;
+	const choice = await showMessageBox({
 		type: "info",
 		title: mainT("common", "actions.about") || "About OpenScreen",
 		message: heading,
@@ -485,9 +500,9 @@ let isRecording = false;
 async function downloadAndInstall(latestVersion: string) {
 	const downloaded = await downloadSelfUpdate();
 	if (downloaded.kind === "failed") {
-		await dialog.showMessageBox({
+		await showMessageBox({
 			type: "error",
-			title: app.name,
+			title: PRODUCT_NAME,
 			// Not `updates.failed`: the CHECK succeeded — that is how we got here — and telling
 			// the user we could not check for updates sends them looking in the wrong place.
 			message: mainT("common", "updates.downloadFailed"),
@@ -504,9 +519,9 @@ async function downloadAndInstall(latestVersion: string) {
 		platform: process.platform,
 	});
 	if (blocked) {
-		await dialog.showMessageBox({
+		await showMessageBox({
 			type: "info",
-			title: app.name,
+			title: PRODUCT_NAME,
 			message: mainT(
 				"common",
 				blocked === "recording" ? "updates.blockedRecording" : "updates.blockedLocation",
@@ -515,9 +530,9 @@ async function downloadAndInstall(latestVersion: string) {
 		return;
 	}
 
-	const restart = await dialog.showMessageBox({
+	const restart = await showMessageBox({
 		type: "info",
-		title: app.name,
+		title: PRODUCT_NAME,
 		message: mainT("common", "updates.readyToInstall", { latestVersion }),
 		buttons: [
 			mainT("common", "actions.restartNow") || "Restart Now",
@@ -533,16 +548,30 @@ async function downloadAndInstall(latestVersion: string) {
  *  that answer leads to. The HUD's button waits on it to drop its "Checking…" label, and must
  *  not be left spinning behind a dialog the user walked away from, or behind a 240 MB
  *  download they approved. */
+/** `checkForSelfUpdate` accepts no signal and no timeout, so a stalled update feed (corporate
+ *  proxy, CDN blackhole) hangs it forever. Unbounded, that would leave `checkForUpdates`'
+ *  `finally` unreachable and `updateCheckInFlight` latched true for the rest of the session,
+ *  silently turning every later check — menu, tray and HUD — into a no-op. */
+async function probeSelfUpdate(): Promise<UpdateOutcome> {
+	let timer: NodeJS.Timeout | undefined;
+	const timeout = new Promise<UpdateOutcome>((resolve) => {
+		timer = setTimeout(
+			() => resolve({ kind: "failed", error: new Error("self-update probe timed out") }),
+			30_000,
+		);
+		timer.unref?.();
+	});
+	try {
+		return await Promise.race([checkForSelfUpdate(getInstallChannel()), timeout]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 async function checkForUpdates(onVerdict?: () => void) {
-	let verdictReported = false;
-	const reportVerdict = () => {
-		if (verdictReported) return;
-		verdictReported = true;
-		onVerdict?.();
-	};
 	if (updateCheckInFlight) {
 		// Another check owns the dialogs; this caller has nothing left to wait for.
-		reportVerdict();
+		onVerdict?.();
 		return;
 	}
 	updateCheckInFlight = true;
@@ -554,11 +583,10 @@ async function checkForUpdates(onVerdict?: () => void) {
 			fetchLatest: (url, init) => net.fetch(url, init),
 			signal,
 		});
-		reportVerdict();
 		if (result.kind === "current") {
-			await dialog.showMessageBox({
+			await showMessageBox({
 				type: "info",
-				title: app.name,
+				title: PRODUCT_NAME,
 				message: mainT("common", "updates.current", {
 					currentVersion: result.currentVersion,
 				}),
@@ -570,7 +598,7 @@ async function checkForUpdates(onVerdict?: () => void) {
 		// payload, and every macOS install predating Developer ID signing, which Squirrel can
 		// never update — can only be pointed at the download page. Ask the updater first so the
 		// buttons offered match what this install can actually do.
-		const selfUpdate = await checkForSelfUpdate(getInstallChannel());
+		const selfUpdate = await probeSelfUpdate();
 		const canSelfUpdate = selfUpdate.kind === "downloaded";
 		if (selfUpdate.kind === "failed") {
 			// A release published before the update feeds existed has no latest*.yml. Not worth a
@@ -581,9 +609,9 @@ async function checkForUpdates(onVerdict?: () => void) {
 			});
 		}
 
-		const choice = await dialog.showMessageBox({
+		const choice = await showMessageBox({
 			type: "info",
-			title: app.name,
+			title: PRODUCT_NAME,
 			message: mainT("common", "updates.available", {
 				currentVersion: result.currentVersion,
 				latestVersion: result.latestVersion,
@@ -604,43 +632,25 @@ async function checkForUpdates(onVerdict?: () => void) {
 		}
 		await downloadAndInstall(result.latestVersion);
 	} catch (error) {
-		reportVerdict();
 		// Quitting is not a failure, and the app is already on its way out — there is nothing
 		// left to show the dialog on.
 		if (signal.aborted && updateCheckAbort?.signal.aborted) return;
-		await dialog.showMessageBox({
+		await showMessageBox({
 			type: "error",
-			title: app.name,
+			title: PRODUCT_NAME,
 			message: mainT("common", "updates.failed"),
 			detail: error instanceof Error ? error.message : String(error),
 		});
 	} finally {
-		// Belt and braces: a throw before the verdict exists must not strand the caller.
-		reportVerdict();
 		updateCheckInFlight = false;
 		updateCheckAbort = null;
+		// Reported here, not the moment the release lookup returns. Until this point
+		// `updateCheckInFlight` is still set, so a caller told "done" early re-enables a
+		// button whose very next click hits the guard above and does nothing at all — no
+		// dialog, no error, nothing the user can see.
+		onVerdict?.();
 	}
 }
-
-// The HUD's settings panel shows the running version and, where this copy owns its updates,
-// runs the same check the menu does. Registered here rather than in ipc/handlers.ts because
-// this is where the check and the install channel already live.
-ipcMain.handle("get-app-info", () => ({
-	version: app.getVersion(),
-	canCheckForUpdates: canOfferUpdateCheck(),
-}));
-
-ipcMain.handle("check-for-updates", async () => {
-	// The renderer hides the button on a package-manager channel. A renderer is not where that
-	// rule gets to be enforced.
-	if (!canOfferUpdateCheck()) return;
-	await new Promise<void>((resolve) => {
-		checkForUpdates(resolve).catch((error) => {
-			console.error("[updates] check failed", error);
-			resolve();
-		});
-	});
-});
 
 function updateTrayMenu(recording: boolean = false) {
 	if (!tray) return;
@@ -649,7 +659,7 @@ function updateTrayMenu(recording: boolean = false) {
 		? mainT("common", "actions.recordingStatus", {
 				source: selectedSourceName,
 			}) || `Recording: ${selectedSourceName}`
-		: "OpenScreen";
+		: PRODUCT_NAME;
 	const menuTemplate = recording
 		? [
 				{
@@ -679,6 +689,20 @@ function updateTrayMenu(recording: boolean = false) {
 							},
 						]
 					: []),
+				// The About box's other homes are menu-bar items, and no window this app creates
+				// shows a menu bar: the HUD is frameless (electron/windows.ts), and the editor and
+				// notes windows call setAutoHideMenuBar(true) on Windows and Linux. Without this
+				// entry the box — and the Copy button that is the point of building it ourselves —
+				// is reachable there only by opening the editor and holding Alt.
+				isMac
+					? {
+							role: "about" as const,
+							label: mainT("common", "actions.about") || "About OpenScreen",
+						}
+					: {
+							label: mainT("common", "actions.about") || "About OpenScreen",
+							click: runAboutDialog,
+						},
 				{ type: "separator" as const },
 				{
 					label: mainT("common", "actions.quit") || "Quit",
@@ -972,6 +996,28 @@ appReady?.then(async () => {
 		return { success };
 	});
 
+	// The HUD's settings panel shows the running version and, where this copy owns its updates,
+	// runs the same check the menu does. Registered here rather than in ipc/handlers.ts because
+	// this is where the check and the install channel already live — but inside `appReady`, like
+	// every other handler in this file: at module scope they would also be live in the headless
+	// CLI boot path and in a losing second instance that is on its way to app.quit().
+	ipcMain.handle("get-app-info", () => ({
+		version: app.getVersion(),
+		canCheckForUpdates: canOfferUpdateCheck(),
+	}));
+
+	ipcMain.handle("check-for-updates", async () => {
+		// The renderer hides the button on a package-manager channel, and while recording. A
+		// renderer is not where those rules get to be enforced.
+		if (!canOfferUpdateCheck()) return;
+		await new Promise<void>((resolve) => {
+			checkForUpdates(resolve).catch((error) => {
+				console.error("[updates] check failed", error);
+				resolve();
+			});
+		});
+	});
+
 	createTray();
 	updateTrayMenu();
 	configureAboutPanel();
@@ -1002,6 +1048,9 @@ appReady?.then(async () => {
 			isRecording = recording;
 			if (!tray) createTray();
 			updateTrayMenu(recording);
+			// `canOfferUpdateCheck()` now answers "not mid-take" too, and the app/Help menus are
+			// built once at startup — without this they keep offering the check during a take.
+			setupApplicationMenu();
 			if (!recording) {
 				showMainWindow();
 			}

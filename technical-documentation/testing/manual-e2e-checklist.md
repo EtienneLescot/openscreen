@@ -326,12 +326,15 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 ### App menu, About, and updates
 
 - [ ] On macOS, open the application menu and confirm About OpenScreen is followed by Check for Updates.
-- [ ] On Windows and Linux, open the Help menu and confirm it lists Check for Updates and About OpenScreen.
+- [ ] On Windows and Linux, right-click the tray icon and confirm it lists Check for Updates and About OpenScreen. The tray is the only surface that is reachable by default there: the HUD is frameless and the editor and notes windows auto-hide their menu bar, so the Help menu appears only while Alt is held over one of those two windows.
+- [ ] On Windows and Linux, open the editor, hold Alt, and confirm the Help menu lists Check for Updates and About OpenScreen.
 - [ ] Open About and confirm it names the running version, the Electron/Chromium/Node versions, and the install channel.
+- [ ] Confirm the About box opens in front of the HUD rather than behind it.
 - [ ] On Windows and Linux, press Copy in the About box and confirm the clipboard holds that same block.
 - [ ] Open the HUD's device-settings panel and confirm its About row reports the same version.
 - [ ] Run Check for Updates from the menu, from the tray, and from the HUD panel, and confirm each reaches the same result dialog.
-- [ ] Start a second check while one is still running and confirm no second dialog appears.
+- [ ] Start a second check while one is still running and confirm the HUD button stays disabled and reads "Checking…" until the first check's dialogs are done, rather than re-enabling into a click that does nothing.
+- [ ] Start a recording, then confirm Check for Updates is gone from the app menu, the Help menu and the tray for as long as the take runs, and returns when it stops.
 - [ ] On a Microsoft Store, Flathub, Snap, or Nix install, confirm no update affordance appears in the menu, the tray, or the HUD panel, while the version still shows.
 
 ### New effects and controls — v1.8.0

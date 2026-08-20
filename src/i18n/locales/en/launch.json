@@ -94,7 +94,6 @@
 		"previewUnavailable": "Preview unavailable",
 		"about": "About",
 		"version": "Version {{version}}",
-		"checkForUpdates": "Check for updates",
 		"checkingForUpdates": "Checking…"
 	}
 }

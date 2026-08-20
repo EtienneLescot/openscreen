@@ -62,6 +62,9 @@ function getAvailableScreenHeight(): number {
 /** Launches the floating recording HUD and its recorder controls. */
 export function LaunchWindow() {
 	const t = useScopedT("launch");
+	// The update-check label is shared with the app menu and the tray, which read it from
+	// `common`. A second copy under `launch` drifted from it in en and ar before it ever shipped.
+	const tCommon = useScopedT("common");
 	const {
 		locale,
 		setLocale,
@@ -884,10 +887,10 @@ export function LaunchWindow() {
 			preview: t("deviceSettings.preview"),
 			previewUnavailable: t("deviceSettings.previewUnavailable"),
 			about: t("deviceSettings.about"),
-			checkForUpdates: t("deviceSettings.checkForUpdates"),
+			checkForUpdates: tCommon("actions.checkForUpdates"),
 			checkingForUpdates: t("deviceSettings.checkingForUpdates"),
 		}),
-		[t],
+		[t, tCommon],
 	);
 
 	const versionLabel = appInfo ? t("deviceSettings.version", { version: appInfo.version }) : null;
