@@ -263,19 +263,38 @@ public final class AudioTrackMixer {
 
 	/// Reports what each source actually delivered against the finished track.
 	///
-	/// Not diagnostics for their own sake: nothing in the tree recorded whether
-	/// ScreenCaptureKit's system-audio output goes silent-but-delivering or stops delivering
-	/// altogether while nothing is playing, and the answer decides how much of the timeline the
-	/// clock is carrying on its own. One take with system audio enabled and nothing playing
-	/// settles it — `undeliveredSeconds` comes back as the whole track if the tap is gapped the
-	/// way WASAPI loopback is, and near zero if it streams silence. `longestHoleSeconds`
-	/// separates the two shapes a gapped tap can have: one long outage, or a steady stutter.
+	/// Not diagnostics for their own sake: how much of the timeline the clock carries on its own
+	/// depends on whether ScreenCaptureKit's system-audio output goes silent-but-delivering or
+	/// stops delivering altogether while nothing is playing, and nothing in the tree recorded
+	/// which until a take was run against the real API.
+	///
+	/// It has been now, and the tap **streams silence**. It does not gap it the way the WASAPI
+	/// loopback tap does. A 12.05 s take on an M1 Mac mini (macOS 26.5) with system audio
+	/// enabled and nothing playing at all reported `undeliveredSeconds` of 0.07 — 0.6 % of the
+	/// track — as a single hole at the head while the tap came up, `longestHoleSeconds` being
+	/// equal to it. A gapped tap would have reported close to the whole track instead. So on
+	/// macOS the clock only has to carry the take's edges, where under Windows it carries the
+	/// whole quiet stretch as well.
+	///
+	/// `npm run test:sck-audio-timeline:mac` prints these numbers whether it passes or fails,
+	/// so the measurement can be repeated. `longestHoleSeconds` is what would tell the two
+	/// shapes of a gapped tap apart — one long outage, or a steady stutter — should this ever
+	/// change.
 	///
 	/// `droppedSeconds` is the cost side of the same ledger, and it should be zero. It counts
 	/// audio a source delivered describing a span the cursor had already emitted, which cannot
 	/// be placed any more. That happens only when a source went quiet for longer than
 	/// `emissionGraceFrames` and then handed over the period it was quiet for, so anything above
 	/// zero here says the grace is too short for that capture path.
+	///
+	/// `trimmedSeconds` is deliberately not part of that number, though it is discarded by the
+	/// same code. It counts what was cut while a source was still catching up to a cursor that
+	/// had already started moving — the origin staying anchored to the video rather than
+	/// anything going wrong. Every real take carries some: against a live ScreenCaptureKit the
+	/// track starts before the system-audio tap has said anything, and about 40 ms of what it
+	/// first hands over describes time the cursor has already crossed. Counting the two
+	/// together, as this did until the split, made "dropped is zero" unsatisfiable on real
+	/// hardware and cost the check the only thing it was for.
 	private func emitTimelineSummary() {
 		var fields: [String: Any] = [
 			"event": "audio-timeline",
@@ -288,6 +307,7 @@ public final class AudioTrackMixer {
 				"undeliveredSeconds": report.undeliveredSeconds,
 				"longestHoleSeconds": report.longestHoleSeconds,
 				"droppedSeconds": report.droppedSeconds,
+				"trimmedSeconds": report.trimmedSeconds,
 			]
 		}
 		emit(fields)
@@ -300,6 +320,7 @@ public final class AudioTrackMixer {
 		public let undeliveredSeconds: Double
 		public let longestHoleSeconds: Double
 		public let droppedSeconds: Double
+		public let trimmedSeconds: Double
 	}
 
 	public func deliveryReport(for source: Source) -> DeliveryReport {
@@ -307,7 +328,8 @@ public final class AudioTrackMixer {
 			trackSeconds: seconds(cursor),
 			undeliveredSeconds: seconds(undeliveredFrames[source.rawValue]),
 			longestHoleSeconds: seconds(longestHoleFrames[source.rawValue]),
-			droppedSeconds: seconds(sources[source.rawValue].droppedFrames)
+			droppedSeconds: seconds(sources[source.rawValue].droppedFrames),
+			trimmedSeconds: seconds(sources[source.rawValue].trimmedFrames)
 		)
 	}
 
@@ -701,8 +723,15 @@ public final class AudioTrackMixer {
 		/// Where the clock stood at this source's most recent delivery, in absolute frames.
 		/// The mixer sets it, because only the mixer holds the clock.
 		var lastDeliveryFrame: Int64 = 0
+		/// Whether any of this source's audio has actually reached the mix. Until it has, the
+		/// source is not yet established on the timeline and cannot be "late" — see
+		/// `discardFrames(before:)`.
+		private(set) var hasPlaced = false
 		/// Captured audio that arrived too late to be placed. See `discardFrames(before:)`.
 		private(set) var droppedFrames: Int64 = 0
+		/// Captured audio discarded while this source was still catching up to the cursor. Also
+		/// `discardFrames(before:)`, but the benign half of it — see there for why they differ.
+		private(set) var trimmedFrames: Int64 = 0
 
 		var endFrame: Int64 { startFrame + Int64(samples.count / MixFormat.channelCount) }
 
@@ -763,28 +792,47 @@ public final class AudioTrackMixer {
 			for index in 0..<(usableFrames * MixFormat.channelCount) {
 				mix[base + index] += samples[index]
 			}
+			hasPlaced = true
 			samples.removeFirst(usableFrames * MixFormat.channelCount)
 			startFrame += Int64(usableFrames)
 		}
 
-		/// Discards samples the mixer has already emitted past — a buffer that arrived after
-		/// its chunk went out cannot be placed any more.
+		/// Discards samples the mixer has already emitted past, counting them by cause.
 		///
-		/// This is the one path that loses captured audio, so it keeps a count. It costs
-		/// nothing while a source delivers steadily, however far behind the clock it runs; it
-		/// bites only when one went quiet for longer than `emissionGraceFrames`, had silence
-		/// emitted in its place, and then handed over the period it was quiet for.
+		/// Two different things land here and only one of them is a fault. What separates them
+		/// is whether this source had established itself on the timeline yet, which is what
+		/// `hasPlaced` records — not where the frames sit, which was the tempting answer and the
+		/// wrong one.
+		///
+		/// Before a source has placed anything, it is still catching up and cannot be late.
+		/// `beginTimeline` opens the writer session on the first video frame, and a source only
+		/// joins the quorum that can hold the cursor back once it `hasDelivered`, so the track
+		/// starts moving before the audio tap has said anything at all. Whatever the tap then
+		/// hands over first describes a span the cursor has already crossed — a few tens of
+		/// milliseconds of it against a live ScreenCaptureKit, and all of a take's audio if the
+		/// tap opened before the session did. Cutting that is how the origin stays anchored to
+		/// the video instead of drifting back to meet the first sample. It is `trimmedFrames`,
+		/// and it is the design working.
+		///
+		/// Once a source has placed audio, a discard means it went quiet for longer than
+		/// `emissionGraceFrames`, had silence emitted in its place, and then handed over the
+		/// period it was quiet for. That is captured audio genuinely lost: `droppedFrames`, and
+		/// it should be zero.
 		private mutating func discardFrames(before cursor: Int64) {
 			guard startFrame < cursor else {
 				return
 			}
 
 			let available = Int64(samples.count / MixFormat.channelCount)
-			let discarded = Int(min(cursor - startFrame, available))
+			let discarded = min(cursor - startFrame, available)
 			if discarded > 0 {
-				samples.removeFirst(discarded * MixFormat.channelCount)
-				startFrame += Int64(discarded)
-				droppedFrames += Int64(discarded)
+				if hasPlaced {
+					droppedFrames += discarded
+				} else {
+					trimmedFrames += discarded
+				}
+				samples.removeFirst(Int(discarded) * MixFormat.channelCount)
+				startFrame += discarded
 			}
 			if samples.isEmpty {
 				startFrame = cursor
