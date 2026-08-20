@@ -18,10 +18,6 @@ import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema
 import { useProjectStore } from "./projectStore";
 import { useSequentialTimelineOps } from "./useSequentialTimelineOps";
 
-const toastErrorMock = vi.hoisted(() => vi.fn());
-
-vi.mock("sonner", () => ({ toast: { error: toastErrorMock } }));
-
 function makeDocWithAsset(): AxcutDocument {
 	const base = createEmptyDocument({ projectId: "proj_seq", title: "seq" });
 	return {
@@ -59,7 +55,6 @@ function makeDocWithAsset(): AxcutDocument {
 
 beforeEach(() => {
 	useProjectStore.getState().clear();
-	toastErrorMock.mockReset();
 });
 
 afterEach(() => {
@@ -74,10 +69,11 @@ describe("useSequentialTimelineOps", () => {
 		const callOrder: string[] = [];
 		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
 			// Mirror the real store: write the saved doc back so the next
-			// call in the queue sees the latest committed state.
+			// call in the queue sees the latest committed state, and report
+			// success the way `projectStore.saveDocument` does.
 			useProjectStore.getState().setDocument(doc);
-			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 			callOrder.push(doc.timeline.trimRanges[0]?.startSec.toString() ?? "empty");
+			return true;
 		});
 
 		const { result } = renderHook(() =>
@@ -117,15 +113,20 @@ describe("useSequentialTimelineOps", () => {
 		expect(doc2.timeline.trimRanges.map((t) => t.startSec).sort()).toEqual([1, 5]);
 	});
 
-	it("surfaces save errors without rejecting or poisoning the queue", async () => {
+	it("keeps the queue healthy when a save reports failure", async () => {
+		// `projectStore.saveDocument` resolves false rather than rejecting -- it has
+		// already told the user why. What this hook owes is that the failed op resolves
+		// to null and the NEXT op still runs, off a document that never took the failed
+		// edit.
 		const seed = makeDocWithAsset();
 		useProjectStore.setState({ document: seed });
 
 		const saveDocument = vi
-			.fn<(doc: AxcutDocument) => Promise<void>>()
-			.mockRejectedValueOnce(new Error("save failed"))
+			.fn<(doc: AxcutDocument) => Promise<boolean>>()
+			.mockResolvedValueOnce(false)
 			.mockImplementationOnce(async (doc) => {
 				useProjectStore.getState().setDocument(doc);
+				return true;
 			});
 
 		const { result } = renderHook(() =>
@@ -156,16 +157,13 @@ describe("useSequentialTimelineOps", () => {
 
 		expect(firstResult).toBeNull();
 		expect(secondResult).not.toBeNull();
-		expect(toastErrorMock).toHaveBeenCalledWith("Save failed", {
-			description: "save failed",
-		});
 		// The queue survived the first failure — both saves were attempted.
 		expect(saveDocument).toHaveBeenCalledTimes(2);
 		expect(saveDocument).toHaveBeenNthCalledWith(2, secondResult);
 	});
 
 	it("returns null when the store has no document and no fallback is supplied", async () => {
-		const saveDocument = vi.fn(async () => undefined);
+		const saveDocument = vi.fn(async () => true);
 		const { result } = renderHook(() =>
 			useSequentialTimelineOps({ fallbackDocument: null, saveDocument }),
 		);
@@ -194,6 +192,7 @@ describe("useSequentialTimelineOps", () => {
 
 		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
 			useProjectStore.getState().setDocument(doc);
+			return true;
 		});
 
 		const { result } = renderHook(() =>

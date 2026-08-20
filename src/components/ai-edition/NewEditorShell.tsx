@@ -14,7 +14,6 @@ import {
 } from "@/lib/ai-edition/document/timeline";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
-import { saveTimelineMutation } from "@/lib/ai-edition/store/timelineSave";
 import {
 	useAssetTranscriptions,
 	useAutoTranscription,
@@ -303,15 +302,9 @@ export function NewEditorShell() {
 		// 3. Handle request-save-before-close from Electron
 		const unsubSaveBeforeClose = window.electronAPI.onRequestSaveBeforeClose(async () => {
 			const doc = useProjectStore.getState().document;
-			if (doc) {
-				try {
-					await saveDocument(doc);
-					return true;
-				} catch {
-					toast.error("Failed to save before closing");
-					return false;
-				}
-			}
+			// The store already toasted the reason; answering false is what keeps the
+			// window open on top of it.
+			if (doc) return await saveDocument(doc);
 			return true;
 		});
 
@@ -345,7 +338,6 @@ export function NewEditorShell() {
 			// stale-closure bugs.
 			const known = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 60;
 			const state = useProjectStore.getState();
-			const persist = state.saveDocument;
 			setSourceDuration(known);
 			const doc = state.document;
 			if (!doc || doc.assets.length === 0) return;
@@ -368,7 +360,7 @@ export function NewEditorShell() {
 					[{ startSec: 0, endSec: known }],
 					"Auto-created full-duration clip",
 				);
-				void saveTimelineMutation(persist, next);
+				void state.saveDocument(next);
 				return;
 			}
 			// Hand the probed duration to the pure document layer: it patches only the
@@ -379,7 +371,7 @@ export function NewEditorShell() {
 			// nothing is waiting, so there is nothing to guard here.
 			const next = applyProbedDuration(doc, assetId, known);
 			if (next !== doc) {
-				void saveTimelineMutation(persist, next);
+				void state.saveDocument(next);
 			}
 		},
 		[setSourceDuration],
@@ -620,14 +612,7 @@ export function NewEditorShell() {
 	const handleSave = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		try {
-			await saveDocument(doc);
-			toast.success("Project saved");
-		} catch (err) {
-			toast.error("Save failed", {
-				description: err instanceof Error ? err.message : String(err),
-			});
-		}
+		if (await saveDocument(doc)) toast.success("Project saved");
 	}, [saveDocument]);
 
 	// Native File menu (electron/main.ts) → v4 actions. The menu is shown via
@@ -655,13 +640,7 @@ export function NewEditorShell() {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			if (title === doc.project.title) return;
-			try {
-				await saveDocument({ ...doc, project: { ...doc.project, title } });
-			} catch (err) {
-				toast.error("Rename failed", {
-					description: err instanceof Error ? err.message : String(err),
-				});
-			}
+			await saveDocument({ ...doc, project: { ...doc.project, title } });
 		},
 		[saveDocument],
 	);
@@ -682,13 +661,12 @@ export function NewEditorShell() {
 				}
 				if (choice === "save") {
 					const doc = useProjectStore.getState().document;
-					if (doc) {
-						try {
-							await saveDocument(doc);
-						} catch {
-							resolve("cancel");
-							return;
-						}
+					// A failed save cancels the action that prompted this dialog. The store has
+					// already said why -- which is what the bare `catch {}` here used to swallow,
+					// leaving the window refusing to close with nothing on screen explaining it.
+					if (doc && !(await saveDocument(doc))) {
+						resolve("cancel");
+						return;
 					}
 				}
 				if (action === "record") {
@@ -847,13 +825,8 @@ export function NewEditorShell() {
 					if (choice === "cancel") return;
 					if (choice === "save") {
 						const doc = useProjectStore.getState().document;
-						if (doc) {
-							try {
-								await saveDocument(doc);
-							} catch {
-								return;
-							}
-						}
+						// Stay put if the save did not land -- the store has already said why.
+						if (doc && !(await saveDocument(doc))) return;
 					}
 					setNewProjectOpen(true);
 				})();
@@ -866,13 +839,8 @@ export function NewEditorShell() {
 					if (choice === "cancel") return;
 					if (choice === "save") {
 						const doc = useProjectStore.getState().document;
-						if (doc) {
-							try {
-								await saveDocument(doc);
-							} catch {
-								return;
-							}
-						}
+						// Stay put if the save did not land -- the store has already said why.
+						if (doc && !(await saveDocument(doc))) return;
 					}
 					setOpenProjectOpen(true);
 				})();
