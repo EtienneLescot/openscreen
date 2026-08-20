@@ -108,6 +108,13 @@ const cases = [
 		expectDefaulted: true,
 	},
 	{
+		label: "shares-a-brand-only",
+		why: "another device from the same maker is still another device — a shared brand must not answer for it",
+		deviceId: "",
+		deviceName: "Logitech Blue Yeti",
+		expectDefaulted: true,
+	},
+	{
 		label: "plain-default-request",
 		why: "no particular device was asked for, so the default endpoint is the right answer and no warning is due",
 		deviceId: "default",

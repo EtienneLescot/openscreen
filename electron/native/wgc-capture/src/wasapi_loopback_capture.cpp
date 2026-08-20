@@ -66,31 +66,21 @@ std::wstring normalizeDeviceName(const std::wstring& value) {
 }
 
 /**
- * Is `word` one of the space-separated words of `haystack`?
+ * How well a candidate endpoint answers a requested name, or 0 for "not this
+ * one" -- which the caller must treat as a real answer.
  *
- * Both sides have already been through `normalizeDeviceName`, so a word is
- * exactly what sits between two spaces.
+ * Only decisive matches count: equal once normalized, or one containing the
+ * other, which is the ordinary case since Chromium appends USB ids to what the
+ * driver reports.
+ *
+ * A further tier used to score shared WORDS, to bridge names differing more than
+ * that. It bridged endpoints that were not the same device -- a requested
+ * "micro" matched the "microphone" that opens nearly every Windows endpoint
+ * name, so asking for a microphone that does not exist quietly recorded
+ * whichever one sorted first, and the fallback warning could not fire because a
+ * device HAD been resolved (getopenscreen/openscreen#404). Returning 0 is what
+ * makes that warning reachable.
  */
-bool containsWord(const std::wstring& haystack, const std::wstring& word) {
-    if (haystack.empty() || word.empty()) {
-        return false;
-    }
-    size_t pos = 0;
-    while (pos <= haystack.size()) {
-        const size_t end = haystack.find(L' ', pos);
-        const std::wstring candidate =
-            haystack.substr(pos, end == std::wstring::npos ? std::wstring::npos : end - pos);
-        if (candidate == word) {
-            return true;
-        }
-        if (end == std::wstring::npos) {
-            break;
-        }
-        pos = end + 1;
-    }
-    return false;
-}
-
 int scoreDeviceName(const std::wstring& candidateName, const std::wstring& candidateId, const std::wstring& requestedName) {
     const std::wstring candidate = normalizeDeviceName(candidateName);
     const std::wstring id = normalizeDeviceName(candidateId);
@@ -108,30 +98,7 @@ int scoreDeviceName(const std::wstring& candidateName, const std::wstring& candi
         return 800;
     }
 
-    // Whole words from here down, never substrings. `candidate.find(word)` let a
-    // requested "micro" match the "microphone" that begins almost every endpoint
-    // name on Windows, so a name matching nothing still scored high enough to
-    // win -- and the recording quietly used a microphone nobody asked for, with
-    // the fallback warning unable to fire because a device HAD been resolved
-    // (getopenscreen/openscreen#404).
-    int score = 0;
-    size_t pos = 0;
-    while (pos < requested.size()) {
-        const size_t end = requested.find(L' ', pos);
-        const std::wstring word = requested.substr(pos, end == std::wstring::npos ? std::wstring::npos : end - pos);
-        if (word.size() > 1 && word != L"microphone" && word != L"mic" && word != L"audio" && word != L"input") {
-            if (containsWord(candidate, word)) {
-                score += 100;
-            } else if (containsWord(id, word)) {
-                score += 50;
-            }
-        }
-        if (end == std::wstring::npos) {
-            break;
-        }
-        pos = end + 1;
-    }
-    return score;
+    return 0;
 }
 
 std::wstring getDeviceFriendlyName(IMMDevice* device) {
