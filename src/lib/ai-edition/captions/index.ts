@@ -1,4 +1,4 @@
-export type { CaptionCue } from "./cues";
+export type { CaptionCue, CaptionTextRegion } from "./cues";
 export {
 	CAPTION_Z_INDEX_BASE,
 	captionCueAt,
@@ -8,6 +8,8 @@ export {
 	sourceSpanToTimelineSpans,
 } from "./cues";
 export type {
+	CaptionBandRect,
+	CaptionOffsetRange,
 	CaptionSettings,
 	CaptionSettingsPatch,
 	CaptionTextAlign,
@@ -15,8 +17,11 @@ export type {
 } from "./settings";
 export {
 	CAPTION_BAND_HEIGHT_PCT,
+	CAPTION_EDGE_MARGIN_PCT,
 	captionBackgroundCss,
 	captionBandRect,
+	captionInkHeightPct,
+	captionOffsetRange,
 	DEFAULT_CAPTION_SETTINGS,
 	getCaptionSettings,
 	patchCaptionSettings,

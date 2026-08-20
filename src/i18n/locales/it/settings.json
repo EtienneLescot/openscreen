@@ -53,6 +53,11 @@
 		"reactiveWebcam": "Riduci con lo zoom",
 		"reactiveWebcamDescription": "La webcam si riduce dolcemente durante lo zoom, così non intralcia.",
 		"help": "Come la webcam viene composta con lo schermo: picture-in-picture, pila verticale, doppio riquadro, forma della maschera, dimensione e effetto specchio.",
+		"helpNoWebcam": "Questo progetto non ha una webcam, quindi i controlli di layout sono disattivati e il preset mostra «Nessuna webcam». Il layout salvato viene conservato per quando aggiungerai una webcam.",
+		"webcamFraming": "Inquadratura webcam",
+		"webcamCropZoom": "Zoom ritaglio",
+		"webcamCropX": "Spostamento orizzontale",
+		"webcamCropY": "Spostamento verticale",
 		"shapes": {
 			"rectangle": "Rett.",
 			"circle": "Cerchio",
@@ -292,10 +297,17 @@
 		"alignLeft": "Sinistra",
 		"alignCenter": "Centro",
 		"alignRight": "Destra",
-		"verticalOffset": "Scostamento",
+		"verticalOffset": "Scostamento verticale",
+		"horizontalOffset": "Scostamento orizzontale",
 		"width": "Larghezza",
 		"lineLength": "Lunghezza riga",
 		"minWords": "Parole min. per riga",
 		"maxWords": "Parole max. per riga"
+	},
+	"audio": {
+		"title": "Audio",
+		"outputGain": "Livello di uscita",
+		"reset": "Reimposta audio",
+		"help": "Regola il livello di uscita audio. Si applica allo stesso modo nell’anteprima e nell’esportazione."
 	}
 }

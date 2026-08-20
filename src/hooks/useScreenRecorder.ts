@@ -20,6 +20,7 @@ import type { CursorCaptureMode, RecordedVideoAssetInput } from "@/lib/recording
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { createRecorderHandle, type RecorderHandle } from "./recorderHandle";
+import { webcamDeviceIdentityFrom } from "./webcamDeviceIdentity";
 
 const TARGET_FRAME_RATE = 60;
 const MIN_FRAME_RATE = 30;
@@ -187,6 +188,23 @@ export async function finalizeWebcamAsset(
 
 export function useScreenRecorder(): UseScreenRecorderReturn {
 	const t = useScopedT("editor");
+	/**
+	 * `t` through a ref, for the callbacks that must not be rebuilt when it
+	 * changes identity.
+	 *
+	 * `finalizeNativeWindowsRecording` is one of them: it sits in the dependency
+	 * array of the unmount effect below, whose cleanup bumps `countdownRunId` and
+	 * discards any native recording in flight. Recreating that callback therefore
+	 * re-runs the effect, and its cleanup silently cancels the countdown a
+	 * recording is starting from — the take never begins, with nothing logged.
+	 */
+	const tRef = useRef(t);
+	// In an effect, not during render: a render React discards still leaves a ref
+	// written there, and a later recording error would then be worded by a UI that
+	// never reached the screen.
+	useEffect(() => {
+		tRef.current = t;
+	}, [t]);
 	const [recording, setRecording] = useState(false);
 	const [paused, setPaused] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -214,6 +232,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (cancelled || !prefs) return;
 				setMicrophoneEnabled(prefs.micEnabled);
 				if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
+				// The name matters as much as the id: the native Windows helper picks
+				// the microphone by NAME, and falls back to the Windows default
+				// endpoint when it is empty. Seeding only the id left an auto-started
+				// recording racing this window's own device enumeration for it, and
+				// losing (getopenscreen/openscreen#404).
+				if (prefs.micDeviceName) setMicrophoneDeviceName(prefs.micDeviceName);
 				setWebcamEnabledState(prefs.camEnabled);
 				if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
 				setSystemAudioEnabled(prefs.systemAudioEnabled);
@@ -317,6 +341,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			mixingContext.current = null;
 		}
 	}, []);
+
+	/**
+	 * The camera to name in a native capture request. See
+	 * `webcamDeviceIdentityFrom` for why it is read off the live track rather than
+	 * off this hook's two separate pieces of state. Must be called before
+	 * `stopWebcamPreviewStream()`, which is why the Windows path captures it up
+	 * front instead of at the point of use.
+	 */
+	const readWebcamDeviceIdentity = useCallback(
+		() => webcamDeviceIdentityFrom(webcamStream.current, webcamDeviceId, webcamDeviceName),
+		[webcamDeviceId, webcamDeviceName],
+	);
 
 	const stopWebcamPreviewStream = useCallback(() => {
 		if (!webcamStream.current) {
@@ -600,6 +636,15 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 
 			clearNativeRecordingState();
+			// The other way a camera goes missing, and the quieter one: the device
+			// opened, so nothing warned at start, but it never produced a frame and
+			// the file it left behind was empty. Say so before the editor opens
+			// without a camera and leaves the user to work out why. Through `tRef`
+			// because this callback has to stay referentially stable — see the ref's
+			// own comment.
+			if (result.webcamDropped) {
+				toast.error(tRef.current("recording.cameraCaptureUnavailable"));
+			}
 			if (result.session) {
 				await window.electronAPI.setCurrentRecordingSession(result.session);
 			} else if (result.path) {
@@ -1058,11 +1103,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const displayId = Number(selectedSource.display_id);
 			const sourceType = selectedSource.id.startsWith("window:") ? "window" : "display";
 			const windowHandle = parseWindowHandleFromSourceId(selectedSource.id);
+			let webcamIdentity = { deviceId: webcamDeviceId, deviceName: webcamDeviceName };
 			if (webcamEnabled) {
 				await waitForWebcamReady();
 				if (!isCountdownRunActive(countdownRunToken)) {
 					return true;
 				}
+				// Read the device off the live track before letting go of it: this is
+				// the only moment where the id and the name are known to describe the
+				// same camera (see readWebcamDeviceIdentity).
+				webcamIdentity = readWebcamDeviceIdentity();
 				// Release the renderer-side validation stream before asking the native
 				// helper to open the same device: most webcams only allow one exclusive
 				// capture session, and native (Media Foundation/DirectShow) now owns
@@ -1098,8 +1148,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				},
 				webcam: {
 					enabled: webcamEnabled,
-					deviceId: webcamDeviceId,
-					deviceName: webcamDeviceName,
+					deviceId: webcamIdentity.deviceId,
+					deviceName: webcamIdentity.deviceName,
 					width: 0,
 					height: 0,
 					fps: WEBCAM_TARGET_FRAME_RATE,
@@ -1111,6 +1161,17 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const result = await window.electronAPI.startNativeWindowsRecording(request);
 			if (!result.success || !result.recordingId) {
 				throw new Error(result.error ?? "Native Windows capture failed.");
+			}
+
+			// The take goes on without the camera rather than failing, so this is the
+			// only moment the user can learn about it while it is still cheap to stop
+			// and retry. Left unsaid, the camera's absence was discovered in the
+			// editor, long after the moment was gone.
+			if (result.webcamUnavailable) {
+				toast.error(t("recording.cameraCaptureUnavailable"));
+			}
+			if (result.microphoneDefaulted) {
+				toast.error(t("recording.microphoneDefaulted"));
 			}
 
 			// Tell the user when the helper silently switched away from the default
@@ -1248,8 +1309,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				},
 				webcam: {
 					enabled: webcamEnabled,
-					deviceId: webcamDeviceId,
-					deviceName: webcamDeviceName,
+					// Same pairing rule as the Windows path; here the stream is still
+					// open, so the identity can be read at the point of use.
+					...readWebcamDeviceIdentity(),
 					width: 0,
 					height: 0,
 					fps: WEBCAM_TARGET_FRAME_RATE,

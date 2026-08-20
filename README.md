@@ -64,18 +64,15 @@ Every platform has a recommended route below. On Windows that is the Microsoft S
 
 ### macOS
 
-Download the `.dmg` installer directly from the [Releases page](https://github.com/getopenscreen/openscreen/releases). If Gatekeeper blocks the app, you can bypass it by running the following command in your terminal after installation:
+Download the `.dmg` installer directly from the [Releases page](https://github.com/getopenscreen/openscreen/releases) and drag OpenScreen into your Applications folder. Builds from 1.9.0 onward are signed with a Developer ID certificate and notarized by Apple, so Gatekeeper does not block them and no terminal step is needed.
 
-```bash
-xattr -rd com.apple.quarantine /Applications/Openscreen.app
-```
-
-Note: Give your terminal Full Disk Access in **System Settings > Privacy & Security** to grant you access and then run the above command.
-
-After running this command, proceed to **System Settings > Privacy & Security** to grant the necessary permissions for "screen recording" and "accessibility". Once permissions are granted, you can launch the app.
+On first launch, open **System Settings > Privacy & Security** and grant the two permissions OpenScreen needs: **Screen Recording** and **Accessibility**. Recording cannot start until both are granted.
 
 > [!NOTE]
-> **Upgrading from an older version and hitting permission issues?** If you already had OpenScreen installed and the new version won't record (Screen Recording or Accessibility keep failing even after you grant them), uninstall the old version, remove OpenScreen's existing entries under **System Settings > Privacy & Security** (both Screen Recording and Accessibility), then do a fresh install and grant the permissions again when prompted.
+> **macOS 15 and later re-ask for screen-recording permission periodically.** That prompt comes from macOS itself and applies to every third-party screen recorder — it is not a sign that anything is wrong with your install or that an update broke something. Grant it again when asked.
+
+> [!NOTE]
+> **Upgrading from a version older than 1.9.0?** Those builds were not signed with a Developer ID certificate, and macOS ties Screen Recording and Accessibility grants to an app's signature — so it cannot tell the new build is the same app, and the permissions you granted the old one do not carry over. If the new version won't record even after you grant them, remove OpenScreen's existing entries under **System Settings > Privacy & Security** (both Screen Recording and Accessibility), then launch it again and grant them when prompted.
 
 ### Windows
 

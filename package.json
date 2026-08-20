@@ -1,7 +1,7 @@
 {
 	"name": "openscreen",
 	"private": true,
-	"version": "1.9.2",
+	"version": "1.9.6",
 	"type": "module",
 	"packageManager": "npm@10.9.4",
 	"engines": {
@@ -11,6 +11,10 @@
 	"author": {
 		"name": "Etienne Lescot",
 		"url": "https://github.com/EtienneLescot"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/getopenscreen/openscreen.git"
 	},
 	"contributors": [
 		{
@@ -63,9 +67,14 @@
 		"test:wgc-window:win": "node scripts/test-windows-wgc-helper.mjs --window",
 		"test:wgc-audio:win": "node scripts/test-windows-wgc-helper.mjs --system-audio",
 		"test:wgc-mic:win": "node scripts/test-windows-wgc-helper.mjs --microphone",
+		"test:wgc-mic-selection:win": "node scripts/test-windows-microphone-selection.mjs",
 		"test:wgc-mixed-audio:win": "node scripts/test-windows-wgc-helper.mjs --system-audio --microphone",
+		"test:wgc-audio-timeline:win": "node scripts/test-windows-audio-timeline.mjs",
 		"test:wgc-webcam:win": "node scripts/test-windows-wgc-helper.mjs --webcam",
+		"test:wgc-camera-selection:win": "node scripts/test-windows-camera-selection.mjs",
 		"test:wgc-full:win": "node scripts/test-windows-wgc-helper.mjs --webcam --system-audio --microphone",
+		"test:sck-audio-timeline:mac": "node scripts/test-macos-audio-timeline.mjs",
+		"test:swift:mac": "swift test --package-path electron/native/screencapturekit",
 		"capture:openscreen-preview": "node scripts/capture-openscreen-preview.mjs",
 		"inspect:cursor-click-bounce": "node scripts/inspect-native-cursor-click-bounce.mjs",
 		"diagnostic:run": "node scripts/diagnostic-tool/diagnostic.mjs",
@@ -105,6 +114,7 @@
 		"@uiw/react-color-colorful": "^2.9.2",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
+		"electron-updater": "^6.8.9",
 		"i18next": "^23.16.0",
 		"langchain": "^1.2.39",
 		"lucide-react": "^0.545.0",

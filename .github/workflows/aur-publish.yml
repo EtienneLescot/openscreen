@@ -366,9 +366,46 @@ jobs:
             HostName aur.archlinux.org
             User aur
             IdentityFile ~/.ssh/aur_key
+            # Offer this key and nothing else. Without it ssh walks whatever
+            # else it can find first, and AUR can refuse on a key that is not
+            # the one being diagnosed -- so the probe below would be reporting
+            # on a different identity than the push. It is also the standard
+            # cause of "permission denied" against AUR with more than one key.
+            IdentitiesOnly yes
             StrictHostKeyChecking yes
             UserKnownHostsFile ~/.ssh/aur_known_hosts
           SSHCONF
+
+      # "Permission denied (publickey)" is the same message for three different
+      # problems: a secret that is not a readable key, a key nobody registered
+      # on AUR, and a key registered to an account that does not maintain this
+      # package. v1.9.1, v1.9.2 and v1.9.5 all died here and none said which.
+      #
+      # This narrows it by elimination rather than proving the last one. A
+      # public key is public, so printing it costs nothing and lets what CI
+      # presents be compared against what is on the account. `help` is the
+      # documented way to test AUR auth without pushing: if it answers, the key
+      # parses AND is registered, so only authorization for ${PACKAGE} is left.
+      # Its reply also enumerates the commands the account may run, which is
+      # where to look for a repo-listing one if this needs to go further.
+      - name: Identify the key AUR sees
+        if: steps.aur_secret.outputs.configured == 'true' && !inputs.dry_run
+        continue-on-error: true
+        env:
+          PACKAGE: ${{ vars.AUR_PACKAGE_NAME }}
+        run: |
+          if ! ssh-keygen -y -f ~/.ssh/aur_key > /tmp/aur_key.pub 2>/tmp/aur_key.err; then
+            echo "::error::AUR_SSH_PRIVATE_KEY is not a readable private key: $(cat /tmp/aur_key.err)"
+            exit 0
+          fi
+          echo "Public key this workflow presents:"
+          cat /tmp/aur_key.pub
+          ssh-keygen -lf /tmp/aur_key.pub || true
+          echo "--- what AUR says about it (auth only; NOT write access to ${PACKAGE}) ---"
+          # Bounded: a diagnostic must never be the thing that hangs a release.
+          # Exits non-zero by design; the message is the payload.
+          timeout -k 5 30 ssh -o BatchMode=yes -o ConnectTimeout=10 \
+            aur@aur.archlinux.org help 2>&1 || true
 
       - name: Commit and push
         if: steps.aur_secret.outputs.configured == 'true' && !inputs.dry_run
