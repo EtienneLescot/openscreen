@@ -42,6 +42,7 @@
 		"cameraDenied": "Camera access denied. Recording will continue without webcam.",
 		"cameraDisconnected": "Webcam disconnected.",
 		"cameraNotFound": "Camera not found.",
+		"cameraCaptureUnavailable": "The camera could not be opened. Recording without it.",
 		"permissionDenied": "Recording permission denied. Please allow screen recording.",
 		"accessibilityAllowAndRetry": "Allow Accessibility access for OpenScreen, then press record again to start the countdown.",
 		"selectSource": "Please select a source to record"

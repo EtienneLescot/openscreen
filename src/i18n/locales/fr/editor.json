@@ -40,6 +40,7 @@
 		"cameraDenied": "Accès à la caméra refusé. L'enregistrement continuera sans webcam.",
 		"cameraDisconnected": "Webcam déconnectée.",
 		"cameraNotFound": "Caméra introuvable.",
+		"cameraCaptureUnavailable": "Impossible d'ouvrir la caméra. Enregistrement sans elle.",
 		"permissionDenied": "Permission d'enregistrement refusée. Veuillez autoriser l'enregistrement d'écran.",
 		"accessibilityAllowAndRetry": "Autorisez l'accès Accessibilité pour OpenScreen, puis appuyez de nouveau sur enregistrer pour lancer le compte à rebours.",
 		"selectSource": "Veuillez sélectionner une source à enregistrer"

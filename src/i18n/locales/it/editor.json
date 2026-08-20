@@ -42,6 +42,7 @@
 		"cameraDenied": "Accesso alla fotocamera negato. La registrazione continuerà senza webcam.",
 		"cameraDisconnected": "Webcam disconnessa.",
 		"cameraNotFound": "Fotocamera non trovata.",
+		"cameraCaptureUnavailable": "Impossibile aprire la fotocamera. Registrazione senza.",
 		"permissionDenied": "Autorizzazione di registrazione negata. Consenti la registrazione dello schermo.",
 		"accessibilityAllowAndRetry": "Consenti l'accesso all'accessibilità per OpenScreen, poi premi di nuovo registra per avviare il conto alla rovescia.",
 		"selectSource": "Seleziona una sorgente da registrare"

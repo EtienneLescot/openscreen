@@ -42,6 +42,7 @@
 		"cameraDenied": "Acesso à câmera negado. A gravação continuará sem webcam.",
 		"cameraDisconnected": "Webcam desconectada.",
 		"cameraNotFound": "Câmera não encontrada.",
+		"cameraCaptureUnavailable": "Não foi possível abrir a câmera. Gravando sem ela.",
 		"permissionDenied": "Permissão de gravação negada. Por favor, permita a gravação de tela.",
 		"accessibilityAllowAndRetry": "Permita o acesso de Acessibilidade para o OpenScreen e pressione gravar novamente para iniciar a contagem regressiva.",
 		"selectSource": "Por favor, selecione uma fonte para gravar"
