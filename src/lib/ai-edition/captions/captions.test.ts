@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { captionCuesToTextRegions, deriveCaptionCues } from "./cues";
-import type { CaptionSettings } from "./settings";
+import type { CaptionSettings, CaptionSettingsPatch } from "./settings";
 import {
 	CAPTION_BAND_HEIGHT_PCT,
 	captionBackgroundCss,
@@ -207,6 +207,33 @@ describe("caption settings", () => {
 		expect(stored.offsetY).toBeGreaterThanOrEqual(range.y.min - 1e-9);
 		expect(stored.offsetY).toBeLessThanOrEqual(range.y.max + 1e-9);
 		expect(stored.offsetY).toBeCloseTo(getCaptionSettings(flipped).offsetY, 6);
+	});
+
+	// `fontSize` and `backgroundEnabled` reach the range the long way round, through
+	// the height of the drawn block: the taller the ink, the less of the band is
+	// empty, and the empty part is all the band is allowed to hang off the frame.
+	it.each([
+		{ field: "fontSize", grow: { fontSize: 200 } as CaptionSettingsPatch },
+		{ field: "backgroundEnabled", grow: { backgroundEnabled: true } as CaptionSettingsPatch },
+	] as const)("re-clamps when $field narrows the reach", ({ grow }) => {
+		// Start where the reach is widest, so growing the ink has something to take.
+		const roomy = patchCaptionSettings(doc(), {
+			enabled: true,
+			verticalPosition: "bottom",
+			fontSize: 12,
+			backgroundEnabled: false,
+		});
+		const pushed = patchCaptionSettings(roomy, {
+			offsetY: captionOffsetRange(getCaptionSettings(roomy)).y.max,
+		});
+		const grown = patchCaptionSettings(pushed, grow);
+
+		const range = captionOffsetRange(getCaptionSettings(grown));
+		// The reach really did narrow — otherwise this proves nothing.
+		expect(range.y.max).toBeLessThan(captionOffsetRange(getCaptionSettings(pushed)).y.max);
+		const stored = (grown.legacyEditor as { captions: CaptionSettings }).captions;
+		expect(stored.offsetY).toBeLessThanOrEqual(range.y.max + 1e-9);
+		expect(stored.offsetY).toBeCloseTo(getCaptionSettings(grown).offsetY, 6);
 	});
 
 	it("normalises an offset left over from another anchor on read", () => {
