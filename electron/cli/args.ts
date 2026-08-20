@@ -28,12 +28,18 @@ export type CliCommand = (
 	/** Machine-readable NDJSON output on stdout instead of human progress. */
 	json?: boolean;
 	/**
-	 * Write the machine-readable result here instead of trusting stdout with it.
-	 * On a host without dbus or a GPU -- a container, a CI runner, a server --
-	 * Chromium and ANGLE write diagnostics straight to the process's stdout, ahead
-	 * of anything this CLI emits, and no Chromium switch reaches all of them: some
-	 * of that output does not go through Chromium's logging at all. A file is the
-	 * one channel nothing else can reach.
+	 * Write the machine-readable result here rather than onto stdout.
+	 *
+	 * stdout is correct as it stands -- Chromium logs to stderr, and nothing this
+	 * process runs writes anywhere it should not. What a caller cannot control is
+	 * the wrapper around it. Ubuntu's xvfb-run, which is how a GUI binary gets run
+	 * headlessly in the first place, folds the command's stderr into its stdout;
+	 * under it, `sources --json | jq` sees Chromium's diagnostics ahead of the JSON
+	 * and fails. That is not hypothetical -- it is what the first attempt to script
+	 * this command did.
+	 *
+	 * A named file is a channel no wrapper can redirect into. It also sidesteps
+	 * shell quoting and encoding, which matters more on Windows than on POSIX.
 	 */
 	jsonOutPath?: string;
 };
