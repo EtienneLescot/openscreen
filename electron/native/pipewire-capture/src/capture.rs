@@ -401,6 +401,17 @@ impl Capture {
             // hold is audio from before the pause: it is part of the take and
             // stays, and the first drain after resume places it. See
             // AudioRing::pause for what discarding it used to cost.
+            //
+            // THE CLOCK IS STOPPED FIRST, AND THAT ORDER IS THE RIGHT WAY ROUND.
+            // It leaves a window of a microsecond or so in which a capture
+            // thread can still be admitted — but a PipeWire buffer is delivered
+            // AFTER the audio in it was captured, so a buffer arriving in that
+            // window carries sound from before the pause instant, which the
+            // video timeline does cover. Keeping it is correct. Closing the
+            // gates first would reject that same buffer instead, and a
+            // rejection owes no silence, so it would drop a quantum of audio
+            // the video still accounts for — the same error, in the direction
+            // that actually loses something.
             if let Some(mix) = &mut self.audio {
                 for input in &mut mix.inputs {
                     input.ring.pause();
