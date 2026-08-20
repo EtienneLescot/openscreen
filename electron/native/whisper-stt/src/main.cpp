@@ -276,7 +276,7 @@ int main(int argc, char** argv) {
 	                             // /inference handler still runs, but skipping
 	                             // the request is wasted work.
 	cparams.dtw_token_timestamps = true;
-	cparams.dtw_aheads_preset    = WHISPER_AHEADS_LARGE_V3_TURBO;
+	cparams.dtw_aheads_preset    = WHISPER_AHEADS_SMALL;
 	whisper_context* ctx = whisper_init_from_file_with_params(model_path.c_str(), cparams);
 	if (!ctx && cparams.use_gpu) {
 		// Metal/Vulkan allocation can fail transiently when the editor or another

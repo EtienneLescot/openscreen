@@ -98,7 +98,7 @@ subtitle is the reason rather than "With AI".
 
 ### One phase, including the first-run model download
 
-On a fresh install the GGML model (~574 MB) is not on disk. It is fetched by
+On a fresh install the GGML model (~264 MB) is not on disk. It is fetched by
 `SttManager.prepare()` **inside** the `stt:transcribe` IPC call — i.e. inside a
 run this store has already marked `running` — so the user sees one single busy
 phase that simply takes longer the first time. That is deliberate: no separate
@@ -107,7 +107,7 @@ clickable in the meantime (`phase: "model"` is emitted by the main process but
 deliberately not forwarded to the renderer by `transcribeAsset`). Nothing in the
 renderer imposes a timeout that a slow download could trip: the preload does a
 bare `ipcRenderer.invoke`, `fetchWithRetry` has no per-request deadline, and
-whisper-server's 60 s readiness budget only starts once the download resolved.
+whisper-server's 30 s readiness budget only starts once the download resolved.
 
 Three edges make that promise hold, and each is load-bearing:
 
@@ -146,10 +146,11 @@ helper's `/inference` JSON.
 
 Why whisper.cpp, in one paragraph: a single C++ dependency with native DTW
 token timestamps for word-level timing and portable runtime device selection
-that covers Metal, Vulkan and CPU in one binary. OpenScreen supplies bounded,
-sequential chunks to `whisper_full()` and restores their absolute timestamps,
-so long recordings retain progress and retry boundaries. Validation data —
-backend-by-backend WER and real-time factors — lives in
+that covers Metal, Vulkan and CPU in one binary. `whisper_full()` does its own
+long-form windowing over anything longer than 30 s, so no manual windowing is
+required on our side — OpenScreen chunks anyway, for progress and retry
+boundaries rather than for correctness (see § Long-form recordings). Validation
+data — backend-by-backend WER and real-time factors — lives in
 [`tools/stt-eval/whispercpp-dtw-poc/REPORT.md`](../../tools/stt-eval/whispercpp-dtw-poc/REPORT.md).
 
 ### Per-platform backend
@@ -187,7 +188,7 @@ it verbatim in the response.
    array.
 2. **DTW timestamp** — every non-special token carries `t_dtw` in
    centiseconds from whisper.cpp's native DTW
-   (`dtw_token_timestamps=true`, `dtw_aheads_preset=WHISPER_AHEADS_LARGE_V3_TURBO`,
+   (`dtw_token_timestamps=true`, `dtw_aheads_preset=WHISPER_AHEADS_SMALL`,
    `flash_attn=false`, which together are the prerequisites for DTW to
    actually run). `t_dtw == -1` is the DTW-inactive guardrail: the helper
    fails the request rather than emit zero-quality timestamps.
@@ -224,16 +225,20 @@ so no second pass is needed.
 
 ### Long-form recordings
 
-OpenScreen splits long recordings at nearby low-energy boundaries, transcribes
-the bounded chunks sequentially, then restores their absolute timestamps. This
-keeps progress observable and makes a failed chunk retryable without running a
-whole long recording again.
+`whisper_full()` handles recordings longer than 30 s internally, but OpenScreen
+splits them first anyway: `chunking.ts` cuts at the quietest frame near each
+90 s boundary, the chunks are transcribed sequentially, and their absolute
+timestamps are restored afterwards. That is not for correctness — whisper's own
+windowing would cope — but so progress stays observable and a failed chunk can
+be retried without re-running the whole recording. The validation set exercises
+130 s at WER 0.076 with full per-word coverage (see the validation report
+linked above).
 
 ### Model
 
-The single shipped artifact is `ggml-large-v3-turbo-q5_0.bin` from
-`ggerganov/whisper.cpp` on HuggingFace: Whisper `large-v3-turbo`, multilingual
-(~99 languages), q5_0 quantised, ~574 MB. Precision is baked into the GGML file —
+The single shipped artifact is `ggml-small-q8_0.bin` from
+`ggerganov/whisper.cpp` on HuggingFace: Whisper `small`, multilingual (~99
+languages), q8_0 quantised, ~264 MB. Precision is baked into the GGML file —
 there is no runtime `--int8` flag. `electron/stt/modelManager.ts` downloads
 the file once into the user-data cache and writes it through an atomic
 `.partial` rename, so a half-downloaded file can never be picked up as a
@@ -285,7 +290,7 @@ bash scripts/build-whisper-stt.sh
 # issues inside whisper.cpp's vulkan-shaders-gen sub-project.
 
 # Run the helper directly for manual testing
-set OPENSCREEN_WHISPER_MODEL=%APPDATA%\Electron\stt-models\whisper-ggml\ggml-large-v3-turbo-q5_0.bin
+set OPENSCREEN_WHISPER_MODEL=%APPDATA%\Electron\stt-models\whisper-ggml\ggml-small-q8_0.bin
 electron\native\bin\win32-x64\whisper-stt-server.exe --port 20199 --threads 8
 
 # Test
