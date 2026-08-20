@@ -6,6 +6,7 @@ import {
 } from "@/components/video-editor/types";
 import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
 import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
@@ -85,7 +86,7 @@ export function applyPreviewAudioSettings(
 	elements: Array<HTMLAudioElement | null>,
 	gainDb: number,
 ): void {
-	const outputGain = 10 ** (gainDb / 20);
+	const outputGain = audioGainScalar(gainDb);
 	if (!graph) {
 		for (const element of elements) {
 			if (element) element.volume = Math.min(1, outputGain);

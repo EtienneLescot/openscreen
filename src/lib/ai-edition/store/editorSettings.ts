@@ -47,6 +47,17 @@ import type { AxcutDocument } from "../schema";
  *  region, and near a cut the export pulls audio across the junction while the preview cannot. */
 export const AUDIO_GAIN_DB_LIMIT = 12;
 
+/** dB to the linear scalar every side of the boundary multiplies by.
+ *
+ *  Exported rather than written out three times. `finish_audio` applies
+ *  `10f32.powf(gain_db / 20.0)` per sample; the preview feeds this to a `GainNode`; the
+ *  timeline waveform scales its bars by it. The claim those three make together — that what
+ *  you see is what you hear is what you export — only holds while they are the same number,
+ *  and a hand-copied `10 ** (dB / 20)` is exactly how that stops being true. */
+export function audioGainScalar(gainDb: number): number {
+	return 10 ** (gainDb / 20);
+}
+
 export interface EditorSettingsSnapshot {
 	wallpaper: string;
 	aspectRatio: AspectRatio;
