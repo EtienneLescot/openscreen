@@ -65,6 +65,10 @@ function runHelper(label, microphoneDeviceId, microphoneDeviceName) {
 
 		const proc = spawn(HELPER, [JSON.stringify(config)], { windowsHide: true });
 		let output = "";
+		let spawnError = null;
+		proc.on("error", (error) => {
+			spawnError = error.message;
+		});
 		proc.stdout.on("data", (chunk) => {
 			output += chunk.toString();
 		});
@@ -80,13 +84,23 @@ function runHelper(label, microphoneDeviceId, microphoneDeviceName) {
 		}, RECORD_MS);
 		const killTimer = setTimeout(() => proc.kill(), RECORD_MS + 6000);
 
-		proc.on("close", () => {
+		proc.on("close", (code, signal) => {
 			clearTimeout(stopTimer);
 			clearTimeout(killTimer);
 			fs.rmSync(outputPath, { force: true });
 			resolve({
+				// A helper that dies can still have printed everything expected, so
+				// how it ended is part of the result rather than something to skip.
+				spawnError,
+				code,
+				signal,
 				defaulted: output.includes('"code":"microphone-defaulted"'),
 				selected: output.match(/"microphoneDeviceName":"([^"]*)"/)?.[1] ?? null,
+				// Which endpoints the helper actually saw. A negative case proves
+				// nothing if the device it was meant to be tempted by was absent.
+				candidates: [...output.matchAll(/Native microphone candidate: (.+?) score=(\d+)/g)].map(
+					(match) => ({ name: match[1].trim(), score: Number(match[2]) }),
+				),
 			});
 		});
 	});
@@ -102,9 +116,23 @@ const cases = [
 	},
 	{
 		label: "name-matches-nothing",
-		why: "a name was supplied and matches no endpoint — the fuzzy match must not invent one",
+		why: "a name was supplied and matches no endpoint — the match must not invent one",
 		deviceId: "",
 		deviceName: "A Microphone That Is Not Here",
+		expectDefaulted: true,
+	},
+	{
+		label: "short-word-inside-a-name",
+		why: '"Micro" sits inside the "Microphone" that opens nearly every Windows endpoint name — containment must be whole words',
+		deviceId: "",
+		deviceName: "Micro",
+		expectDefaulted: true,
+	},
+	{
+		label: "short-word-inside-a-brand",
+		why: '"Logi" sits inside "Logitech" — the same mistake one word along',
+		deviceId: "",
+		deviceName: "Logi",
 		expectDefaulted: true,
 	},
 	{
@@ -141,17 +169,40 @@ if (REAL_MIC_NAME) {
 let failures = 0;
 for (const testCase of cases) {
 	const result = await runHelper(testCase.label, testCase.deviceId, testCase.deviceName);
-	let ok = result.defaulted === testCase.expectDefaulted;
-	if (ok && testCase.expectSelectedToMatch) {
-		// Not string equality: WASAPI's friendly name is the app's label without
-		// the USB ids Chromium appends, so the app's name contains the endpoint's.
-		ok = Boolean(result.selected) && testCase.deviceName.includes(result.selected);
+
+	const problems = [];
+	if (result.spawnError) problems.push(`could not start the helper: ${result.spawnError}`);
+	if (result.signal) problems.push(`helper killed by ${result.signal}`);
+	if (result.code !== 0 && result.code !== null) problems.push(`helper exited ${result.code}`);
+	if (result.defaulted !== testCase.expectDefaulted) {
+		problems.push(`defaulted=${result.defaulted}, expected ${testCase.expectDefaulted}`);
 	}
-	if (!ok) failures += 1;
+	// A case that supplies a name is only meaningful if the helper had endpoints
+	// to be tempted by; with none enumerated it would pass whatever the rules
+	// say. A case supplying no name never reaches enumeration at all, and that
+	// short circuit IS the behaviour under test there.
+	const scoringWasExercised = testCase.deviceName !== "";
+	if (testCase.expectDefaulted && scoringWasExercised && result.candidates.length === 0) {
+		problems.push("no endpoint was enumerated, so this case proves nothing");
+	}
+	if (testCase.expectDefaulted && result.candidates.some((c) => c.score > 0)) {
+		const scored = result.candidates
+			.filter((c) => c.score > 0)
+			.map((c) => `${c.name}=${c.score}`)
+			.join(", ");
+		problems.push(`something scored above zero: ${scored}`);
+	}
+	if (testCase.expectSelectedToMatch) {
+		const matches = Boolean(result.selected) && testCase.deviceName.includes(result.selected);
+		if (!matches) problems.push(`opened "${result.selected}", which is not what was asked for`);
+	}
+
+	if (problems.length) failures += 1;
 	console.log(
-		`${ok ? "PASS" : "FAIL"}  ${testCase.label.padEnd(24)} defaulted=${String(result.defaulted).padEnd(5)} expected=${String(testCase.expectDefaulted).padEnd(5)} opened="${result.selected}"`,
+		`${problems.length ? "FAIL" : "PASS"}  ${testCase.label.padEnd(24)} defaulted=${String(result.defaulted).padEnd(5)} opened="${result.selected}"`,
 	);
 	console.log(`      ${testCase.why}`);
+	for (const problem of problems) console.log(`      -> ${problem}`);
 }
 
 console.log(
