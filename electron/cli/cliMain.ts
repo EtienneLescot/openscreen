@@ -42,6 +42,24 @@ function safeWrite(stream: NodeJS.WriteStream, text: string): void {
 	}
 }
 
+// Timestamped startup milestones on stderr. A process that stops answering says
+// nothing about where it stopped, and `openscreen sources` has hung on roughly
+// half of its headless CI runs while emitting no renderer output whatsoever --
+// which rules out everything after the renderer starts and leaves everything
+// before it. These narrow that down without guessing.
+//
+// Gated on the existing diagnostic flag, so a normal run is byte-identical and
+// no other packaging path can observe this.
+const startedAt = Date.now();
+function milestone(name: string): void {
+	if (!isDiagnosticModeEnabled()) return;
+	safeWrite(
+		process.stderr,
+		`[milestone +${Date.now() - startedAt}ms] ${name}
+`,
+	);
+}
+
 function createOutput(json: boolean): CliOutput {
 	const isTty = process.stdout.isTTY === true;
 	let progressLineActive = false;
@@ -215,6 +233,7 @@ function setupRecordStopSignals(stop: (reason: string) => void): void {
 const writeStdout = (text: string) => safeWrite(process.stdout, text);
 
 export function runCli(command: CliCommand): void {
+	milestone(`runCli entered (${command.kind})`);
 	if (command.kind === "help") {
 		safeWrite(process.stdout, CLI_USAGE);
 		app.exit(0);
@@ -301,9 +320,11 @@ export function runCli(command: CliCommand): void {
 		app.exit(1);
 	});
 
+	milestone("awaiting app ready");
 	void app
 		.whenReady()
 		.then(async () => {
+			milestone("app ready");
 			if (command.kind === "info") {
 				const code = await runInfoCommand(command.projectPath, command.json === true, writeStdout);
 				app.exit(code);
@@ -382,7 +403,10 @@ export function runCli(command: CliCommand): void {
 			ipcMain.handle("update-global-shortcut", () => ({ success: false }));
 
 			const request: CliRequest = command;
-			ipcMain.handle("cli-get-request", () => request);
+			ipcMain.handle("cli-get-request", () => {
+				milestone("renderer asked for the request");
+				return request;
+			});
 			ipcMain.on("cli-log", (_event, level: string, message: string) => {
 				if (level === "error") {
 					output.error(message);
@@ -396,6 +420,7 @@ export function runCli(command: CliCommand): void {
 			});
 
 			ipcMain.handle("cli-done", async (_event, result: CliDoneResult) => {
+				milestone(`renderer reported done (success=${result.success})`);
 				if (finished) return;
 				finished = true;
 
@@ -476,6 +501,9 @@ export function runCli(command: CliCommand): void {
 				captions: "cli-captions",
 			}[command.kind];
 			cliWindow = loadRunnerWindow(windowType);
+			milestone(`runner window created (${windowType})`);
+			cliWindow.webContents.on("did-finish-load", () => milestone("renderer did-finish-load"));
+			cliWindow.webContents.on("dom-ready", () => milestone("renderer dom-ready"));
 
 			// Surface renderer console errors/warnings on stderr — the hidden window
 			// has no other way to show what went wrong (toasts are invisible).
@@ -488,6 +516,9 @@ export function runCli(command: CliCommand): void {
 			cliWindow.webContents.on("did-fail-load", (_e, code, description) => {
 				output.error(`Failed to load runner window: ${description} (${code})`);
 				app.exit(1);
+			});
+			app.on("child-process-gone", (_e, details) => {
+				milestone(`child-process-gone: ${details.type} (${details.reason})`);
 			});
 			cliWindow.webContents.on("render-process-gone", (_e, details) => {
 				output.error(`Renderer crashed: ${details.reason}`);
