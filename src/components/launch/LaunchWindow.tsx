@@ -425,7 +425,13 @@ export function LaunchWindow() {
 	useEffect(() => {
 		setHudMouseEventsEnabled(false);
 		return () => {
-			window.electronAPI?.setHudOverlayIgnoreMouseEvents?.(false);
+			// Through the wrapper, not the bridge under it: the wrapper owns
+			// `hudIgnoreMouseEventsRef`, and a raw send here leaves that mirror
+			// describing a state the main process has already left. The next run
+			// then dedupes against a mirror that is wrong and sends nothing — under
+			// StrictMode that is every mount, so the click-through path quietly
+			// stops being exercised on the machine it is developed on.
+			setHudMouseEventsEnabled(true);
 		};
 	}, [setHudMouseEventsEnabled]);
 
