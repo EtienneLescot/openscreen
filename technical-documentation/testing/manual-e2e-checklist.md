@@ -416,6 +416,8 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 - [ ] Confirm local transcription reports the device it actually ran on and completes on a Metal-capable machine.
 - [ ] Confirm the packaged `.app` contains the compositor addon and that the addon carries no build-machine path.
 - [ ] Confirm the packaged `.app` bundles its ffmpeg libraries and runs on a machine with no developer toolchain installed.
+- [ ] **On a Retina/HiDPI display**, record the screen and confirm the recorded frame is filled edge to edge — not the desktop drawn small in one corner of a black rectangle. Then do the same for a single window. Issue #418 shipped exactly this, invisible on every 1× display because a point size and a pixel size are the same number there; `SCStreamConfiguration` does not scale a frame up to fill an oversized buffer, so the surplus stays background black. Check the frame, not just the file's dimensions — the reporter's `.mp4` was 3024×1898 as expected and still wrong inside.
+- [ ] **With a second display attached at a different scale factor**, record each display in turn and confirm both fill their frame. A machine whose displays all share one scale factor cannot catch a units mix-up.
 
 ### Linux
 
