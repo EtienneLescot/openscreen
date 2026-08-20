@@ -172,7 +172,7 @@ export function NewEditorShell() {
 	// don't race each other's save and overwrite one another in the
 	// store. The hook reads the doc inside the chain (after awaiting the
 	// previous save) — see its source for the race this fixes.
-	const { apply: applyTimelineOp } = useSequentialTimelineOps({
+	const { apply: applyTimelineOp, enqueue: enqueueTimelineWrite } = useSequentialTimelineOps({
 		fallbackDocument: document,
 		saveDocument,
 	});
@@ -393,38 +393,33 @@ export function NewEditorShell() {
 		[setCurrentTime],
 	);
 
-	// Same race, same shape of fix as `useSequentialTimelineOps` — see that file's header.
-	// `insertClipAt` is a read-modify-write of the whole document, so two adds in flight at
-	// once both read the pre-insert doc and the second `saveDocument` clobbers the first,
-	// silently dropping a clip. Two adds is one double-click on **Add to timeline** (the
-	// button has no pending state) or two quick drags. It can't route through `apply()`
-	// because inserting a clip is not an AxcutTimelineOperation — it carries its own
-	// background duration probe — so the queue is here, built the same way.
+	// Same race as `useSequentialTimelineOps` — see that file's header. `insertClipAt` is a
+	// read-modify-write of the whole document, so two adds in flight at once both read the
+	// pre-insert doc and the second `saveDocument` clobbers the first, silently dropping a
+	// clip. Two adds is one double-click on **Add to timeline** (the button has no pending
+	// state) or two quick drags.
+	//
+	// It goes on that hook's queue rather than one of its own: a second queue serialises
+	// adds against adds and nothing else, so an add still clobbers a trim landing at the
+	// same moment. It can't route through `apply()` — inserting a clip is not an
+	// AxcutTimelineOperation, it carries its own background duration probe — hence
+	// `enqueue`, which is the same chain without that constraint.
 	//
 	// The append index is read INSIDE the chain for the same reason the doc is: off the
 	// closure, `clips.length` stays frozen at the last render, so the second add lands
 	// before the first instead of after it.
-	const addToTimelineQueueRef = useRef<Promise<unknown>>(Promise.resolve());
 	const handleDropAsset = useCallback(
-		(assetId: string) => {
-			const queued = addToTimelineQueueRef.current.then(() => {
+		(assetId: string) =>
+			enqueueTimelineWrite(() => {
 				const at = useProjectStore.getState().document?.timeline.clips.length ?? 0;
 				return tl.insertClipAt(assetId, at);
-			});
-			// Swallow on the STORED promise only, so a failed add doesn't poison the queue;
-			// the caller still gets `queued` and can observe the rejection.
-			addToTimelineQueueRef.current = queued.then(
-				() => undefined,
-				() => undefined,
-			);
-			return queued.catch((error) => {
+			}).catch((error) => {
 				toast.error(te("mediaStage.couldNotAddAsset"), {
 					description: error instanceof Error ? error.message : String(error),
 				});
 				throw error;
-			});
-		},
-		[tl, te],
+			}),
+		[tl, te, enqueueTimelineWrite],
 	);
 
 	// Ref so the 'ended' listener below always sees the latest clips without tearing

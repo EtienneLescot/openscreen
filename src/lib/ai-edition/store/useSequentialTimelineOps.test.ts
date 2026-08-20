@@ -11,6 +11,9 @@
 //      has a resolved promise to chain off.
 //   3. The store-empty fallback (no project loaded) returns null instead
 //      of crashing.
+//   4. `enqueue` shares that one chain with `apply`, so a document write
+//      that isn't an operation — the media panel's clip insertion — can't
+//      race an op. A second queue would only serialise it against itself.
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -160,6 +163,71 @@ describe("useSequentialTimelineOps", () => {
 		// The queue survived the first failure — both saves were attempted.
 		expect(saveDocument).toHaveBeenCalledTimes(2);
 		expect(saveDocument).toHaveBeenNthCalledWith(2, secondResult);
+	});
+
+	it("runs an enqueued write after the op ahead of it has committed", async () => {
+		const seed = makeDocWithAsset();
+		useProjectStore.setState({ document: seed });
+
+		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
+			useProjectStore.getState().setDocument(doc);
+		});
+
+		const { result } = renderHook(() =>
+			useSequentialTimelineOps({ fallbackDocument: seed, saveDocument }),
+		);
+
+		// What the insertion actually needs: the clip count, read at the moment
+		// it runs. On its own queue this would still be the pre-op count.
+		let trimsSeenByTask = -1;
+		await act(async () => {
+			const opPromise = result.current.apply({
+				type: "add_trim_range" as const,
+				assetId: "asset_1",
+				startSec: 1,
+				endSec: 2,
+				reason: "ahead of the insertion",
+			});
+			const taskPromise = result.current.enqueue(() => {
+				trimsSeenByTask = useProjectStore.getState().document?.timeline.trimRanges.length ?? -1;
+			});
+			await Promise.all([opPromise, taskPromise]);
+		});
+
+		expect(trimsSeenByTask).toBe(1);
+	});
+
+	it("keeps the chain usable after an enqueued write throws", async () => {
+		const seed = makeDocWithAsset();
+		useProjectStore.setState({ document: seed });
+
+		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
+			useProjectStore.getState().setDocument(doc);
+		});
+
+		const { result } = renderHook(() =>
+			useSequentialTimelineOps({ fallbackDocument: seed, saveDocument }),
+		);
+
+		let rejection: unknown;
+		let ranAfterTheFailure = false;
+		await act(async () => {
+			const failing = result.current.enqueue(() => {
+				throw new Error("insert failed");
+			});
+			const next = result.current.enqueue(() => {
+				ranAfterTheFailure = true;
+			});
+			await failing.catch((err: unknown) => {
+				rejection = err;
+			});
+			await next;
+		});
+
+		// The caller sees the failure...
+		expect((rejection as Error).message).toBe("insert failed");
+		// ...and the queue behind it did not stall.
+		expect(ranAfterTheFailure).toBe(true);
 	});
 
 	it("returns null when the store has no document and no fallback is supplied", async () => {
