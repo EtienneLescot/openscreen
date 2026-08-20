@@ -630,10 +630,15 @@ export function getSessionContextUsage(
 ): { usedTokens: number; budgetTokens: number; ratio: number; fillPercent: number } | null {
 	const session = sessionsByProject.get(projectId)?.get(sessionId);
 	if (!session) return null;
-	// Measured on what the model is given, not on the transcript — after a
+	// Measured on what the model is given, not on the transcript -- after a
 	// compaction those differ, and the number that matters is the one that
 	// fills the context window.
-	const snap = budgetSnapshot(modelMessages(session), budgetTokens);
+	//
+	// `modelHistory`, NOT `modelMessages`: the model gets a 20-message window, so on
+	// a 40-message session `modelMessages` reports double what is sent, and pressing
+	// Compact halves the reported number while what actually reaches the provider
+	// barely moves. That is the same class of wrong number this pill exists to avoid.
+	const snap = budgetSnapshot(modelHistory(session), budgetTokens);
 	const fillPercent = Math.min(100, Math.round(snap.ratio * 100));
 	return {
 		usedTokens: snap.usedTokens,
@@ -666,7 +671,8 @@ export function getSessionBudget(
 ): SessionBudgetSnapshot | null {
 	const s = sessionsByProject.get(projectId)?.get(sessionId);
 	if (!s) return null;
-	const snap = budgetSnapshot(modelMessages(s), budgetTokens);
+	// Same window the model is actually sent — see `getSessionContextUsage`.
+	const snap = budgetSnapshot(modelHistory(s), budgetTokens);
 	return {
 		usedTokens: snap.usedTokens,
 		budgetTokens: snap.budgetTokens,

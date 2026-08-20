@@ -1141,9 +1141,11 @@ function ChatStripPanel() {
 		});
 	}, [llmConfig]);
 
-	// Prefer the main process's model-message budget so manual compaction can
-	// shrink this meter while the complete transcript remains visible. The hook
-	// falls back to a renderer estimate in browser/shim or bridge-failure cases.
+	// Prefer the main process's estimate of the windowed history it actually sends, so
+	// manual compaction can shrink this meter while the complete transcript remains
+	// visible. The renderer estimate is only shown until the first answer arrives --
+	// including in web builds, where the shim answers with its own transcript estimate
+	// rather than leaving the fallback in place.
 	const budget = useChatBudget({ projectId, sessionId: activeSessionId, messages });
 
 	const [compactNowPending, setCompactNowPending] = useState(false);
