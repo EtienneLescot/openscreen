@@ -13,10 +13,20 @@ export const WEBSITE_URL = "https://getopenscreen.com";
  *  electron-builder's `productName` ("Openscreen") when packaged and to package.json's `name`
  *  ("openscreen") in dev, so the About box would disagree with its own title bar. */
 export const PRODUCT_NAME = "OpenScreen";
-/** Must name the holder in LICENSE. electron-builder derives Info.plist's
- *  NSHumanReadableCopyright and the Windows LegalCopyright from package.json's `author`, so a
- *  third spelling here would put three attributions on one binary. */
-export const COPYRIGHT = "© 2025 Siddharth Vaddem — MIT License";
+/** The collective form, and deliberately NOT the whole of LICENSE. LICENSE carries two holders:
+ *  Siddharth Vaddem, who created the project — MIT obliges us to keep that notice on a codebase
+ *  that still contains his code — and the contributors collectively. This is the line every user
+ *  sees, so it names the group that maintains the app rather than one person who no longer does.
+ *
+ *  "contributors" and not "OpenScreen": getopenscreen is a GitHub organisation, not a legal
+ *  entity, and copyright cannot vest in something that does not exist. Each author keeps their
+ *  own; this is shorthand for all of them.
+ *
+ *  Must stay byte-identical to `copyright` in electron-builder.json5, which feeds Info.plist's
+ *  NSHumanReadableCopyright and the Windows LegalCopyright. That key is declared explicitly
+ *  BECAUSE electron-builder otherwise derives those from package.json's `author` — a single
+ *  name, which put a second attribution on the same binary this string appears in. */
+export const COPYRIGHT = "© 2025-2026 OpenScreen contributors — MIT License";
 
 /** macOS opens its own About panel (the app menu's `role: "about"`), so it is the one platform
  *  that must not be shown the message box we build, and the only one whose panel needs
