@@ -73,6 +73,8 @@
 		"test:wgc-webcam:win": "node scripts/test-windows-wgc-helper.mjs --webcam",
 		"test:wgc-camera-selection:win": "node scripts/test-windows-camera-selection.mjs",
 		"test:wgc-full:win": "node scripts/test-windows-wgc-helper.mjs --webcam --system-audio --microphone",
+		"test:sck-audio-timeline:mac": "node scripts/test-macos-audio-timeline.mjs",
+		"test:swift:mac": "swift test --package-path electron/native/screencapturekit",
 		"capture:openscreen-preview": "node scripts/capture-openscreen-preview.mjs",
 		"inspect:cursor-click-bounce": "node scripts/inspect-native-cursor-click-bounce.mjs",
 		"diagnostic:run": "node scripts/diagnostic-tool/diagnostic.mjs",

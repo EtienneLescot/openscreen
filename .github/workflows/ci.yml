@@ -284,6 +284,41 @@ jobs:
           cd crates
           cargo build -p compositor-view-napi --release
 
+  # The macOS capture helper had NO job on any pull request — not a build, not a test.
+  # `build.yml` compiles it, and build.yml triggers only on `push: tags: v*` or
+  # workflow_dispatch, so a Swift file that did not compile surfaced when someone cut a
+  # release rather than when they pushed it. That is the same gap `rust-windows-compositor-
+  # check` above was added to close for the Windows compositor.
+  #
+  # `swift test`, not just `swift build`, and the difference is the reason this job exists
+  # at all. PR #343 changed how audio is placed on the recording timeline and shipped 301
+  # lines of Swift tests beside the change; not one of them ever ran, because no workflow
+  # invoked `swift test` and nothing under `electron/native/screencapturekit/Tests` was
+  # executed on any pull request. A change to recording timing that no measurement can
+  # contradict is not one to merge into a shipped capture path, so the measurement runs here.
+  #
+  # `AudioTrackMixerTests` needs no screen, no display server and no TCC grant: the mixer
+  # takes its sink and its clock as parameters, so the tests drive it with a collecting sink
+  # and a hand-moved clock. That is what makes "does a sound land where it happened"
+  # answerable on a headless runner. The other half of that question — the one that needs a
+  # real display, a real tap and a real speaker — is `npm run test:sck-audio-timeline:mac`,
+  # which cannot run here and is run by hand.
+  #
+  # macos-14 for the same reason the compositor job uses it: Apple Silicon, matching what
+  # ships. The release build runs too, because the executable targets are not covered by the
+  # test target and `-c release` is what `build:native:mac` actually produces.
+  swift-macos-helper:
+    name: Swift test (macOS capture helper)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - name: Show toolchain
+        run: swift --version
+      - name: swift test (capture core)
+        run: swift test --package-path electron/native/screencapturekit
+      - name: swift build (release, both helpers)
+        run: swift build -c release --package-path electron/native/screencapturekit
+
   semantic-pr:
     name: Validate PR title (semantic)
     runs-on: ubuntu-latest

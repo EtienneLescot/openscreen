@@ -1,0 +1,388 @@
+/**
+ * Does a sound land where it happened, and does the track cover the whole take?
+ *
+ * The macOS sibling of scripts/test-windows-audio-timeline.mjs, and it asks one more
+ * question than that one does. The helper's mixed audio track used to take its origin
+ * from the first buffer that happened to arrive, so a take beginning in silence began
+ * the track wherever the first sound was — and it never called
+ * `writer.endSession(atSourceTime:)`, so the file also ENDED at the last sample anything
+ * delivered. Leading silence missing at the front, trailing silence missing at the back,
+ * one cause: a cursor advanced by data instead of by a clock.
+ *
+ *   npm run test:sck-audio-timeline:mac
+ *
+ * Records ten seconds — four silent, three with a tone, three silent again — and measures
+ * where the tone sits and how long each track is. Plays through the default output device
+ * and captures the default display, so both have to be working: this measures the machine
+ * as much as the code. `swift test` is the half that measures only the code, and that one
+ * runs on every pull request.
+ *
+ * Two tolerances, because the two measurements are not equally tight:
+ *
+ *   - The tone's position is compared against the instant playback was ASKED for, so it
+ *     carries afplay's start-up latency and the output device waking up. 250 ms.
+ *   - The audio track's length is compared against the VIDEO track's length in the same
+ *     file. Both come from one writer session and one endSession, so no wall clock enters
+ *     it at all and the comparison can be tight. 100 ms.
+ *
+ * That second one is the assertion with teeth, and it is the one Windows cannot make: its
+ * script has no video track to compare against and settles for "not shorter than the
+ * silence", with TOLERANCE_S = 1.0.
+ */
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(__dirname, "..");
+
+const PLAY_AT_MS = Number(process.env.OPENSCREEN_SCK_TEST_PLAY_AT_MS ?? 4000);
+const TONE_MS = 3000;
+/** Silence after the tone, so the trailing half of the timeline is exercised too. */
+const TAIL_MS = 3000;
+/** How far the tone may sit from where it was asked for before this is a failure. */
+const TONE_TOLERANCE_S = 0.25;
+/** How far the audio track may differ in length from the video track in the same file. */
+const TRACK_TOLERANCE_S = 0.1;
+/** Analysis window for locating the tone. Tight enough to resolve a 250 ms mis-rebase. */
+const WINDOW_MS = 20;
+
+if (process.platform !== "darwin") {
+	console.log("macOS only — skipping.");
+	process.exit(0);
+}
+
+/**
+ * The vendored LGPL tree first, then whatever is on PATH.
+ *
+ * scripts/fetch-ffmpeg-macos.mjs BUILDS its tree from source (roughly five minutes),
+ * because no LGPL macOS binary is published — far too much to demand of a test run, so a
+ * Homebrew ffmpeg is accepted here. That is fine for measuring a file and would not be
+ * fine for shipping: Homebrew's build is GPL-3.0.
+ */
+function resolveTool(name) {
+	const fromEnv = process.env[`OPENSCREEN_${name.toUpperCase()}`];
+	if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+
+	const thirdparty = path.join(ROOT, "crates", "thirdparty");
+	if (fs.existsSync(thirdparty)) {
+		for (const entry of fs.readdirSync(thirdparty)) {
+			if (!entry.startsWith("ffmpeg-n")) continue;
+			const candidate = path.join(thirdparty, entry, "bin", name);
+			if (fs.existsSync(candidate)) return candidate;
+		}
+	}
+
+	const onPath = spawnSync("/usr/bin/which", [name], { encoding: "utf8" });
+	const resolved = (onPath.stdout ?? "").trim();
+	return resolved && fs.existsSync(resolved) ? resolved : null;
+}
+
+function resolveHelper() {
+	const candidates = [
+		process.env.OPENSCREEN_SCK_HELPER_BIN,
+		path.join(
+			ROOT,
+			"electron",
+			"native",
+			"screencapturekit",
+			"build",
+			"openscreen-screencapturekit-helper",
+		),
+		path.join(
+			ROOT,
+			"electron",
+			"native",
+			"bin",
+			"darwin-arm64",
+			"openscreen-screencapturekit-helper",
+		),
+		path.join(
+			ROOT,
+			"electron",
+			"native",
+			"bin",
+			"darwin-x64",
+			"openscreen-screencapturekit-helper",
+		),
+	];
+	return candidates.find((candidate) => candidate && fs.existsSync(candidate)) ?? null;
+}
+
+/**
+ * The helper matches `source.displayId` against `SCShareableContent.displays`, so this has
+ * to be a real CGDirectDisplayID rather than an index. Asked of CoreGraphics directly —
+ * guessing 1 is right on most single-display Macs and wrong on the rest.
+ */
+function resolveDisplayId() {
+	const override = Number(process.env.OPENSCREEN_SCK_TEST_DISPLAY_ID);
+	if (Number.isFinite(override) && override > 0) return override;
+
+	const probe = path.join(os.tmpdir(), "openscreen-main-display-id.swift");
+	fs.writeFileSync(probe, "import CoreGraphics\nprint(CGMainDisplayID())\n");
+	const result = spawnSync("swift", [probe], { encoding: "utf8" });
+	fs.rmSync(probe, { force: true });
+	const parsed = Number((result.stdout ?? "").trim());
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+const FFMPEG = resolveTool("ffmpeg");
+const FFPROBE = resolveTool("ffprobe");
+const HELPER = resolveHelper();
+if (!HELPER) {
+	console.error("No ScreenCaptureKit helper found. Run: npm run build:native:mac");
+	process.exit(1);
+}
+if (!FFMPEG || !FFPROBE) {
+	console.error(
+		"No ffmpeg/ffprobe found. Run `npm run fetch:ffmpeg:mac`, install one with Homebrew,\n" +
+			"or point OPENSCREEN_FFMPEG and OPENSCREEN_FFPROBE at binaries.",
+	);
+	process.exit(1);
+}
+
+const tonePath = path.join(os.tmpdir(), "openscreen-audio-timeline-tone.wav");
+const madeTone = spawnSync(FFMPEG, [
+	"-hide_banner",
+	"-loglevel",
+	"error",
+	"-f",
+	"lavfi",
+	"-i",
+	`sine=frequency=440:duration=${TONE_MS / 1000}`,
+	"-ac",
+	"2",
+	"-ar",
+	"48000",
+	"-acodec",
+	"pcm_s16le",
+	"-y",
+	tonePath,
+]);
+if (madeTone.status !== 0 || !fs.existsSync(tonePath)) {
+	console.error("Could not synthesise the test tone.");
+	process.exit(1);
+}
+
+const outputPath = path.join(os.tmpdir(), "openscreen-audio-timeline.mp4");
+fs.rmSync(outputPath, { force: true });
+
+const displayId = resolveDisplayId();
+const request = {
+	schemaVersion: 1,
+	recordingId: Date.now(),
+	source: { type: "display", sourceId: `screen:${displayId}:0`, displayId },
+	video: { fps: 30, width: 1280, height: 720, bitrate: 4_000_000, hideSystemCursor: true },
+	audio: {
+		system: { enabled: true },
+		// No microphone on purpose: a live one streams continuously and would keep the
+		// timeline moving on its own, hiding exactly the failure this measures.
+		microphone: { enabled: false, deviceId: null, deviceName: null, gain: 1 },
+	},
+	webcam: { enabled: false, deviceId: null, deviceName: null, width: 1280, height: 720, fps: 30 },
+	cursor: { mode: "editable-overlay" },
+	outputs: { screenPath: outputPath },
+};
+
+console.log(
+	`Recording ${(PLAY_AT_MS + TONE_MS + TAIL_MS) / 1000}s on display ${displayId}: ` +
+		`${PLAY_AT_MS / 1000}s of silence, a ${TONE_MS / 1000}s tone, then ${TAIL_MS / 1000}s of silence...`,
+);
+const proc = spawn(HELPER, [JSON.stringify(request)]);
+let helperOutput = "";
+let spawnError = null;
+let playbackArmed = false;
+const helperEvents = [];
+proc.on("error", (error) => {
+	spawnError = error.message;
+});
+
+/**
+ * Arms the tone once the helper says it is recording, never from spawn.
+ *
+ * Everything measured here is relative to the writer session, which opens on the first
+ * video frame — after ScreenCaptureKit, the encoder and the audio taps have all come up.
+ * Counting from spawn would fold that setup into the offset and fail the test on a slow
+ * machine with nothing wrong with the timestamps.
+ */
+function armPlaybackOnce() {
+	if (playbackArmed || !helperEvents.some((event) => event.event === "recording-started")) {
+		return;
+	}
+	playbackArmed = true;
+	setTimeout(() => {
+		// Blocking on purpose: it guarantees the tone really played before the tail is
+		// timed and the stop below is sent, which is the premise of the measurement.
+		spawnSync("/usr/bin/afplay", [tonePath]);
+		setTimeout(() => {
+			try {
+				proc.stdin.write("stop\n");
+			} catch {
+				// Already gone; the close handler reports how it ended.
+			}
+		}, TAIL_MS);
+	}, PLAY_AT_MS);
+}
+
+function consume(chunk) {
+	helperOutput += chunk.toString();
+	for (const line of chunk.toString().split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed.startsWith("{")) continue;
+		try {
+			helperEvents.push(JSON.parse(trimmed));
+		} catch {
+			// Not one of ours; the raw text is kept in helperOutput either way.
+		}
+	}
+	armPlaybackOnce();
+}
+proc.stdout.on("data", consume);
+proc.stderr.on("data", consume);
+
+// If the helper never announces itself, nothing would ever stop it.
+const startTimeout = setTimeout(() => {
+	if (!playbackArmed) {
+		console.error("The helper never reported that recording had started.");
+		proc.kill();
+	}
+}, 30_000);
+
+/** Per-stream durations, which is what "does the audio cover the take" is asked of. */
+function streamDurations() {
+	const probed = spawnSync(
+		FFPROBE,
+		[
+			"-hide_banner",
+			"-loglevel",
+			"error",
+			"-show_entries",
+			"stream=codec_type,duration",
+			"-of",
+			"json",
+			outputPath,
+		],
+		{ encoding: "utf8", maxBuffer: 1 << 24 },
+	);
+	try {
+		const streams = JSON.parse(probed.stdout ?? "{}").streams ?? [];
+		const durationOf = (kind) => {
+			const stream = streams.find((candidate) => candidate.codec_type === kind);
+			const seconds = Number(stream?.duration);
+			return Number.isFinite(seconds) ? seconds : null;
+		};
+		return { audio: durationOf("audio"), video: durationOf("video") };
+	} catch {
+		return { audio: null, video: null };
+	}
+}
+
+/** Where the tone actually sits, from the decoded samples rather than the metadata. */
+function firstAudibleSecond() {
+	const rate = 16000;
+	const decoded = spawnSync(
+		FFMPEG,
+		[
+			"-hide_banner",
+			"-nostats",
+			"-loglevel",
+			"error",
+			"-i",
+			outputPath,
+			"-map",
+			"0:a",
+			"-f",
+			"s16le",
+			"-ac",
+			"1",
+			"-ar",
+			String(rate),
+			"-",
+		],
+		{ maxBuffer: 1 << 28 },
+	);
+	const pcm = decoded.stdout ?? Buffer.alloc(0);
+	const samples = pcm.length / 2;
+	const windowSamples = (rate * WINDOW_MS) / 1000;
+	for (let index = 0; index * windowSamples < samples; index += 1) {
+		let peak = 0;
+		const from = index * windowSamples;
+		const to = Math.min(from + windowSamples, samples);
+		for (let at = from; at < to; at += 1) {
+			peak = Math.max(peak, Math.abs(pcm.readInt16LE(at * 2)));
+		}
+		// Well above dither, well below a real tone.
+		if (peak > 1200) return (index * WINDOW_MS) / 1000;
+	}
+	return null;
+}
+
+proc.on("close", (code, signal) => {
+	clearTimeout(startTimeout);
+	const problems = [];
+	if (!playbackArmed) problems.push("recording never started, so no tone was played");
+	if (spawnError) problems.push(`could not start the helper: ${spawnError}`);
+	if (signal) problems.push(`helper killed by ${signal}`);
+	if (code !== 0 && code !== null) problems.push(`helper exited ${code}`);
+
+	const { audio, video } = streamDurations();
+	const toneAt = firstAudibleSecond();
+	const playedAt = PLAY_AT_MS / 1000;
+
+	if (audio === null) {
+		problems.push("the recording has no audio track at all");
+	}
+	if (toneAt === null) {
+		problems.push(
+			"no audible tone in the recording — check the default output device is on and unmuted",
+		);
+	} else if (Math.abs(toneAt - playedAt) > TONE_TOLERANCE_S) {
+		problems.push(
+			`the tone sits at ${toneAt.toFixed(2)}s, and was played at ${playedAt.toFixed(2)}s`,
+		);
+	}
+	// The whole take has to be IN the audio track: the silence before the tone and the
+	// silence after it, not just the part where something was playing.
+	if (audio !== null && video !== null && Math.abs(audio - video) > TRACK_TOLERANCE_S) {
+		problems.push(
+			`the audio track is ${audio.toFixed(2)}s and the video track is ${video.toFixed(2)}s — ` +
+				`the mixed track does not span the take`,
+		);
+	}
+
+	// The mixer's own account of how much of the track it filled with silence because no
+	// source covered it. On a take where nothing plays, this is the measurement that says
+	// whether ScreenCaptureKit's system-audio output is silence-gapped the way the WASAPI
+	// loopback tap is, or whether it streams silence continuously.
+	const summary = helperEvents.findLast((event) => event.event === "audio-timeline");
+
+	fs.rmSync(outputPath, { force: true });
+	console.log(
+		`\n${problems.length ? "FAIL" : "PASS"}  audio=${audio?.toFixed(2) ?? "(none)"}s  ` +
+			`video=${video?.toFixed(2) ?? "(none)"}s  ` +
+			`tone at ${toneAt === null ? "(none)" : `${toneAt.toFixed(2)}s`}, played at ${playedAt.toFixed(2)}s`,
+	);
+	if (summary) {
+		console.log(
+			`      system audio delivered nothing for ${Number(summary.systemUncoveredSeconds ?? 0).toFixed(2)}s ` +
+				`of a ${Number(summary.trackSeconds ?? 0).toFixed(2)}s track ` +
+				`(near the whole track means ScreenCaptureKit gaps its silence, like WASAPI loopback;\n` +
+				`       near zero means it streams silence and only the take's edges needed the clock)`,
+		);
+	}
+	for (const problem of problems) console.log(`      -> ${problem}`);
+	if (problems.length) {
+		const complaints = helperEvents
+			.filter((event) => event.event === "error" || event.event === "warning")
+			.slice(-5);
+		for (const complaint of complaints) {
+			console.log(`      helper: ${complaint.code}: ${complaint.message}`);
+		}
+		if (!complaints.length && helperOutput.trim()) {
+			console.log(`      helper: ${helperOutput.trim().split("\n").slice(-3).join(" | ")}`);
+		}
+	}
+	process.exit(problems.length ? 1 : 0);
+});
