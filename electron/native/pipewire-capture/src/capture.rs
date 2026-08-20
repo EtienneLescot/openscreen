@@ -397,12 +397,10 @@ impl Capture {
     pub fn pause(&mut self) {
         if self.paused_at.is_none() {
             self.paused_at = Some(Instant::now());
-            // The rings stop taking samples here rather than queueing them for
-            // the discard at resume. A queue nobody drains overflows the
-            // two-second cap within two seconds of a pause, and the discard that
-            // used to clear that overflow cleared the tally with it — taking any
-            // real drop from before the pause, which is the one worth reporting.
-            // See AudioRing::pause.
+            // The rings stop taking samples for the duration. What they already
+            // hold is audio from before the pause: it is part of the take and
+            // stays, and the first drain after resume places it. See
+            // AudioRing::pause for what discarding it used to cost.
             if let Some(mix) = &mut self.audio {
                 for input in &mut mix.inputs {
                     input.ring.pause();
@@ -414,14 +412,13 @@ impl Capture {
     pub fn resume(&mut self) {
         if let Some(since) = self.paused_at.take() {
             self.paused_total += since.elapsed();
-            // Whatever arrived while paused is thrown away rather than encoded:
-            // the video timeline did not advance across the pause, so keeping
-            // the audio would push every later sample out of sync by the length
-            // of the pause.
+            // Nothing was captured while paused, so there is nothing here to
+            // throw away — the rings only have to start taking samples again.
+            // `pending` is left alone for the same reason the rings are: it
+            // holds samples drained before the pause, which are take audio.
             if let Some(mix) = &mut self.audio {
                 for input in &mut mix.inputs {
                     input.ring.resume();
-                    input.pending.clear();
                 }
             }
         }
