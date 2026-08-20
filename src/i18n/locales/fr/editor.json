@@ -238,6 +238,7 @@
 		"providerSettings": "Réglages du fournisseur…",
 		"applyEditsFailed": "Impossible d'appliquer les modifications de l'agent",
 		"agentEditConflict": "Les modifications de l'agent n'ont pas été appliquées, car le projet a changé pendant son travail.",
+		"applyAnyway": "Appliquer quand même",
 		"chatFailed": "Échec du chat",
 		"rewindFailed": "Échec du retour en arrière",
 		"rewoundSuccess": "Retour au début de ce message effectué",
@@ -284,7 +285,7 @@
 		"sendTitle": "Envoyer (Entrée)",
 		"send": "Envoyer",
 		"rewindConfirmTitle": "Revenir ici ?",
-		"rewindConfirmBody": "Les modifications de l'agent et les échanges suivants après ce point seront annulés. Le projet, la conversation et l'état de l'agent seront restaurés.",
+		"rewindConfirmBody": "Les modifications de l'agent et les échanges suivants après ce point seront annulés. Le projet, la conversation et l'état de l'agent seront restaurés. Les modifications que vous avez faites depuis seront elles aussi remplacées.",
 		"rewindConfirm": "Revenir en arrière",
 		"configureModel": "Configurer le modèle d'IA",
 		"historyDialog": {

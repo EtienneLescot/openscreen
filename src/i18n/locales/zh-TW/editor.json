@@ -238,6 +238,7 @@
 		"providerSettings": "提供者設定…",
 		"applyEditsFailed": "無法套用代理的編輯",
 		"agentEditConflict": "代理執行期間專案已變更，因此未套用代理的編輯。",
+		"applyAnyway": "仍然套用",
 		"chatFailed": "聊天失敗",
 		"rewindFailed": "倒轉失敗",
 		"rewoundSuccess": "已倒轉至該訊息的開頭",
@@ -284,7 +285,7 @@
 		"sendTitle": "傳送（Enter）",
 		"send": "傳送",
 		"rewindConfirmTitle": "要倒轉到這裡嗎？",
-		"rewindConfirmBody": "此時間點之後代理的編輯與後續對話回合將被回復。專案、對話與代理狀態將被還原。",
+		"rewindConfirmBody": "此時間點之後代理的編輯與後續對話回合將被回復。專案、對話與代理狀態將被還原。你在那之後所做的編輯也會被取代。",
 		"rewindConfirm": "倒轉",
 		"configureModel": "設定 AI 模型",
 		"historyDialog": {

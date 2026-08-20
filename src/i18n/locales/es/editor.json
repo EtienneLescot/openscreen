@@ -238,6 +238,7 @@
 		"providerSettings": "Configuración del proveedor…",
 		"applyEditsFailed": "No se pudieron aplicar las ediciones del agente",
 		"agentEditConflict": "Las ediciones del agente no se aplicaron porque el proyecto cambió mientras trabajaba.",
+		"applyAnyway": "Aplicar de todos modos",
 		"chatFailed": "Error en el chat",
 		"rewindFailed": "Error al rebobinar",
 		"rewoundSuccess": "Rebobinado al inicio de ese mensaje",
@@ -284,7 +285,7 @@
 		"sendTitle": "Enviar (Intro)",
 		"send": "Enviar",
 		"rewindConfirmTitle": "¿Rebobinar aquí?",
-		"rewindConfirmBody": "Las ediciones del agente y los turnos posteriores a este punto se revertirán. Se restaurará el proyecto, la conversación y el estado del agente.",
+		"rewindConfirmBody": "Las ediciones del agente y los turnos posteriores a este punto se revertirán. Se restaurará el proyecto, la conversación y el estado del agente. Las ediciones que hayas hecho desde entonces también se reemplazarán.",
 		"rewindConfirm": "Rebobinar",
 		"configureModel": "Configurar modelo de IA",
 		"historyDialog": {

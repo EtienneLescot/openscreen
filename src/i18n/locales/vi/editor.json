@@ -238,6 +238,7 @@
 		"providerSettings": "Cài đặt nhà cung cấp…",
 		"applyEditsFailed": "Không thể áp dụng chỉnh sửa của tác nhân",
 		"agentEditConflict": "Các chỉnh sửa của tác nhân không được áp dụng vì dự án đã thay đổi trong lúc xử lý.",
+		"applyAnyway": "Vẫn áp dụng",
 		"chatFailed": "Trò chuyện thất bại",
 		"rewindFailed": "Tua lại thất bại",
 		"rewoundSuccess": "Đã tua lại đến đầu tin nhắn đó",
@@ -284,7 +285,7 @@
 		"sendTitle": "Gửi (Enter)",
 		"send": "Gửi",
 		"rewindConfirmTitle": "Tua lại đến đây?",
-		"rewindConfirmBody": "Các chỉnh sửa của tác nhân và các lượt tiếp theo sau điểm này sẽ được khôi phục lại. Dự án, cuộc trò chuyện và trạng thái tác nhân sẽ được khôi phục.",
+		"rewindConfirmBody": "Các chỉnh sửa của tác nhân và các lượt tiếp theo sau điểm này sẽ được khôi phục lại. Dự án, cuộc trò chuyện và trạng thái tác nhân sẽ được khôi phục. Các chỉnh sửa bạn đã thực hiện từ lúc đó cũng sẽ bị thay thế.",
 		"rewindConfirm": "Tua lại",
 		"configureModel": "Cấu hình mô hình AI",
 		"historyDialog": {

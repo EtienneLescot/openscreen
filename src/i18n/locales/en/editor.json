@@ -238,6 +238,7 @@
 		"providerSettings": "Provider settings…",
 		"applyEditsFailed": "Could not apply the agent's edits",
 		"agentEditConflict": "Agent edits were not applied because the project changed while it was working.",
+		"applyAnyway": "Apply anyway",
 		"chatFailed": "Chat failed",
 		"rewindFailed": "Rewind failed",
 		"rewoundSuccess": "Rewound to the start of that message",
@@ -284,7 +285,7 @@
 		"sendTitle": "Send (Enter)",
 		"send": "Send",
 		"rewindConfirmTitle": "Rewind here?",
-		"rewindConfirmBody": "The agent's edits and follow-up turns after this point get rolled back. Project, conversation, and agent state will be restored.",
+		"rewindConfirmBody": "The agent's edits and follow-up turns after this point get rolled back. Project, conversation, and agent state will be restored. Any edits you made since then are replaced too.",
 		"rewindConfirm": "Rewind",
 		"configureModel": "Configure AI Model",
 		"historyDialog": {

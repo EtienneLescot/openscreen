@@ -238,6 +238,7 @@
 		"providerSettings": "プロバイダー設定…",
 		"applyEditsFailed": "エージェントの編集を適用できませんでした",
 		"agentEditConflict": "エージェントの処理中にプロジェクトが変更されたため、編集は適用されませんでした。",
+		"applyAnyway": "それでも適用",
 		"chatFailed": "チャットに失敗しました",
 		"rewindFailed": "巻き戻しに失敗しました",
 		"rewoundSuccess": "そのメッセージの先頭まで巻き戻しました",
@@ -284,7 +285,7 @@
 		"sendTitle": "送信（Enter）",
 		"send": "送信",
 		"rewindConfirmTitle": "ここまで巻き戻しますか？",
-		"rewindConfirmBody": "この時点以降のエージェントの編集とやり取りは元に戻されます。プロジェクト、会話、エージェントの状態が復元されます。",
+		"rewindConfirmBody": "この時点以降のエージェントの編集とやり取りは元に戻されます。プロジェクト、会話、エージェントの状態が復元されます。それ以降にあなたが行った編集も置き換えられます。",
 		"rewindConfirm": "巻き戻す",
 		"configureModel": "AIモデルを設定",
 		"historyDialog": {

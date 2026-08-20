@@ -238,6 +238,7 @@
 		"providerSettings": "Impostazioni provider…",
 		"applyEditsFailed": "Impossibile applicare le modifiche dell'agente",
 		"agentEditConflict": "Le modifiche dell'agente non sono state applicate perché il progetto è cambiato durante l'elaborazione.",
+		"applyAnyway": "Applica comunque",
 		"chatFailed": "Chat non riuscita",
 		"rewindFailed": "Riavvolgimento non riuscito",
 		"rewoundSuccess": "Riavvolto all'inizio di quel messaggio",
@@ -284,7 +285,7 @@
 		"sendTitle": "Invia (Invio)",
 		"send": "Invia",
 		"rewindConfirmTitle": "Riavvolgere qui?",
-		"rewindConfirmBody": "Le modifiche dell'agente e i turni successivi a questo punto verranno annullati. Il progetto, la conversazione e lo stato dell'agente verranno ripristinati.",
+		"rewindConfirmBody": "Le modifiche dell'agente e i turni successivi a questo punto verranno annullati. Il progetto, la conversazione e lo stato dell'agente verranno ripristinati. Anche le modifiche che hai fatto da allora verranno sostituite.",
 		"rewindConfirm": "Riavvolgi",
 		"configureModel": "Configura modello IA",
 		"historyDialog": {
