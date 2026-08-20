@@ -119,6 +119,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          # What this host actually gives X11 and Chromium, rather than what
+          # Debian's copy of xvfb-run says it would. Both capture paths die in
+          # screen_capturer_x11.cc "Failed to initialize pixel buffer", and the
+          # usual suspects are a shallow screen depth and a small /dev/shm.
+          echo "--- capture-relevant environment ---"
+          echo "xvfb-run default args: $(grep -m1 '^XVFBARGS=' "$(command -v xvfb-run)" || echo unknown)"
+          echo "/dev/shm: $(df -h /dev/shm | tail -1)"
+
           echo "--- sandbox-relevant kernel settings ---"
           echo "unprivileged_userns_clone: $(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || echo 'n/a')"
           echo "apparmor_restrict_unprivileged_userns: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 'n/a')"
@@ -128,7 +136,16 @@ jobs:
           # Every invocation is bounded. A CLI that never returns is a failure
           # mode this workflow has already produced once, and an unbounded
           # command turns it into a full runner slot spent learning nothing.
-          run_cli() { timeout --signal=TERM --kill-after=10s "${CLI_TIMEOUT:-120}" xvfb-run -a ./result/bin/openscreen "$@"; }
+          # An explicit screen rather than whatever this xvfb-run defaults to,
+          # and --disable-dev-shm-usage, which is the standard answer to Chromium
+          # in a container: /dev/shm is typically 64M there and Chromium expects
+          # far more. Two changes at once, deliberately -- each run costs ten
+          # minutes and the capture path has never once worked here, so getting
+          # it to work matters more right now than attributing which knob did it.
+          # Worth bisecting afterwards if it goes green.
+          XVFB_SCREEN="-screen 0 1920x1080x24"
+          CHROME_FLAGS="--disable-dev-shm-usage"
+          run_cli() { timeout --signal=TERM --kill-after=10s "${CLI_TIMEOUT:-120}" xvfb-run -a -s "$XVFB_SCREEN" ./result/bin/openscreen "$@"; }
 
           SANDBOX=""
           echo "--- probe: as shipped ---"
@@ -143,7 +160,7 @@ jobs:
           fi
 
           echo "--- openscreen --help ---"
-          run_cli $SANDBOX --help
+          run_cli $SANDBOX $CHROME_FLAGS --help
 
           # `sources` enumerates displays, windows and microphones, so it
           # exercises the capture stack rather than proving that a usage string
@@ -172,7 +189,7 @@ jobs:
           for i in $(seq 1 "$ATTEMPTS"); do
             echo "=== attempt $i/$ATTEMPTS ==="
             RC=0
-            CLI_TIMEOUT=60 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>"/tmp/sources.$i.err" || RC=$?
+            CLI_TIMEOUT=60 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>"/tmp/sources.$i.err" || RC=$?
             # Every non-zero outcome is a failure. The kill is tracked on top of
             # that rather than instead of it, because it carries its own meaning:
             # the CLI's internal bound on getSources is supposed to fire first,
@@ -245,7 +262,7 @@ jobs:
             echo "=== export attempt $i/3 ==="
             rm -f /tmp/demo.openscreen /tmp/demo.mp4
             RC=0
-            CLI_TIMEOUT=120 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX record --duration 2 --project /tmp/demo.openscreen >"/tmp/rec.$i.out" 2>&1 || RC=$?
+            CLI_TIMEOUT=120 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS record --duration 2 --project /tmp/demo.openscreen >"/tmp/rec.$i.out" 2>&1 || RC=$?
             if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.openscreen ]; then
               echo "record failed (rc=$RC); last lines:"
               tail -5 "/tmp/rec.$i.out" || true
@@ -255,7 +272,7 @@ jobs:
             head -c 200 /tmp/demo.openscreen; echo
 
             RC=0
-            CLI_TIMEOUT=180 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX export /tmp/demo.openscreen -o /tmp/demo.mp4 >"/tmp/exp.$i.out" 2>&1 || RC=$?
+            CLI_TIMEOUT=180 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS export /tmp/demo.openscreen -o /tmp/demo.mp4 >"/tmp/exp.$i.out" 2>&1 || RC=$?
             if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.mp4 ]; then
               echo "export failed (rc=$RC); last lines:"
               tail -15 "/tmp/exp.$i.out" || true
