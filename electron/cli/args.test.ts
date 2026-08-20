@@ -157,6 +157,21 @@ describe("parseCliArgs", () => {
 		expect(parse(["sources", "extra-arg"])).toMatchObject({ kind: "error" });
 	});
 
+	it("parses the sources output file, resolved against cwd", () => {
+		expect(parse(["sources", "-o", "s.json"])).toMatchObject({
+			kind: "sources",
+			jsonOutPath: inCwd("s.json"),
+		});
+		expect(parse(["sources", "--json", "--out", "s.json"])).toMatchObject({
+			kind: "sources",
+			json: true,
+			jsonOutPath: inCwd("s.json"),
+		});
+		// The flag is optional; absent means stdout stays the only channel.
+		expect(parse(["sources"])).toMatchObject({ kind: "sources", jsonOutPath: undefined });
+		expect(parse(["sources", "--out"])).toMatchObject({ kind: "error" });
+	});
+
 	it("parses pack", () => {
 		expect(parse(["pack", "demo.openscreen", "--out", "bundle"])).toMatchObject({
 			kind: "pack",

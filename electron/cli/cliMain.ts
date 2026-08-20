@@ -409,9 +409,27 @@ export function runCli(command: CliCommand): void {
 					if (result.success && command.kind === "captions" && result.projectData !== undefined) {
 						await writeProjectFile(command.projectPath, result.projectData);
 					}
+					// A file is the only output channel this process fully owns. Chromium
+					// and ANGLE write diagnostics straight to stdout on a host with no
+					// dbus and no GPU, ahead of anything emitted here, and no switch
+					// silences all of them -- part of that output never passes through
+					// Chromium's logging. So -o exists for the case stdout cannot serve.
+					if (
+						result.success &&
+						command.kind === "sources" &&
+						command.jsonOutPath &&
+						result.sources
+					) {
+						await fs.writeFile(
+							command.jsonOutPath,
+							`${JSON.stringify(result.sources, null, 2)}
+`,
+							"utf8",
+						);
+					}
 				} catch (error) {
 					result.success = false;
-					result.error = `Run succeeded but writing the project file failed: ${String(error)}`;
+					result.error = `Run succeeded but writing the output file failed: ${String(error)}`;
 				}
 
 				if (result.success) {
