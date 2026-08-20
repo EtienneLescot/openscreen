@@ -44,6 +44,7 @@
 		"cameraDisconnected": "ウェブカメラが切断されました。",
 		"cameraNotFound": "カメラが見つかりません。",
 		"cameraCaptureUnavailable": "カメラを開けませんでした。カメラなしで録画します。",
+		"microphoneDefaulted": "選択したマイクを特定できませんでした。既定の入力を録音します。",
 		"accessibilityAllowAndRetry": "OpenScreenにアクセシビリティアクセスを許可してから、もう一度録画を押してカウントダウンを開始してください。",
 		"selectSource": "録画するソースを選択してください"
 	},

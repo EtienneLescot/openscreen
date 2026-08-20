@@ -53,6 +53,12 @@ export type NativeWindowsRecordingStartResult = {
 	 * but the user has to be told, or they discover it in the editor.
 	 */
 	webcamUnavailable?: boolean;
+	/**
+	 * A microphone was asked for but could not be named, so the helper captured
+	 * whatever Windows calls the default input. The take is fine; the voice on it
+	 * probably is not the one the user chose.
+	 */
+	microphoneDefaulted?: boolean;
 };
 
 export function parseWindowHandleFromSourceId(sourceId?: string | null) {

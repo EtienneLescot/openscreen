@@ -35,6 +35,7 @@
 		"cameraDisconnected": "Cámara web desconectada.",
 		"cameraNotFound": "Cámara no encontrada.",
 		"cameraCaptureUnavailable": "No se pudo abrir la cámara. Grabando sin ella.",
+		"microphoneDefaulted": "No se pudo identificar el micrófono elegido. Grabando la entrada predeterminada.",
 		"permissionDenied": "Permiso de grabación denegado. Por favor permite la grabación de pantalla.",
 		"accessibilityAllowAndRetry": "Permite el acceso de accesibilidad para OpenScreen y luego pulsa grabar de nuevo para iniciar la cuenta atrás.",
 		"selectSource": "Por favor selecciona una fuente para grabar"

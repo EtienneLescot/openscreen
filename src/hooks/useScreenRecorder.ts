@@ -232,6 +232,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (cancelled || !prefs) return;
 				setMicrophoneEnabled(prefs.micEnabled);
 				if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
+				// The name matters as much as the id: the native Windows helper picks
+				// the microphone by NAME, and falls back to the Windows default
+				// endpoint when it is empty. Seeding only the id left an auto-started
+				// recording racing this window's own device enumeration for it, and
+				// losing (getopenscreen/openscreen#404).
+				if (prefs.micDeviceName) setMicrophoneDeviceName(prefs.micDeviceName);
 				setWebcamEnabledState(prefs.camEnabled);
 				if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
 				setSystemAudioEnabled(prefs.systemAudioEnabled);
@@ -1163,6 +1169,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			// editor, long after the moment was gone.
 			if (result.webcamUnavailable) {
 				toast.error(t("recording.cameraCaptureUnavailable"));
+			}
+			if (result.microphoneDefaulted) {
+				toast.error(t("recording.microphoneDefaulted"));
 			}
 
 			// Tell the user when the helper silently switched away from the default

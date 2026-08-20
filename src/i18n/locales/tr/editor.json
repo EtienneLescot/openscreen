@@ -36,6 +36,7 @@
 		"cameraDisconnected": "Webcam bağlantısı kesildi.",
 		"cameraNotFound": "Kamera bulunamadı.",
 		"cameraCaptureUnavailable": "Kamera açılamadı. Kamerasız kaydediliyor.",
+		"microphoneDefaulted": "Seçilen mikrofon belirlenemedi. Varsayılan giriş kaydediliyor.",
 		"accessibilityAllowAndRetry": "OpenScreen için Erişilebilirlik erişimine izin verin, ardından geri sayımı başlatmak için tekrar kayda basın.",
 		"selectSource": "Lütfen kayıt için bir kaynak seçin"
 	},
