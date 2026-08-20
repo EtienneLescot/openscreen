@@ -18,7 +18,12 @@ import type { CliSourcesResult } from "@/lib/cliContracts";
 // reports exactly what a denied permission already reported.
 const MICROPHONE_TIMEOUT_MS = 5_000;
 
-async function withTimeout<T>(work: Promise<T>, fallback: T, what: string): Promise<T> {
+// Enumeration walks every display and window and grabs a thumbnail of each, so
+// it is allowed to be slow on a loaded machine. It is not allowed to be
+// unbounded.
+const SOURCE_ENUMERATION_TIMEOUT_MS = 20_000;
+
+async function withTimeout<T>(work: Promise<T>, fallback: T, what: string, ms: number): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		return await Promise.race([
@@ -26,11 +31,9 @@ async function withTimeout<T>(work: Promise<T>, fallback: T, what: string): Prom
 			new Promise<T>((resolve) => {
 				timer = setTimeout(() => {
 					// Surfaced on stderr as `[renderer] …` by the CLI's console bridge.
-					console.warn(
-						`${what} did not settle in ${MICROPHONE_TIMEOUT_MS}ms; continuing without it`,
-					);
+					console.warn(`${what} did not settle in ${ms}ms`);
 					resolve(fallback);
-				}, MICROPHONE_TIMEOUT_MS);
+				}, ms);
 			}),
 		]);
 	} finally {
@@ -47,7 +50,12 @@ async function enumerateMicrophones(): Promise<{
 			(device) => device.kind === "audioinput",
 		);
 
-	let inputs = await withTimeout<MediaDeviceInfo[]>(listInputs(), [], "device enumeration");
+	let inputs = await withTimeout<MediaDeviceInfo[]>(
+		listInputs(),
+		[],
+		"device enumeration",
+		MICROPHONE_TIMEOUT_MS,
+	);
 
 	// Labels are blank until a getUserMedia grant exists; a short-lived probe
 	// stream unlocks them without leaving anything recording.
@@ -62,8 +70,13 @@ async function enumerateMicrophones(): Promise<{
 			})
 			.catch(() => false); // Permission denied — report devices without labels.
 
-		if (await withTimeout(probe, false, "microphone permission probe")) {
-			inputs = await withTimeout(listInputs(), inputs, "device re-enumeration");
+		if (await withTimeout(probe, false, "microphone permission probe", MICROPHONE_TIMEOUT_MS)) {
+			inputs = await withTimeout(
+				listInputs(),
+				inputs,
+				"device re-enumeration",
+				MICROPHONE_TIMEOUT_MS,
+			);
 		}
 	}
 
@@ -75,10 +88,33 @@ async function enumerateMicrophones(): Promise<{
 }
 
 async function enumerateSources(): Promise<CliSourcesResult> {
-	const sources = await window.electronAPI.getSources({
-		types: ["screen", "window"],
-		thumbnailSize: { width: 32, height: 18 },
-	});
+	// desktopCapturer.getSources is unbounded on the main side, and on a host
+	// whose GL stack is broken -- a CI runner, a container, a server where ANGLE
+	// cannot initialise -- it can simply never return. `openscreen sources` hung
+	// forever on four of five headless attempts, always here: the milestones show
+	// the renderer asking for its request and then going silent, which is the call
+	// immediately after.
+	//
+	// Bounded on this side rather than in the shared get-sources handler, which
+	// the GUI uses too and where a timeout would change behaviour nobody asked to
+	// change. Failing in twenty seconds with a reason beats hanging until killed.
+	const sources = await withTimeout<Awaited<
+		ReturnType<typeof window.electronAPI.getSources>
+	> | null>(
+		window.electronAPI.getSources({
+			types: ["screen", "window"],
+			thumbnailSize: { width: 32, height: 18 },
+		}),
+		null,
+		"desktop source enumeration",
+		SOURCE_ENUMERATION_TIMEOUT_MS,
+	);
+	if (sources === null) {
+		throw new Error(
+			`Desktop source enumeration did not return within ${SOURCE_ENUMERATION_TIMEOUT_MS}ms. ` +
+				"This usually means the display or GPU stack cannot be reached — check that a display server is available.",
+		);
+	}
 
 	const displays = sources
 		.filter((source) => source.id.startsWith("screen:"))
