@@ -724,6 +724,23 @@ export function NewEditorShell() {
 		openShortcutsConfig();
 	}, [openShortcutsConfig]);
 
+	// Both hand off to the main process rather than rendering anything here: the About box and
+	// the update dialogs are native message boxes owned by a window (see showMessageBox in
+	// electron/main.ts), which is what keeps them from opening behind the always-on-top HUD.
+	// Errors are swallowed on purpose — the main process is the one that reports them, and a
+	// rejection here would only surface as an unhandled promise in the renderer.
+	const handleShowAbout = useCallback(() => {
+		void window.electronAPI?.showAbout?.().catch(() => {
+			// Swallowed: see above.
+		});
+	}, []);
+
+	const handleCheckForUpdates = useCallback(() => {
+		void window.electronAPI?.checkForUpdates?.().catch(() => {
+			// Swallowed: see above.
+		});
+	}, []);
+
 	const pasteRegion = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
@@ -1119,6 +1136,8 @@ export function NewEditorShell() {
 					openSettings: handleOpenSettings,
 					renameProject: handleRenameProject,
 					toggleChat: () => setChatOpen((v) => !v),
+					showAbout: handleShowAbout,
+					checkForUpdates: handleCheckForUpdates,
 				}}
 			/>
 

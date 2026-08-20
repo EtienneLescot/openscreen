@@ -372,6 +372,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	/** Resolves once the check has a verdict. The dialogs that verdict leads to — download,
 	 *  restart — are the main process's conversation, not the caller's. */
 	checkForUpdates: () => ipcRenderer.invoke("check-for-updates") as Promise<void>,
+	/** Opens the main process's About box (or the native panel on macOS). Resolves as soon as
+	 *  the box is up, NOT when it is dismissed — there is no verdict to wait for, unlike
+	 *  `checkForUpdates` above. */
+	showAbout: () => ipcRenderer.invoke("show-about") as Promise<void>,
+	/** The full update veto, asked fresh. `getAppInfo().canCheckForUpdates` answers only the
+	 *  permanent half; this one also answers "not mid-take", so it is only correct for a caller
+	 *  that asks at the moment it shows the affordance. */
+	canCheckForUpdatesNow: () => ipcRenderer.invoke("can-check-for-updates-now") as Promise<boolean>,
 	revealInFolder: (filePath: string) => {
 		return ipcRenderer.invoke("reveal-in-folder", filePath);
 	},
