@@ -107,7 +107,14 @@ or pass --duration.
 
 function takeValue(argv: string[], i: number, flag: string): [string, number] {
 	const next = argv[i + 1];
-	if (next === undefined || next.startsWith("--")) {
+	// "" is rejected alongside a missing value: an unset variable in a wrapper
+	// (`openscreen sources -o "$OUT"`) reaches us as an empty argument, and every
+	// caller here feeds the result to resolvePath, where path.resolve(cwd, "")
+	// returns cwd. That turns a typo into a directory path, which then fails much
+	// later as EISDIR from the write — after the work is done and discarded —
+	// instead of as the parse error the same mistake gets when the value is
+	// omitted entirely.
+	if (next === undefined || next === "" || next.startsWith("--")) {
 		throw new Error(`${flag} requires a value`);
 	}
 	return [next, i + 1];
