@@ -388,6 +388,8 @@ interface Window {
 		getPlatform: () => string;
 		getAppInfo: () => Promise<{ version: string; canCheckForUpdates: boolean }>;
 		checkForUpdates: () => Promise<void>;
+		showAbout: () => Promise<void>;
+		canCheckForUpdatesNow: () => Promise<boolean>;
 		revealInFolder: (
 			filePath: string,
 		) => Promise<{ success: boolean; error?: string; message?: string }>;

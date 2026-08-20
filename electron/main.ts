@@ -463,10 +463,25 @@ function configureAboutPanel() {
 	});
 }
 
+/** Mirrors `updateCheckInFlight`. A menu item cannot fire twice — the menu closes on the
+ *  click — but the in-app menu reaches the same box from a renderer, where a double click or
+ *  a held Enter can, and every one of those would stack another modal on the same parent. */
+let aboutDialogOpen = false;
+
 /** The About box for the platforms with no native panel worth opening. The "Copy" button is
  *  the point of building it ourselves: version, runtime and install channel are exactly what
  *  a bug report needs, and retyping them off a screenshot is how they arrive wrong. */
 async function showAboutDialog() {
+	if (aboutDialogOpen) return;
+	aboutDialogOpen = true;
+	try {
+		await presentAboutDialog();
+	} finally {
+		aboutDialogOpen = false;
+	}
+}
+
+async function presentAboutDialog() {
 	const facts = aboutFacts();
 	const detail = `${formatAboutDetail(facts)}\n${COPYRIGHT}`;
 	const heading = `${PRODUCT_NAME} ${facts.version}`;
@@ -1014,6 +1029,34 @@ appReady?.then(async () => {
 		version: app.getVersion(),
 		canCheckForUpdates: channelAllowsUpdateCheck(),
 	}));
+
+	// The FULL veto, permanent and transient, for a caller that can ask again at the moment it
+	// needs the answer. `get-app-info` deliberately carries only the permanent half because the
+	// HUD reads it once per mount (see 33e19d6e); the editor's app menu has no such excuse — it
+	// asks each time it opens, so a stale "yes" cannot outlive the take that invalidated it.
+	// Without this, that menu would keep offering a check mid-recording that the handler below
+	// then silently refuses.
+	ipcMain.handle("can-check-for-updates-now", () => canOfferUpdateCheck());
+
+	// The editor's app menu opens the SAME About box the native menu and the tray do, rather
+	// than rendering its own panel: the version block exists to be pasted into a bug report,
+	// and a second React spelling of it is a second thing to keep in step with about.ts.
+	//
+	// Returns immediately instead of awaiting the box. `check-for-updates` resolves on its
+	// verdict because the caller has a spinner to stop; this one has nothing to wait for, and
+	// awaiting it would leave the renderer's promise pending for as long as the user leaves
+	// the dialog open.
+	ipcMain.handle("show-about", () => {
+		// macOS asked for its own panel and `configureAboutPanel()` already filled it in.
+		// Calling runAboutDialog() here would open a second, differently-shaped box beside the
+		// one the app menu's `role: "about"` gives — the exact duplication about.ts:31-33 warns
+		// against.
+		if (usesNativeAboutPanel(process.platform)) {
+			app.showAboutPanel();
+			return;
+		}
+		runAboutDialog();
+	});
 
 	ipcMain.handle("check-for-updates", async () => {
 		// The renderer hides the button on a package-manager channel, and while recording. A
