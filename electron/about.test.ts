@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	type AboutFacts,
@@ -46,6 +47,19 @@ describe("formatAboutDetail", () => {
 		expect(
 			formatAboutDetail(facts({ platform: "linux", arch: "x64", channel: "appimage" })),
 		).toContain("linux x64 · appimage");
+	});
+});
+
+// Both about.ts and electron-builder.json5 state in prose that these two must stay
+// byte-identical, and within one commit's lifetime they already came apart: the string moved
+// here while the config key was still missing, which is precisely the second attribution on the
+// binary — Get Info and the Windows file properties falling back to package.json's `author` —
+// that declaring the key exists to prevent. A comment in two files cannot hold that; this can.
+describe("COPYRIGHT", () => {
+	it("matches the copyright electron-builder stamps into the bundle", () => {
+		const config = readFileSync(new URL("../electron-builder.json5", import.meta.url), "utf8");
+		const declared = config.match(/["']?copyright["']?\s*:\s*["']([^"']*)["']/)?.[1];
+		expect(declared).toBe(COPYRIGHT);
 	});
 });
 
