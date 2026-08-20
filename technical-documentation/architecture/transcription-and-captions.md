@@ -374,20 +374,40 @@ export interface SttTranscribeResponse {
   detectedLanguage: string;
   backend: SttBackend; // "whispercpp-metal" | "whispercpp-vulkan"
                        // | "whispercpp-cuda" | "whispercpp-cpu"
+  timing?: SttTiming;  // { elapsedSec, audioSec, rtf }, summed over the chunks
 }
 ```
 
 `backend` is the device whisper.cpp actually bound at runtime — not the
-platform default `gpuDetector` would have guessed. Any consumer that wants
-to surface the backend in the UI reads it directly out of this field; the
-contract is the source of truth.
+platform default `gpuDetector` would have guessed — and `timing` is the
+helper's own measurement around `whisper_full`, summed over every chunk of
+the request. `rtf` keeps whisper.cpp's convention (wall-clock ÷ audio, so
+lower is faster); the "× real-time" figure the UI shows is its reciprocal,
+via `realtimeSpeed()` in `src/lib/ai-edition/transcription/status.ts`. It is
+optional because a staged helper binary can pre-date the field — absent, not
+zeroed, so "not reported" never renders as a measurement.
+
+For anything user-facing, though, read them off the STATUS events rather than
+this response: the response lands only once the whole recording is done,
+which is far too late to explain a wait that is already happening.
 
 The request takes a raw `Float32Array` of mono 16 kHz PCM and an optional
 ISO 639-1 `language` code; `"auto"` or absent leaves detection to Whisper.
 Status events fan out on a separate channel
 (`SttStatusEvent`, `phase: "model" | "transcribe"`) so the renderer can
 drive a "downloading model" / "transcribing" indicator without holding open
-the inference request.
+the inference request. Every landed chunk also carries `backend` and a
+running `rtf` (cumulative for the run, not for that one chunk — a per-chunk
+figure swings with how much speech a chunk holds and reads as noise), which
+is what lets the media surfaces render "Transcribing 45% · CPU · 0.9×" while
+the work is still going.
+
+`SttManager` logs the same pair per chunk through `console.*` — the channel
+the main-process ring buffer wraps, so the lines reach "Save Diagnostics",
+which the helper's own stderr does not — and warns once per run when the
+backend is `whispercpp-cpu`. That warning exists because the CPU path costs
+roughly half the throughput (median 2.07×, see the POC report) and is only
+ever reached through fallbacks that are otherwise completely silent.
 
 ## Captions
 

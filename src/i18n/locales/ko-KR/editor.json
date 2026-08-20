@@ -148,6 +148,7 @@
 		"transcribingEllipsis": "받아쓰는 중…",
 		"pendingTranscription": "받아쓰기 대기 중",
 		"transcriptionFailed": "받아쓰기 실패",
+		"cpuBackendHint": "CPU에서 실행 중 — GPU보다 약 2배 느립니다",
 		"noTranscript": "대본 없음",
 		"generating": "생성 중",
 		"generationFailed": "생성 실패",

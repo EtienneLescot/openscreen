@@ -11,7 +11,9 @@ import { Loader2 } from "lucide-react";
 import { useScopedT } from "@/contexts/I18nContext";
 import {
 	type AssetTranscriptionView,
+	isCpuBackend,
 	progressFraction,
+	realtimeSpeed,
 } from "@/lib/ai-edition/transcription/status";
 
 /** Human-readable state of one asset's transcript, in the user's language. */
@@ -34,9 +36,21 @@ export function useTranscriptionLabel(): (view: AssetTranscriptionView) => strin
 				// hang, so append the percentage as soon as the main process reports
 				// chunk progress — and only then (see `TranscriptionProgressBar`).
 				const fraction = progressFraction(view.progress);
-				return fraction === null
-					? t("mediaStage.transcribing")
-					: `${t("mediaStage.transcribing")} ${Math.round(fraction * 100)}%`;
+				const head =
+					fraction === null
+						? t("mediaStage.transcribing")
+						: `${t("mediaStage.transcribing")} ${Math.round(fraction * 100)}%`;
+				// Two things only the run itself knows: which device is doing the work,
+				// and how fast. "CPU" appears on the slow path ONLY — naming the GPU
+				// backend on every healthy run would be noise, whereas landing on CPU
+				// costs about half the throughput and happens through fallbacks that are
+				// otherwise completely silent. The speed shows on any backend: "is this
+				// moving, and how fast" is the same question at 5× as at 0.9×.
+				const suffix: string[] = [];
+				if (isCpuBackend(view.backend)) suffix.push("CPU");
+				const speed = realtimeSpeed(view.rtf);
+				if (speed !== null) suffix.push(`${speed.toFixed(1)}×`);
+				return suffix.length === 0 ? head : `${head} · ${suffix.join(" · ")}`;
 			}
 			case "empty":
 				return t("mediaStage.noSpeechDetected");
@@ -68,7 +82,12 @@ export function TranscriptionStatusDot({
 	view: AssetTranscriptionView;
 	size?: number;
 }) {
+	const t = useScopedT("editor");
 	const label = useTranscriptionLabel()(view);
+	// The label says "CPU"; this says what that costs. It has to be a <title>
+	// CHILD rather than the `title` attribute the dot below uses — lucide renders
+	// children inside its <svg>, and SVG has no tooltip-bearing `title` attribute.
+	const cpuHint = isCpuBackend(view.backend) ? t("mediaStage.cpuBackendHint") : null;
 	if (view.status === "running" || view.status === "queued") {
 		return (
 			<Loader2
@@ -76,7 +95,9 @@ export function TranscriptionStatusDot({
 				className="animate-spin"
 				style={{ color: "var(--accent)", flexShrink: 0 }}
 				aria-label={label}
-			/>
+			>
+				<title>{cpuHint ? `${label} — ${cpuHint}` : label}</title>
+			</Loader2>
 		);
 	}
 	const { fill, halo } = DOT_COLOR[view.status];

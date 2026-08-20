@@ -5,6 +5,7 @@ import { ensureModels, modelPaths } from "./modelManager";
 import type {
 	SttPhraseSegment,
 	SttStatusEvent,
+	SttTiming,
 	SttTranscribeRequest,
 	SttTranscribeResponse,
 	SttWordSegment,
@@ -59,6 +60,26 @@ function cancelledError(): Error {
 	const error = new Error("Transcription cancelled");
 	error.name = "AbortError";
 	return error;
+}
+
+/**
+ * One transcription's cost, in both of the conventions this repo uses.
+ *
+ * whisper.cpp and the POC report measure RTF — wall-clock divided by audio, so
+ * LOWER is faster — while the figure that means something to a reader is its
+ * reciprocal ("2.1x real-time"). Printing both lets a log line be compared
+ * against tools/stt-eval/whispercpp-dtw-poc/REPORT.md 5 without arithmetic.
+ *
+ * ASCII "x" rather than the report's "×" glyph: these lines are read in a
+ * Windows console and in the diagnostics dump, neither of which is reliably
+ * UTF-8.
+ */
+function formatTiming(timing: SttTiming): string {
+	const speed = timing.rtf > 0 ? 1 / timing.rtf : 0;
+	return (
+		`${timing.audioSec.toFixed(1)}s audio in ${timing.elapsedSec.toFixed(1)}s ` +
+		`(${timing.rtf.toFixed(2)} rtf, ${speed.toFixed(1)}x real-time)`
+	);
 }
 
 export interface SttManagerInitOptions {
@@ -213,6 +234,13 @@ export class SttManager {
 		const wordSegments: SttWordSegment[] = [];
 		let detectedLanguage: string | null = null;
 		let backend = this.server.status.backend ?? "whispercpp-cpu";
+		// Summed, not averaged: chunks differ in length, so the mean of the
+		// per-chunk RTFs is not the RTF of the run.
+		let elapsedSec = 0;
+		let audioSec = 0;
+		let timedChunks = 0;
+		// The CPU verdict is worth saying once per run, not once per chunk.
+		let warnedCpu = false;
 		// Only the first chunk auto-detects; every later chunk is forced onto the
 		// language it resolved, so whisper cannot flip mid-recording on a chunk
 		// that opens with a proper noun or a silence and "transcribe" the rest as
@@ -281,18 +309,58 @@ export class SttManager {
 				if (!language) language = detectedLanguage;
 			}
 			backend = result.backend ?? backend;
+			if (result.timing) {
+				elapsedSec += result.timing.elapsedSec;
+				audioSec += result.timing.audioSec;
+				timedChunks++;
+			}
+			const runRtf = audioSec > 0 ? elapsedSec / audioSec : undefined;
+			// Through `console.*` on purpose: that is what the main-process ring
+			// buffer wraps (electron/diagnostics/main-log-buffer.ts), so these lines
+			// reach "Save Diagnostics". The helper's own stderr is forwarded with
+			// `process.stderr.write` in whisperServer.ts and never lands there.
+			console.info(
+				`[stt] chunk ${index + 1}/${chunks.length} on ${backend}: ` +
+					(result.timing
+						? formatTiming(result.timing)
+						: "no timing reported (staged helper binary pre-dates the field)"),
+			);
+			// Falling back to CPU is silent on both sides — the helper retries
+			// without GPU when init returns null, and this process can relaunch the
+			// helper with `--cpu` — and it costs about half the throughput. A user
+			// staring at a transcription that takes twice as long has, without this,
+			// nothing anywhere telling them why.
+			if (!warnedCpu && backend === "whispercpp-cpu") {
+				warnedCpu = true;
+				console.warn(
+					"[stt] running on CPU - no GPU backend was bound. Expect roughly half " +
+						"the throughput of the Vulkan/Metal path (median 2.07x on the reference " +
+						"machine, tools/stt-eval/whispercpp-dtw-poc/REPORT.md 5.3).",
+				);
+			}
 			this.emit({
 				phase: "transcribe",
 				completedSec: chunk.endSample / SAMPLE_RATE,
 				totalSec,
+				backend,
+				rtf: runRtf,
 			});
 		}
 
+		const timing: SttTiming | undefined =
+			timedChunks > 0 && audioSec > 0
+				? { elapsedSec, audioSec, rtf: elapsedSec / audioSec }
+				: undefined;
+		console.info(
+			`[stt] done on ${backend}: ${chunks.length} chunk(s), ` +
+				(timing ? formatTiming(timing) : "no timing reported"),
+		);
 		return {
 			segments,
 			wordSegments,
 			detectedLanguage: detectedLanguage ?? language ?? "auto",
 			backend,
+			timing,
 		};
 	}
 

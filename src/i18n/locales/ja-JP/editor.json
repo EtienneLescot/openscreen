@@ -148,6 +148,7 @@
 		"transcribingEllipsis": "文字起こし中…",
 		"pendingTranscription": "文字起こし待機中",
 		"transcriptionFailed": "文字起こしに失敗しました",
+		"cpuBackendHint": "CPU で実行中 — GPU より約 2 倍低速です",
 		"noTranscript": "文字起こしなし",
 		"generating": "生成中",
 		"generationFailed": "生成に失敗しました",

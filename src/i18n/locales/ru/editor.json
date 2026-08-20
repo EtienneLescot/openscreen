@@ -148,6 +148,7 @@
 		"transcribingEllipsis": "Расшифровка…",
 		"pendingTranscription": "Ожидает расшифровки",
 		"transcriptionFailed": "Ошибка расшифровки",
+		"cpuBackendHint": "Выполняется на процессоре — примерно в 2× медленнее, чем на GPU",
 		"noTranscript": "Нет расшифровки",
 		"generating": "Создание",
 		"generationFailed": "Ошибка создания",

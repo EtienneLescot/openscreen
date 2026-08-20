@@ -148,6 +148,7 @@
 		"transcribingEllipsis": "轉錄中…",
 		"pendingTranscription": "等待轉錄",
 		"transcriptionFailed": "轉錄失敗",
+		"cpuBackendHint": "正在使用 CPU 執行 — 比 GPU 慢約 2 倍",
 		"noTranscript": "沒有逐字稿",
 		"generating": "產生中",
 		"generationFailed": "產生失敗",

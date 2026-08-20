@@ -148,6 +148,7 @@
 		"transcribingEllipsis": "Trascrizione in corso…",
 		"pendingTranscription": "Trascrizione in attesa",
 		"transcriptionFailed": "Trascrizione non riuscita",
+		"cpuBackendHint": "In esecuzione su CPU — circa 2× più lento che su GPU",
 		"noTranscript": "Nessuna trascrizione",
 		"generating": "Generazione in corso",
 		"generationFailed": "Generazione non riuscita",

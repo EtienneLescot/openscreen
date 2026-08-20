@@ -130,6 +130,76 @@ describe("WhisperServerManager", () => {
 		}
 	});
 
+	/** Answer `/inference` with one canned body and run a single transcription. */
+	async function transcribeWith(json: unknown) {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(JSON.stringify(json), { status: 200 })),
+		);
+		try {
+			const mgr = new WhisperServerManager();
+			(mgr as unknown as { process: unknown; port: number }).process = {};
+			(mgr as unknown as { process: unknown; port: number }).port = 9999;
+			return await mgr.transcribe({ samples: new Float32Array(1600) });
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	}
+
+	it("reads the helper's timing block off an /inference response", async () => {
+		const result = await transcribeWith({
+			segments: [],
+			detected_language: "english",
+			backend: "whispercpp-vulkan",
+			timing: { elapsed_s: 5.5, audio_s: 11, rtf: 0.5 },
+		});
+		expect(result.timing).toEqual({ elapsedSec: 5.5, audioSec: 11, rtf: 0.5 });
+	});
+
+	// A staged binary older than the `timing` field just omits it — and
+	// `electron/native/bin/<tag>/` is gitignored, so a dev tree keeps whatever was
+	// last built there. Null, not zeroes: "not reported" and "took no time" must
+	// not reach the UI looking the same.
+	it("reports no timing at all when the helper omits the block", async () => {
+		const result = await transcribeWith({
+			segments: [],
+			detected_language: "english",
+			backend: "whispercpp-cpu",
+		});
+		expect(result.timing).toBeNull();
+	});
+
+	// `rtf` is derived from the other two, so a junk ratio is recoverable — and a
+	// NaN surviving this far would reach the renderer as "NaN× real-time".
+	it("recomputes rtf when the helper's own value is unusable", async () => {
+		const result = await transcribeWith({
+			segments: [],
+			backend: "whispercpp-cpu",
+			timing: { elapsed_s: 4, audio_s: 8, rtf: "not-a-number" },
+		});
+		expect(result.timing).toEqual({ elapsedSec: 4, audioSec: 8, rtf: 0.5 });
+	});
+
+	// Same defensive parse the segment bounds get: nothing on this wire is
+	// guaranteed by a schema.
+	it("accepts stringified durations", async () => {
+		const result = await transcribeWith({
+			segments: [],
+			backend: "whispercpp-cpu",
+			timing: { elapsed_s: "4", audio_s: "8", rtf: "0.5" },
+		});
+		expect(result.timing).toEqual({ elapsedSec: 4, audioSec: 8, rtf: 0.5 });
+	});
+
+	it("rejects a timing block with no usable durations", async () => {
+		const result = await transcribeWith({
+			segments: [],
+			backend: "whispercpp-cpu",
+			timing: { rtf: 0.5 },
+		});
+		expect(result.timing).toBeNull();
+	});
+
 	describe("WhisperServerManager language normalization", () => {
 		function captureFormField(language: string | undefined): Promise<string | null> {
 			return new Promise((resolve, reject) => {
