@@ -1059,6 +1059,10 @@ export function V4Timeline({
 				return;
 			}
 			const added = await tl.addZoomsBulk(suggestions);
+			// A failed write returns 0 and has already toasted why. Without this the user
+			// got "Added 0 automatic zooms" stacked on top of "Failed to save project",
+			// with no zoom anywhere -- a success message for something that did not happen.
+			if (added === 0) return;
 			toast.success(
 				t(added === 1 ? "toolbar.addedAutoZoom" : "toolbar.addedAutoZoomPlural", { count: added }),
 			);

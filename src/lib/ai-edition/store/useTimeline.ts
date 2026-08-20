@@ -30,7 +30,6 @@ import {
 import { dropTrimPillsByIds, resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
-import { saveTimelineMutation } from "./timelineSave";
 
 // How long a region lasts when the caller doesn't say. The timeline's toolbar
 // passes its own duration instead, derived from the current zoom so the new pill
@@ -97,11 +96,7 @@ export function useTimeline() {
 	const ts = useScopedT("settings");
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
-	const saveProjectDocument = useProjectStore((s) => s.saveDocument);
-	const saveDocument = useCallback(
-		(document: AxcutDocument) => saveTimelineMutation(saveProjectDocument, document),
-		[saveProjectDocument],
-	);
+	const saveDocument = useProjectStore((s) => s.saveDocument);
 	const setDocument = useProjectStore((s) => s.setDocument);
 	const [selection, setSelection] = useState<RegionHandle | null>(null);
 	// F2.7 — shift-click multi-selection. `selection` stays the inspector's
@@ -109,10 +104,27 @@ export function useTimeline() {
 	// the Delete key operates on.
 	const [multiSelection, setMultiSelection] = useState<RegionHandle[]>([]);
 	const [clipSelection, setClipSelection] = useState<string | null>(null);
+	// Pre-drag snapshots for the two optimistic paths (zoom focus, annotations), so a
+	// failed commit can put the document back instead of leaving an edit on screen that
+	// was never written.
 	const zoomFocusRollbackRef = useRef<AxcutDocument | null>(null);
 	const zoomFocusLiveRef = useRef<AxcutDocument | null>(null);
 	const annotationRollbackRef = useRef<AxcutDocument | null>(null);
 	const annotationLiveRef = useRef<AxcutDocument | null>(null);
+
+	// A drag does not always end in a commit: `ZoomFocusOverlay` unmounts the moment
+	// `focusMode` flips to "auto", so `endDrag` never runs and the snapshot outlives the
+	// project. Left alone, resetting focus in project B and failing that save restored
+	// project A's document into B -- the next successful save then wrote A over B. It
+	// also pinned two whole documents per hook instance, and annotations can carry
+	// base64 image data URLs.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: projectId is the trigger, not a read — the body only clears refs.
+	useEffect(() => {
+		zoomFocusRollbackRef.current = null;
+		zoomFocusLiveRef.current = null;
+		annotationRollbackRef.current = null;
+		annotationLiveRef.current = null;
+	}, [projectId]);
 
 	const hasDoc = document !== null && projectId !== null;
 
@@ -517,9 +529,12 @@ export function useTimeline() {
 		zoomFocusLiveRef.current = null;
 		if (!(await saveDocument(doc)) && rollback) {
 			useProjectStore.setState((state) =>
-				state.document === doc
-					? { document: rollback, revision: state.revision + 1, dirty: false }
-					: {},
+				// `dirty` is deliberately NOT cleared. The rollback target is the last document
+				// this drag started from, which is not the same as the last SAVED one: with two
+				// commits in flight the first one's unsaved document is what we restore. Saying
+				// "clean" there tells `beforeunload` and `setHasUnsavedChanges` there is nothing
+				// to save, and the window closes on real work without prompting.
+				state.document === doc ? { document: rollback, revision: state.revision + 1 } : {},
 			);
 		}
 	}, [saveDocument]);
@@ -629,9 +644,12 @@ export function useTimeline() {
 		annotationLiveRef.current = null;
 		if (!(await saveDocument(doc)) && rollback) {
 			useProjectStore.setState((state) =>
-				state.document === doc
-					? { document: rollback, revision: state.revision + 1, dirty: false }
-					: {},
+				// `dirty` is deliberately NOT cleared. The rollback target is the last document
+				// this drag started from, which is not the same as the last SAVED one: with two
+				// commits in flight the first one's unsaved document is what we restore. Saying
+				// "clean" there tells `beforeunload` and `setHasUnsavedChanges` there is nothing
+				// to save, and the window closes on real work without prompting.
+				state.document === doc ? { document: rollback, revision: state.revision + 1 } : {},
 			);
 		}
 	}, [saveDocument]);
