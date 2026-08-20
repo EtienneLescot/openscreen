@@ -25,12 +25,7 @@ name: Nix build
 on:
   workflow_dispatch:
   push:
-    # TEMPORARY: claude/agitated-dijkstra-d63315 is here only so this workflow
-    # can report once before it reaches main. `workflow_dispatch` cannot fire
-    # for a workflow that the default branch has never seen, so a push trigger
-    # is the only way to learn whether `nix build` currently passes at all.
-    # Remove this branch from the list before merging.
-    branches: [main, claude/agitated-dijkstra-d63315]
+    branches: [main]
   schedule:
     # Mondays, 06:00 UTC. Drift here comes from the lockfile and from the app's
     # own build requirements, neither of which respects a release cadence.
