@@ -11,8 +11,8 @@ import { NotesWindow } from "./components/launch/NotesWindow.tsx";
 import { SourceSelector } from "./components/launch/SourceSelector";
 import { Toaster } from "./components/ui/sonner";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { EditorDialogsProvider } from "./contexts/EditorDialogsContext";
 import { useScopedT } from "./contexts/I18nContext";
-import { ProviderSettingsProvider } from "./contexts/ProviderSettingsContext";
 import { ShortcutsProvider } from "./contexts/ShortcutsContext";
 import { loadAllCustomFonts } from "./lib/customFonts";
 
@@ -113,7 +113,7 @@ export default function App() {
 			case "editor":
 				return (
 					<ShortcutsProvider>
-						<ProviderSettingsProvider>
+						<EditorDialogsProvider>
 							<Suspense
 								fallback={
 									<div className="flex flex-col items-center justify-center gap-3 h-screen bg-[#09090b]">
@@ -147,7 +147,7 @@ export default function App() {
 								<ShortcutsConfigDialog />
 								<ProviderSettingsDialog />
 							</Suspense>
-						</ProviderSettingsProvider>
+						</EditorDialogsProvider>
 					</ShortcutsProvider>
 				);
 			default:
