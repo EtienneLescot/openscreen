@@ -493,7 +493,7 @@ unit falls back to the original words (`untranslatedUnits`,
 
 Caption appearance lives in `document.legacyEditor.captions`, accessed
 through `getCaptionSettings` / `patchCaptionSettings`
-([`src/lib/ai-edition/captions/settings.ts:122,154`](../../src/lib/ai-edition/captions/settings.ts:122)).
+([`src/lib/ai-edition/captions/settings.ts:217,262`](../../src/lib/ai-edition/captions/settings.ts:217)).
 
 | Field | Default | Notes |
 |---|---|---|
@@ -576,7 +576,7 @@ sync.
 > the sole pixel source (see [preview.md](preview.md)).
 
 - **Preview and export** — `captionCuesToTextRegions`
-  ([`src/lib/ai-edition/captions/cues.ts:242`](../../src/lib/ai-edition/captions/cues.ts:242))
+  ([`src/lib/ai-edition/captions/cues.ts:254`](../../src/lib/ai-edition/captions/cues.ts:254))
   converts the virtual-ms cue list into synthetic `CaptionTextRegion`s via
   the `captionBandRect` + `captionBackgroundCss` helpers. Those regions
   ride the existing annotation path through the scene description and onto

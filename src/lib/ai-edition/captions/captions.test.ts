@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { captionCuesToTextRegions, deriveCaptionCues } from "./cues";
+import type { CaptionSettings } from "./settings";
 import {
 	CAPTION_BAND_HEIGHT_PCT,
 	captionBackgroundCss,
@@ -176,6 +177,36 @@ describe("caption settings", () => {
 		const large = captionOffsetRange({ ...ON, fontSize: 200 }).y.max;
 		expect(small).toBeGreaterThan(large);
 		expect(large).toBeCloseTo(100 - CAPTION_BAND_HEIGHT_PCT - 75, 6);
+	});
+
+	it("re-clamps the offsets against the geometry a patch just created", () => {
+		// A patch can move the reachable span itself — `width`, `fontSize`,
+		// `backgroundEnabled` and `verticalPosition` all do. Clamping only on read
+		// would leave the stored number outside the span until someone read it, and
+		// the next patch would write that stale number straight back out.
+		const wide = patchCaptionSettings(doc(), { enabled: true, width: 20 });
+		const pushed = patchCaptionSettings(wide, {
+			offsetX: captionOffsetRange(getCaptionSettings(wide)).x.max,
+		});
+		const narrowed = patchCaptionSettings(pushed, { width: 100 });
+
+		const stored = (narrowed.legacyEditor as { captions: CaptionSettings }).captions;
+		expect(stored.offsetX).toBeCloseTo(0, 6);
+		expect(stored.offsetX).toBeCloseTo(getCaptionSettings(narrowed).offsetX, 6);
+	});
+
+	it("re-clamps when the anchor moves, not just when the width does", () => {
+		const low = patchCaptionSettings(doc(), { enabled: true, verticalPosition: "bottom" });
+		const pushed = patchCaptionSettings(low, {
+			offsetY: captionOffsetRange(getCaptionSettings(low)).y.min,
+		});
+		const flipped = patchCaptionSettings(pushed, { verticalPosition: "top" });
+
+		const stored = (flipped.legacyEditor as { captions: CaptionSettings }).captions;
+		const range = captionOffsetRange(getCaptionSettings(flipped));
+		expect(stored.offsetY).toBeGreaterThanOrEqual(range.y.min - 1e-9);
+		expect(stored.offsetY).toBeLessThanOrEqual(range.y.max + 1e-9);
+		expect(stored.offsetY).toBeCloseTo(getCaptionSettings(flipped).offsetY, 6);
 	});
 
 	it("normalises an offset left over from another anchor on read", () => {
