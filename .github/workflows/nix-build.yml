@@ -125,14 +125,18 @@ jobs:
           # that output never passes through Chromium's logging. The file is the
           # only channel the process fully owns. stdout is still captured, as the
           # evidence for why the flag exists.
+          # OPENSCREEN_DIAGNOSTIC turns on timestamped startup milestones, which
+          # is the only way to see where a hang happens: three of the last six
+          # runs stopped here without the renderer emitting anything at all, so
+          # the useful question is how far the main process got first.
           echo "--- openscreen sources -o ---"
           RC=0
-          run_cli $SANDBOX sources -o /tmp/sources.json >/tmp/sources.out 2>/tmp/sources.err || RC=$?
+          OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX sources -o /tmp/sources.json             >/tmp/sources.out 2>/tmp/sources.err || RC=$?
 
           echo "--- stdout, first 300 bytes (expected to be noisy) ---"
           head -c 300 /tmp/sources.out; echo
-          echo "--- stderr, first 3 lines ---"
-          head -3 /tmp/sources.err || true
+          echo "--- stderr in full: milestones live here ---"
+          cat /tmp/sources.err || true
 
           if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
             echo "::error::openscreen sources did not return within 120s. A CLI that hangs on a headless host cannot be scripted."
