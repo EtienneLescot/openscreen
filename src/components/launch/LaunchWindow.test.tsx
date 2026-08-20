@@ -484,8 +484,16 @@ describe("LaunchWindow record button", () => {
 			</StrictMode>,
 		);
 
+		// The whole sequence, not its tail: because the wrapper dedupes, a cleanup
+		// that is deleted outright and a cleanup that asks for the wrong value both
+		// collapse to a lone [true] and would satisfy an assertion on the last call.
+		// Only mount → hand input back → mount again distinguishes the three.
 		await waitFor(() => {
-			expect(window.electronAPI.setHudOverlayIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+			expect(vi.mocked(window.electronAPI.setHudOverlayIgnoreMouseEvents).mock.calls).toEqual([
+				[true],
+				[false],
+				[true],
+			]);
 		});
 	});
 
