@@ -27,7 +27,12 @@ import {
 	ZOOM_DEPTH_LEGEND,
 	ZOOM_DEPTH_SCALES,
 } from "../../../src/lib/ai-edition/timeline/zoom-scale";
-import { executeAgentTool, isMutatingTool } from "../agent-tools";
+import {
+	executeAgentTool,
+	isMutatingTool,
+	OPENSCREEN_TOOL_NAMES,
+	PHANTOM_TOOL_NAMES,
+} from "../agent-tools";
 import {
 	anthropicCachingMiddleware,
 	buildSystemPrompt,
@@ -37,45 +42,13 @@ import {
 	TOOL_DESCRIPTIONS,
 } from "./service";
 
-const OPENSCREEN_TOOLS = [
-	"getCurrentDocument",
-	"getTranscript",
-	"getCursorTrack",
-	"addTrim",
-	"addTrims",
-	"setTrim",
-	"setClipRange",
-	"moveClip",
-	"replaceTimeline",
-	"addZoom",
-	"addZooms",
-	"setZoom",
-	"addSpeed",
-	"setSpeed",
-	"addAnnotation",
-	"setAnnotation",
-	"addCameraFullscreen",
-	"setCameraFullscreen",
-	"removeTrim",
-	"removeModifier",
-	"removeClip",
-];
-
-/** The tools `createDeepAgent` used to add. None of them may ever be built here
- * again: `execute` is in the middleware's list too and only disappeared at
- * runtime because the default backend is not a sandbox, so it is listed as
- * well — a sandbox backend would have made it a 26th tool. */
-const PHANTOM_TOOLS = [
-	"ls",
-	"read_file",
-	"write_file",
-	"edit_file",
-	"glob",
-	"grep",
-	"execute",
-	"write_todos",
-	"task",
-];
+// Both rosters used to be re-typed here, and a third time in the workbench. This
+// file is the one that runs in CI, so its copy stayed right and the bench's went
+// stale at 19 tools — asserting a surface the product had outgrown. One list now,
+// in `agent-tools.ts`; this suite is what pins it to what `buildTools` actually
+// builds, and the bench reads the same array.
+const OPENSCREEN_TOOLS: readonly string[] = OPENSCREEN_TOOL_NAMES;
+const PHANTOM_TOOLS: readonly string[] = PHANTOM_TOOL_NAMES;
 
 /** Valid arguments for every tool, chosen so the executor's verdict is split
  * across the table: some succeed, some are refused for an unknown id, and
@@ -191,7 +164,9 @@ function toolsFor(document: AxcutDocument) {
 }
 
 describe("the tool surface handed to the model", () => {
-	it("is exactly OpenScreen's 21 tools", () => {
+	// No count in the title: the number moved twice without either copy of the
+	// roster following, and a title is the one place a stale number cannot fail.
+	it("is exactly the tools OpenScreen declares, in that order", () => {
 		const { tools } = toolsFor(fixtureDocument());
 		expect(tools.map((t) => t.name)).toEqual(OPENSCREEN_TOOLS);
 	});
@@ -419,7 +394,7 @@ describe("the prompt when the user has turned project edits off", () => {
 });
 
 describe("the tools when the user has turned project edits off", () => {
-	it("still builds all 21 — the model has to be able to NAME the edit", () => {
+	it("still builds every one — the model has to be able to NAME the edit", () => {
 		const { sink } = recordingSink();
 		const tools: BuiltTool[] = buildTools({ current: fixtureDocument() }, sink, false);
 		expect(tools.map((t) => t.name)).toEqual(OPENSCREEN_TOOLS);

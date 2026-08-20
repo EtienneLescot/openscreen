@@ -54,6 +54,11 @@
 		"reactiveWebcam": "縮放時縮小",
 		"reactiveWebcamDescription": "放大影片時鏡頭會平滑縮小，以免遮擋內容。",
 		"help": "攝影機與螢幕的合成方式：子母畫面、垂直堆疊、雙畫面、遮罩形狀、大小與鏡像。",
+		"helpNoWebcam": "此專案沒有攝影機，因此版面配置控制項已停用，預設顯示為「無網路攝影機」。你儲存的版面配置會保留，以便新增攝影機後使用。",
+		"webcamFraming": "攝影機構圖",
+		"webcamCropZoom": "裁切縮放",
+		"webcamCropX": "水平移動",
+		"webcamCropY": "垂直移動",
 		"shapes": {
 			"rectangle": "矩形",
 			"circle": "圓形",
@@ -293,10 +298,17 @@
 		"alignLeft": "靠左",
 		"alignCenter": "置中",
 		"alignRight": "靠右",
-		"verticalOffset": "位移",
+		"verticalOffset": "垂直位移",
+		"horizontalOffset": "水平位移",
 		"width": "寬度",
 		"lineLength": "行長",
 		"minWords": "每行最少字數",
 		"maxWords": "每行最多字數"
+	},
+	"audio": {
+		"title": "音訊",
+		"outputGain": "輸出音量",
+		"reset": "重設音訊",
+		"help": "調整音訊輸出電平。它在預覽與匯出中的效果完全一致。"
 	}
 }

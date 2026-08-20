@@ -65,6 +65,50 @@ std::wstring normalizeDeviceName(const std::wstring& value) {
     return result;
 }
 
+/**
+ * Does `needle` appear in `haystack` as whole words?
+ *
+ * Plain containment is what let a requested "Micro" answer for
+ * "Microphone (Logitech StreamCam)" -- the request is inside the name, just not
+ * as a word -- and a requested "Logi" for "Logitech". Either resolved an
+ * endpoint nobody asked for, and silenced the fallback warning by doing so.
+ *
+ * Both sides are normalized, so a boundary is the start of the string, the end,
+ * or a space.
+ */
+bool containsAsWords(const std::wstring& haystack, const std::wstring& needle) {
+    if (haystack.empty() || needle.empty()) {
+        return false;
+    }
+    size_t pos = haystack.find(needle);
+    while (pos != std::wstring::npos) {
+        const bool startsOnBoundary = pos == 0 || haystack[pos - 1] == L' ';
+        const size_t after = pos + needle.size();
+        const bool endsOnBoundary = after == haystack.size() || haystack[after] == L' ';
+        if (startsOnBoundary && endsOnBoundary) {
+            return true;
+        }
+        pos = haystack.find(needle, pos + 1);
+    }
+    return false;
+}
+
+/**
+ * How well a candidate endpoint answers a requested name, or 0 for "not this
+ * one" -- which the caller must treat as a real answer.
+ *
+ * Only decisive matches count: equal once normalized, or one containing the
+ * other, which is the ordinary case since Chromium appends USB ids to what the
+ * driver reports.
+ *
+ * A further tier used to score shared WORDS, to bridge names differing more than
+ * that. It bridged endpoints that were not the same device -- a requested
+ * "micro" matched the "microphone" that opens nearly every Windows endpoint
+ * name, so asking for a microphone that does not exist quietly recorded
+ * whichever one sorted first, and the fallback warning could not fire because a
+ * device HAD been resolved (getopenscreen/openscreen#404). Returning 0 is what
+ * makes that warning reachable.
+ */
 int scoreDeviceName(const std::wstring& candidateName, const std::wstring& candidateId, const std::wstring& requestedName) {
     const std::wstring candidate = normalizeDeviceName(candidateName);
     const std::wstring id = normalizeDeviceName(candidateId);
@@ -75,31 +119,14 @@ int scoreDeviceName(const std::wstring& candidateName, const std::wstring& candi
     if (candidate == requested) {
         return 1000;
     }
-    if (!candidate.empty() && (candidate.find(requested) != std::wstring::npos || requested.find(candidate) != std::wstring::npos)) {
+    if (containsAsWords(candidate, requested) || containsAsWords(requested, candidate)) {
         return 900;
     }
-    if (!id.empty() && (id.find(requested) != std::wstring::npos || requested.find(id) != std::wstring::npos)) {
+    if (containsAsWords(id, requested) || containsAsWords(requested, id)) {
         return 800;
     }
 
-    int score = 0;
-    size_t pos = 0;
-    while (pos < requested.size()) {
-        const size_t end = requested.find(L' ', pos);
-        const std::wstring word = requested.substr(pos, end == std::wstring::npos ? std::wstring::npos : end - pos);
-        if (word.size() > 1 && word != L"microphone" && word != L"mic" && word != L"audio" && word != L"input") {
-            if (candidate.find(word) != std::wstring::npos) {
-                score += 100;
-            } else if (id.find(word) != std::wstring::npos) {
-                score += 50;
-            }
-        }
-        if (end == std::wstring::npos) {
-            break;
-        }
-        pos = end + 1;
-    }
-    return score;
+    return 0;
 }
 
 std::wstring getDeviceFriendlyName(IMMDevice* device) {
@@ -169,6 +196,23 @@ bool WasapiLoopbackCapture::initialize(WasapiCaptureEndpoint endpoint, const std
     }
 
     if (!device_) {
+        // A particular microphone was asked for and nothing here could find it,
+        // so the recording is about to capture whatever Windows calls the default
+        // input. Worth saying out loud, and keyed on the OUTCOME rather than on
+        // which lookup failed: the caller sends an empty name when it could not
+        // resolve one in time, but a name that simply matches no endpoint lands
+        // in exactly the same place. Either way the take sounds like the wrong
+        // microphone with nothing explaining why (getopenscreen/openscreen#404).
+        const bool wantedAParticularMicrophone =
+            endpoint == WasapiCaptureEndpoint::Microphone &&
+            ((!deviceId.empty() && deviceId != L"default") || !deviceName.empty());
+        if (wantedAParticularMicrophone) {
+            std::cerr << "{\"event\":\"warning\",\"code\":\"microphone-defaulted\","
+                         "\"message\":\"The requested microphone could not be resolved; "
+                         "capturing the default input\"}"
+                      << std::endl;
+        }
+
         const EDataFlow flow =
             endpoint == WasapiCaptureEndpoint::SystemLoopback ? eRender : eCapture;
         hr = deviceEnumerator_->GetDefaultAudioEndpoint(flow, eConsole, &device_);

@@ -72,9 +72,13 @@ import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/rec
 import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { toHelperRect } from "../native-bridge/helperCoordinates";
+import { scoreDeviceNameMatch } from "../recording/deviceNameMatching";
 import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
+	readMicrophoneDefaulted,
+	readWebcamFormat,
+	readWebcamUnavailable,
 	terminateNativeWindowsCapture,
 	waitForNativeWindowsCaptureStop,
 } from "../recording/nativeWindowsCaptureStop";
@@ -472,6 +476,18 @@ let currentRecordingSession: RecordingSession | null = null;
 export interface RecordingPrefs {
 	micEnabled: boolean;
 	micDeviceId: string | null;
+	/**
+	 * The microphone's LABEL, carried beside its id because the native Windows
+	 * helper selects by name and Chromium selects by id.
+	 *
+	 * Without it, a HUD rebuilt for a new recording restored the id and had to
+	 * re-derive the name from its own `enumerateDevices()` — which needs a full
+	 * getUserMedia permission round-trip first, and an auto-started recording
+	 * beat it. The request then went out with no name at all, and the helper
+	 * answers that by recording the Windows default endpoint instead of the
+	 * microphone the user picked (getopenscreen/openscreen#404).
+	 */
+	micDeviceName: string | null;
 	camEnabled: boolean;
 	camDeviceId: string | null;
 	systemAudioEnabled: boolean;
@@ -480,6 +496,7 @@ export interface RecordingPrefs {
 let recordingPrefs: RecordingPrefs = {
 	micEnabled: false,
 	micDeviceId: null,
+	micDeviceName: null,
 	camEnabled: false,
 	camDeviceId: null,
 	systemAudioEnabled: false,
@@ -944,40 +961,6 @@ function isWindowsGraphicsCaptureOsSupported() {
 	return Number.isFinite(build) && build >= 19041;
 }
 
-function normalizeNativeDeviceName(value: string) {
-	return value
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, " ")
-		.trim();
-}
-
-function scoreNativeDeviceName(candidateName: string, candidateId: string, requestedName?: string) {
-	const candidate = normalizeNativeDeviceName(candidateName);
-	const id = normalizeNativeDeviceName(candidateId);
-	const requested = normalizeNativeDeviceName(requestedName ?? "");
-	if (!requested) {
-		return 0;
-	}
-	if (candidate === requested) {
-		return 1000;
-	}
-	if (candidate.includes(requested) || requested.includes(candidate)) {
-		return 900;
-	}
-	if (id.includes(requested) || requested.includes(id)) {
-		return 800;
-	}
-
-	return requested
-		.split(/\s+/)
-		.filter((word) => word.length > 1 && !["camera", "webcam", "video", "input"].includes(word))
-		.reduce((score, word) => {
-			if (candidate.includes(word)) return score + 100;
-			if (id.includes(word)) return score + 50;
-			return score;
-		}, 0);
-}
-
 function queryDirectShowVideoInputRegistry() {
 	return new Promise<string>((resolve) => {
 		const proc = spawn(
@@ -1022,7 +1005,7 @@ async function resolveDirectShowWebcamClsid(deviceName?: string) {
 	let best: { clsid: string; friendlyName?: string; score: number } | null = null;
 	for (const entry of entries) {
 		if (!entry.clsid) continue;
-		const score = scoreNativeDeviceName(entry.friendlyName ?? "", entry.clsid, deviceName);
+		const score = scoreDeviceNameMatch(entry.friendlyName ?? "", entry.clsid, deviceName);
 		if (!best || score > best.score) {
 			best = { clsid: entry.clsid, friendlyName: entry.friendlyName, score };
 		}
@@ -1322,25 +1305,6 @@ function sendNativeWindowsStopCommand(proc: ChildProcessWithoutNullStreams) {
 	proc.stdin.write("stop\n");
 	proc.stdin.end();
 	return true;
-}
-
-function readNativeWindowsWebcamFormat(output: string) {
-	const lines = output.split(/\r?\n/).filter((line) => line.includes('"event":"webcam-format"'));
-	const lastLine = lines.at(-1);
-	if (!lastLine) {
-		return null;
-	}
-
-	try {
-		return JSON.parse(lastLine) as {
-			width?: number;
-			height?: number;
-			fps?: number;
-			deviceName?: string;
-		};
-	} catch {
-		return null;
-	}
 }
 
 function readNativeWindowsEncoderSelection(output: string) {
@@ -2449,7 +2413,7 @@ export function registerIpcHandlers(
 					cursorCaptureMode === "editable-overlay"
 						? Math.max(0, captureStartedAtMs - cursorStartTimeMs)
 						: 0;
-				const webcamFormat = readNativeWindowsWebcamFormat(nativeWindowsCaptureOutput);
+				const webcamFormat = readWebcamFormat(nativeWindowsCaptureOutput);
 				const encoderSelection = readNativeWindowsEncoderSelection(nativeWindowsCaptureOutput);
 				// Captured now because stop may have no helper left to ask. A helper
 				// killed mid-recording is exactly the case where this matters most.
@@ -2466,12 +2430,42 @@ export function registerIpcHandlers(
 					onRecordingStateChange(true, source.name);
 				}
 
+				// Reported at start, not at stop: the helper decides the camera is a
+				// lost cause during its own init — before it announces "Recording
+				// started", so the warning is already in the buffer here — and telling
+				// the user now, while the take is still worth restarting, beats telling
+				// them at the end. Keyed on the helper's own event rather than on a
+				// missing `webcamFormat`: absence of the format line also means "the
+				// line could not be parsed", which would put a red toast on a recording
+				// whose camera is working perfectly.
+				const webcamUnavailable =
+					request.webcam.enabled && readWebcamUnavailable(nativeWindowsCaptureOutput);
+				// Same shape as the camera notice: the helper records the Windows
+				// default input rather than failing, so this take is usable but is
+				// almost certainly the wrong microphone.
+				const microphoneDefaulted =
+					request.audio.microphone.enabled && readMicrophoneDefaulted(nativeWindowsCaptureOutput);
+				if (microphoneDefaulted) {
+					console.warn("[native-wgc] recording the default input; the microphone was not named", {
+						deviceId: request.audio.microphone.deviceId,
+						deviceName: request.audio.microphone.deviceName,
+					});
+				}
+				if (webcamUnavailable) {
+					console.warn("[native-wgc] recording without a camera; the helper could not open it", {
+						deviceId: request.webcam.deviceId,
+						deviceName: request.webcam.deviceName,
+					});
+				}
+
 				return {
 					success: true,
 					recordingId,
 					path: outputPath,
 					helperPath,
 					videoEncoderSelection: encoderSelection?.video ?? null,
+					webcamUnavailable,
+					microphoneDefaulted,
 				};
 			} catch (error) {
 				console.error("Failed to start native Windows recording:", error);
@@ -2863,8 +2857,21 @@ export function registerIpcHandlers(
 			let webcamVideoPath: string | undefined;
 			if (preferredWebcamPath) {
 				try {
-					await fs.access(preferredWebcamPath, fsConstants.R_OK);
-					webcamVideoPath = preferredWebcamPath;
+					// Size, not just existence. A camera that opened but delivered no
+					// frame still gets a file created for it, and its `Finalize()` then
+					// fails, leaving nought bytes on disk. Admitting that file put a
+					// camera track in the document pointing at something no demuxer can
+					// read, and the preview compositor answers an unreadable camera by
+					// drawing the SCREEN recording inside the little camera rectangle —
+					// which is how a webcam that never recorded showed up as the desktop
+					// duplicated into its own corner (getopenscreen/openscreen#387).
+					const webcamStat = await fs.stat(preferredWebcamPath);
+					webcamVideoPath = webcamStat.size > 0 ? preferredWebcamPath : undefined;
+					if (!webcamVideoPath) {
+						console.warn("[native-wgc] the webcam file is empty; saving without a camera", {
+							path: preferredWebcamPath,
+						});
+					}
 				} catch {
 					webcamVideoPath = undefined;
 				}
@@ -2887,6 +2894,14 @@ export function registerIpcHandlers(
 				path: screenVideoPath,
 				session,
 				recovered,
+				// `preferredWebcamPath` is non-null only for a take that asked for a
+				// camera, so the pair means "a camera was requested and none survived".
+				// This is the second, quieter way to lose one: the helper opened the
+				// device happily and then never got a frame out of it, so it reports no
+				// `webcam-unavailable` and the start-time notice stays silent. Left
+				// unreported, the user would find out in the editor — which is exactly
+				// the silence this change exists to end.
+				webcamDropped: Boolean(preferredWebcamPath) && !webcamVideoPath,
 				message: recovered
 					? "Native Windows recording recovered from a failed stop"
 					: "Native Windows recording session stored successfully",

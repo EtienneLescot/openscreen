@@ -21,7 +21,7 @@ use std::ffi::CString;
 use std::ptr;
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio,
+    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_audio,
     stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
 };
 use crate::config::Cfg;
@@ -457,6 +457,7 @@ pub fn run_composited_multi(
     let mut clip_frame_counts: Vec<u64> = vec![0; clips.len()];
 
     let scene = comp.scene_snapshot();
+    let audio_settings = scene.as_ref().map(|scene| scene.audio).unwrap_or_default();
     // Ring de staging a 2 : l'export ne veut que du debit, une frame de latence
     // ne se voit pas dans un fichier. Voir `Compositor::set_readback_depth` pour
     // la raison pour laquelle la preview, elle, reste a 1.
@@ -533,7 +534,10 @@ pub fn run_composited_multi(
         // raccourci voit son audio raccourci d'autant), puis un seul encode AAC.
         let declared_audio: Vec<bool> = clips.iter().map(|c| c.has_audio).collect();
         let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
-        audio_encoder.encode(&assemble_concatenated_pcm(&clip_pcm, &plan), octx)?;
+        audio_encoder.encode(
+            &finish_audio(assemble_concatenated_pcm(&clip_pcm, &plan), audio_settings),
+            octx,
+        )?;
         crate::ffi::averr(crate::ffi::av_write_trailer(octx), "write_trailer")?;
         crate::ffi::avio_closep(&mut pb);
         crate::ffi::avformat_free_context(octx);

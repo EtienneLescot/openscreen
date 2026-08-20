@@ -625,9 +625,13 @@ describe("les demoScripts ne peuvent nommer qu'un outil qui existe", () => {
 	// tours où rien n'avait jamais été lu. Un scénario dont le seul objet est
 	// « a-t-il regardé ? » certifiait un modèle aveugle.
 	//
-	// Les 8 fantômes restent autorisés : `cursor-question` et `wizard-enhance-bare`
+	// Les fantômes restent autorisés : `cursor-question` et `wizard-enhance-bare`
 	// rejouent des tours live de 2026-07-31 où le modèle appelait `ls`/`glob`, et
-	// c'est précisément ce que ces demos doivent continuer à exercer.
+	// c'est précisément ce que ces demos doivent continuer à exercer. Leur nombre
+	// n'est pas écrit ici : `PHANTOM_TOOL_NAMES` en compte un de plus que la liste
+	// que ce banc tenait à la main (`execute`, que seul un backend sandbox ferait
+	// réapparaître), et une exemption dont la taille est recopiée en prose dérive
+	// exactement comme le roster a dérivé.
 	const KNOWN = new Set<string>([...OPENSCREEN_TOOLS, ...PHANTOM_TOOLS]);
 
 	for (const scenario of allScenarios()) {

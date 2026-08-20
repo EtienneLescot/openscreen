@@ -53,6 +53,11 @@
 		"reactiveWebcam": "Thu nhỏ khi phóng to",
 		"reactiveWebcamDescription": "Camera thu nhỏ mượt mà khi video được phóng to, để không che khuất.",
 		"help": "Cách ghép webcam với màn hình: hình trong hình, xếp dọc, khung đôi, hình dạng mặt nạ, kích thước và lật gương.",
+		"helpNoWebcam": "Dự án này không có camera nên các tùy chọn bố cục bị tắt và thiết lập sẵn hiển thị “Không có webcam”. Bố cục đã lưu của bạn vẫn được giữ lại cho khi bạn thêm camera.",
+		"webcamFraming": "Khung hình webcam",
+		"webcamCropZoom": "Thu phóng vùng cắt",
+		"webcamCropX": "Dịch chuyển ngang",
+		"webcamCropY": "Dịch chuyển dọc",
 		"shapes": {
 			"rectangle": "Chữ nhật",
 			"circle": "Tròn",
@@ -292,10 +297,17 @@
 		"alignLeft": "Trái",
 		"alignCenter": "Giữa",
 		"alignRight": "Phải",
-		"verticalOffset": "Độ lệch",
+		"verticalOffset": "Độ lệch dọc",
+		"horizontalOffset": "Độ lệch ngang",
 		"width": "Chiều rộng",
 		"lineLength": "Độ dài dòng",
 		"minWords": "Số từ tối thiểu mỗi dòng",
 		"maxWords": "Số từ tối đa mỗi dòng"
+	},
+	"audio": {
+		"title": "Âm thanh",
+		"outputGain": "Mức đầu ra",
+		"reset": "Đặt lại âm thanh",
+		"help": "Điều chỉnh mức đầu ra của âm thanh. Nó được áp dụng giống hệt nhau trong bản xem trước và khi xuất."
 	}
 }

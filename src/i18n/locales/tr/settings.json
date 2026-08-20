@@ -53,6 +53,11 @@
 		"reactiveWebcam": "Yakınlaştırınca küçült",
 		"reactiveWebcamDescription": "Video yakınlaştırıldığında kamera yumuşakça küçülür, böylece yoldan çekilir.",
 		"help": "Web kamerasının ekranla birleştirilme biçimi: resim içinde resim, dikey yığın, çift çerçeve, maske şekli, boyut ve aynalama.",
+		"helpNoWebcam": "Bu projede kamera yok; bu yüzden yerleşim denetimleri kapalı ve ön ayar “Web kamerası yok” gösteriyor. Kaydettiğiniz yerleşim, bir kamera eklediğinizde kullanılmak üzere korunur.",
+		"webcamFraming": "Webcam kadrajı",
+		"webcamCropZoom": "Kırpma yakınlaştırması",
+		"webcamCropX": "Yatay kaydırma",
+		"webcamCropY": "Dikey kaydırma",
 		"shapes": {
 			"rectangle": "Dikdörtgen",
 			"circle": "Daire",
@@ -292,10 +297,17 @@
 		"alignLeft": "Sol",
 		"alignCenter": "Orta",
 		"alignRight": "Sağ",
-		"verticalOffset": "Kaydırma",
+		"verticalOffset": "Dikey ofset",
+		"horizontalOffset": "Yatay ofset",
 		"width": "Genişlik",
 		"lineLength": "Satır uzunluğu",
 		"minWords": "Satır başına en az kelime",
 		"maxWords": "Satır başına en çok kelime"
+	},
+	"audio": {
+		"title": "Ses",
+		"outputGain": "Çıkış seviyesi",
+		"reset": "Sesi sıfırla",
+		"help": "Ses çıkış seviyesini ayarlayın. Önizlemede ve dışa aktarmada aynı şekilde uygulanır."
 	}
 }
