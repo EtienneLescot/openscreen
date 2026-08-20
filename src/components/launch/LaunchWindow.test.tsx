@@ -164,7 +164,7 @@ vi.mock("@/contexts/I18nContext", () => ({
 			"deviceSettings.previewUnavailable": "Preview unavailable",
 			"deviceSettings.about": "About",
 			"deviceSettings.version": "Version {{version}}",
-			"deviceSettings.checkForUpdates": "Check for updates",
+			"actions.checkForUpdates": "Check for updates",
 			"deviceSettings.checkingForUpdates": "Checking…",
 			"audio.inputDevice": "Input device",
 			"webcam.cameraDevice": "Camera device",

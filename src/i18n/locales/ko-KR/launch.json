@@ -96,7 +96,6 @@
 		"previewUnavailable": "미리 보기를 사용할 수 없습니다",
 		"about": "정보",
 		"version": "버전 {{version}}",
-		"checkForUpdates": "업데이트 확인",
 		"checkingForUpdates": "확인 중…"
 	}
 }

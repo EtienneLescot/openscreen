@@ -96,7 +96,6 @@
 		"previewUnavailable": "预览不可用",
 		"about": "关于",
 		"version": "版本 {{version}}",
-		"checkForUpdates": "检查更新",
 		"checkingForUpdates": "正在检查…"
 	}
 }

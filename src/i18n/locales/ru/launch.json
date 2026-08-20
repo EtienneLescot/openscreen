@@ -96,7 +96,6 @@
 		"previewUnavailable": "Предпросмотр недоступен",
 		"about": "О программе",
 		"version": "Версия {{version}}",
-		"checkForUpdates": "Проверить обновления",
 		"checkingForUpdates": "Проверка…"
 	}
 }

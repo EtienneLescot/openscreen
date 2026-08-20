@@ -124,6 +124,10 @@ function createShimElectronAPI() {
 		onRequestSaveBeforeClose: () => () => undefined,
 		loadProjectFileFromPath: () => Promise.resolve({ success: false, canceled: true }),
 		getPathForFile: () => "",
+		// Browser mode has no main process to ask, and no installer that could update it. A
+		// version still has to come back or the HUD's About block never renders at all.
+		getAppInfo: () => Promise.resolve({ version: "0.0.0-browser", canCheckForUpdates: false }),
+		checkForUpdates: () => Promise.resolve(),
 		getSources: () => Promise.resolve(SHIM_SOURCES),
 		selectSource: (source: ShimDesktopSource) => {
 			shimSelectedSource = source;

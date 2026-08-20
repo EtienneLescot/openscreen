@@ -96,7 +96,6 @@
 		"previewUnavailable": "Önizleme kullanılamıyor",
 		"about": "Hakkında",
 		"version": "Sürüm {{version}}",
-		"checkForUpdates": "Güncellemeleri denetle",
 		"checkingForUpdates": "Denetleniyor…"
 	}
 }

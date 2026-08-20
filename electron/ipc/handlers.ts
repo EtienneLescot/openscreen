@@ -54,6 +54,7 @@ import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
+import { getInstallChannel } from "../install-channel";
 import { RECORDINGS_DIR } from "../main";
 import { type AudioPeaksResult, getAudioPeaks } from "../media/audioPeaks";
 import {
@@ -4038,6 +4039,10 @@ export function registerIpcHandlers(
 				appVersion: app.getVersion(),
 				platform: process.platform,
 				arch: process.arch,
+				// The same fact the About box leads with, and for the same reason: it is what
+				// explains why a copy does or does not offer an update check. This file is the
+				// artifact users actually attach, so it must not be the one that omits it.
+				channel: getInstallChannel(),
 				osRelease: os.release(),
 				osVersion: os.version(),
 				totalMemoryMB: Math.round(os.totalmem() / 1024 / 1024),

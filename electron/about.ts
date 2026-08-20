@@ -9,7 +9,21 @@
 import type { InstallChannel } from "./install-channel";
 
 export const WEBSITE_URL = "https://getopenscreen.com";
-export const COPYRIGHT = "© OpenScreen contributors — MIT License";
+/** The brand spelling, for the surfaces we render ourselves. NOT `app.name`: that resolves to
+ *  electron-builder's `productName` ("Openscreen") when packaged and to package.json's `name`
+ *  ("openscreen") in dev, so the About box would disagree with its own title bar. */
+export const PRODUCT_NAME = "OpenScreen";
+/** Must name the holder in LICENSE. electron-builder derives Info.plist's
+ *  NSHumanReadableCopyright and the Windows LegalCopyright from package.json's `author`, so a
+ *  third spelling here would put three attributions on one binary. */
+export const COPYRIGHT = "© 2025 Siddharth Vaddem — MIT License";
+
+/** macOS opens its own About panel (the app menu's `role: "about"`), so it is the one platform
+ *  that must not be shown the message box we build, and the only one whose panel needs
+ *  populating up front. Pure so both branches can be pinned from a Linux-only CI. */
+export function usesNativeAboutPanel(platform: NodeJS.Platform): boolean {
+	return platform === "darwin";
+}
 
 export interface AboutFacts {
 	version: string;
