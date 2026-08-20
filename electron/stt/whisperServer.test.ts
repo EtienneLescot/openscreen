@@ -191,6 +191,22 @@ describe("WhisperServerManager", () => {
 		expect(result.timing).toEqual({ elapsedSec: 4, audioSec: 8, rtf: 0.5 });
 	});
 
+	// Durations no clock could produce. Letting these through would put a bogus
+	// figure into the run totals in SttManager, where nothing downstream could
+	// tell it from a real measurement.
+	it.each([
+		["negative elapsed", { elapsed_s: -1, audio_s: 8 }],
+		["zero audio", { elapsed_s: 4, audio_s: 0 }],
+		["negative audio", { elapsed_s: 4, audio_s: -8 }],
+	])("rejects a timing block with %s", async (_label, timing) => {
+		const result = await transcribeWith({
+			segments: [],
+			backend: "whispercpp-cpu",
+			timing,
+		});
+		expect(result.timing).toBeNull();
+	});
+
 	it("rejects a timing block with no usable durations", async () => {
 		const result = await transcribeWith({
 			segments: [],
