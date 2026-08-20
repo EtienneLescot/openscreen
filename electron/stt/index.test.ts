@@ -269,7 +269,7 @@ describe("SttManager", () => {
 	});
 
 	it("retries setup after a failed one instead of caching the rejection", async () => {
-		// First run downloads a 253 MB model. Caching a rejected `prepare()` meant
+		// First run downloads a 264 MB model. Caching a rejected `prepare()` meant
 		// one dropped connection failed every later transcription in the session —
 		// including the retry the editor offers — until the app was restarted.
 		const { ensureModels } = await import("./modelManager");

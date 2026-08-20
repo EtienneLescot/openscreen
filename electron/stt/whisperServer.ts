@@ -42,7 +42,7 @@ const REQUEST_TIMEOUT_MS = 280_000;
  * and the renderer doesn't move.
  *
  * Word timestamps come from whisper.cpp's native DTW token timestamps
- * (`t_dtw`, LARGE_V3_TURBO aheads preset, `flash_attn = false` so DTW is actually
+ * (`t_dtw`, SMALL aheads preset, `flash_attn = false` so DTW is actually
  * computed). The helper returns them already absolute, so no segment-offset
  * arithmetic is required.
  *
@@ -52,7 +52,7 @@ const REQUEST_TIMEOUT_MS = 280_000;
  */
 
 export interface WhisperServerStartOptions {
-	/** Absolute path to the GGML model file (e.g. ggml-large-v3-turbo-q5_0.bin). */
+	/** Absolute path to the GGML model file (e.g. ggml-small-q8_0.bin). */
 	modelPath: string;
 	/** Externally-resolved binary path (skips gpuDetector on startup); null = auto. */
 	binaryPath?: string | null;
@@ -131,7 +131,7 @@ export class WhisperServerManager {
 	/** Check the server's HTTP root for a 200; resolves once responsive. */
 	private static async pollUntilReady(
 		baseUrl: string,
-		timeoutMs = 60_000,
+		timeoutMs = 30_000,
 		shouldContinue: () => boolean = () => true,
 	): Promise<void> {
 		const deadline = Date.now() + timeoutMs;
@@ -286,7 +286,7 @@ export class WhisperServerManager {
 				await Promise.race([
 					WhisperServerManager.pollUntilReady(
 						`http://127.0.0.1:${port}`,
-						60_000,
+						30_000,
 						() => this.process === child,
 					),
 					exitedBeforeReady,

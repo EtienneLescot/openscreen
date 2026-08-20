@@ -19,7 +19,7 @@ describe("modelManager", () => {
 		expect(STT_MODELS.whisper.cacheDir).toBe("whisper-ggml");
 		expect(STT_MODELS.whisper.repoId).toBe("ggerganov/whisper.cpp");
 		expect(STT_MODELS.whisper.files.length).toBe(1);
-		expect(STT_MODELS.whisper.files[0].name).toBe("ggml-large-v3-turbo-q5_0.bin");
+		expect(STT_MODELS.whisper.files[0].name).toBe("ggml-small-q8_0.bin");
 		expect(STT_MODELS.whisper.files[0].expectedSha256).not.toBeNull();
 		for (const f of STT_MODELS.whisper.files) {
 			expect(f.approximateBytes).toBeGreaterThan(0);
@@ -32,7 +32,7 @@ describe("modelManager", () => {
 
 	it("modelPaths places the GGML file under the cache directory", () => {
 		const paths = modelPaths(dir);
-		expect(paths.whisper).toBe(path.join(dir, "whisper-ggml", "ggml-large-v3-turbo-q5_0.bin"));
+		expect(paths.whisper).toBe(path.join(dir, "whisper-ggml", "ggml-small-q8_0.bin"));
 	});
 
 	it("areModelsPresent returns false when the model file is missing", async () => {
@@ -92,7 +92,7 @@ describe("modelManager", () => {
 			expect(fetches).toBe(1);
 			expect(await readFile(paths.whisper)).toEqual(replacement);
 			// The stale copy is displaced by the atomic rename, not quarantined
-			// beside it: a `.bad` sibling would strand hundreds of MB nothing ever reaps.
+			// beside it: a `.bad` sibling would strand 264 MB nothing ever reaps.
 			expect(existsSync(`${paths.whisper}.bad`)).toBe(false);
 			expect(existsSync(`${paths.whisper}.partial`)).toBe(false);
 		} finally {
@@ -180,7 +180,7 @@ describe("modelManager", () => {
 			const s = await stat(paths.whisper);
 			expect(s.size).toBeGreaterThan(0);
 			expect(progressCalls.length).toBeGreaterThanOrEqual(1);
-			expect(progressCalls[0].file).toBe("ggml-large-v3-turbo-q5_0.bin");
+			expect(progressCalls[0].file).toBe("ggml-small-q8_0.bin");
 		} finally {
 			STT_MODELS.whisper.files[0].expectedSha256 = originalSha;
 		}

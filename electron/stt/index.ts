@@ -20,7 +20,7 @@ import { WhisperServerManager } from "./whisperServer";
  *      (`chunking.ts`) and runs each through whisper-stt-server's HTTP
  *      `/inference`, which returns both phrase- and word-level segments in one
  *      pass (see whisperServer.ts). Word timestamps come from whisper.cpp's
- *      native DTW token timestamps (`t_dtw`, LARGE_V3_TURBO aheads preset,
+ *      native DTW token timestamps (`t_dtw`, SMALL aheads preset,
  *      `flash_attn = false`), see
  *      technical-documentation/architecture/transcription-and-captions.md § Decision rationale.
  *   3. `shutdown()` tears down on app quit.
@@ -124,7 +124,7 @@ export class SttManager {
 		if (options.statusSink) this.addStatusSink(options.statusSink);
 		if (options.modelsBaseDir) this.modelsBaseDir = options.modelsBaseDir;
 		if (!this.initPromise) {
-			// A REJECTED init must not be cached. `prepare()` downloads a large
+			// A REJECTED init must not be cached. `prepare()` downloads a 264 MB
 			// model on first run, and caching its rejection meant one dropped
 			// connection poisoned the whole app session: every later transcription
 			// — including the retry the UI offers, and every remaining asset in the

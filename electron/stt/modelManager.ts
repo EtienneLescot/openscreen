@@ -13,10 +13,9 @@ import { pipeline } from "node:stream/promises";
  * from the `ggml-org` GitHub org the engine itself now lives under;
  * `ggml-org/whisper.cpp` on HuggingFace is a different, access-gated repo
  * and returns 401 on every file including README.md — confirmed by curl).
- * whisper.cpp bakes precision into the file, so there is no runtime `--int8`
- * flag. OpenScreen uses the q5_0 quantized large-v3-turbo multilingual model:
- * substantially stronger recognition than `small`, while the turbo decoder
- * remains practical for interactive captions on Apple Silicon.
+ * whisper.cpp bakes precision into the file, so
+ * there is no runtime `--int8` flag; OpenScreen ships the q8_0 quantized
+ * `small` multilingual model by default.
  *
  * The file is verified by SHA-256 and written atomically (via .partial rename)
  * to prevent partial downloads from being treated as complete.
@@ -28,7 +27,7 @@ import { pipeline } from "node:stream/promises";
 export type SttModelId = "whisper";
 
 export interface SttModelFile {
-	/** Relative path within the model directory (e.g. "ggml-large-v3-turbo-q5_0.bin"). */
+	/** Relative path within the model directory (e.g. "ggml-small-q8_0.bin"). */
 	name: string;
 	/** HuggingFace resolve URL for this file. */
 	url: string;
@@ -55,13 +54,13 @@ const MODEL_BASE = "https://huggingface.co";
 // long-standing public model-file repo that never moved when the engine's
 // GitHub org was renamed.
 const MODEL_REPO = "ggerganov/whisper.cpp";
-const MODEL_FILE = "ggml-large-v3-turbo-q5_0.bin";
+const MODEL_FILE = "ggml-small-q8_0.bin";
 // Pinned to a commit rather than `main` so `expectedSha256` is an invariant and
 // not a bet: `main` is a mutable branch pointer, and a re-upload under it would
 // now invalidate every cache in the field at once instead of merely breaking new
 // installs. This revision was checked against HuggingFace's paths-info API — its
 // LFS oid for MODEL_FILE is exactly the digest below.
-const MODEL_REVISION = "98aa99a0a9db05ae2342309f5096248665f7cba3";
+const MODEL_REVISION = "5359861c739e955e79d9a303bcbc70fb988958b1";
 
 export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 	whisper: {
@@ -71,8 +70,8 @@ export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 			{
 				name: MODEL_FILE,
 				url: `${MODEL_BASE}/${MODEL_REPO}/resolve/${MODEL_REVISION}/${MODEL_FILE}`,
-				expectedSha256: "394221709CD5AD1F40C46E6031CA61BCE88931E6E088C188294C6D5A55FFA7E2",
-				approximateBytes: 574_041_195,
+				expectedSha256: "49C8FB02B65E6049D5FA6C04F81F53B867B5EC9540406812C643F177317F779F",
+				approximateBytes: 264_000_000,
 			},
 		],
 	},
@@ -180,7 +179,7 @@ async function ensureFile(
 			// would buy nothing — the rename at the end of this function is already
 			// atomic, so there is no window to close — while costing the user their
 			// only model if the replacement never lands (offline, HF 5xx, ENOSPC)
-			// and stranding hundreds of MB that nothing ever cleans up.
+			// and stranding 264 MB that nothing ever cleans up.
 		}
 	}
 

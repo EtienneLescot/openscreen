@@ -319,7 +319,7 @@ describe("WhisperServerManager", () => {
 		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 		try {
 			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-			const modelPath = path.join(dir, "ggml-large-v3-turbo-q5_0.bin");
+			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
 			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			await fs.writeFile(modelPath, "dummy-ggml");
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
@@ -379,7 +379,7 @@ describe("WhisperServerManager", () => {
 		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 		try {
 			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-			const modelPath = path.join(dir, "ggml-large-v3-turbo-q5_0.bin");
+			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
 			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			await fs.writeFile(modelPath, "dummy-ggml");
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
