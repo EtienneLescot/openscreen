@@ -53,6 +53,7 @@
 		"reactiveWebcam": "Riduci con lo zoom",
 		"reactiveWebcamDescription": "La webcam si riduce dolcemente durante lo zoom, così non intralcia.",
 		"help": "Come la webcam viene composta con lo schermo: picture-in-picture, pila verticale, doppio riquadro, forma della maschera, dimensione e effetto specchio.",
+		"helpNoWebcam": "Questo progetto non ha una webcam, quindi i controlli di layout sono disattivati e il preset mostra «Nessuna webcam». Il layout salvato viene conservato per quando aggiungerai una webcam.",
 		"shapes": {
 			"rectangle": "Rett.",
 			"circle": "Cerchio",

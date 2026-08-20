@@ -53,6 +53,7 @@
 		"reactiveWebcam": "Shrink on Zoom",
 		"reactiveWebcamDescription": "Camera smoothly shrinks while the video is zoomed in, so it stays out of the way.",
 		"help": "How the webcam is composed with the screen: picture-in-picture, vertical stack, dual frame, mask shape, size, and mirroring.",
+		"helpNoWebcam": "This project has no camera, so the layout controls are off and the preset reads “No Webcam”. Your saved layout is kept for when a camera is added.",
 		"shapes": {
 			"rectangle": "Rect",
 			"circle": "Circle",
