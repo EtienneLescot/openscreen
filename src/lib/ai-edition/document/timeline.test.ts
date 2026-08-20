@@ -1370,6 +1370,29 @@ describe("removeClip — delete a clip, close the gap, drop its pills", () => {
 		expect(next.zoomRanges[0]).toMatchObject({ startMs: 2000, endMs: 4000 });
 	});
 
+	it("preserves a bare clipId that is not a complete source anchor", () => {
+		const before = doc();
+		before.zoomRanges.push(
+			makeZoom({
+				id: "partial_anchor",
+				clipId: "clip_a",
+				sourceStartSec: undefined,
+				sourceEndSec: undefined,
+				startMs: 500,
+				endMs: 1500,
+			}),
+		);
+
+		const next = removeClip(before, "clip_a");
+
+		expect(next.zoomRanges.map((region) => region.id)).toEqual(["z_b", "partial_anchor"]);
+		expect(next.zoomRanges[1]).toMatchObject({
+			clipId: "clip_a",
+			startMs: 500,
+			endMs: 1500,
+		});
+	});
+
 	it("drops every modifier anchored to the last remaining clip", () => {
 		const before = makeDoc({
 			timeline: {
@@ -1385,6 +1408,37 @@ describe("removeClip — delete a clip, close the gap, drop its pills", () => {
 					clipId: undefined,
 					sourceStartSec: undefined,
 					sourceEndSec: undefined,
+				}),
+				// #249, and the branch nothing pinned: with no clip left, `removeClip` skips
+				// `rederiveRegionMs` entirely, so this filter is the only thing deciding. A bare
+				// `clipId` is not an anchor -- the region is still placed by its raw ms, so the
+				// clip going away must not take it. Without this case the ternary can be
+				// refactored back to the old semantics with a green suite.
+				makeZoom({
+					id: "partial_zoom",
+					clipId: "clip_a",
+					sourceStartSec: undefined,
+					sourceEndSec: undefined,
+				}),
+				// The same region after an in-memory edit that never round-tripped through zod:
+				// `null`, not `undefined`. The document layer used to call this one anchored
+				// (`!== undefined`) while the export path called it unanchored (`typeof`), and
+				// the two answers moved it to two different places -- `rederiveAnchoredRegion`
+				// slid it to `Math.max(null, ...)`, i.e. the clip start, while the exporter kept
+				// using its raw ms. One predicate now. Both halves get a case, because a single
+				// region carrying two `null`s still reads unanchored if only one check is
+				// loosened, and would pin neither.
+				makeZoom({
+					id: "null_start_zoom",
+					clipId: "clip_a",
+					sourceStartSec: null as unknown as undefined,
+					sourceEndSec: 1,
+				}),
+				makeZoom({
+					id: "null_end_zoom",
+					clipId: "clip_a",
+					sourceStartSec: 0,
+					sourceEndSec: null as unknown as undefined,
 				}),
 			],
 			annotations: [
@@ -1442,7 +1496,12 @@ describe("removeClip — delete a clip, close the gap, drop its pills", () => {
 		const next = removeClip(before, "clip_a");
 
 		expect(next.timeline.clips).toEqual([]);
-		expect(next.zoomRanges.map((region) => region.id)).toEqual(["legacy_zoom"]);
+		expect(next.zoomRanges.map((region) => region.id)).toEqual([
+			"legacy_zoom",
+			"partial_zoom",
+			"null_start_zoom",
+			"null_end_zoom",
+		]);
 		expect(next.annotations).toEqual([]);
 		expect((next.legacyEditor as { speedRegions: Array<{ id: string }> }).speedRegions).toEqual([
 			expect.objectContaining({ id: "legacy_speed" }),

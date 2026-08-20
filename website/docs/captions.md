@@ -14,7 +14,7 @@ keywords:
 
 # Captions & transcript
 
-OpenScreen transcribes your recording's audio **entirely on-device** — nothing is uploaded, and it works offline. That one transcript is then the source for two things: the captions burned into your video, and a text view you can edit your recording from.
+OpenScreen transcribes your recording's audio **entirely on-device** — your audio is never uploaded, and once the model is on disk it works offline. That one transcript is then the source for two things: the captions burned into your video, and a text view you can edit your recording from.
 
 ## Transcribing
 
@@ -23,7 +23,7 @@ Every clip carries its own transcript. Run it either way:
 - From the **Media** stage — select an asset card and hit **Regenerate**. This is also where you force a language (Auto, English, French, Spanish) instead of letting Whisper detect it, and where per-asset status lives (Pending, Transcribing, Generated, Failed).
 - From the **Captions** facet in the editor's inspector — **Transcribe video** runs the same pipeline on the current media.
 
-The first run downloads a local Whisper model (~264 MB, SHA-256 verified, written atomically so a half-download can never be picked up). After that, transcription is fully offline. It runs natively — whisper.cpp with a GPU backend picked at runtime: Metal on Apple Silicon, Vulkan on Windows and Linux, CPU everywhere else.
+The whisper.cpp engine ships inside the app; the model does not. The first run downloads it from huggingface.co (~264 MB, SHA-256 verified, written atomically so a half-download can never be picked up) — the one moment transcription needs a network. After that it is fully offline, on a GPU backend picked at runtime: Metal on Apple Silicon, Vulkan on Windows and Linux, CPU everywhere else.
 
 Word timings come from Whisper's own DTW token timestamps, then get re-anchored on the audio itself — every boundary is pulled back to the quietest moment just before it. This is what makes a transcript-driven cut land where the word actually starts instead of a syllable late.
 
@@ -39,10 +39,12 @@ Open the **Captions** facet in the inspector:
 | **Language** | *Original (transcript)*, or any translation layer you've generated. |
 | **Text** | Font, size, bold, text color. |
 | **Background** | On/off, color, and opacity for the plate behind the text. |
-| **Position** | Top / Middle / Bottom, left / center / right alignment, a fine vertical offset, and band width as a % of the frame. |
+| **Position** | Top / Middle / Bottom, left / center / right alignment, vertical and horizontal offsets, and band width as a % of the frame. |
 | **Line length** | Min and max words per line (1–12). Lines are packed inside that range. |
 
-Size is expressed in pixels at a 1080-high frame and scales with the real output, so captions look the same at 720p, 1080p, or source. Preview and export share the same layout code — what you see is what gets burned in.
+Everything in **Position** is measured against the **exported frame**, not against the video inside it. Captions stay where you put them when you change padding, and they can sit in the padded area — push the vertical offset to either extreme and the text lands flush against the top or bottom edge of the frame. The two offsets only travel as far as the caption can actually go, so wherever you drag them, something moves.
+
+Size is expressed in pixels at a 1080-high frame and scales with the real output, so captions look the same at 720p, 1080p, or source. Preview and export share the same layout code — what you see is what gets burned in. Burned in is the only form they take: OpenScreen writes no sidecar `.srt` or `.vtt`, so captions can't be turned off by whoever watches the file.
 
 ### Translation
 

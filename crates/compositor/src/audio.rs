@@ -4,6 +4,7 @@
 
 use crate::ffi::*;
 use crate::regions::SpeedSegment;
+use crate::scene::SceneAudio;
 use anyhow::{bail, Result};
 use std::f32::consts::PI;
 use std::ffi::CString;
@@ -25,6 +26,44 @@ const TARGET_GRAINS: usize = 8;
 const PASSTHROUGH_EPSILON: f64 = 1e-3;
 
 pub type PlanarPcm = Vec<Vec<f32>>;
+
+/// Apply the editor's output trim to the assembled timeline.
+///
+/// One stage, and keeping it that way takes some resisting. This runs on the assembled
+/// timeline — trimmed, speed-adjusted, concatenated — while the editor preview plays the
+/// untouched SOURCE file, seeked. A linear gain is the only operation that means the same
+/// thing on both, which is what lets the editor claim that what you hear is what you export.
+///
+/// Three things that look like they belong here and do not:
+/// - a filter or a compressor, which carries state across cuts here and not in the preview;
+/// - a loudness normaliser, whose makeup is a single scalar measured over the whole assembled
+///   programme — the preview never holds that programme, and the value moves with every trim;
+/// - a sync offset, which shipped here once. It is expressed in TIMELINE seconds at this
+///   point in the pipeline, but the preview would apply it in SOURCE seconds, so a 2x speed
+///   region halved it; and because the shift is uniform over the assembled programme, near a
+///   cut the export pulls audio across the junction while the preview only has the active
+///   asset loaded.
+///
+/// Any of them means either rendering the export's audio assembly preview-side, or accepting
+/// and documenting a divergence — not a quiet extra stage in this function.
+///
+/// The bound mirrors `AUDIO_GAIN_DB_LIMIT` in editorSettings.ts. The result stays the same
+/// length so video and following clips cannot drift.
+pub fn finish_audio(mut pcm: PlanarPcm, settings: SceneAudio) -> PlanarPcm {
+    let samples = pcm.first().map(Vec::len).unwrap_or(0);
+    if samples == 0 {
+        return pcm;
+    }
+    for channel in pcm.iter_mut() {
+        channel.resize(samples, 0.0);
+    }
+
+    let trim = 10.0f32.powf(settings.gain_db.clamp(-12.0, 12.0) / 20.0);
+    for sample in pcm.iter_mut().flatten() {
+        *sample = (*sample * trim).clamp(-1.0, 1.0);
+    }
+    pcm
+}
 
 extern "C" {
     fn sn_fmt_stream(s: *mut AVFormatContext, i: i32) -> *mut AVStream;
@@ -1062,5 +1101,49 @@ mod tests {
         let early = planar(&samples);
         let mixed = mix_aligned_tracks(&[(-0.001, &early)], 0.0, 8);
         assert_eq!(mixed[0], vec![0.5; 8]);
+    }
+
+    /// The gain must be the SAME scalar the editor preview feeds its GainNode
+    /// (`10 ** (dB / 20)`), because that identity is the whole parity guarantee: nothing
+    /// else stands between what the editor plays and what this writes.
+    #[test]
+    fn output_trim_is_the_same_scalar_the_preview_applies() {
+        for gain_db in [-12.0f32, -6.0206, 0.0, 6.0206, 12.0] {
+            let result = finish_audio(
+                planar(&[0.25, -0.25]),
+                SceneAudio { gain_db },
+            );
+            let expected = (0.25 * 10.0f32.powf(gain_db / 20.0)).clamp(-1.0, 1.0);
+            assert!(
+                (result[0][0] - expected).abs() < 1e-6,
+                "gain {gain_db} dB: got {}, want {expected}",
+                result[0][0]
+            );
+            assert!((result[0][1] + expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn out_of_range_gain_is_clamped_to_the_editor_bound() {
+        // A hand-edited project, the AI edition agent, or a future UI change must not be
+        // able to ask for a gain the slider cannot display.
+        let quiet = finish_audio(planar(&[0.5]), SceneAudio { gain_db: -99.0 });
+        let floor = 0.5 * 10.0f32.powf(-12.0 / 20.0);
+        assert!((quiet[0][0] - floor).abs() < 1e-6);
+
+        let loud = finish_audio(planar(&[0.1]), SceneAudio { gain_db: 99.0 });
+        let ceiling = 0.1 * 10.0f32.powf(12.0 / 20.0);
+        assert!((loud[0][0] - ceiling).abs() < 1e-6);
+    }
+
+    #[test]
+    fn output_is_clipped_to_full_scale_and_keeps_its_length() {
+        // The trim can push a hot signal past full scale; the timeline must come back the
+        // same length either way, or video and the following clips drift against it.
+        let result = finish_audio(planar(&[0.9, -0.9, 0.1]), SceneAudio { gain_db: 12.0 });
+        assert_eq!(result[0].len(), 3);
+        assert_eq!(result[0][0], 1.0);
+        assert_eq!(result[0][1], -1.0);
+        assert!((result[0][2] - 0.1 * 10.0f32.powf(12.0 / 20.0)).abs() < 1e-6);
     }
 }

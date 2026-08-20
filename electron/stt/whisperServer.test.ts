@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -88,6 +89,43 @@ describe("WhisperServerManager", () => {
 		expect(mgr.status.running).toBe(false);
 	});
 
+	it("does not allow a helper to spawn after permanent shutdown", async () => {
+		const mgr = new WhisperServerManager();
+		await mgr.shutdown();
+
+		await expect(mgr.start({ modelPath: "/missing/model.bin" })).rejects.toThrow(/shutting down/);
+		const { spawn } = await import("node:child_process");
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	it("bounds a readiness probe that accepts a connection but never responds", async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn((_url: string, init?: RequestInit) => {
+				return new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+						once: true,
+					});
+				});
+			}),
+		);
+		try {
+			const pollUntilReady = (
+				WhisperServerManager as unknown as {
+					pollUntilReady: (baseUrl: string, timeoutMs: number) => Promise<void>;
+				}
+			).pollUntilReady;
+			const readiness = pollUntilReady("http://127.0.0.1:9999", 2_500);
+			const assertion = expect(readiness).rejects.toThrow(/did not respond within 2500ms/);
+			await vi.advanceTimersByTimeAsync(3_000);
+			await assertion;
+		} finally {
+			vi.unstubAllGlobals();
+			vi.useRealTimers();
+		}
+	});
+
 	it("extracts phrase and word segments from a verbose_json response", async () => {
 		const fakeJson = {
 			task: "transcribe",
@@ -128,6 +166,92 @@ describe("WhisperServerManager", () => {
 		} finally {
 			vi.unstubAllGlobals();
 		}
+	});
+
+	/** Answer `/inference` with one canned body and run a single transcription. */
+	async function transcribeWith(json: unknown) {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(JSON.stringify(json), { status: 200 })),
+		);
+		try {
+			const mgr = new WhisperServerManager();
+			(mgr as unknown as { process: unknown; port: number }).process = {};
+			(mgr as unknown as { process: unknown; port: number }).port = 9999;
+			return await mgr.transcribe({ samples: new Float32Array(1600) });
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	}
+
+	it("reads the helper's timing block off an /inference response", async () => {
+		const result = await transcribeWith({
+			segments: [],
+			detected_language: "english",
+			backend: "whispercpp-vulkan",
+			timing: { elapsed_s: 5.5, audio_s: 11, rtf: 0.5 },
+		});
+		expect(result.timing).toEqual({ elapsedSec: 5.5, audioSec: 11, rtf: 0.5 });
+	});
+
+	// A staged binary older than the `timing` field just omits it — and
+	// `electron/native/bin/<tag>/` is gitignored, so a dev tree keeps whatever was
+	// last built there. Null, not zeroes: "not reported" and "took no time" must
+	// not reach the UI looking the same.
+	it("reports no timing at all when the helper omits the block", async () => {
+		const result = await transcribeWith({
+			segments: [],
+			detected_language: "english",
+			backend: "whispercpp-cpu",
+		});
+		expect(result.timing).toBeNull();
+	});
+
+	// `rtf` is derived from the other two, so a junk ratio is recoverable — and a
+	// NaN surviving this far would reach the renderer as "NaN× real-time".
+	it("recomputes rtf when the helper's own value is unusable", async () => {
+		const result = await transcribeWith({
+			segments: [],
+			backend: "whispercpp-cpu",
+			timing: { elapsed_s: 4, audio_s: 8, rtf: "not-a-number" },
+		});
+		expect(result.timing).toEqual({ elapsedSec: 4, audioSec: 8, rtf: 0.5 });
+	});
+
+	// Same defensive parse the segment bounds get: nothing on this wire is
+	// guaranteed by a schema.
+	it("accepts stringified durations", async () => {
+		const result = await transcribeWith({
+			segments: [],
+			backend: "whispercpp-cpu",
+			timing: { elapsed_s: "4", audio_s: "8", rtf: "0.5" },
+		});
+		expect(result.timing).toEqual({ elapsedSec: 4, audioSec: 8, rtf: 0.5 });
+	});
+
+	// Durations no clock could produce. Letting these through would put a bogus
+	// figure into the run totals in SttManager, where nothing downstream could
+	// tell it from a real measurement.
+	it.each([
+		["negative elapsed", { elapsed_s: -1, audio_s: 8 }],
+		["zero audio", { elapsed_s: 4, audio_s: 0 }],
+		["negative audio", { elapsed_s: 4, audio_s: -8 }],
+	])("rejects a timing block with %s", async (_label, timing) => {
+		const result = await transcribeWith({
+			segments: [],
+			backend: "whispercpp-cpu",
+			timing,
+		});
+		expect(result.timing).toBeNull();
+	});
+
+	it("rejects a timing block with no usable durations", async () => {
+		const result = await transcribeWith({
+			segments: [],
+			backend: "whispercpp-cpu",
+			timing: { rtf: 0.5 },
+		});
+		expect(result.timing).toBeNull();
 	});
 
 	describe("WhisperServerManager language normalization", () => {
@@ -270,6 +394,106 @@ describe("WhisperServerManager", () => {
 				vi.unstubAllGlobals();
 			}
 		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("retries with CPU when the GPU helper exits during model startup", async () => {
+		const fs = await import("node:fs/promises");
+		const { spawn } = await import("node:child_process");
+		const dir = await mkdtemp(path.join(tmpdir(), "whisper-cpu-fallback-"));
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+		try {
+			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
+			await fs.writeFile(modelPath, "dummy-ggml");
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
+
+			const child = () => {
+				const proc = Object.assign(new EventEmitter(), {
+					stdout: new EventEmitter(),
+					stderr: new EventEmitter(),
+					pid: 1234,
+					kill: vi.fn(),
+				});
+				return proc;
+			};
+			const gpuChild = child();
+			const cpuChild = child();
+			vi.mocked(spawn)
+				.mockImplementationOnce(() => {
+					queueMicrotask(() => {
+						gpuChild.stderr.emit(
+							"data",
+							Buffer.from("ggml_metal_buffer_init: initialized\nfailed to allocate GPU buffer"),
+						);
+						gpuChild.emit("exit", 1);
+					});
+					return gpuChild as never;
+				})
+				.mockReturnValueOnce(cpuChild as never);
+			vi.stubGlobal(
+				"fetch",
+				vi
+					.fn()
+					.mockImplementationOnce(() => new Promise<Response>(() => undefined))
+					.mockResolvedValueOnce(new Response("ok", { status: 200 })),
+			);
+
+			const mgr = new WhisperServerManager();
+			const result = await mgr.start({
+				modelPath,
+				binaryPath: fakeBinaryPath,
+				backend: "whispercpp-metal",
+			});
+			expect(result.backend).toBe("whispercpp-cpu");
+			expect(spawn).toHaveBeenCalledTimes(2);
+			expect(vi.mocked(spawn).mock.calls[0]?.[1]).not.toContain("--cpu");
+			expect(vi.mocked(spawn).mock.calls[1]?.[1]).toContain("--cpu");
+		} finally {
+			if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+			vi.unstubAllGlobals();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("serializes overlapping start calls onto one helper process", async () => {
+		const fs = await import("node:fs/promises");
+		const { spawn } = await import("node:child_process");
+		const dir = await mkdtemp(path.join(tmpdir(), "whisper-single-start-"));
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+		try {
+			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
+			await fs.writeFile(modelPath, "dummy-ggml");
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
+			const child = Object.assign(new EventEmitter(), {
+				stdout: new EventEmitter(),
+				stderr: new EventEmitter(),
+				pid: 1234,
+				kill: vi.fn(),
+			});
+			vi.mocked(spawn).mockReturnValue(child as never);
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => new Response("ok", { status: 200 })),
+			);
+			const mgr = new WhisperServerManager();
+			const options = {
+				modelPath,
+				binaryPath: fakeBinaryPath,
+				backend: "whispercpp-cpu" as const,
+			};
+
+			const [first, second] = await Promise.all([mgr.start(options), mgr.start(options)]);
+
+			expect(first).toEqual(second);
+			expect(spawn).toHaveBeenCalledOnce();
+		} finally {
+			if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+			vi.unstubAllGlobals();
 			await rm(dir, { recursive: true, force: true });
 		}
 	});

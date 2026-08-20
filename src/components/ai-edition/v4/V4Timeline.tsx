@@ -33,6 +33,7 @@ import { createId } from "@/lib/ai-edition/document/ids";
 import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
+import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
@@ -258,11 +259,18 @@ const ClipWaveform = memo(function ClipWaveform({
 	assetDurationSec,
 	sourceStartSec,
 	sourceEndSec,
+	gain,
 }: {
 	videoUrl: string | undefined;
 	assetDurationSec: number | undefined;
 	sourceStartSec: number;
 	sourceEndSec: number;
+	/** Linear output gain — `audioGainScalar(settings.audioGainDb)`, not the dB.
+	 *  Passed in rather than read from the settings store here: this component is
+	 *  memoised per clip, and subscribing each one to the document would re-render
+	 *  every waveform on any edit at all. As a prop it busts the memo on a gain
+	 *  change and on nothing else. */
+	gain: number;
 }) {
 	// The duration is what tells `useAudioPeaks` whether this recording is small
 	// enough to decode whole — the file's byte size does not, on compressed video.
@@ -301,15 +309,31 @@ const ClipWaveform = memo(function ClipWaveform({
 	if (!bars) return null;
 	return (
 		<div aria-hidden className={styles.tlWave}>
-			{bars.map((h, bi) => (
-				<span
-					key={bi}
-					style={{
-						height: `${Math.max(8, Math.round(h * 100))}%`,
-						opacity: (0.5 + h * 0.5).toFixed(2),
-					}}
-				/>
-			))}
+			{bars.map((h, bi) => {
+				// Gain is applied HERE and not inside the memo above, which scans the whole
+				// asset's blocks: a slider drag fires one setLive per pointer move, so this
+				// keeps a tick at `barCount` multiplies instead of re-folding the peaks.
+				//
+				// Clamped because `finish_audio` clamps: it does `(sample * trim).clamp(-1, 1)`
+				// per sample, and this bar is `max|sample|` over its bucket. Gain is positive
+				// and clamping is monotonic, so `clamp(max(|s|) * g)` IS the peak of the gained,
+				// clipped signal — the bar is exact, not an impression. Without the clamp a
+				// 0.5 peak at +12 dB computes `height: 199%` and is merely hidden by the clip's
+				// `overflow`, which draws a signal the export will never write.
+				//
+				// The 8% floor is deliberately NOT scaled: it exists so an empty clip still
+				// reads as a clip, and it is not amplitude.
+				const amplitude = Math.min(1, h * gain);
+				return (
+					<span
+						key={bi}
+						style={{
+							height: `${Math.max(8, Math.round(amplitude * 100))}%`,
+							opacity: (0.5 + amplitude * 0.5).toFixed(2),
+						}}
+					/>
+				);
+			})}
 		</div>
 	);
 });
@@ -361,7 +385,7 @@ export function V4Timeline({
 	tl: TimelineApi;
 	setCurrentTime: (sec: number) => void;
 	variant?: "edit" | "media";
-	onDropAsset?: (assetId: string) => void;
+	onDropAsset?: (assetId: string) => Promise<void>;
 	videoSources?: VideoSource[];
 	playing: boolean;
 	onTogglePlay: () => void;
@@ -1059,6 +1083,10 @@ export function V4Timeline({
 				return;
 			}
 			const added = await tl.addZoomsBulk(suggestions);
+			// A failed write returns 0 and has already toasted why. Without this the user
+			// got "Added 0 automatic zooms" stacked on top of "Failed to save project",
+			// with no zoom anywhere -- a success message for something that did not happen.
+			if (added === 0) return;
 			toast.success(
 				t(added === 1 ? "toolbar.addedAutoZoom" : "toolbar.addedAutoZoomPlural", { count: added }),
 			);
@@ -1545,7 +1573,7 @@ export function V4Timeline({
 								e.preventDefault();
 								setDragOver(false);
 								const id = e.dataTransfer.getData(ASSET_MIME);
-								if (id && onDropAsset) onDropAsset(id);
+								if (id && onDropAsset) void onDropAsset(id).catch(() => undefined);
 							}}
 						>
 							{clips.map((c, i) => {
@@ -1607,6 +1635,7 @@ export function V4Timeline({
 											assetDurationSec={asset?.durationSec}
 											sourceStartSec={c.sourceStartSec}
 											sourceEndSec={c.sourceEndSec ?? c.sourceStartSec + dur}
+											gain={audioGainScalar(settings.audioGainDb)}
 										/>
 										<div className={styles.tlClipLabel}>
 											<span
