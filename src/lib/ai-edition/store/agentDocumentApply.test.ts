@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyDocument } from "../schema";
-import { applyAgentDocumentIfCurrent } from "./agentDocumentApply";
+import { applyAgentDocumentIfCurrent, runAgentTurn } from "./agentDocumentApply";
 import { useProjectStore } from "./projectStore";
 
 const saveMock = vi.hoisted(() => vi.fn());
@@ -51,6 +51,20 @@ describe("applyAgentDocumentIfCurrent", () => {
 		expect(useProjectStore.getState().document?.project.title).toBe("Manual edit");
 	});
 
+	it("puts the document back when the save fails", async () => {
+		// Without this the user is told the edits were rejected while looking at them, and
+		// `dirty` is left set -- so the next unrelated save writes the rejected document.
+		const before = createEmptyDocument({ projectId: "project_1", title: "Before" });
+		const agentResult = { ...before, project: { ...before.project, title: "Agent edit" } };
+		useProjectStore.setState({ projectId: "project_1", document: before, revision: 4 });
+		saveMock.mockResolvedValue({ success: false, error: "EACCES" });
+
+		await expect(applyAgentDocumentIfCurrent(agentResult, 4)).rejects.toThrow("EACCES");
+
+		expect(useProjectStore.getState().document?.project.title).toBe("Before");
+		expect(useProjectStore.getState().dirty).toBe(false);
+	});
+
 	it("allows an explicit rewind to replace the current revision", async () => {
 		const current = createEmptyDocument({ projectId: "project_1", title: "Current" });
 		const checkpoint = {
@@ -63,5 +77,71 @@ describe("applyAgentDocumentIfCurrent", () => {
 		await expect(applyAgentDocumentIfCurrent(checkpoint)).resolves.toBe("applied");
 
 		expect(useProjectStore.getState().document?.project.title).toBe("Checkpoint");
+	});
+});
+
+describe("runAgentTurn", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		saveMock.mockReset();
+	});
+
+	it("refuses to apply when the document moved WHILE the turn was running", async () => {
+		// The assertion the guard actually needs. Reading `revision` after the await --
+		// the one-line mistake that restores the bug in full -- leaves every other test in
+		// this file green, because they all move the store before the turn starts.
+		const before = createEmptyDocument({ projectId: "project_1", title: "Before" });
+		useProjectStore.setState({ projectId: "project_1", document: before, revision: 4 });
+		saveMock.mockImplementation(async (document) => ({ success: true, document }));
+
+		const { result, applyDocument } = await runAgentTurn(async (documentSnapshot) => {
+			// A background transcription landing mid-turn, which is the common case.
+			useProjectStore.getState().setDocument({
+				...before,
+				project: { ...before.project, title: "Manual edit" },
+			});
+			return {
+				document: { ...documentSnapshot, project: { ...before.project, title: "Agent edit" } },
+			};
+		});
+
+		expect(result.document).toBeTruthy();
+		await expect(applyDocument()).resolves.toBe("conflict");
+		expect(saveMock).not.toHaveBeenCalled();
+		expect(useProjectStore.getState().document?.project.title).toBe("Manual edit");
+	});
+
+	it("applies anyway when the user answers the conflict toast", async () => {
+		const before = createEmptyDocument({ projectId: "project_1", title: "Before" });
+		useProjectStore.setState({ projectId: "project_1", document: before, revision: 4 });
+		saveMock.mockImplementation(async (document) => ({ success: true, document }));
+
+		const { applyDocument } = await runAgentTurn(async () => {
+			useProjectStore.getState().setDocument({
+				...before,
+				project: { ...before.project, title: "Manual edit" },
+			});
+			return { document: { ...before, project: { ...before.project, title: "Agent edit" } } };
+		});
+
+		await expect(applyDocument()).resolves.toBe("conflict");
+		// Same turn, same document, still in hand -- the point of keeping it.
+		await expect(applyDocument({ ignoreConflict: true })).resolves.toBe("applied");
+		expect(useProjectStore.getState().document?.project.title).toBe("Agent edit");
+	});
+
+	it("never writes a text-only turn over a real project", async () => {
+		// With no document open the agent runs against an empty stand-in that still
+		// carries the real project id, so a matching revision must not be enough.
+		useProjectStore.setState({ projectId: "project_1", document: null, revision: 0 });
+		saveMock.mockImplementation(async (document) => ({ success: true, document }));
+
+		const { applyDocument } = await runAgentTurn(async (documentSnapshot) => {
+			expect(documentSnapshot).toBeUndefined();
+			return { document: createEmptyDocument({ projectId: "project_1", title: "Empty" }) };
+		});
+
+		await expect(applyDocument()).resolves.toBe("no-live-document");
+		expect(saveMock).not.toHaveBeenCalled();
 	});
 });

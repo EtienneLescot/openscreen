@@ -4,7 +4,10 @@ import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutAsset } from "@/lib/ai-edition/schema";
-import { applyAgentDocumentIfCurrent } from "@/lib/ai-edition/store/agentDocumentApply";
+import {
+	applyAgentDocumentIfCurrent,
+	runAgentTurn,
+} from "@/lib/ai-edition/store/agentDocumentApply";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
@@ -870,14 +873,6 @@ function ChatStripPanel() {
 		scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
 	});
 
-	// Apply a document returned by the agent (tool batch or rewind). Agent turns
-	// supply their starting revision so a concurrent manual edit wins; an explicit
-	// rewind omits it because replacing the live document is the confirmed action.
-	const applyAgentDocument = useCallback(
-		(doc: unknown, expectedRevision?: number) => applyAgentDocumentIfCurrent(doc, expectedRevision),
-		[],
-	);
-
 	const send = async (overrideText?: string) => {
 		const text = (overrideText ?? input).trim();
 		if (!projectId || !text || busy) return;
@@ -927,26 +922,39 @@ function ChatStripPanel() {
 			thinkingRunSessionRef.current = sessionId;
 			// Send the current document snapshot so the agent can run edit tools
 			// against it (P1). Falls back to text-only chat when no doc is open.
-			const snapshot = useProjectStore.getState();
-			const documentSnapshot = snapshot.document ?? undefined;
-			const documentRevision = snapshot.revision;
-			const result = await nativeBridgeClient.aiEdition.chatRun(
-				projectId,
-				sessionId,
-				text,
-				documentSnapshot,
+			// `runAgentTurn` reads the document AND the revision it is at from one snapshot
+			// before the turn starts, so a manual edit landing while the agent works is
+			// detectable when its answer comes back.
+			const { result, applyDocument } = await runAgentTurn((documentSnapshot) =>
+				nativeBridgeClient.aiEdition.chatRun(projectId, sessionId, text, documentSnapshot),
 			);
 			const assistant = result.assistantMessage;
 			if (result.success && assistant) {
 				if (result.document) {
-					try {
-						const applyResult = await applyAgentDocument(result.document, documentRevision);
-						if (applyResult === "conflict") {
-							toast.warning(t("chat.agentEditConflict"));
+					const applyEdits = async (options?: { ignoreConflict?: boolean }) => {
+						try {
+							return await applyDocument(options);
+						} catch (err) {
+							toast.error(t("chat.applyEditsFailed"), {
+								description: err instanceof Error ? err.message : String(err),
+							});
+							return "conflict" as const;
 						}
-					} catch (err) {
-						toast.error(t("chat.applyEditsFailed"), {
-							description: err instanceof Error ? err.message : String(err),
+					};
+					if ((await applyEdits()) === "conflict") {
+						// The turn is not lost, it is just not automatically applied: the document
+						// is still in hand and the assistant's reply is about to be rendered as if
+						// the edits had landed. The thing that usually moves `revision` here is a
+						// background transcription finishing, not the user -- so dropping the whole
+						// turn on the floor and blaming "the project changed" costs them a minute
+						// of waiting and their tokens for something they never did. Let them take
+						// it. No auto-dismiss: it is the only way back to this document.
+						toast.warning(t("chat.agentEditConflict"), {
+							duration: Number.POSITIVE_INFINITY,
+							action: {
+								label: t("chat.applyAnyway"),
+								onClick: () => void applyEdits({ ignoreConflict: true }),
+							},
 						});
 					}
 				}
@@ -1023,7 +1031,9 @@ function ChatStripPanel() {
 					return;
 				}
 				const doc = (result as { document?: unknown }).document;
-				if (doc) await applyAgentDocument(doc);
+				// No `expectedRevision`: a rewind REPLACES whatever is live, which is what the
+				// confirmation dialog now says out loud -- including any manual edit made since.
+				if (doc) await applyAgentDocumentIfCurrent(doc);
 				setMessages(
 					result.messages.map((m) => ({
 						id: m.id,
@@ -1044,7 +1054,7 @@ function ChatStripPanel() {
 				setRewindFor(null);
 			}
 		},
-		[projectId, activeSessionId, applyAgentDocument, t],
+		[projectId, activeSessionId, t],
 	);
 
 	useEffect(() => {

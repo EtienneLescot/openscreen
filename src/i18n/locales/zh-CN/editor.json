@@ -238,6 +238,7 @@
 		"providerSettings": "提供方设置…",
 		"applyEditsFailed": "无法应用代理的编辑",
 		"agentEditConflict": "代理工作期间项目已更改，因此未应用代理的编辑。",
+		"applyAnyway": "仍然应用",
 		"chatFailed": "聊天失败",
 		"rewindFailed": "回退失败",
 		"rewoundSuccess": "已回退到该消息的开头",
@@ -284,7 +285,7 @@
 		"sendTitle": "发送（回车）",
 		"send": "发送",
 		"rewindConfirmTitle": "要回退到这里吗？",
-		"rewindConfirmBody": "此时间点之后代理的编辑和后续对话轮次将被回滚。项目、对话和代理状态将被恢复。",
+		"rewindConfirmBody": "此时间点之后代理的编辑和后续对话轮次将被回滚。项目、对话和代理状态将被恢复。你在那之后所做的编辑也会被替换。",
 		"rewindConfirm": "回退",
 		"configureModel": "配置 AI 模型",
 		"historyDialog": {

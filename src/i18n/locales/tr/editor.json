@@ -238,6 +238,7 @@
 		"providerSettings": "Sağlayıcı ayarları…",
 		"applyEditsFailed": "Aracının düzenlemeleri uygulanamadı",
 		"agentEditConflict": "Aracı çalışırken proje değiştiği için düzenlemeleri uygulanmadı.",
+		"applyAnyway": "Yine de uygula",
 		"chatFailed": "Sohbet başarısız oldu",
 		"rewindFailed": "Geri sarma başarısız oldu",
 		"rewoundSuccess": "O mesajın başına geri sarıldı",
@@ -284,7 +285,7 @@
 		"sendTitle": "Gönder (Enter)",
 		"send": "Gönder",
 		"rewindConfirmTitle": "Buraya geri sarılsın mı?",
-		"rewindConfirmBody": "Bu noktadan sonraki aracı düzenlemeleri ve takip eden turlar geri alınacak. Proje, konuşma ve aracı durumu geri yüklenecek.",
+		"rewindConfirmBody": "Bu noktadan sonraki aracı düzenlemeleri ve takip eden turlar geri alınacak. Proje, konuşma ve aracı durumu geri yüklenecek. O zamandan beri yaptığınız düzenlemeler de değiştirilir.",
 		"rewindConfirm": "Geri sar",
 		"configureModel": "Yapay zeka modelini yapılandır",
 		"historyDialog": {
