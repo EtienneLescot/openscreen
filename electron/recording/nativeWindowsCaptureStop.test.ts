@@ -124,6 +124,28 @@ describe("readWebcamFormat", () => {
 		});
 	});
 
+	// A friendly name is free text from the driver, so it can contain the very
+	// character that used to end the slice. Cutting the object there dropped a
+	// camera that was working perfectly.
+	it("reads a device name that contains a closing brace", () => {
+		const output =
+			'{"event":"webcam-format","schemaVersion":2,"width":1280,"height":720,"fps":30,"deviceName":"Camera } Studio"}\n';
+		expect(readWebcamFormat(output)).toMatchObject({
+			width: 1280,
+			deviceName: "Camera } Studio",
+		});
+	});
+
+	it("reads a device name whose escaped quote precedes a brace", () => {
+		const output =
+			'{"event":"webcam-format","schemaVersion":2,"width":640,"height":480,"fps":30,"deviceName":"Cam \\"X\\" } 2"}\n';
+		expect(readWebcamFormat(output)).toMatchObject({ deviceName: 'Cam "X" } 2' });
+	});
+
+	it("is null when the object is cut off mid-way", () => {
+		expect(readWebcamFormat('{"event":"webcam-format","width":1280')).toBe(null);
+	});
+
 	it("is null when the helper never announced a camera", () => {
 		expect(readWebcamFormat("Recording started\n")).toBe(null);
 	});
