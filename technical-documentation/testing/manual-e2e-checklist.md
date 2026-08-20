@@ -335,6 +335,7 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 - [ ] Run Check for Updates from the menu, from the tray, and from the HUD panel, and confirm each reaches the same result dialog.
 - [ ] Start a second check while one is still running and confirm the HUD button stays disabled and reads "Checking…" until the first check's dialogs are done, rather than re-enabling into a click that does nothing.
 - [ ] Start a recording, then confirm Check for Updates is gone from the app menu, the Help menu and the tray for as long as the take runs, and returns when it stops.
+- [ ] Open the HUD's device-settings panel, start a recording with it still open, and confirm the update button disappears while the version stays. Then stop the take, reopen the panel, and confirm the button is back — a HUD that mounts mid-take must not lose it permanently.
 - [ ] On a Microsoft Store, Flathub, Snap, or Nix install, confirm no update affordance appears in the menu, the tray, or the HUD panel, while the version still shows.
 
 ### New effects and controls — v1.8.0
