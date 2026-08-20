@@ -145,6 +145,11 @@ interface Window {
 			message?: string;
 			discarded?: boolean;
 			error?: string;
+			/**
+			 * A camera was recorded but produced nothing usable, so the session was
+			 * saved without it. Still a success — the screen video is intact.
+			 */
+			webcamDropped?: boolean;
 		}>;
 		pauseNativeWindowsRecording: () => Promise<{
 			success: boolean;

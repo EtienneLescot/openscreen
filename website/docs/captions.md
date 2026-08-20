@@ -39,8 +39,10 @@ Open the **Captions** facet in the inspector:
 | **Language** | *Original (transcript)*, or any translation layer you've generated. |
 | **Text** | Font, size, bold, text color. |
 | **Background** | On/off, color, and opacity for the plate behind the text. |
-| **Position** | Top / Middle / Bottom, left / center / right alignment, a fine vertical offset, and band width as a % of the frame. |
+| **Position** | Top / Middle / Bottom, left / center / right alignment, vertical and horizontal offsets, and band width as a % of the frame. |
 | **Line length** | Min and max words per line (1–12). Lines are packed inside that range. |
+
+Everything in **Position** is measured against the **exported frame**, not against the video inside it. Captions stay where you put them when you change padding, and they can sit in the padded area — push the vertical offset to either extreme and the text lands flush against the top or bottom edge of the frame. The two offsets only travel as far as the caption can actually go, so wherever you drag them, something moves.
 
 Size is expressed in pixels at a 1080-high frame and scales with the real output, so captions look the same at 720p, 1080p, or source. Preview and export share the same layout code — what you see is what gets burned in. Burned in is the only form they take: OpenScreen writes no sidecar `.srt` or `.vtt`, so captions can't be turned off by whoever watches the file.
 

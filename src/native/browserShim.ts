@@ -42,6 +42,7 @@ let shimSelectedSource: ShimDesktopSource | null = null;
 type ShimRecordingPrefs = {
 	micEnabled: boolean;
 	micDeviceId: string | null;
+	micDeviceName: string | null;
 	camEnabled: boolean;
 	camDeviceId: string | null;
 	systemAudioEnabled: boolean;
@@ -51,6 +52,7 @@ const recordingPrefsStorageKey = "browser-shim-recording-prefs";
 let shimRecordingPrefs: ShimRecordingPrefs = {
 	micEnabled: false,
 	micDeviceId: null,
+	micDeviceName: null,
 	camEnabled: false,
 	camDeviceId: null,
 	systemAudioEnabled: false,

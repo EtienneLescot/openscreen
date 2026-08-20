@@ -13,7 +13,7 @@ import { Captions as CaptionsIcon, Languages, Loader2, Trash2 } from "lucide-rea
 import { useMemo, useState } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { CaptionTextAlign, CaptionVerticalPosition } from "@/lib/ai-edition/captions";
-import { untranslatedUnits } from "@/lib/ai-edition/captions";
+import { captionOffsetRange, untranslatedUnits } from "@/lib/ai-edition/captions";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useTimelineTranscriptGate,
@@ -24,6 +24,16 @@ import { nativeBridgeClient } from "@/native";
 import { ColorField } from "./ColorField";
 import styles from "./NewEditorShell.module.css";
 import { SliderCell, Toggle } from "./RightPanes";
+
+/** A hundred stops across whatever span the offset currently has.
+ *
+ *  The bounds are geometry, so they are rarely round numbers. A fixed `step` of 1
+ *  would leave `max` unreachable whenever the span isn't a whole number of steps —
+ *  the caption would stop just short of the frame edge, which is the very thing
+ *  #396 is about. Deriving the step from the span puts both ends exactly on a stop. */
+function sliderStep(range: { min: number; max: number }): number {
+	return Math.max((range.max - range.min) / 100, Number.EPSILON);
+}
 
 /** The families `src/index.css` already loads for on-canvas text — anything else
  *  would render in the preview but fall back to a default in the export canvas. */
@@ -113,6 +123,11 @@ export function CaptionsPane() {
 	const disabled = !hasDocument;
 	const languageOptions = useMemo(() => Object.values(translations), [translations]);
 
+	// The reach depends on the anchor, the width and the font size, so it moves as the
+	// user works. Taking the sliders' bounds from the same function the geometry clamps
+	// with is what keeps every position on them a position the band can actually take.
+	const offsetRange = useMemo(() => captionOffsetRange(settings), [settings]);
+
 	const handleTranslate = async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
@@ -182,7 +197,7 @@ export function CaptionsPane() {
 			</header>
 			<div className={styles.paneBody} style={{ padding: 0 }}>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.show")}</span>
+					<span className={styles.label}>{t("captions.show")}</span>
 					<Toggle
 						checked={settings.enabled}
 						disabled={disabled || !hasTranscript}
@@ -275,7 +290,7 @@ export function CaptionsPane() {
 				{/* ── Language ───────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.language")}</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.displayLanguage")}</span>
+					<span className={styles.label}>{t("captions.displayLanguage")}</span>
 					<select
 						value={settings.language ?? ""}
 						disabled={disabled}
@@ -358,7 +373,7 @@ export function CaptionsPane() {
 				{/* ── Text ───────────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.text")}</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.font")}</span>
+					<span className={styles.label}>{t("captions.font")}</span>
 					<select
 						value={settings.fontFamily}
 						disabled={disabled}
@@ -373,7 +388,7 @@ export function CaptionsPane() {
 					</select>
 				</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.bold")}</span>
+					<span className={styles.label}>{t("captions.bold")}</span>
 					<Toggle
 						checked={settings.fontWeight === "bold"}
 						disabled={disabled}
@@ -393,7 +408,7 @@ export function CaptionsPane() {
 					/>
 				</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.textColor")}</span>
+					<span className={styles.label}>{t("captions.textColor")}</span>
 					<ColorField
 						label={t("captions.textColor")}
 						value={settings.color}
@@ -409,7 +424,7 @@ export function CaptionsPane() {
 				    background: the swatch keeps showing the remembered colour while the
 				    plate is off, because that is what turning it back on will draw. */}
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.background")}</span>
+					<span className={styles.label}>{t("captions.background")}</span>
 					<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
 						<ColorField
 							label={t("captions.backgroundColor")}
@@ -466,11 +481,28 @@ export function CaptionsPane() {
 					<SliderCell
 						label={t("captions.verticalOffset")}
 						value={settings.offsetY}
-						min={-45}
-						max={45}
+						min={offsetRange.y.min}
+						max={offsetRange.y.max}
+						step={sliderStep(offsetRange.y)}
+						decimals={1}
 						suffix="%"
 						disabled={disabled}
 						onChange={(v) => setLive({ offsetY: v })}
+						onCommit={() => void commit()}
+					/>
+					<SliderCell
+						label={t("captions.horizontalOffset")}
+						value={settings.offsetX}
+						min={offsetRange.x.min}
+						max={offsetRange.x.max}
+						step={sliderStep(offsetRange.x)}
+						decimals={1}
+						suffix="%"
+						// A full-width band is already flush with both frame edges, so there is
+						// no travel to offer. Leaving the slider live would let the user drag a
+						// control that cannot move anything, which reads as a bug.
+						disabled={disabled || offsetRange.x.max <= offsetRange.x.min}
+						onChange={(v) => setLive({ offsetX: v })}
 						onCommit={() => void commit()}
 					/>
 					<SliderCell
@@ -488,7 +520,7 @@ export function CaptionsPane() {
 				{/* ── Line length ────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.lineLength")}</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.minWords")}</span>
+					<span className={styles.label}>{t("captions.minWords")}</span>
 					<select
 						value={settings.minWordsPerLine}
 						disabled={disabled}
@@ -503,7 +535,7 @@ export function CaptionsPane() {
 					</select>
 				</div>
 				<div className={styles.paneRow} style={{ marginBottom: 16 }}>
-					<span className="label">{t("captions.maxWords")}</span>
+					<span className={styles.label}>{t("captions.maxWords")}</span>
 					<select
 						value={settings.maxWordsPerLine}
 						disabled={disabled}

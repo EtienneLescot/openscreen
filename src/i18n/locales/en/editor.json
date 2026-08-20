@@ -42,6 +42,8 @@
 		"cameraDenied": "Camera access denied. Recording will continue without webcam.",
 		"cameraDisconnected": "Webcam disconnected.",
 		"cameraNotFound": "Camera not found.",
+		"cameraCaptureUnavailable": "The camera could not be opened. Recording without it.",
+		"microphoneDefaulted": "The chosen microphone could not be identified. Recording the default input.",
 		"permissionDenied": "Recording permission denied. Please allow screen recording.",
 		"accessibilityAllowAndRetry": "Allow Accessibility access for OpenScreen, then press record again to start the countdown.",
 		"selectSource": "Please select a source to record"
@@ -132,6 +134,8 @@
 		"emptyHint": "No media yet — import a recording to get started.",
 		"importMedia": "Import media",
 		"added": "Added {{label}}",
+		"addToTimeline": "Add to timeline",
+		"addedToTimeline": "Added {{label}} to the timeline",
 		"sourceTranscript": "Source Transcript",
 		"close": "Close",
 		"transcriptReady": "Transcript ready",
@@ -140,6 +144,7 @@
 		"transcribingEllipsis": "Transcribing…",
 		"pendingTranscription": "Pending transcription",
 		"transcriptionFailed": "Transcription failed",
+		"cpuBackendHint": "Running on CPU — about 2× slower than on the GPU",
 		"noTranscript": "No transcript",
 		"notGeneratedYet": "Not generated yet",
 		"regenerateAs": "Regenerate as",
@@ -235,6 +240,8 @@
 		"selectModelFailed": "Could not select model",
 		"providerSettings": "Provider settings…",
 		"applyEditsFailed": "Could not apply the agent's edits",
+		"agentEditConflict": "Agent edits were not applied because the project changed while it was working.",
+		"applyAnyway": "Apply anyway",
 		"chatFailed": "Chat failed",
 		"rewindFailed": "Rewind failed",
 		"rewoundSuccess": "Rewound to the start of that message",
@@ -281,7 +288,7 @@
 		"sendTitle": "Send (Enter)",
 		"send": "Send",
 		"rewindConfirmTitle": "Rewind here?",
-		"rewindConfirmBody": "The agent's edits and follow-up turns after this point get rolled back. Project, conversation, and agent state will be restored.",
+		"rewindConfirmBody": "The agent's edits and follow-up turns after this point get rolled back. Project, conversation, and agent state will be restored. Any edits you made since then are replaced too.",
 		"rewindConfirm": "Rewind",
 		"configureModel": "Configure AI Model",
 		"historyDialog": {
@@ -361,7 +368,13 @@
 	},
 	"preview": {
 		"videoPreview": "Video preview",
-		"webcamPreview": "Webcam preview (drag to reposition)"
+		"webcamPreview": "Webcam preview (drag to reposition)",
+		"mediaError": {
+			"title": "Preview stopped",
+			"description": "The video couldn't be decoded. The file may be damaged, still being written, or no longer where the project expects it — your project itself is intact.",
+			"retry": "Try again",
+			"detail": "Details: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "Annotation",

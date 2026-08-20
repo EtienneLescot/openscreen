@@ -77,14 +77,19 @@ Les rapports vont dans `workbench/reports/` (gitignoré), en JSON et en Markdown
    seule une différence énorme est lisible. Un check qui passe de 2/3 à 3/3 n'est pas une
    amélioration, c'est du bruit.
 2. **L'empreinte du run** : `systemSha256` (le message système réellement envoyé), `toolsSha256`,
-   `toolNames[]` (**19 attendus**), l'id du modèle, le sha git. Deux rapports d'empreintes
-   différentes ne sont pas comparables. C'est arrivé le jour où `createAgent` a remplacé
-   `createDeepAgent` : le message système est passé de ~8 700 à 2 968 caractères et la surface
-   d'outils de 25 à 17. Elle a **rebougé deux fois depuis** — `moveClip` (18ᵉ outil), les
-   descriptions de `replaceTimeline`/zoom/caméra, deux règles de sélection d'outil et le bloc de
-   consentement ajouté au prompt quand `allowAgentEdits` est faux ; puis `getCursorTrack`
-   (19ᵉ), deux lignes de prompt sur la télémétrie et sur la cécité, et `cursorNote` plus
-   `assets[].hasCursorTelemetry` dans le snapshot. **Tous les rapports antérieurs sont des
+   `toolNames[]` (exactement `OPENSCREEN_TOOL_NAMES` — aucun compte n'est écrit ici : le roster
+   est épinglé en CI par `deep-agent/service.test.ts` contre ce que `buildTools` construit
+   vraiment, et un nombre recopié en prose est précisément ce qui a laissé ce banc en annoncer
+   19 pendant que le produit en livrait 21), l'id du modèle, le sha git. Deux rapports
+   d'empreintes différentes ne sont pas comparables. C'est arrivé le jour où `createAgent` a
+   remplacé `createDeepAgent` : le message système est passé de ~8 700 à 2 968 caractères et la
+   surface d'outils de 25 à 17. Elle a **rebougé trois fois depuis** — `moveClip` (18ᵉ outil),
+   les descriptions de `replaceTimeline`/zoom/caméra, deux règles de sélection d'outil et le
+   bloc de consentement ajouté au prompt quand `allowAgentEdits` est faux ; puis
+   `getCursorTrack` (19ᵉ), deux lignes de prompt sur la télémétrie et sur la cécité, et
+   `cursorNote` plus `assets[].hasCursorTelemetry` dans le snapshot ; puis `addTrims` et
+   `addZooms` (560d368e), les variantes par lot qui émettent toute la passe en un aller-retour.
+   **Tous les rapports antérieurs sont des
    archives**, pas des références — `baseline-full-2026-07-31T17-33-19-798Z` compris, et les trois
    fichiers de `baselines/` avec. Il faut re-mesurer une ligne de base live avant de prétendre
    comparer quoi que ce soit.

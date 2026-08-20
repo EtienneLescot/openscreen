@@ -502,6 +502,80 @@ export const removeClipArgs = z.object({
 });
 
 /**
+ * Every tool the model is handed, in the order `buildTools` builds them.
+ *
+ * The roster lives here, beside `MUTATING_TOOL_NAMES`, rather than in
+ * `deep-agent/service.ts` where `buildTools` is: the workbench needs to name the
+ * surface from its L0 layer, and importing the service would drag LangChain into
+ * a layer that deliberately runs on zod and pure document helpers alone.
+ *
+ * It is hand-written — the schemas differ per tool, so nothing can generate it —
+ * but it is not free-floating: `deep-agent/service.test.ts` asserts it equals
+ * `buildTools(...).map(t => t.name)`, and that test runs in CI. Adding a tool
+ * without adding it here fails the suite.
+ *
+ * ponytail: there used to be two more copies of this list, one in that test and
+ * one in `workbench/lib/prompts.ts`, neither derived from anything. The
+ * workbench's copy sat at 19 entries from the day it was written while the agent
+ * grew to 21 (`addTrims`/`addZooms`, commit 560d368e). Nothing caught it,
+ * because `npm run wb` is not part of CI — so the bench asserted a surface the
+ * product had not had for some time.
+ */
+export const OPENSCREEN_TOOL_NAMES = [
+	"getCurrentDocument",
+	"getTranscript",
+	"getCursorTrack",
+	"addTrim",
+	"addTrims",
+	"setTrim",
+	"setClipRange",
+	"moveClip",
+	"replaceTimeline",
+	"addZoom",
+	"addZooms",
+	"setZoom",
+	"addSpeed",
+	"setSpeed",
+	"addAnnotation",
+	"setAnnotation",
+	"addCameraFullscreen",
+	"setCameraFullscreen",
+	"removeTrim",
+	"removeModifier",
+	"removeClip",
+] as const;
+
+/**
+ * The tools `createDeepAgent` used to inject on top of ours, over an in-memory
+ * backend that was EMPTY and that the model was not told was empty — the
+ * mechanical cause of D1, where the agent ran `ls`/`glob` against that sandbox
+ * and reported in good faith that the project held no cursor telemetry.
+ *
+ * The surface is gone, so this is no longer "tools we also get": it is the list
+ * of names that must never appear again. A call to one of them now means the
+ * model is hallucinating a filesystem it was never offered, which is a rarer but
+ * still exact D1 tell — which is why the workbench scores it as well as pinning
+ * it here.
+ *
+ * `execute` is included even though it vanished at runtime: it is in the
+ * middleware's list too and only disappeared because the default backend is not
+ * a sandbox. A sandbox backend would have made it a 26th tool. The workbench's
+ * own copy of this list omitted it, so `isPhantomTool` could not flag the one
+ * name a sandbox backend would have brought back.
+ */
+export const PHANTOM_TOOL_NAMES = [
+	"ls",
+	"read_file",
+	"write_file",
+	"edit_file",
+	"glob",
+	"grep",
+	"execute",
+	"write_todos",
+	"task",
+] as const;
+
+/**
  * The tools that change the document. A LIST, not an inference: it gates the
  * checkpoint the chat-service takes before a write and the mutating/non-mutating
  * split the workbench scores its DSL axis on, and neither should quietly change

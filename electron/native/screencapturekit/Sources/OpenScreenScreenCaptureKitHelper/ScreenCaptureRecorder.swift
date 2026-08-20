@@ -2,6 +2,7 @@ import AVFoundation
 import CoreGraphics
 import CoreMedia
 import Foundation
+import OpenScreenCaptureCore
 import ScreenCaptureKit
 
 struct Rectangle: Decodable {
@@ -101,23 +102,6 @@ enum HelperError: Error, CustomStringConvertible {
 	}
 }
 
-func emit(_ fields: [String: Any]) {
-	if let data = try? JSONSerialization.data(withJSONObject: fields, options: []),
-		let line = String(data: data, encoding: .utf8)
-	{
-		print(line)
-		fflush(stdout)
-	}
-}
-
-func emitError(code: String, message: String) {
-	emit([
-		"event": "error",
-		"code": code,
-		"message": message,
-	])
-}
-
 @available(macOS 13.0, *)
 final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	private struct CaptureTarget {
@@ -139,6 +123,9 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	// audio track 0 and nothing else. See AudioTrackMixer.
 	private var audioInput: AVAssetWriterInput?
 	private var audioMixer: AudioTrackMixer?
+	/// Drives the mixer's cursor while nothing is arriving to drive it. Owned by the sample
+	/// queue: created when the writer session opens, cancelled on the same queue at teardown.
+	private var audioTicker: DispatchSourceTimer?
 	private var didStartWriting = false
 	private var didEmitRecordingStarted = false
 	private var didReportWriterFailure = false
@@ -307,6 +294,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			writer.startSession(atSourceTime: presentationTime)
 			didStartWriting = true
 			audioMixer?.beginTimeline(at: presentationTime)
+			startAudioTicker()
 		}
 
 		if videoInput.isReadyForMoreMediaData {
@@ -537,9 +525,49 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 				input: input,
 				includesSystemAudio: request.audio.system.enabled,
 				includesMicrophone: nativeMicrophoneEnabled,
-				microphoneGain: request.audio.microphone.gain
+				microphoneGain: request.audio.microphone.gain,
+				clock: { [weak self] in self?.timelineNow() ?? .invalid }
 			)
 		}
+	}
+
+	/// The instant the writer's timeline has reached: the host clock, less the time spent
+	/// paused — the same transform `retimedSampleBuffer` applies to every sample, so this and
+	/// the presentation timestamps are answers in one domain.
+	///
+	/// Frozen while paused, because `pauseStartedAt` stops moving and `totalPausedDuration`
+	/// does not yet include the pause in progress. On resume the offset grows by exactly the
+	/// pause, so the position continues from where it froze: the pause interrupts the audio
+	/// clock without shifting anything recorded after it. That is the same property the
+	/// Windows mixer gets by re-deriving its anchor on resume, derived here instead of tracked.
+	private func timelineNow() -> CMTime {
+		let (paused, offset, pausedAt) = stateQueue.sync {
+			(isPaused, totalPausedDuration, pauseStartedAt)
+		}
+		let now = paused ? (pausedAt ?? CMClockGetTime(hostClock)) : CMClockGetTime(hostClock)
+		return CMTimeSubtract(now, offset)
+	}
+
+	/// A take that nothing is playing into is exactly the take whose audio timeline has to keep
+	/// moving, so the mixer cannot be driven by buffer arrival alone. 10 ms is the chunk size it
+	/// emits at; the leeway lets the system coalesce the wakeups, since being a few milliseconds
+	/// late only means the next tick emits two chunks instead of one.
+	private func startAudioTicker() {
+		guard audioMixer != nil, audioTicker == nil else {
+			return
+		}
+
+		let timer = DispatchSource.makeTimerSource(queue: sampleQueue)
+		timer.schedule(
+			deadline: .now() + .milliseconds(10),
+			repeating: .milliseconds(10),
+			leeway: .milliseconds(5)
+		)
+		timer.setEventHandler { [weak self] in
+			self?.audioMixer?.tick()
+		}
+		audioTicker = timer
+		timer.resume()
 	}
 
 	private func finishWriter() async {
@@ -548,9 +576,25 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		}
 
 		// Capture has stopped, so nothing is in flight on the sample queue any more; hopping
-		// onto it once is what makes the mixer's final flush safe without a lock.
+		// onto it once is what makes the mixer's final flush safe without a lock, and it is
+		// also where the ticker has to die, since that is the queue it fires on.
+		//
+		// `endSession` is the trailing half of the same bug the clock-driven cursor fixes at
+		// the front. Without it the file ended at the last sample anything happened to deliver,
+		// so a ten-second take that went quiet at six yielded a six-second recording; the
+		// helper had never called it at all. `end` comes from the same clock the mixer runs on
+		// and is read after `stopCapture()` returned, so it is at or past every sample already
+		// appended — which is what makes it safe to hand to `endSession`, since a source time
+		// before an appended sample would trim that sample back out.
 		sampleQueue.sync {
-			audioMixer?.finish()
+			audioTicker?.cancel()
+			audioTicker = nil
+
+			let end = timelineNow()
+			audioMixer?.finish(atSourceTime: end)
+			if didStartWriting, writer.status == .writing {
+				writer.endSession(atSourceTime: end)
+			}
 		}
 
 		videoInput?.markAsFinished()

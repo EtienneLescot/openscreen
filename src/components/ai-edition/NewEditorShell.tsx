@@ -172,7 +172,7 @@ export function NewEditorShell() {
 	// don't race each other's save and overwrite one another in the
 	// store. The hook reads the doc inside the chain (after awaiting the
 	// previous save) — see its source for the race this fixes.
-	const { apply: applyTimelineOp } = useSequentialTimelineOps({
+	const { apply: applyTimelineOp, enqueue: enqueueTimelineWrite } = useSequentialTimelineOps({
 		fallbackDocument: document,
 		saveDocument,
 	});
@@ -302,15 +302,9 @@ export function NewEditorShell() {
 		// 3. Handle request-save-before-close from Electron
 		const unsubSaveBeforeClose = window.electronAPI.onRequestSaveBeforeClose(async () => {
 			const doc = useProjectStore.getState().document;
-			if (doc) {
-				try {
-					await saveDocument(doc);
-					return true;
-				} catch {
-					toast.error("Failed to save before closing");
-					return false;
-				}
-			}
+			// The store already toasted the reason; answering false is what keeps the
+			// window open on top of it.
+			if (doc) return await saveDocument(doc);
 			return true;
 		});
 
@@ -324,6 +318,7 @@ export function NewEditorShell() {
 		if (!document) return [];
 		return document.assets.map((asset) => ({
 			id: asset.id,
+			filePath: /^(https?|blob|data):/.test(asset.originalPath) ? undefined : asset.originalPath,
 			// Real Electron assets are filesystem paths and go through toFileUrl.
 			// In the browser preview an asset can already point at an http(s)/
 			// blob/data URL served by Vite; toFileUrl would mangle those into a
@@ -398,11 +393,33 @@ export function NewEditorShell() {
 		[setCurrentTime],
 	);
 
+	// Same race as `useSequentialTimelineOps` — see that file's header. `insertClipAt` is a
+	// read-modify-write of the whole document, so two adds in flight at once both read the
+	// pre-insert doc and the second `saveDocument` clobbers the first, silently dropping a
+	// clip. Two adds is one double-click on **Add to timeline** (the button has no pending
+	// state) or two quick drags.
+	//
+	// It goes on that hook's queue rather than one of its own: a second queue serialises
+	// adds against adds and nothing else, so an add still clobbers a trim landing at the
+	// same moment. It can't route through `apply()` — inserting a clip is not an
+	// AxcutTimelineOperation, it carries its own background duration probe — hence
+	// `enqueue`, which is the same chain without that constraint.
+	//
+	// The append index is read INSIDE the chain for the same reason the doc is: off the
+	// closure, `clips.length` stays frozen at the last render, so the second add lands
+	// before the first instead of after it.
 	const handleDropAsset = useCallback(
-		(assetId: string) => {
-			void tl.insertClipAt(assetId, clips.length);
-		},
-		[tl, clips.length],
+		(assetId: string) =>
+			enqueueTimelineWrite(() => {
+				const at = useProjectStore.getState().document?.timeline.clips.length ?? 0;
+				return tl.insertClipAt(assetId, at);
+			}).catch((error) => {
+				toast.error(te("mediaStage.couldNotAddAsset"), {
+					description: error instanceof Error ? error.message : String(error),
+				});
+				throw error;
+			}),
+		[tl, te, enqueueTimelineWrite],
 	);
 
 	// Ref so the 'ended' listener below always sees the latest clips without tearing
@@ -618,14 +635,7 @@ export function NewEditorShell() {
 	const handleSave = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		try {
-			await saveDocument(doc);
-			toast.success("Project saved");
-		} catch (err) {
-			toast.error("Save failed", {
-				description: err instanceof Error ? err.message : String(err),
-			});
-		}
+		if (await saveDocument(doc)) toast.success("Project saved");
 	}, [saveDocument]);
 
 	// Native File menu (electron/main.ts) → v4 actions. The menu is shown via
@@ -653,13 +663,7 @@ export function NewEditorShell() {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			if (title === doc.project.title) return;
-			try {
-				await saveDocument({ ...doc, project: { ...doc.project, title } });
-			} catch (err) {
-				toast.error("Rename failed", {
-					description: err instanceof Error ? err.message : String(err),
-				});
-			}
+			await saveDocument({ ...doc, project: { ...doc.project, title } });
 		},
 		[saveDocument],
 	);
@@ -680,13 +684,12 @@ export function NewEditorShell() {
 				}
 				if (choice === "save") {
 					const doc = useProjectStore.getState().document;
-					if (doc) {
-						try {
-							await saveDocument(doc);
-						} catch {
-							resolve("cancel");
-							return;
-						}
+					// A failed save cancels the action that prompted this dialog. The store has
+					// already said why -- which is what the bare `catch {}` here used to swallow,
+					// leaving the window refusing to close with nothing on screen explaining it.
+					if (doc && !(await saveDocument(doc))) {
+						resolve("cancel");
+						return;
 					}
 				}
 				if (action === "record") {
@@ -845,13 +848,8 @@ export function NewEditorShell() {
 					if (choice === "cancel") return;
 					if (choice === "save") {
 						const doc = useProjectStore.getState().document;
-						if (doc) {
-							try {
-								await saveDocument(doc);
-							} catch {
-								return;
-							}
-						}
+						// Stay put if the save did not land -- the store has already said why.
+						if (doc && !(await saveDocument(doc))) return;
 					}
 					setNewProjectOpen(true);
 				})();
@@ -864,13 +862,8 @@ export function NewEditorShell() {
 					if (choice === "cancel") return;
 					if (choice === "save") {
 						const doc = useProjectStore.getState().document;
-						if (doc) {
-							try {
-								await saveDocument(doc);
-							} catch {
-								return;
-							}
-						}
+						// Stay put if the save did not land -- the store has already said why.
+						if (doc && !(await saveDocument(doc))) return;
 					}
 					setOpenProjectOpen(true);
 				})();
@@ -1226,7 +1219,7 @@ export function NewEditorShell() {
 							/>
 						</>
 					) : mode === "media" ? (
-						<MediaStage />
+						<MediaStage onAddToTimeline={handleDropAsset} />
 					) : (
 						<RecStage
 							onStartRecording={() => void handleNewRecording()}

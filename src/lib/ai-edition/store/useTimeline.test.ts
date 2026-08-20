@@ -18,6 +18,9 @@ const probeVideoDurationMock = vi.hoisted(() => vi.fn());
 const probeVideoDimensionsMock = vi.hoisted(() =>
 	vi.fn().mockResolvedValue({ width: 1920, height: 1080 }),
 );
+const toastErrorMock = vi.hoisted(() => vi.fn());
+
+vi.mock("sonner", () => ({ toast: { error: toastErrorMock } }));
 
 vi.mock("../timeline/duration", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../timeline/duration")>();
@@ -546,6 +549,63 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 			focusMode: "auto",
 		});
 	});
+
+	it("rolls a live focus edit back when its commit cannot be saved", async () => {
+		bridgeMocks.save.mockResolvedValueOnce({ success: false, error: "project file locked" });
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.focus).toEqual({
+			cx: 0.8,
+			cy: 0.2,
+		});
+
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.focus).toEqual({
+			cx: 0.5,
+			cy: 0.5,
+		});
+		// Still dirty, deliberately. The rollback target is the document this drag
+		// started from, not the last SAVED one, so claiming "clean" would let the window
+		// close on unsaved work without a prompt.
+		expect(useProjectStore.getState().dirty).toBe(true);
+		// The live edit advanced revision once; restoring a different document
+		// advances it again so async work cannot mistake the rollback for the
+		// optimistic document it replaced.
+		expect(useProjectStore.getState().revision).toBe(3);
+		expect(toastErrorMock).toHaveBeenCalledWith("Failed to save project", {
+			description: "project file locked",
+		});
+	});
+
+	it("does not restore another project's document after the project changed", async () => {
+		// A drag does not always end in a commit: `ZoomFocusOverlay` unmounts the instant
+		// `focusMode` flips to "auto", so `endDrag` never runs and the snapshot outlives
+		// the project. Restoring it into the NEXT project put project A's document in
+		// project B, and the following successful save wrote A over B on disk.
+		const { result, rerender } = renderTimeline();
+
+		act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+
+		const otherProjectDoc: AxcutDocument = {
+			...docWithZoom,
+			project: { ...docWithZoom.project, id: "proj_other", title: "Other" },
+		};
+		act(() => {
+			useProjectStore.setState({ projectId: "proj_other", document: otherProjectDoc });
+		});
+		rerender();
+
+		bridgeMocks.save.mockResolvedValueOnce({ success: false, error: "project file locked" });
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(useProjectStore.getState().document?.project.id).toBe("proj_other");
+	});
 });
 
 // Regression guard for the playhead-stutter fix. `currentTimeSec` is rewritten on
@@ -667,5 +727,57 @@ describe("useTimeline selection", () => {
 		act(() => result.current.clearSelection());
 		expect(result.current.selection).toBeNull();
 		expect(result.current.clipSelection).toBeNull();
+	});
+});
+
+describe("useTimeline save failures", () => {
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		toastErrorMock.mockReset();
+		bridgeMocks.save.mockResolvedValue({ success: false, error: "disk full" });
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	it("surfaces a rejected mutation without applying it or leaking the rejection", async () => {
+		const { result } = renderTimeline();
+
+		await act(async () => {
+			await expect(result.current.removeClip("clip_a")).resolves.toBeUndefined();
+		});
+
+		expect(toastErrorMock).toHaveBeenCalledWith("Failed to save project", {
+			description: "disk full",
+		});
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(1);
+		expect(useProjectStore.getState().document?.timeline.clips[0]?.id).toBe("clip_a");
+	});
+
+	it("reports 0 zooms added when the bulk write fails", async () => {
+		// The count is what the Auto-enhance caller shows in its success toast, so a
+		// failed write returning `suggestions.length` produced "Added 3 automatic zooms"
+		// stacked on "Failed to save project", with no zoom anywhere. The caller guards
+		// on this 0 (`V4Timeline` runAutoZooms).
+		const { result } = renderTimeline();
+
+		let added: number | undefined;
+		await act(async () => {
+			added = await result.current.addZoomsBulk([
+				{ span: { start: 1000, end: 2000 }, focus: { cx: 0.5, cy: 0.5 } },
+			]);
+		});
+
+		expect(added).toBe(0);
+		expect(useProjectStore.getState().document?.zoomRanges).toHaveLength(0);
 	});
 });
