@@ -65,37 +65,51 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 
-/** Immutable dated tag. `latest` is an alias that moves — do not use it here. */
-const RELEASE_TAG = "autobuild-2026-07-30-13-32";
+/**
+ * Immutable dated tag. `latest` is an alias that moves — do not use it here.
+ *
+ * MUST be a **last-day-of-the-month** autobuild. Immutable is not the same as
+ * permanent: BtbN keeps only ~15 days of daily autobuilds and prunes the rest,
+ * retaining month-end builds long term. A daily tag therefore 404s about two
+ * weeks after it is pinned, which breaks `npm run fetch:ffmpeg*` — and with it
+ * `build:linux` and `build:win`, which `publish-release` both depend on. That
+ * has already happened twice: `autobuild-2026-07-15-14-01` (fixed in 81e05972)
+ * and `autobuild-2026-07-30-13-32`, a Thursday.
+ *
+ * Check before re-pinning: `gh api repos/BtbN/FFmpeg-Builds/releases -q
+ * '.[].tag_name'` — anything older than ~15 days that is still listed is a
+ * month-end build, and only those are safe.
+ */
+const RELEASE_TAG = "autobuild-2026-07-31-14-10";
 const BASE = `https://github.com/BtbN/FFmpeg-Builds/releases/download/${RELEASE_TAG}`;
 
 /** Tag, asset and digest move together. Re-pin all three or none. */
 const PINNED = {
 	"win32-x64": {
-		asset: "ffmpeg-n8.1.2-32-gcfa62de001-win64-lgpl-8.1.zip",
-		sha256: "c5a091e6a0e446f737f5ae78f9ed38dc02081c014156097468c196b606c4717f",
+		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-win64-lgpl-8.1.zip",
+		sha256: "089e4169e93b2b3f3acbfced3c0704d24276a225641bdda04d796d28b07a2a38",
 		exe: "ffmpeg.exe",
 	},
 	"win32-arm64": {
-		asset: "ffmpeg-n8.1.2-32-gcfa62de001-winarm64-lgpl-8.1.zip",
-		sha256: "c5b600e5577142fe7d9d4c9788b91d09a4eaf36900abc5b7cf82b8af54663d7a",
+		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-winarm64-lgpl-8.1.zip",
+		sha256: "5b55ac00360811ef08513c76240c93e52a369cd29040d21799e7758fc7e9eaea",
 		exe: "ffmpeg.exe",
 	},
 	"linux-x64": {
-		asset: "ffmpeg-n8.1.2-32-gcfa62de001-linux64-lgpl-8.1.tar.xz",
-		sha256: "c54903d95c31d283441bc30ad61ed5d58ed968e18d6169b606dbf175d3719c30",
+		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-linux64-lgpl-8.1.tar.xz",
+		sha256: "8c8b2897f2a8093ae2d985f7f1867d218451d4c567c1b2437f86a7c73a950b9f",
 		exe: "ffmpeg",
 	},
 	"linux-arm64": {
-		asset: "ffmpeg-n8.1.2-32-gcfa62de001-linuxarm64-lgpl-8.1.tar.xz",
-		sha256: "f7a5ffe5e8f10957ce4675e0fab8d8a739a33abcf626721a9cfc7fcae40afb3d",
+		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-linuxarm64-lgpl-8.1.tar.xz",
+		sha256: "0c8716a94ac1fe22eb56e7a0cedd0f00c1d8fae712ec19973d679a7a87916743",
 		exe: "ffmpeg",
 	},
 };
 
 /**
  * The "-shared" sibling of PINNED, from the *same* release tag and source
- * commit (n8.1.2-32-gcfa62de001) — same ffmpeg, just built with shared libraries
+ * commit (n8.1.2-34-g9b6c8969e0) — same ffmpeg, just built with shared libraries
  * instead of static linking.
  *
  * Two consumers now: the Windows D3D11 compositor addon, and the Linux
@@ -108,16 +122,20 @@ const PINNED = {
  */
 const SHARED_PINNED = {
 	"linux-x64": {
-		asset: "ffmpeg-n8.1.2-32-gcfa62de001-linux64-lgpl-shared-8.1.tar.xz",
-		sha256: "74ef679aa7e4f8cdbd5193da3d99bf220a679f64d35daf078397081b789f150e",
+		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-linux64-lgpl-shared-8.1.tar.xz",
+		sha256: "c882a80f06617149198a98a07a0880a7e881953ae9f9cb931f5be09a4f93caae",
+	},
+	"linux-arm64": {
+		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-linuxarm64-lgpl-shared-8.1.tar.xz",
+		sha256: "eec386482ac6799bb547b5f507dedd19ef6354eee0ca4ddb04bdd053d03c3cfb",
 	},
 	"win32-x64": {
-		asset: "ffmpeg-n8.1.2-32-gcfa62de001-win64-lgpl-shared-8.1.zip",
-		sha256: "23429f940316ea92e376f6946c0a1f1b9043c930f3bc068228461d65ae24f8b8",
+		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-win64-lgpl-shared-8.1.zip",
+		sha256: "c222a490dde4e7059f45495deef6bfb98dbcacc2b43df5b607546252037aa95c",
 	},
 	"win32-arm64": {
-		asset: "ffmpeg-n8.1.2-32-gcfa62de001-winarm64-lgpl-shared-8.1.zip",
-		sha256: "7e8ede09fb48087478a272c57dab1a11eaba6688ee7a3d82728fd365425a1b6e",
+		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-winarm64-lgpl-shared-8.1.zip",
+		sha256: "4abab52904037ecad91b54811d69005a0b2e1f591242fd1517d32b299246ece0",
 	},
 };
 
@@ -436,8 +454,10 @@ async function fetchSharedDlls(tag, binDir) {
 		// copies belong in binDir. On Linux that same directory is owned by the two
 		// native build scripts: build-linux-compositor-addon.mjs puts SYMBOL-RENAMED
 		// (osff_*) copies there so the addon cannot bind to Chromium's ffmpeg, and
-		// build-linux-pipewire-helper.mjs stages unrenamed ones in `binDir/ffmpeg/`
-		// for the helper's `$ORIGIN/ffmpeg` RUNPATH. Dropping a third, unrenamed set
+		// build-linux-pipewire-helper.mjs stages unrenamed ones in
+		// `binDir/helper-ffmpeg/` for the helper's `$ORIGIN/helper-ffmpeg` RUNPATH
+		// (named to stay clear of `binDir/ffmpeg`, which is the static executable
+		// this script vendors). Dropping a third, unrenamed set
 		// in binDir would overwrite the renamed ones under identical filenames and
 		// break the addon at load time. Linux takes the SDK below and nothing else.
 		if (process.platform !== "win32") {
@@ -496,12 +516,22 @@ async function main() {
 	const dest = path.join(binDir, spec.exe);
 
 	// `--sdk-only` skips the standalone ffmpeg CLI and vendors just the build-time
-	// SDK. Linux needs it: the CLI lands at `<binDir>/ffmpeg` as a FILE, while
-	// build-linux-pipewire-helper.mjs stages the helper's libraries into
-	// `<binDir>/ffmpeg/` as a DIRECTORY — the name its `$ORIGIN/ffmpeg` RUNPATH is
-	// compiled against. One clobbers the other (`EEXIST: mkdir .../linux-x64/ffmpeg`).
-	// Nothing in the app spawns the CLI any more (see assertLgpl's note), and v1.7.0
-	// shipped Linux packages without it, so on Linux it is dead weight AND a conflict.
+	// SDK, which is what `build:linux` uses.
+	//
+	// It was introduced because the CLI landed at `<binDir>/ffmpeg` as a FILE while
+	// build-linux-pipewire-helper.mjs wanted `<binDir>/ffmpeg/` as a DIRECTORY, and
+	// one clobbered the other (`EEXIST: mkdir .../linux-x64/ffmpeg`). That conflict
+	// is gone — the helper's libraries live in `helper-ffmpeg/` now — so this flag
+	// no longer avoids a collision. What is left is a size argument: the static CLI
+	// is ~110 MB, `linux.extraResources` has no exclusion for it (unlike Windows'
+	// "!win32-*/ffmpeg.exe"), and Linux packages have shipped without it since
+	// v1.7.0.
+	//
+	// One caveat if that is ever revisited: the app is NOT entirely done with the
+	// CLI, contrary to assertLgpl's note below. electron/media/audioPeaks.ts spawns
+	// it to decode waveform peaks ~6x faster than the renderer can, and falls back
+	// to the browser pipelines when it is absent — so on Linux that fallback is
+	// always the one taken. Degraded, cached after the first decode, not broken.
 	if (process.argv.includes("--sdk-only")) {
 		console.log(`Skipping the standalone ffmpeg CLI (--sdk-only).`);
 		await fetchSharedDlls(tag, binDir);

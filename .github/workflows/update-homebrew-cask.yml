@@ -16,14 +16,49 @@ permissions:
 jobs:
   update-cask:
     runs-on: ubuntu-latest
-    if: (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease) && vars.HOMEBREW_TAP_OWNER != '' && vars.HOMEBREW_TAP_REPO != ''
+    # The tap configuration has LEFT this `if:`, and that is the point of the change.
+    # `vars.HOMEBREW_TAP_OWNER != '' && vars.HOMEBREW_TAP_REPO != ''` here made the job
+    # `skipped`, and a skipped job is green: every release since this workflow was
+    # written has "succeeded" without publishing a cask, because neither variable has
+    # ever existed on the repository. Same failure as #148, where publish-winget.yml
+    # spent eight releases green and silent for exactly this reason — see the comment
+    # above its own `if:`. A guard that does nothing quietly guards nothing.
+    #
+    # So the job always starts, and a step announces the missing configuration. It costs
+    # a runner-minute per release; it buys "nothing was published" being visible in the
+    # run summary instead of inferable from a tap nobody thought to look at.
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
     env:
       TAP_OWNER: ${{ vars.HOMEBREW_TAP_OWNER }}
       TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
       CASK_NAME: ${{ vars.HOMEBREW_CASK_NAME || 'openscreen' }}
+      # `secrets` is not a context an `if:` can read, at job level or step level — only
+      # `env` is. Hence this boolean-as-string, which exposes whether the token is set
+      # without ever exposing its value. Same trick as publish-winget.yml.
+      HAS_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
-      - name: Resolve tag and version
+      - name: Check the tap configuration
+        id: config
+        run: |
+          set -euo pipefail
+          # `homebrew-?*`, not `-n`: the fourth requirement in the warning below is a
+          # rule about the name itself, and a name test is the one of the four this step
+          # can actually apply. `getopenscreen/openscreen-tap` would clone, commit and
+          # push exactly like a real tap and still be untappable — a green run publishing
+          # to somewhere `brew tap` cannot resolve, which is the failure this whole
+          # workflow change exists to stop. `?*` also rejects a repository named the bare
+          # `homebrew-`, which the prefix alone would accept.
+          if [[ -n "$TAP_OWNER" && "$TAP_REPO" == homebrew-?* && "$HAS_TOKEN" == "true" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Tap: ${TAP_OWNER}/${TAP_REPO}, cask ${CASK_NAME}."
+            exit 0
+          fi
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          echo "::warning title=Homebrew cask not updated::No cask was published. Needs (1) the repository variable HOMEBREW_TAP_OWNER, currently ${TAP_OWNER:-UNSET}; (2) HOMEBREW_TAP_REPO, currently ${TAP_REPO:-UNSET}; (3) the secret HOMEBREW_TAP_TOKEN, currently $([[ "$HAS_TOKEN" == "true" ]] && echo set || echo UNSET), with contents write on that repository; and (4) the tap repository itself, which must be named homebrew-<something> for Homebrew to recognise it. See https://github.com/getopenscreen/openscreen/issues/335"
+
+      - name: Resolve and validate tag
         id: meta
+        if: steps.config.outputs.configured == 'true'
         env:
           GH_EVENT_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
@@ -34,11 +69,24 @@ jobs:
             echo "::error::No tag resolved from release event or workflow input"
             exit 1
           fi
+          # The `prerelease` filter only covers the `release` event. `workflow_dispatch`
+          # takes free text — no git ref rule applies to it — so a manual replay of
+          # `v1.9.4-rc.2` would publish an RC as THE cask, and `brew upgrade` would hand
+          # it to everyone on stable. Homebrew accepts that version string happily; only
+          # this check refuses it. The same hole was closed in aur-publish.yml, where the
+          # free-text input also escaped a `sed` expression; here every use is quoted, so
+          # what is left is the wrong-version case and the tag reaching a Ruby file that
+          # users execute.
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Refusing tag '$TAG' — expected a stable vMAJOR.MINOR.PATCH tag"
+            exit 1
+          fi
           VERSION="${TAG#v}"
           echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Wait for release DMG assets
+        if: steps.config.outputs.configured == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.meta.outputs.tag }}
@@ -73,6 +121,7 @@ jobs:
 
       - name: Find macOS DMG assets
         id: assets
+        if: steps.config.outputs.configured == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.meta.outputs.tag }}
@@ -109,6 +158,7 @@ jobs:
 
       - name: Download DMGs and compute sha256
         id: shas
+        if: steps.config.outputs.configured == 'true'
         env:
           REPO: ${{ github.repository }}
           TAG: ${{ steps.meta.outputs.tag }}
@@ -125,13 +175,15 @@ jobs:
           echo "x64_sha=$X64_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Checkout tap
-        uses: actions/checkout@v4
+        if: steps.config.outputs.configured == 'true'
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.TAP_OWNER }}/${{ env.TAP_REPO }}
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
       - name: Write cask file
+        if: steps.config.outputs.configured == 'true'
         env:
           REPO: ${{ github.repository }}
           TAG: ${{ steps.meta.outputs.tag }}
@@ -185,6 +237,7 @@ jobs:
           EOF
 
       - name: Commit and push to tap
+        if: steps.config.outputs.configured == 'true'
         working-directory: tap
         env:
           VERSION: ${{ steps.meta.outputs.version }}

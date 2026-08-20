@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // The transcript pane's empty state is what a user meets before any transcript
 // exists — and, since transcription now runs by itself in the background, it is
 // also where they wait for one. These assertions pin the three answers it has

@@ -10,21 +10,11 @@ name: Build whisper-stt binaries
 #
 # ponytail: one binary per platform is enough because whisper.cpp selects the
 # right backend at runtime (Metal on Apple Silicon, Vulkan on Windows/Linux,
-# CPU fallback when no GPU/driver is available). A CUDA variant is supported
-# by the build script but is not built by default; Vulkan already accelerates
-# NVIDIA cards.
+# CPU fallback when no GPU/driver is available). Vulkan already accelerates
+# NVIDIA cards, so there is no separate CUDA build.
 
 on:
   workflow_dispatch:
-    inputs:
-      enable_cuda:
-        description: "Also build a CUDA variant when the host has an nvcc toolchain"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "true"
-          - "false"
   push:
     paths:
       - "scripts/build-whisper-stt.sh"
@@ -54,7 +44,16 @@ jobs:
             tag: darwin-x64
             label: macOS x64 (CPU)
             vulkan: false
-          - os: ubuntu-latest
+          # PINNED, and not `ubuntu-latest` — see the long comment on build.yml's
+          # build-linux job. This leg produces the WORST offender of the two: built on
+          # 24.04, whisper-stt-server and the libggml backends needed GLIBC_2.38 and
+          # GLIBCXX_3.4.32, so they died in ld.so on Ubuntu 22.04, Debian 12 and RHEL 9
+          # and transcription failed there with an unactionable developer error. The
+          # symbols were never asked for: `__isoc23_strtol` is glibc 2.38's C23 redirect
+          # and `_ZSt21ios_base_library_initv` is emitted into every TU that includes
+          # <iostream> by GCC 13.2+. 22.04 has the CMake (3.22 >= the 3.20 required) and
+          # a C++20 compiler; nothing here uses a GCC 13-only library feature.
+          - os: ubuntu-22.04
             arch: x64
             tag: linux-x64
             label: Linux x64 (Vulkan + CPU fallback)
@@ -67,13 +66,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
 
       - name: Install Ninja (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        # `startsWith`, matching the macOS step below, rather than an exact image name:
+        # this was `== 'ubuntu-latest'`, so pinning the image would have skipped Ninja
+        # silently instead of failing.
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build build-essential
@@ -138,7 +140,7 @@ jobs:
           echo "CMAKE_PREFIX_PATH=${VCPKG_ROOT_DIR}/installed/x64-windows" >> "$GITHUB_ENV"
 
       - name: Cache whisper.cpp build tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # Matches scripts/build-whisper-stt.sh's own BUILD_ROOT default for
           # each OS (short `C:/wstbuild` on Windows to dodge the vulkan-shaders-gen
@@ -160,8 +162,6 @@ jobs:
             whisper-stt-build-${{ matrix.tag }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-
 
       - name: Run whisper-stt build script
-        env:
-          ENABLE_CUDA: ${{ github.event.inputs.enable_cuda || 'false' }}
         run: bash scripts/build-whisper-stt.sh
 
       - name: Stage binaries for upload
@@ -195,7 +195,7 @@ jobs:
           echo "Staged ${BAG}.tar.gz"
 
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: whisper-stt-${{ matrix.tag }}
           path: whisper-stt-${{ matrix.tag }}.tar.gz

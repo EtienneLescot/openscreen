@@ -356,8 +356,9 @@ export function multipleModifiers(options?: { projectId?: string }): AxcutDocume
 	});
 }
 
-/** More than 800 transcript segments — `agent-tools.ts:625` slices at 800 and
- * says nothing about it (DSL-6). */
+/** More than 800 transcript segments. `getTranscript` used to slice at 800 and
+ * say nothing about it; it no longer caps, and this fixture is what keeps that
+ * honest. */
 export function longTranscript(options?: { segments?: number; projectId?: string }): AxcutDocument {
 	const count = options?.segments ?? 900;
 	const durationSec = count * 2;

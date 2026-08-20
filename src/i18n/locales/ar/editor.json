@@ -42,6 +42,8 @@
 		"cameraDenied": "تم رفض الوصول إلى الكاميرا. سيستمر التسجيل بدون كاميرا الويب.",
 		"cameraDisconnected": "تم فصل كاميرا الويب.",
 		"cameraNotFound": "لم يتم العثور على كاميرا.",
+		"cameraCaptureUnavailable": "تعذّر فتح الكاميرا. يجري التسجيل بدون كاميرا.",
+		"microphoneDefaulted": "تعذّر تحديد الميكروفون المحدَّد؛ يجري التسجيل من الإدخال الافتراضي.",
 		"permissionDenied": "تم رفض إذن التسجيل. يرجى السماح بتسجيل الشاشة.",
 		"accessibilityAllowAndRetry": "اسمح بوصول تسهيلات الاستخدام لـ OpenScreen، ثم اضغط على التسجيل مرة أخرى لبدء العد التنازلي.",
 		"selectSource": "يرجى تحديد مصدر للتسجيل"
@@ -132,6 +134,8 @@
 		"emptyHint": "لا توجد وسائط بعد — استورد تسجيلاً للبدء.",
 		"importMedia": "استيراد وسائط",
 		"added": "تمت إضافة {{label}}",
+		"addToTimeline": "إضافة إلى الخط الزمني",
+		"addedToTimeline": "تمت إضافة {{label}} إلى الخط الزمني",
 		"sourceTranscript": "نص المصدر",
 		"close": "إغلاق",
 		"transcriptReady": "النص جاهز",
@@ -146,6 +150,7 @@
 		"transcribingEllipsis": "جارٍ النسخ…",
 		"pendingTranscription": "بانتظار النسخ",
 		"transcriptionFailed": "فشل النسخ",
+		"cpuBackendHint": "يعمل على المعالج — أبطأ بنحو 2× من معالج الرسوميات",
 		"noTranscript": "لا يوجد نص مكتوب",
 		"generating": "جارٍ الإنشاء",
 		"generationFailed": "فشل الإنشاء",
@@ -235,6 +240,8 @@
 		"selectModelFailed": "تعذّر اختيار النموذج",
 		"providerSettings": "إعدادات المزوّد…",
 		"applyEditsFailed": "تعذّر تطبيق تعديلات الوكيل",
+		"agentEditConflict": "لم تُطبَّق تعديلات الوكيل لأن المشروع تغيّر أثناء عمله.",
+		"applyAnyway": "تطبيق على أي حال",
 		"chatFailed": "فشلت المحادثة",
 		"rewindFailed": "فشلت إعادة الضبط",
 		"rewoundSuccess": "تمت إعادة الضبط إلى بداية تلك الرسالة",
@@ -281,7 +288,7 @@
 		"sendTitle": "إرسال (Enter)",
 		"send": "إرسال",
 		"rewindConfirmTitle": "إعادة الضبط هنا؟",
-		"rewindConfirmBody": "سيتم التراجع عن تعديلات الوكيل والأدوار اللاحقة بعد هذه النقطة. سيُستعاد المشروع والمحادثة وحالة الوكيل.",
+		"rewindConfirmBody": "سيتم التراجع عن تعديلات الوكيل والأدوار اللاحقة بعد هذه النقطة. سيُستعاد المشروع والمحادثة وحالة الوكيل. وسيتم استبدال أي تعديلات أجريتها منذ ذلك الحين أيضًا.",
 		"rewindConfirm": "إعادة الضبط",
 		"configureModel": "تهيئة نموذج الذكاء الاصطناعي",
 		"historyDialog": {
@@ -311,7 +318,9 @@
 		"noMatches": "لا توجد مشاريع تطابق \"{{query}}\".",
 		"navigateHint": "للتنقل ·",
 		"openHint": "للفتح",
-		"browseFiles": "تصفح الملفات…"
+		"browseFiles": "تصفح الملفات…",
+		"deleteProject": "حذف المشروع",
+		"confirmDelete": "هل تريد حذف هذا المشروع؟ سيتم الاحتفاظ بتسجيلاتك."
 	},
 	"editClipDialog": {
 		"title": "تعديل المقطع",
@@ -359,7 +368,13 @@
 	},
 	"preview": {
 		"videoPreview": "معاينة الفيديو",
-		"webcamPreview": "معاينة كاميرا الويب (اسحب لتغيير الموضع)"
+		"webcamPreview": "معاينة كاميرا الويب (اسحب لتغيير الموضع)",
+		"mediaError": {
+			"title": "توقّفت المعاينة",
+			"description": "تعذّر فك ترميز الفيديو. قد يكون الملف تالفًا، أو ما زال قيد الكتابة، أو لم يعد في المكان الذي يتوقعه المشروع — مشروعك نفسه سليم.",
+			"retry": "إعادة المحاولة",
+			"detail": "التفاصيل: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "تعليق توضيحي",

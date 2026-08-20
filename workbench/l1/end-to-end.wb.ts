@@ -19,7 +19,10 @@ import { runRepetition, runScenarioReps } from "../lib/runner";
 import { allScenarios, getScenario } from "../scenarios/registry";
 
 describe("the context the model actually receives", () => {
-	it("is our 19 tools and nothing else", async () => {
+	// The title used to say "19" while the agent shipped 21, and a title cannot
+	// fail. The count lives in the roster now, and the roster is pinned in CI by
+	// `deep-agent/service.test.ts` against what `buildTools` actually builds.
+	it("is our tool surface and nothing else", async () => {
 		const run = await runScenario({
 			label: "l1-surface",
 			prompt: "hello",
@@ -122,7 +125,7 @@ describe("no scoring without evidence", () => {
 });
 
 describe("a name the model was never given", () => {
-	it("comes back as a tool result naming the 19, and the turn survives", async () => {
+	it("comes back as a tool result naming the real ones, and the turn survives", async () => {
 		// The demoScripts of `cursor-question` and `wizard-enhance-bare` still
 		// replay the live turns of 2026-07-31, when the model had `ls`/`glob`/
 		// `grep` and used them. Now that the surface is gone those calls are

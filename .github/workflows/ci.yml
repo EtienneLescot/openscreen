@@ -19,7 +19,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npm run lint
 
@@ -27,7 +27,7 @@ jobs:
     name: Type Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npx tsc --noEmit
 
@@ -48,7 +48,7 @@ jobs:
     # fixing on the spot, fix the fixture anyway: re-introducing a baseline
     # re-opens the drift this closed.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Typecheck tests
         run: npx tsc -p tsconfig.test.json --noEmit
@@ -57,20 +57,40 @@ jobs:
     name: Docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # No ./.github/actions/setup: check-docs.mjs imports only node builtins,
       # so npm ci would be a minute of install for nothing. Node 22 is here for
       # import.meta.dirname (needs >= 20.11).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: npm run docs:check
+
+  appstream:
+    name: AppStream metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # `appstream` is not on the runner image, and it is the only thing this job
+      # needs — no Node, no npm ci. Same reasoning as the Docs job above.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq appstream
+      # This gate exists because nothing else reads the file. It is upstream
+      # metadata with no consumer in this repository yet, so without validation
+      # here the first thing to discover a broken edit would be a Flathub
+      # reviewer, weeks later, on a submission that then has to be redone.
+      #
+      # --no-net deliberately: with network validation on, this job also fetches
+      # every screenshot, and an unreachable raw.githubusercontent.com would turn
+      # a metadata check into a flaky one on unrelated PRs. Dead screenshot URLs
+      # are caught by Flathub at submission time, which is the only place the
+      # answer actually matters.
+      - run: appstreamcli validate --no-net --explain build/com.getopenscreen.OpenScreen.metainfo.xml
 
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npm run test
 
@@ -78,7 +98,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npx vite build
 
@@ -122,7 +142,7 @@ jobs:
     name: Rust test (macOS compositor)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --target aarch64-apple-darwin
@@ -168,8 +188,8 @@ jobs:
     name: Rust check (Windows compositor)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       # bindgen needs libclang. `crates/.cargo/config.toml` pins LIBCLANG_PATH to
@@ -209,10 +229,10 @@ jobs:
     name: Rust test (Linux compositor)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Pas de ./.github/actions/setup : `fetch-ffmpeg.mjs` n'importe que des
       # builtins node, donc `npm ci` serait une minute d'installation pour rien.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       # libclang-dev, pas libclang1 : bindgen a besoin de libclang pour lire les
@@ -264,12 +284,62 @@ jobs:
           cd crates
           cargo build -p compositor-view-napi --release
 
+  # The macOS capture helper had NO job on any pull request — not a build, not a test.
+  # `build.yml` compiles it, and build.yml triggers only on `push: tags: v*` or
+  # workflow_dispatch, so a Swift file that did not compile surfaced when someone cut a
+  # release rather than when they pushed it. That is the same gap `rust-windows-compositor-
+  # check` above was added to close for the Windows compositor.
+  #
+  # `swift test`, not just `swift build`, and the difference is the reason this job exists
+  # at all. PR #343 changed how audio is placed on the recording timeline and shipped 301
+  # lines of Swift tests beside the change; not one of them ever ran, because no workflow
+  # invoked `swift test` and nothing under `electron/native/screencapturekit/Tests` was
+  # executed on any pull request. A change to recording timing that no measurement can
+  # contradict is not one to merge into a shipped capture path, so the measurement runs here.
+  #
+  # `AudioTrackMixerTests` needs no screen, no display server and no TCC grant: the mixer
+  # takes its sink and its clock as parameters, so the tests drive it with a collecting sink
+  # and a hand-moved clock. That is what makes "does a sound land where it happened"
+  # answerable on a headless runner. The other half of that question — the one that needs a
+  # real display, a real tap and a real speaker — is `npm run test:sck-audio-timeline:mac`,
+  # which cannot run here and is run by hand.
+  #
+  # `macos-latest`, matching `build.yml`'s arm64 leg — NOT `macos-14` like the compositor job
+  # above, and the difference is load bearing. A gate has to compile with the toolchain that
+  # actually ships the binary, or it fails on code that is fine and passes on code that is not.
+  # This job was written as `macos-14` by copying the job above and failed immediately:
+  # `ScreenCaptureRecorder.swift` has carried a trailing comma in an argument list since long
+  # before this change, which is Swift 6.1 syntax (SE-0439), and the macos-14 image is on Swift
+  # 5.10. Nothing was wrong with the file — every release builds it — the gate was just pointed
+  # at an older compiler than the one that builds releases. `swift --version` is printed for
+  # exactly that reason: when this job disagrees with `build.yml`, the toolchain is the first
+  # thing to check.
+  #
+  # NB the package still declares `swift-tools-version: 5.9`, which that trailing comma now
+  # contradicts. Left alone here rather than fixed in passing: it is pre-existing, unrelated to
+  # the audio timeline, and "which Swift does the helper actually require" deserves its own
+  # decision rather than being settled as a side effect of adding CI.
+  #
+  # The release build runs too, because the executable targets are not covered by the test
+  # target and `-c release` is what `build:native:mac` actually produces.
+  swift-macos-helper:
+    name: Swift test (macOS capture helper)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Show toolchain
+        run: swift --version
+      - name: swift test (capture core)
+        run: swift test --package-path electron/native/screencapturekit
+      - name: swift build (release, both helpers)
+        run: swift build -c release --package-path electron/native/screencapturekit
+
   semantic-pr:
     name: Validate PR title (semantic)
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: amannn/action-semantic-pull-request@v5
+      - uses: amannn/action-semantic-pull-request@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

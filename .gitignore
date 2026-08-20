@@ -124,3 +124,11 @@ workbench/runs/
 
 # Fixture d'évaluation — enregistrement réel de l'utilisateur, jamais versionné
 workbench/fixtures/
+
+# Artefacts de setup de la publication AUR (scripts/ + .github/workflows/aur-publish.yml).
+# La clé privée ne vit que dans le secret GitHub AUR_SSH_PRIVATE_KEY ; si `aur_ci`
+# réapparaît ici c'est une régénération locale, à détruire (`shred -u`) après usage.
+# Le dépôt est public : rien de tout ça ne doit pouvoir partir dans un commit.
+/aur_ci
+/aur_ci.pub
+/aur_known_hosts

@@ -202,7 +202,7 @@ export default defineScenario({
 				"live dira si le modèle y cède encore. Reste listé pour cette raison, pas par " +
 				"habitude.",
 		},
-		// beh.sandbox retiré : les 8 outils fantômes ne sont plus sur la surface.
+		// beh.sandbox retiré : les outils fantômes ne sont plus sur la surface.
 		// INTERMITTENTES, mesuré en live sur deepseek-v4-flash : ces deux checks
 		// passent certains runs entiers. Le modèle omet parfois tout multiplicateur
 		// (silence = honnête, donc `beh.multiplier` passe) et centre parfois ses

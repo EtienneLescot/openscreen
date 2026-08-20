@@ -38,6 +38,26 @@ import type { AxcutDocument } from "../schema";
 // for the same reason (their canonical types live in lib/wallpaper and
 // lib/cursor/cursorThemes as the source of truth).
 
+/** Output gain bound, shared by the slider, this store and `finish_audio` (Rust).
+ *
+ *  A linear gain is the one audio setting that behaves identically on the preview's source
+ *  file and on the export's assembled timeline, which is why it is the only one left. A sync
+ *  offset was tried and removed: the preview seeks in SOURCE time while the export shifts the
+ *  stretched, concatenated timeline, so the same value meant different delays under a speed
+ *  region, and near a cut the export pulls audio across the junction while the preview cannot. */
+export const AUDIO_GAIN_DB_LIMIT = 12;
+
+/** dB to the linear scalar every side of the boundary multiplies by.
+ *
+ *  Exported rather than written out three times. `finish_audio` applies
+ *  `10f32.powf(gain_db / 20.0)` per sample; the preview feeds this to a `GainNode`; the
+ *  timeline waveform scales its bars by it. The claim those three make together — that what
+ *  you see is what you hear is what you export — only holds while they are the same number,
+ *  and a hand-copied `10 ** (dB / 20)` is exactly how that stops being true. */
+export function audioGainScalar(gainDb: number): number {
+	return 10 ** (gainDb / 20);
+}
+
 export interface EditorSettingsSnapshot {
 	wallpaper: string;
 	aspectRatio: AspectRatio;
@@ -53,6 +73,8 @@ export interface EditorSettingsSnapshot {
 	webcamReactiveZoom: boolean;
 	webcamSizePreset: WebcamSizePreset;
 	webcamPosition: WebcamPosition | null;
+	webcamCropRegion: CropRegion;
+	audioGainDb: number;
 	cursor: CursorVisualSettings;
 	cursorShow: boolean;
 	cursorTheme: string;
@@ -62,10 +84,15 @@ export interface EditorSettingsSnapshot {
 export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	wallpaper: DEFAULT_WALLPAPER,
 	aspectRatio: "16:9",
-	shadowIntensity: 0,
+	// Opinionated by default: the wallpaper and the padding were already on, but
+	// with square corners and no shadow the recording read as a rectangle pasted
+	// onto the background rather than a window floating above it (#271 reported
+	// the symptom and blamed the padding). These three are the rest of that look;
+	// shipping the background without them was shipping half a composition.
+	shadowIntensity: 0.2,
 	showBlur: false,
-	motionBlurAmount: 0,
-	borderRadius: 0,
+	motionBlurAmount: 0.2,
+	borderRadius: 40,
 	padding: 50,
 	cropRegion: DEFAULT_CROP_REGION,
 	webcamLayoutPreset: DEFAULT_WEBCAM_LAYOUT_PRESET,
@@ -74,6 +101,8 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	webcamReactiveZoom: DEFAULT_WEBCAM_REACTIVE_ZOOM,
 	webcamSizePreset: DEFAULT_WEBCAM_SIZE_PRESET,
 	webcamPosition: DEFAULT_WEBCAM_POSITION,
+	webcamCropRegion: DEFAULT_CROP_REGION,
+	audioGainDb: 0,
 	cursor: {
 		size: DEFAULT_CURSOR_SIZE,
 		smoothing: DEFAULT_CURSOR_SMOOTHING,
@@ -101,6 +130,8 @@ interface LegacyShape {
 	webcamReactiveZoom?: boolean;
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: WebcamPosition | null;
+	webcamCropRegion?: CropRegion;
+	audioGainDb?: number;
 	cursorSize?: number;
 	cursorSmoothing?: number;
 	cursorMotionBlur?: number;
@@ -155,6 +186,14 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 		),
 		webcamSizePreset: num(legacy?.webcamSizePreset, DEFAULT_EDITOR_SETTINGS.webcamSizePreset),
 		webcamPosition: normaliseWebcamPosition(legacy?.webcamPosition),
+		webcamCropRegion: normaliseCropRegion(legacy?.webcamCropRegion),
+		// Same bound the slider offers and the native `finish_audio` clamps to. Two
+		// different ranges for one value is how a project ends up exporting a gain the
+		// UI cannot display.
+		audioGainDb: Math.min(
+			AUDIO_GAIN_DB_LIMIT,
+			Math.max(-AUDIO_GAIN_DB_LIMIT, num(legacy?.audioGainDb, 0)),
+		),
 		cursor,
 		cursorShow: bool(legacy?.cursorShow, DEFAULT_EDITOR_SETTINGS.cursorShow),
 		cursorTheme: str(legacy?.cursorTheme, DEFAULT_EDITOR_SETTINGS.cursorTheme),
@@ -176,6 +215,8 @@ export interface EditorSettingsPatch {
 	webcamReactiveZoom?: boolean;
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: WebcamPosition | null;
+	webcamCropRegion?: CropRegion;
+	audioGainDb?: number;
 	cursor?: Partial<CursorVisualSettings> & { theme?: string; show?: boolean };
 	autoFocusAll?: boolean;
 }
@@ -227,4 +268,20 @@ function normaliseWebcamPosition(value: unknown): WebcamPosition | null {
 		cx: Math.min(1, Math.max(0, cxRaw)),
 		cy: Math.min(1, Math.max(0, cyRaw)),
 	};
+}
+
+const MIN_CROP_SIZE = 0.01;
+
+function normaliseCropRegion(value: unknown): CropRegion {
+	if (!value || typeof value !== "object") return DEFAULT_CROP_REGION;
+	const candidate = value as Record<string, unknown>;
+	const x = isNumber(candidate.x) ? Math.min(1 - MIN_CROP_SIZE, Math.max(0, candidate.x)) : 0;
+	const y = isNumber(candidate.y) ? Math.min(1 - MIN_CROP_SIZE, Math.max(0, candidate.y)) : 0;
+	const width = isNumber(candidate.width)
+		? Math.min(1 - x, Math.max(MIN_CROP_SIZE, candidate.width))
+		: 1 - x;
+	const height = isNumber(candidate.height)
+		? Math.min(1 - y, Math.max(MIN_CROP_SIZE, candidate.height))
+		: 1 - y;
+	return { x, y, width, height };
 }

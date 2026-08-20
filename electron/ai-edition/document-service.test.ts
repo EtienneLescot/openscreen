@@ -68,6 +68,77 @@ describe("DocumentService", () => {
 			await expect(service.getProject("proj/with/slash")).rejects.toBeInstanceOf(ProjectFileError);
 		});
 
+		// Issue #348 — recording with no camera AND no microphone is the default for
+		// anyone capturing a screen demo, and the failure lands at REOPEN, where the
+		// recording exists on disk but the user cannot get to it. The recorder writes
+		// no audio stream at all in that configuration (confirmed with ffprobe on real
+		// captures) and `cameraTrack: null`, so this is the exact on-disk shape.
+		describe("camera-less, microphone-less recordings", () => {
+			// Windows path separators on purpose: the reporter is on Windows 11 and
+			// `path.join` gives us the host's, so this stays honest on all three.
+			async function writeCamlessProject(originalPath: string, sizeBytes?: number) {
+				const doc = await service.createProject("Screen demo, no cam no mic");
+				const asset: AxcutAsset = {
+					id: "asset_camless",
+					kind: "video",
+					label: path.basename(originalPath),
+					originalPath,
+					sizeBytes,
+					// No `audio` (the probe never populates it) and no camera link.
+					cameraTrack: null,
+					transcriptionFailure: {
+						kind: "no-audio",
+						message: "No audio track found in this video.",
+					},
+				};
+				await service.saveProject({
+					...doc,
+					assets: [asset],
+					project: { ...doc.project, primaryAssetId: asset.id },
+				});
+				return doc.project.id;
+			}
+
+			it("reopens, and stays listed", async () => {
+				const screenPath = path.join(mediaDir, "screen-demo.mp4");
+				await fs.writeFile(screenPath, "screen bytes", "utf8");
+				const projectId = await writeCamlessProject(screenPath);
+
+				const reopened = await service.getProject(projectId);
+				expect(reopened.assets[0]?.cameraTrack).toBeNull();
+				expect(reopened.assets[0]?.originalPath).toBe(screenPath);
+				// A document that throws here is dropped by listProjects' skip-on-error
+				// catch, which presents to the user as "my project vanished" rather than
+				// as an error — so the absence of a throw is not enough to assert.
+				const summaries = await service.listProjects();
+				expect(summaries.map((s) => s.id)).toContain(projectId);
+				// Re-decided on every open, so it must survive the round trip or the
+				// whole recording is re-extracted for transcription each time.
+				expect(reopened.assets[0]?.transcriptionFailure?.kind).toBe("no-audio");
+			});
+
+			it("does not hand the relinker's webcam to an asset that never had one", async () => {
+				// The relink only runs when something is actually broken, so move the
+				// screen file — and register a link that DOES carry a webcam, which is
+				// the shape that produced #265 (screen recording used as the webcam).
+				const screenBytes = "screen bytes";
+				const screenPath = path.join(mediaDir, "moved-screen-demo.mp4");
+				const webcamPath = path.join(mediaDir, "moved-screen-demo-webcam.mp4");
+				await fs.writeFile(screenPath, screenBytes, "utf8");
+				await fs.writeFile(webcamPath, "webcam bytes", "utf8");
+				await registerMediaLinks(mediaDir, screenPath, { webcamVideoPath: webcamPath });
+
+				const projectId = await writeCamlessProject(
+					path.join(mediaDir, "gone", "moved-screen-demo.mp4"),
+					Buffer.byteLength(screenBytes),
+				);
+
+				const reopened = await service.getProject(projectId);
+				expect(reopened.assets[0]?.originalPath).toBe(screenPath);
+				expect(reopened.assets[0]?.cameraTrack).toBeNull();
+			});
+		});
+
 		// Issue #212 — a project authored on another machine opens with every asset
 		// pointing at a path that does not exist here. The relink runs on this read,
 		// not on import, so a document already saved broken still recovers.
@@ -292,6 +363,83 @@ describe("DocumentService", () => {
 			expect(after.project.primaryAssetId).toBe(b.assets[1]?.id);
 		});
 
+		it("resequences other assets and rederives their anchored regions", async () => {
+			const created = await service.createProject("P");
+			const withA = await service.addAsset(created.project.id, { path: "/tmp/a.mp4" });
+			const withB = await service.addAsset(created.project.id, { path: "/tmp/b.mp4" });
+			// Four clips that differ only in id / asset / four numbers.
+			const clip = (
+				id: string,
+				assetId: string,
+				[sourceStartSec, sourceEndSec]: [number, number],
+				[timelineStartSec, timelineEndSec]: [number, number],
+			) => ({
+				id,
+				assetId,
+				sourceStartSec,
+				sourceEndSec,
+				timelineStartSec,
+				timelineEndSec,
+				wordRefs: [],
+				origin: "user" as const,
+				reason: "test",
+			});
+			const assetA = withA.assets[0]?.id ?? "";
+			const assetB = withB.assets[1]?.id ?? "";
+			expect(assetA).toBeTruthy();
+			expect(assetB).toBeTruthy();
+
+			await service.saveProject({
+				...withB,
+				timeline: {
+					...withB.timeline,
+					clips: [
+						clip("a_1", assetA, [0, 2], [0, 2]),
+						clip("b_1", assetB, [10, 14], [2, 6]),
+						clip("a_2", assetA, [2, 3], [6, 7]),
+						clip("b_2", assetB, [20, 22], [7, 9]),
+					],
+				},
+				zoomRanges: [
+					{
+						id: "zoom_b_2",
+						clipId: "b_2",
+						sourceStartSec: 20.5,
+						sourceEndSec: 21.5,
+						startMs: 7500,
+						endMs: 8500,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+					},
+					// Bare `clipId`, no source range: not an anchor, so removing the asset that owns
+					// `a_2` must NOT take it. This is what routes #249's fix through `removeAsset`
+					// -- the fully-anchored zoom above survives either way, so on its own it pins
+					// nothing about the predicate.
+					{
+						id: "zoom_partial_a_2",
+						clipId: "a_2",
+						startMs: 6000,
+						endMs: 7000,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+					},
+				],
+			});
+
+			const after = await service.removeAsset(created.project.id, assetA);
+
+			expect(after.timeline.clips).toMatchObject([
+				{ id: "b_1", timelineStartSec: 0, timelineEndSec: 4 },
+				{ id: "b_2", timelineStartSec: 4, timelineEndSec: 6 },
+			]);
+			expect(after.zoomRanges).toEqual([
+				expect.objectContaining({ id: "zoom_b_2", startMs: 4500, endMs: 5500 }),
+				// Survives, and keeps its raw ms untouched -- now past the end of a 6s timeline.
+				// That is the documented trade-off in `removeClip`: unreachable beats deleted.
+				expect.objectContaining({ id: "zoom_partial_a_2", startMs: 6000, endMs: 7000 }),
+			]);
+		});
+
 		it("throws when removing a missing asset", async () => {
 			const doc = await service.createProject("P");
 			await expect(service.removeAsset(doc.project.id, "asset_x")).rejects.toBeInstanceOf(
@@ -387,7 +535,10 @@ describe("DocumentService", () => {
 			expect(onDisk.annotations).toHaveLength(120);
 		});
 
-		it("survives many interleaved saves of one project", async () => {
+		// 20 real temp-file+rename round trips, serialized through the save queue.
+		// That is genuinely more than 5s of disk when the rest of the suite is
+		// running in parallel, so it gets its own timeout rather than flaking.
+		it("survives many interleaved saves of one project", { timeout: 20_000 }, async () => {
 			const doc = await service.createProject("Storm");
 			// Sizes deliberately alternate long/short: equal-length writes overwrite
 			// each other cleanly and would prove nothing.

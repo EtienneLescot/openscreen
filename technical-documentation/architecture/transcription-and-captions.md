@@ -98,7 +98,7 @@ subtitle is the reason rather than "With AI".
 
 ### One phase, including the first-run model download
 
-On a fresh install the GGML model (~253 MB) is not on disk. It is fetched by
+On a fresh install the GGML model (~264 MB) is not on disk. It is fetched by
 `SttManager.prepare()` **inside** the `stt:transcribe` IPC call — i.e. inside a
 run this store has already marked `running` — so the user sees one single busy
 phase that simply takes longer the first time. That is deliberate: no separate
@@ -145,11 +145,12 @@ per-platform binary name only, and the real backend is corrected from the
 helper's `/inference` JSON.
 
 Why whisper.cpp, in one paragraph: a single C++ dependency with native DTW
-token timestamps for word-level timing, a portable runtime device selection
-that covers Metal, Vulkan and CPU in one binary, and self-contained long-form
-chunking (`whisper_full()` over recordings longer than 30 s) without manual
-windowing on our side. Validation data — backend-by-backend WER and real-time
-factors — lives in
+token timestamps for word-level timing and portable runtime device selection
+that covers Metal, Vulkan and CPU in one binary. `whisper_full()` does its own
+long-form windowing over anything longer than 30 s, so no manual windowing is
+required on our side — OpenScreen chunks anyway, for progress and retry
+boundaries rather than for correctness (see § Long-form recordings). Validation
+data — backend-by-backend WER and real-time factors — lives in
 [`tools/stt-eval/whispercpp-dtw-poc/REPORT.md`](../../tools/stt-eval/whispercpp-dtw-poc/REPORT.md).
 
 ### Per-platform backend
@@ -224,9 +225,14 @@ so no second pass is needed.
 
 ### Long-form recordings
 
-`whisper_full()` handles recordings longer than 30 s internally; OpenScreen
-implements no chunking of its own. The validation set exercises 130 s at WER
-0.076 with full per-word coverage (see the validation report linked above).
+`whisper_full()` handles recordings longer than 30 s internally, but OpenScreen
+splits them first anyway: `chunking.ts` cuts at the quietest frame near each
+90 s boundary, the chunks are transcribed sequentially, and their absolute
+timestamps are restored afterwards. That is not for correctness — whisper's own
+windowing would cope — but so progress stays observable and a failed chunk can
+be retried without re-running the whole recording. The validation set exercises
+130 s at WER 0.076 with full per-word coverage (see the validation report
+linked above).
 
 ### Model
 
@@ -374,20 +380,40 @@ export interface SttTranscribeResponse {
   detectedLanguage: string;
   backend: SttBackend; // "whispercpp-metal" | "whispercpp-vulkan"
                        // | "whispercpp-cuda" | "whispercpp-cpu"
+  timing?: SttTiming;  // { elapsedSec, audioSec, rtf }, summed over the chunks
 }
 ```
 
 `backend` is the device whisper.cpp actually bound at runtime — not the
-platform default `gpuDetector` would have guessed. Any consumer that wants
-to surface the backend in the UI reads it directly out of this field; the
-contract is the source of truth.
+platform default `gpuDetector` would have guessed — and `timing` is the
+helper's own measurement around `whisper_full`, summed over every chunk of
+the request. `rtf` keeps whisper.cpp's convention (wall-clock ÷ audio, so
+lower is faster); the "× real-time" figure the UI shows is its reciprocal,
+via `realtimeSpeed()` in `src/lib/ai-edition/transcription/status.ts`. It is
+optional because a staged helper binary can pre-date the field — absent, not
+zeroed, so "not reported" never renders as a measurement.
+
+For anything user-facing, though, read them off the STATUS events rather than
+this response: the response lands only once the whole recording is done,
+which is far too late to explain a wait that is already happening.
 
 The request takes a raw `Float32Array` of mono 16 kHz PCM and an optional
 ISO 639-1 `language` code; `"auto"` or absent leaves detection to Whisper.
 Status events fan out on a separate channel
 (`SttStatusEvent`, `phase: "model" | "transcribe"`) so the renderer can
 drive a "downloading model" / "transcribing" indicator without holding open
-the inference request.
+the inference request. Every landed chunk also carries `backend` and a
+running `rtf` (cumulative for the run, not for that one chunk — a per-chunk
+figure swings with how much speech a chunk holds and reads as noise), which
+is what lets the media surfaces render "Transcribing 45% · CPU · 0.9×" while
+the work is still going.
+
+`SttManager` logs the same pair per chunk through `console.*` — the channel
+the main-process ring buffer wraps, so the lines reach "Save Diagnostics",
+which the helper's own stderr does not — and warns once per run when the
+backend is `whispercpp-cpu`. That warning exists because the CPU path costs
+roughly half the throughput (median 2.07×, see the POC report) and is only
+ever reached through fallbacks that are otherwise completely silent.
 
 ## Captions
 
@@ -493,24 +519,65 @@ unit falls back to the original words (`untranslatedUnits`,
 
 Caption appearance lives in `document.legacyEditor.captions`, accessed
 through `getCaptionSettings` / `patchCaptionSettings`
-([`src/lib/ai-edition/captions/settings.ts:122,154`](../../src/lib/ai-edition/captions/settings.ts:122)).
+([`src/lib/ai-edition/captions/settings.ts:217,262`](../../src/lib/ai-edition/captions/settings.ts:217)).
 
 | Field | Default | Notes |
 |---|---|---|
 | `enabled` | `false` | Master show/hide for preview and export. |
 | `language` | `null` | `null` = the transcript's own language; any other value selects a translation layer. |
-| `fontSize` | `48` | Pixels at a 1080-high frame; `annotationFontSizePx` scales by the box actually being drawn into (`src/lib/ai-edition/annotationScale.ts`), resolution-free. |
+| `fontSize` | `48` | Pixels at a 1080-high frame; `annotationFontSizeFraction` turns that into a fraction of the box being drawn into (`src/lib/ai-edition/annotationScale.ts`), resolution-free. |
 | `fontFamily`, `fontWeight`, `color` | `Inter`, `bold`, `#ffffff` | Drawn from the same font families `src/index.css` already loads — anything else would render in the preview but fall back to a default in the export canvas. |
 | `backgroundEnabled`, `backgroundColor`, `backgroundOpacity` | `true`, `#000000`, `0.55` | When off, the text draws straight over the video with no plate. |
-| `verticalPosition` | `bottom` | `top` / `middle` / `bottom`. `captionBandRect` anchors the (always centred) band and clamps `offsetY` so it cannot leave the frame. |
-| `offsetY` | `0` | Fine nudge in % of frame height, on top of the anchor. |
+| `verticalPosition` | `bottom` | `top` / `middle` / `bottom`. `captionBandRect` anchors the band; `offsetY` nudges it from there. |
+| `offsetY` | `0` | Fine nudge in % of **frame** height, on top of the anchor. Positive moves down. |
+| `offsetX` | `0` | Fine nudge in % of **frame** width. Positive moves toward the right edge of the exported frame — frame geometry, so an RTL interface locale never mirrors it. |
 | `width` | `80` | Band width in % of frame width. |
 | `minWordsPerLine` / `maxWordsPerLine` | `2` / `7` | Line-group bounds; `groupTimedCaptionWordsIntoLines` packs inside the range, `[1, 12]` after clamp. |
 
+#### Coordinate space
+
+The percentages above are of the **output frame**, not of the screen rect the
+footage occupies. That distinction is the whole of
+[#396](https://github.com/getopenscreen/openscreen/issues/396): captions ride the
+annotation plumbing, and an annotation is measured against `layout.screenRect`
+because it is drawn on top of the video it points at. A subtitle is not — it
+belongs to the frame the viewer sees, and it has to hold still when padding
+shrinks the footage underneath it, and be free to sit in the padded area.
+
+`captionCuesToTextRegions` therefore stamps every region it builds with
+`space: "frame"`. `SceneAnnotation::anchor_rect`
+([`crates/compositor/src/scene.rs`](../../crates/compositor/src/scene.rs)) turns
+that into the reference box each backend multiplies by — `[0, 0, 1, 1]`, the
+render target itself, for frame space, and the screen rect for everything else.
+The field is absent on real annotations, so their payload and their behaviour are
+untouched. It is deliberately an `Option<String>` and not an enum: serde rejects
+an unknown unit variant, so a future value would cost an older binary the entire
+scene rather than one misplaced caption.
+
+The **font denominator follows the same box.** Flipping the rect without the
+denominator would hold a caption still while its glyphs kept shrinking with the
+padding slider, which is why both come off one `anchor` local in each backend.
+
+#### Reach
+
 `CAPTION_BAND_HEIGHT_PCT = 22`
-([`src/lib/ai-edition/captions/settings.ts:74`](../../src/lib/ai-edition/captions/settings.ts:74))
+([`src/lib/ai-edition/captions/settings.ts`](../../src/lib/ai-edition/captions/settings.ts))
 is generous enough for two wrapped lines at the default size — the
 renderers clip to it, so it is deliberately not tight.
+
+The band is a **box**; the visible caption is a strip centred inside it. All three
+rasterizers centre the text vertically, so a box stopped flush against the frame
+edge leaves its glyphs half a band short of it. `captionOffsetRange` therefore
+lets the box hang off the top or bottom by exactly its empty margin — the ink
+reaches the edge, and nothing drawn leaves the frame. The size of that margin is
+derived from `fontSize`, because the slice of the band that carries ink is: a
+200px caption fills the whole band, gets no overhang, and stays whole.
+
+`captionOffsetRange` is also what the inspector's sliders take their bounds from,
+so the reachable span and the slider span are the same span. Before #396 both
+ends were hardcoded to ±45 while the result was clamped separately, which left
+the bottom anchor honouring only −45…+3 — nearly half the slider moved the handle
+and nothing else.
 
 The Captions pane itself
 ([`src/components/ai-edition/CaptionsPane.tsx`](../../src/components/ai-edition/CaptionsPane.tsx))
@@ -535,11 +602,15 @@ sync.
 > the sole pixel source (see [preview.md](preview.md)).
 
 - **Preview and export** — `captionCuesToTextRegions`
-  ([`src/lib/ai-edition/captions/cues.ts:242`](../../src/lib/ai-edition/captions/cues.ts:242))
-  converts the virtual-ms cue list into synthetic `AnnotationRegion`s via
+  ([`src/lib/ai-edition/captions/cues.ts:254`](../../src/lib/ai-edition/captions/cues.ts:254))
+  converts the virtual-ms cue list into synthetic `CaptionTextRegion`s via
   the `captionBandRect` + `captionBackgroundCss` helpers. Those regions
   ride the existing annotation path through the scene description and onto
   the native compositor; neither surface has a caption path of its own.
+  `CaptionTextRegion` is an `AnnotationRegion` plus the `space` marker, kept
+  separate rather than widening the shared type: a frame-space band has a
+  negative `y` when it overhangs an edge, which `annotationRegionSchema`
+  bounds to 0..100. Captions are never stored, so they never meet it.
   Note that `captionBackgroundCss` emits `rgba(...)` (it recombines the
   inspector's separate colour and opacity fields), so the native colour
   parser has to accept CSS colours and not just hex — that contract is
@@ -578,10 +649,16 @@ it deletes data
   displayed it verbatim, and `transcribe.ts` wrote it onto
   `AxcutTranscript.language`. It now reports `whisper_full_lang_id()` — the
   detected language under `"auto"`, the forced one otherwise.
-- **No CUDA build.** Vulkan already accelerates NVIDIA on Windows and
-  Linux, but a dedicated CUDA build can be added later via
-  `OSC_ENABLE_CUDA=ON`; the build script and CMake already accept the
-  flag, the default matrix doesn't build it yet.
+- **CUDA not built by default.** Vulkan already accelerates NVIDIA on Windows and
+  Linux. CMake still accepts `OSC_ENABLE_CUDA=ON`, so a CUDA-enabled
+  helper can be built by passing that through to `cmake` — it installs
+  under the ordinary `whisper-stt-server` name and reports
+  `whispercpp-cuda` at runtime like any other backend. What was removed
+  is the build script's `--cuda` flag, which built a SIDE-BY-SIDE
+  `whisper-stt-server-cuda` binary: `candidateBinaryPaths()` only ever
+  looks for the plain name, so that build could not be selected at
+  runtime no matter what the host had. Nothing in the script or the CI
+  matrix turns CUDA on today.
 - **No CoreML/ANE encoder.** Metal already covers Apple GPU; CoreML is
   a future perf refinement.
 - **HTTP integration test not on CI.** `npm run test:whisper-stt` does the

@@ -9,16 +9,28 @@ on:
         description: "Release tag to publish (e.g. v1.5.0)"
         required: true
         type: string
+      dry_run:
+        description: "Exécuter tout le pipeline mais s'arrêter avant le push AUR"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
+
+env:
+  # Toute source déclarée par le PKGBUILD doit vivre sous ce préfixe.
+  # Le PKGBUILD est hébergé sur l'AUR, pas ici : son mainteneur peut le modifier
+  # à tout moment sans passer par une PR. Cette allowlist est le seul point où
+  # l'on constate qu'une source a été substituée avant de republier.
+  ALLOWED_SOURCE_PREFIX: "https://github.com/getopenscreen/openscreen/"
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     if: (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease) && vars.AUR_PACKAGE_NAME != ''
     steps:
-      - name: Resolve tag and version
+      - name: Resolve and validate tag
         id: meta
         env:
           GH_EVENT_TAG: ${{ github.event.release.tag_name }}
@@ -28,6 +40,18 @@ jobs:
           TAG="${GH_EVENT_TAG:-$INPUT_TAG}"
           if [[ -z "$TAG" ]]; then
             echo "::error::No tag resolved from release event or workflow input"
+            exit 1
+          fi
+          # Borne stricte, pour deux raisons distinctes :
+          #  1. Le tag finit dans des URLs et des réécritures de PKGBUILD.
+          #     `workflow_dispatch` accepte du texte libre — aucune règle de ref
+          #     git ne s'y applique — donc une valeur comme `v1.0|e id|` sortait
+          #     de l'expression `sed` et exécutait du shell dans le runner.
+          #  2. `pkgver` interdit le tiret côté Arch. Le filtre `prerelease` ne
+          #     couvre que l'événement `release` : un dispatch manuel sur un tag
+          #     `-rc.N` produisait un paquet invalide publié aux utilisateurs.
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Refusing tag '$TAG' — expected a stable vMAJOR.MINOR.PATCH tag"
             exit 1
           fi
           VERSION="${TAG#v}"
@@ -66,22 +90,264 @@ jobs:
           echo "name=$PACMAN_NAME" >> "$GITHUB_OUTPUT"
           echo "Found pacman asset: $PACMAN_NAME"
 
-      - name: Download and compute sha256
+      # Clone en HTTPS et non en SSH, délibérément. Tout ce qui suit manipule un
+      # PKGBUILD tiers, et `makepkg` le *source* (c'est un script bash) pour en
+      # extraire les variables. La clé de déploiement n'est donc écrite sur le
+      # disque qu'à la toute dernière étape, une fois le contenu validé : du code
+      # non revu ne s'exécute jamais dans un runner qui la détient.
+      - name: Clone AUR repository (read-only, no deploy key on disk)
         if: steps.aur_secret.outputs.configured == 'true'
-        id: sha
         env:
-          REPO: ${{ github.repository }}
-          TAG: ${{ steps.meta.outputs.tag }}
+          PACKAGE: ${{ vars.AUR_PACKAGE_NAME }}
+        run: |
+          set -euo pipefail
+          git clone "https://aur.archlinux.org/${PACKAGE}.git" aur-repo
+
+      # Garde-fou principal. `makepkg --printsrcinfo` exécute le code de premier
+      # niveau du PKGBUILD ; les corps de fonctions sont seulement définis, pas
+      # appelés. On refuse donc de lancer makepkg sur un fichier dont le préambule
+      # contient de quoi exécuter quoi que ce soit.
+      - name: Audit PKGBUILD before executing it
+        if: steps.aur_secret.outputs.configured == 'true'
+        working-directory: aur-repo
+        env:
+          PACKAGE: ${{ vars.AUR_PACKAGE_NAME }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f PKGBUILD ]]; then
+            echo "::error::No PKGBUILD in the AUR repository"
+            exit 1
+          fi
+
+          # Le préambule = tout ce qui précède la première définition de fonction.
+          PREAMBLE=$(awk '/^[a-zA-Z_]+\(\)[[:space:]]*\{/{exit} {print}' PKGBUILD)
+
+          FAILED=0
+          while IFS= read -r pattern; do
+            if grep -qE "$pattern" <<<"$PREAMBLE"; then
+              echo "::error::PKGBUILD preamble contains a code-execution construct: /$pattern/"
+              FAILED=1
+            fi
+          done <<'PATTERNS'
+          \$\(
+          `
+          [<>]\(
+          (^|[;&|[:space:]])(eval|source|curl|wget|bash|sh|python3?)[[:space:]]
+          PATTERNS
+
+          if [[ "$(grep -cE '^pkgname=' PKGBUILD)" != "1" ]]; then
+            echo "::error::Expected exactly one pkgname= declaration"
+            FAILED=1
+          fi
+          if ! grep -qE "^pkgname=${PACKAGE}\$" PKGBUILD; then
+            echo "::error::pkgname does not match AUR_PACKAGE_NAME (${PACKAGE})"
+            FAILED=1
+          fi
+
+          # Les deux réécritures qui suivent travaillent ligne à ligne. Un tableau
+          # étalé sur plusieurs lignes — formatage parfaitement légal en amont —
+          # laisserait des lignes orphelines et produirait un PKGBUILD invalide.
+          # makepkg finirait par le refuser en le sourçant, mais le diff, lui, ne
+          # verrait rien : les lignes orphelines sont inchangées. Autant refuser
+          # ici, avec un message qui dit quoi regarder.
+          if [[ "$(grep -cE '^sha256sums=' PKGBUILD)" != "1" ]]; then
+            echo "::error::Expected exactly one sha256sums= line"
+            FAILED=1
+          elif ! grep -E '^sha256sums=' PKGBUILD | grep -q ')'; then
+            echo "::error::sha256sums= spans several lines; this workflow only rewrites a single-line array"
+            FAILED=1
+          fi
+
+          if [[ "$(grep -cE '^source=\(' PKGBUILD)" != "1" ]]; then
+            echo "::error::Expected exactly one source=( declaration"
+            FAILED=1
+          elif ! awk '/^source=\(/{f=1} f&&/\)[[:space:]]*$/{found=1; exit} END{exit !found}' PKGBUILD; then
+            echo "::error::Could not find the closing paren of source=()"
+            FAILED=1
+          fi
+
+          if [[ "$FAILED" != "0" ]]; then
+            echo "::error::Refusing to run makepkg on this PKGBUILD. Review it by hand."
+            exit 1
+          fi
+          echo "PKGBUILD preamble clean."
+
+      - name: Bump version and recompute every checksum
+        if: steps.aur_secret.outputs.configured == 'true'
+        working-directory: aur-repo
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
           ASSET: ${{ steps.asset.outputs.name }}
         run: |
           set -euo pipefail
-          BASE="https://github.com/${REPO}/releases/download/${TAG}"
-          curl -fsSL --retry 3 -o /tmp/pkg.pacman "${BASE}/${ASSET}"
-          PKG_SHA=$(sha256sum /tmp/pkg.pacman | awk '{print $1}')
-          echo "sha256=$PKG_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Setup SSH for AUR
+          # awk plutôt que `sed -i "s|...|${VERSION}|"` : la valeur est passée par
+          # -v et n'est jamais reparsée comme partie de l'expression.
+          awk -v v="$VERSION" '
+            /^pkgver=/ { print "pkgver=" v; next }
+            /^pkgrel=/ { print "pkgrel=1";  next }
+            { print }
+          ' PKGBUILD > PKGBUILD.new && mv PKGBUILD.new PKGBUILD
+
+          # Les URLs du bloc source=(), une fois ${pkgver} résolu. On les
+          # retélécharge toutes pour recalculer *tous* les checksums : l'ancienne
+          # version n'en réécrivait qu'un seul, celui du .pacman. Le LICENSE est
+          # pourtant épinglé sur `raw/v${pkgver}/LICENSE`, donc sa somme devient
+          # fausse dès que ce fichier change — et makepkg échoue alors chez tous
+          # les utilisateurs, pas chez nous.
+          SRC_BLOCK=$(awk '/^source=\(/{f=1} f{print} f&&/\)[[:space:]]*$/{exit}' PKGBUILD)
+          mapfile -t URLS < <(grep -oE 'https?://[^"'"'"'[:space:]]+' <<<"$SRC_BLOCK" \
+            | sed -e "s/\\\${pkgver}/${VERSION}/g" -e "s/\\\$pkgver/${VERSION}/g")
+
+          if [[ "${#URLS[@]}" -eq 0 ]]; then
+            echo "::error::Could not parse any source URL from the PKGBUILD"
+            exit 1
+          fi
+
+          # sha256sums doit rester aligné sur source=(), élément par élément. Une
+          # entrée locale et légitime (un .install, un .desktop) ne produit aucune
+          # URL : on écrirait alors un tableau plus court, que makepkg accepte de
+          # générer et que le contrôle de diff laisse passer — pour finir en échec
+          # de vérification chez chaque utilisateur. On compte les entrées, et on
+          # refuse tout formatage qu'on ne sait pas compter plutôt que de deviner.
+          ENTRIES=$(grep -oE '"[^"]*"' <<<"$SRC_BLOCK" | wc -l)
+          RESIDUE=$(sed -e 's/"[^"]*"//g' <<<"$SRC_BLOCK" | tr -d '[:space:]')
+          if [[ "$RESIDUE" != "source=()" ]]; then
+            echo "::error::source=() holds unquoted entries; refusing to guess its shape"
+            exit 1
+          fi
+          if [[ "${#URLS[@]}" -ne "$ENTRIES" ]]; then
+            echo "::error::source=() holds ${ENTRIES} entries but ${#URLS[@]} are URLs; sha256sums would not align"
+            exit 1
+          fi
+
+          SUMS=()
+          for url in "${URLS[@]}"; do
+            # Allowlist : une source pointant ailleurs que sur notre dépôt signifie
+            # que le PKGBUILD distribue autre chose que ce que nous publions.
+            if [[ "$url" != "${ALLOWED_SOURCE_PREFIX}"* ]]; then
+              echo "::error::Source URL outside the allowlist: $url"
+              echo "::error::Expected everything under ${ALLOWED_SOURCE_PREFIX}"
+              exit 1
+            fi
+            # Le test de préfixe seul ne suffit pas : curl normalise les segments
+            # `..` AVANT d'émettre la requête, donc
+            # .../getopenscreen/openscreen/../../attacker/repo/x passe le préfixe
+            # et va chercher le dépôt d'un tiers. Vérifié : l'URL effective
+            # devient bien https://github.com/attacker/repo/x. Le pourcent est
+            # refusé au passage, %2e%2e n'étant normalisé que côté serveur.
+            if [[ "$url" == *".."* || "$url" == *"%"* || "$url" == *"@"* || "$url" == *'\'* ]]; then
+              echo "::error::Source URL contains path traversal, encoding or userinfo: $url"
+              exit 1
+            fi
+            echo "Fetching $url"
+            # -L reste nécessaire (les assets de release redirigent vers le CDN),
+            # donc on contrôle l'hôte d'arrivée plutôt que d'interdire le saut.
+            EFFECTIVE=$(curl -fsSL --retry 3 --proto '=https' \
+              -w '%{url_effective}' -o /tmp/src.bin "$url")
+            EFF_HOST=${EFFECTIVE#https://}
+            EFF_HOST=${EFF_HOST%%/*}
+            if [[ "$EFF_HOST" != "github.com" && "$EFF_HOST" != *".githubusercontent.com" ]]; then
+              echo "::error::Download redirected off GitHub: $EFFECTIVE"
+              exit 1
+            fi
+            SUMS+=("$(sha256sum /tmp/src.bin | awk '{print $1}')")
+          done
+
+          # Le .pacman référencé par le PKGBUILD doit être exactement l'asset
+          # trouvé sur la release. Sinon le paquet sert un binaire que cette
+          # release n'a pas produit.
+          if ! printf '%s\n' "${URLS[@]}" | grep -qE "/${ASSET}\$"; then
+            echo "::error::PKGBUILD does not reference the release asset ${ASSET}"
+            printf '  source: %s\n' "${URLS[@]}"
+            exit 1
+          fi
+
+          NEW_SUMS="sha256sums=($(printf "'%s' " "${SUMS[@]}" | sed 's/ $//'))"
+          awk -v line="$NEW_SUMS" '/^sha256sums=/ { print line; next } { print }' \
+            PKGBUILD > PKGBUILD.new && mv PKGBUILD.new PKGBUILD
+          echo "Recomputed ${#SUMS[@]} checksum(s)."
+
+      - name: Install makepkg
         if: steps.aur_secret.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          # Les DEUX paquets, et c'est subtil :
+          #  - `pacman-package-manager` ne livre que pacman, pacman-conf,
+          #    pacman-db-upgrade, pacman-key et repo-add — jamais makepkg. Il
+          #    s'installait pourtant sans erreur, donc le `|| apt-get install
+          #    makepkg` qui suivait était du code mort et l'étape mourait
+          #    systématiquement sur « makepkg still missing after install ».
+          #  - `makepkg` seul ne suffit pas non plus : il dépend de libalpm mais
+          #    pas du binaire `pacman`, qu'il résout par `type -P pacman` au
+          #    démarrage. Sans lui il sort sur « An unknown error has occurred ».
+          # Vérifié en local sur noble, l'image d'ubuntu-latest.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq makepkg pacman-package-manager
+          command -v makepkg >/dev/null || {
+            echo "::error::makepkg still missing after install."
+            exit 1
+          }
+          # Sans tube : `makepkg --version | head -1` prend un SIGPIPE que
+          # `pipefail` remonte en échec d'étape.
+          makepkg --version
+
+      - name: Regenerate .SRCINFO
+        if: steps.aur_secret.outputs.configured == 'true'
+        working-directory: aur-repo
+        run: |
+          set -euo pipefail
+          makepkg --printsrcinfo > .SRCINFO
+          echo "Updated .SRCINFO"
+
+      # Dernière barrière avant le push : on republie sous notre automatisation,
+      # donc on vérifie que le commit ne porte que le bump attendu. Toute autre
+      # ligne touchée (package(), depends, source, install…) veut dire que le
+      # PKGBUILD a changé en amont et mérite un œil humain avant publication.
+      - name: Verify the diff contains only the expected bump
+        if: steps.aur_secret.outputs.configured == 'true'
+        working-directory: aur-repo
+        run: |
+          set -euo pipefail
+
+          UNEXPECTED=$(git diff --unified=0 -- PKGBUILD \
+            | grep -E '^[+-]' \
+            | grep -vE '^(\+\+\+|---)' \
+            | grep -vE '^[+-](pkgver=|pkgrel=|sha256sums=)' || true)
+
+          {
+            echo "### AUR PKGBUILD diff"
+            echo '```diff'
+            git diff -- PKGBUILD .SRCINFO || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ -n "$UNEXPECTED" ]]; then
+            echo "::error::PKGBUILD changed beyond pkgver/pkgrel/sha256sums:"
+            echo "$UNEXPECTED"
+            echo "::error::Refusing to publish. Review the upstream PKGBUILD by hand."
+            exit 1
+          fi
+          echo "Diff limited to the expected bump."
+
+      - name: Dry run — stop before touching the AUR
+        if: steps.aur_secret.outputs.configured == 'true' && inputs.dry_run
+        working-directory: aur-repo
+        run: |
+          set -euo pipefail
+          echo "Mode dry_run : tout a été validé, rien ne sera poussé."
+          echo "Ce qui aurait été committé :"
+          git --no-pager diff --stat -- PKGBUILD .SRCINFO
+          {
+            echo "### Dry run — aucun push"
+            echo "Le pipeline est allé jusqu'au bout des validations."
+            echo "La clé de déploiement n'a pas été écrite sur le disque."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # La clé n'apparaît sur le disque qu'ici, une fois tout le contenu validé.
+      - name: Setup SSH for AUR
+        if: steps.aur_secret.outputs.configured == 'true' && !inputs.dry_run
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_KNOWN_HOSTS: ${{ vars.AUR_KNOWN_HOSTS }}
@@ -100,57 +366,56 @@ jobs:
             HostName aur.archlinux.org
             User aur
             IdentityFile ~/.ssh/aur_key
+            # Offer this key and nothing else. Without it ssh walks whatever
+            # else it can find first, and AUR can refuse on a key that is not
+            # the one being diagnosed -- so the probe below would be reporting
+            # on a different identity than the push. It is also the standard
+            # cause of "permission denied" against AUR with more than one key.
+            IdentitiesOnly yes
             StrictHostKeyChecking yes
             UserKnownHostsFile ~/.ssh/aur_known_hosts
           SSHCONF
 
-      - name: Clone AUR repository
-        if: steps.aur_secret.outputs.configured == 'true'
+      # "Permission denied (publickey)" is the same message for three different
+      # problems: a secret that is not a readable key, a key nobody registered
+      # on AUR, and a key registered to an account that does not maintain this
+      # package. v1.9.1, v1.9.2 and v1.9.5 all died here and none said which.
+      #
+      # This narrows it by elimination rather than proving the last one. A
+      # public key is public, so printing it costs nothing and lets what CI
+      # presents be compared against what is on the account. `help` is the
+      # documented way to test AUR auth without pushing: if it answers, the key
+      # parses AND is registered, so only authorization for ${PACKAGE} is left.
+      # Its reply also enumerates the commands the account may run, which is
+      # where to look for a repo-listing one if this needs to go further.
+      - name: Identify the key AUR sees
+        if: steps.aur_secret.outputs.configured == 'true' && !inputs.dry_run
+        continue-on-error: true
         env:
           PACKAGE: ${{ vars.AUR_PACKAGE_NAME }}
         run: |
-          set -euo pipefail
-          git clone "ssh://aur@aur.archlinux.org/${PACKAGE}.git" aur-repo
-
-      - name: Install makepkg
-        if: steps.aur_secret.outputs.configured == 'true'
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq pacman-package-manager 2>/dev/null || \
-            sudo apt-get install -y -qq makepkg 2>/dev/null || {
-              echo "::error::Unable to install makepkg. Install pacman-package-manager or makepkg."
-              exit 1
-            }
-          command -v makepkg >/dev/null || {
-            echo "::error::makepkg still missing after install."
-            exit 1
-          }
-
-      - name: Update PKGBUILD and .SRCINFO
-        if: steps.aur_secret.outputs.configured == 'true'
-        working-directory: aur-repo
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
-          SHA256: ${{ steps.sha.outputs.sha256 }}
-          ASSET: ${{ steps.asset.outputs.name }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ steps.meta.outputs.tag }}
-        run: |
-          set -euo pipefail
-          sed -i -E "s|^pkgver=.*|pkgver=${VERSION}|" PKGBUILD
-          sed -i -E "s|^pkgrel=.*|pkgrel=1|" PKGBUILD
-          sed -i -E "s|^sha256sums=\('[^']*'|sha256sums=('${SHA256}'|" PKGBUILD
-          makepkg --printsrcinfo > .SRCINFO
-          echo "Updated .SRCINFO"
+          if ! ssh-keygen -y -f ~/.ssh/aur_key > /tmp/aur_key.pub 2>/tmp/aur_key.err; then
+            echo "::error::AUR_SSH_PRIVATE_KEY is not a readable private key: $(cat /tmp/aur_key.err)"
+            exit 0
+          fi
+          echo "Public key this workflow presents:"
+          cat /tmp/aur_key.pub
+          ssh-keygen -lf /tmp/aur_key.pub || true
+          echo "--- what AUR says about it (auth only; NOT write access to ${PACKAGE}) ---"
+          # Bounded: a diagnostic must never be the thing that hangs a release.
+          # Exits non-zero by design; the message is the payload.
+          timeout -k 5 30 ssh -o BatchMode=yes -o ConnectTimeout=10 \
+            aur@aur.archlinux.org help 2>&1 || true
 
       - name: Commit and push
-        if: steps.aur_secret.outputs.configured == 'true'
+        if: steps.aur_secret.outputs.configured == 'true' && !inputs.dry_run
         working-directory: aur-repo
         env:
           VERSION: ${{ steps.meta.outputs.version }}
+          PACKAGE: ${{ vars.AUR_PACKAGE_NAME }}
         run: |
           set -euo pipefail
+          git remote set-url --push origin "ssh://aur@aur.archlinux.org/${PACKAGE}.git"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add PKGBUILD .SRCINFO

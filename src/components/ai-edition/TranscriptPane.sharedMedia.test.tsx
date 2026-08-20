@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // The rendered half of the shared-media cue bug. `findCueWordId` returning the right
 // answer is not enough on its own: the cue id is compared against every rendered word,
 // so while `data-word-id` carried the bare `word.id`, the SAME transcript word projected

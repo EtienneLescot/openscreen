@@ -1,11 +1,17 @@
-// Context-budget heuristic + message-history compaction. Mirrors axcut's
-// "compact-on-overflow" approach in spirit (sliding window with summary),
-// but kept simple: char-based token estimate + a manual Compact button.
+// Message-history compaction: fold the older half of a conversation into one
+// "Earlier context" summary. The summary is an LLM call (no tools, plain text)
+// using the active provider.
 //
-// Chat-service calls `shouldCompact` before each new turn; when the heuristic
-// trips, `compactHistory` summarizes the older half of the conversation and
-// returns a new history list to feed the model. The summary itself is an
-// LLM call (no tools, plain text → JSON summary) using the active provider.
+// ponytail: compaction is MANUAL ONLY, and there is no overflow heuristic.
+// There used to be one — compact automatically once the history passed 70% of
+// `DEFAULT_BUDGET_TOKENS = 80_000`. That 80k was invented: the app has no
+// per-model context window, so the number could not be right for anything. It
+// was far too small for Gemini's 1M window (throwing away context at 5% fill,
+// and paying a blocking summarizer call to do it) and would be too large for
+// something small. It is the same mistake `getTranscript` made with its 800
+// segments, and it gets the same answer: a guessed limit is deleted, not
+// retuned. Until the app can ask a provider for the real window, the only
+// honest trigger is a person deciding they want it, which is the button.
 
 import type { AiEditionChatMessage } from "../../src/native/contracts";
 
@@ -22,8 +28,10 @@ export interface CompactionBudget {
 }
 
 /**
- * Default budget. Real providers run 100k+ contexts, but we leave headroom
- * for tool-call payload + system prompt. Adjust per provider if needed.
+ * The denominator of the context pill in the chat panel, and nothing else —
+ * no code branches on it any more. It is still a made-up number, so it must
+ * never regain a decision: read it as "the conversation is about this big",
+ * not as "you are this close to a limit".
  */
 export const DEFAULT_BUDGET_TOKENS = 80_000;
 
@@ -31,11 +39,13 @@ export const DEFAULT_BUDGET_TOKENS = 80_000;
 export function estimateHistoryTokens(messages: AiEditionChatMessage[]): number {
 	let chars = 0;
 	for (const m of messages) {
-		// 4 chars per token + 4 tokens per message overhead (rough).
+		// Content only. `chat-service` maps the history to `{role, content}` before it
+		// sends it, so a message's tool-call names and summaries never reach the model --
+		// billing them here inflated the pill with text nobody pays for. The two
+		// compaction comparisons are unaffected: both sides were counted the same way.
 		chars += m.content.length;
-		for (const tc of m.toolCalls ?? [])
-			chars += (tc.name?.length ?? 0) + (tc.summary?.length ?? 0) + 16;
 	}
+	// 4 chars per token (rough).
 	return Math.ceil(chars / CHARS_PER_TOKEN);
 }
 
@@ -52,25 +62,22 @@ export function budgetSnapshot(
 }
 
 /**
- * Decide whether the chat history should be compacted before the next turn.
- * Returns the boundary index where compaction should cut (older half).
+ * Where a compaction should cut, or `null` when there is nothing to fold.
+ *
+ * The only refusal left is "fewer than 4 messages": that is not a guess about
+ * anyone's context window, it is that summarizing one exchange into a summary
+ * cannot make it shorter. Everything else is the caller's decision.
  */
-export function shouldCompact(
-	messages: AiEditionChatMessage[],
-	budgetTokens: number = DEFAULT_BUDGET_TOKENS,
-	thresholdRatio = 0.7,
-): { compact: boolean; splitIndex: number } | null {
+export function compactionSplitIndex(messages: AiEditionChatMessage[]): number | null {
 	if (messages.length < 4) return null;
-	const budget = budgetSnapshot(messages, budgetTokens);
-	if (budget.ratio < thresholdRatio) return null;
 
 	// Split roughly in half. Snap to a user-message boundary so the model
 	// doesn't see a half-turn after compaction.
 	const split = Math.floor(messages.length / 2);
 	for (let i = split; i < messages.length; i += 1) {
-		if (messages[i]?.role === "user") return { compact: true, splitIndex: i };
+		if (messages[i]?.role === "user") return i;
 	}
-	return { compact: true, splitIndex: split };
+	return split;
 }
 
 /**

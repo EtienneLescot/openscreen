@@ -47,6 +47,7 @@ import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview
 import {
 	computeCameraFullscreenRect,
 	computeCompositeLayout,
+	resolveWebcamLayoutPreset,
 	type WebcamCompositeLayout,
 } from "@/lib/compositeLayout";
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
@@ -85,9 +86,14 @@ interface PreviewCanvasProps {
 	onLoadedMetadata: (sec: number, assetId: string) => void;
 	onVideoElement: (el: HTMLVideoElement | null) => void;
 	currentTimeSec: number;
-	/** Receives the id of the asset whose <video> failed — the caller decides per
-	 *  source whether anything is left to render (see Preview.tsx). */
-	onVideoError?: (assetId: string) => void;
+	/** Receives the id of the asset whose <video> gave up, plus the MediaError
+	 *  detail for the card. Transient failures are reloaded inside VirtualPreview
+	 *  and never reach here (see Preview.tsx). */
+	onVideoError?: (assetId: string, detail: string) => void;
+	/** The mounted source decoded a frame again — see VirtualPreview. */
+	onVideoRecovered?: (assetId: string) => void;
+	/** Bumped to force a reload of the mounted source (the Retry button). */
+	retryToken?: number;
 }
 
 // ponytail: fallback only — used until the active source's <video> reports
@@ -214,8 +220,22 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	);
 	const cropRegion: CropRegion = activeClip?.cropRegion ?? DEFAULT_CROP_REGION;
 
+	// P4 — the layout preset is global (one panel for the whole timeline) but the camera
+	// is per clip, so the layout has to be resolved against the clip under the playhead.
+	const activeCameraTrack = useMemo(
+		() => resolveActiveCameraTrack(assets, props.clips, props.currentTimeSec),
+		[assets, props.clips, props.currentTimeSec],
+	);
+	const activeClipHasCamera = Boolean(activeCameraTrack?.visible && activeCameraTrack.sourcePath);
+
 	const layout = useMemo(() => {
-		const preset = settings.webcamLayoutPreset as WebcamLayoutPreset;
+		// A clip with no camera lays out as "no-webcam", whatever the panel says. Hiding
+		// only the webcam slot is not enough: the block presets size the SCREEN off the
+		// block, so the screen stayed squeezed into its half with nothing beside it.
+		const preset = resolveWebcamLayoutPreset(
+			settings.webcamLayoutPreset as WebcamLayoutPreset,
+			activeClipHasCamera,
+		);
 		const mask = settings.webcamMaskShape as WebcamMaskShape;
 		// ponytail: padding shrinks the available content area for ALL layouts
 		// (PiP/dual/stack) so the screen doesn't fill the canvas edge-to-edge.
@@ -240,7 +260,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			canvasSize: frameSize,
 			maxContentSize,
 			screenSize: croppedScreenSize,
-			webcamSize: settings.webcamLayoutPreset === "no-webcam" ? null : WEBCAM_SOURCE_SIZE,
+			webcamSize: preset === "no-webcam" ? null : WEBCAM_SOURCE_SIZE,
 			layoutPreset: preset,
 			webcamSizePreset: settings.webcamSizePreset,
 			// ponytail: PiP webcam is grabbable. Pass through the user's
@@ -254,6 +274,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		frameSize,
 		screenNativeSize,
 		cropRegion,
+		activeClipHasCamera,
 		settings.webcamLayoutPreset,
 		settings.webcamMaskShape,
 		settings.webcamSizePreset,
@@ -293,17 +314,9 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		() => buildWebcamStyle(effectiveLayout, settings, frameSize),
 		[effectiveLayout, settings, frameSize],
 	);
-	// P4 — the layout math above only knows the user's chosen preset
-	// (PiP/dual/stack), not whether the clip under the playhead actually has a
-	// camera. Without this, an empty (but styled — shadow, background) webcam
-	// slot stays visible for clips with no camera attached.
-	const activeCameraTrack = useMemo(
-		() => resolveActiveCameraTrack(assets, props.clips, props.currentTimeSec),
-		[assets, props.clips, props.currentTimeSec],
-	);
-	const showWebcamSlot = Boolean(
-		layout?.webcamRect && activeCameraTrack?.visible && activeCameraTrack.sourcePath,
-	);
+	// `layout` already resolves to "no-webcam" (hence `webcamRect: null`) for a
+	// camera-less clip, so this is belt-and-braces rather than the only guard.
+	const showWebcamSlot = Boolean(layout?.webcamRect && activeClipHasCamera);
 	const [isPlaying, setIsPlaying] = useState(false);
 	const handleVideoElement = useMemo(() => props.onVideoElement, [props.onVideoElement]);
 	// L'élément `<video>` lui-même n'est plus retenu : il ne servait qu'à échantillonner des pixels

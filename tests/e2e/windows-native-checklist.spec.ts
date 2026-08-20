@@ -324,4 +324,96 @@ test.describe("Windows native checklist smoke tests", () => {
 			}
 		}
 	});
+
+	// The HUD must reach click-through by *asking* for it from the renderer, never
+	// by being born that way: a window born input-transparent whose renderer never
+	// mounts can never be clicked again, which is what bricked the app in issue #266.
+	// Both halves matter — that nothing asks during construction, and that the
+	// renderer still does after mount.
+	//
+	// The second assertion also pins `forward` OFF. It used to be the only route back
+	// out of click-through, via a global WH_MOUSE_LL hook that Windows can refuse or
+	// silently revoke — which is how #385 reproduced a dead HUD on a build that already
+	// carried the #266 fix. The way out is now the "hud-overlay-cursor" poll in
+	// electron/windows.ts, and asking for `forward` again would restore the dependency
+	// without restoring the need.
+	//
+	// Note what this test therefore cannot do, and what no test in this file can.
+	// Only a real OS cursor move drives a WH_MOUSE_LL hook; CDP-injected input
+	// arrives below the OS hit-test, so Playwright's own `.click()` on a HUD testid
+	// — above, and in the source-selector step of the checklist test — reaches the
+	// DOM handler whether or not click-through is installed, or even working. Those
+	// clicks assert renderer wiring and nothing else. The failure #266 actually shipped
+	// (a painted, permanently inert HUD) is invisible to injected input by construction,
+	// so it belongs on the manual computer-use checklist and cannot be regression-tested
+	// here. Do not read a green run as evidence that the HUD is clickable.
+	test("the HUD asks for click-through instead of being born with it", async () => {
+		const app = await launchApp();
+
+		try {
+			const hudWindow = await app.firstWindow({ timeout: 60_000 });
+			await hudWindow.waitForLoadState("domcontentloaded");
+			await dismissLanguagePrompt(hudWindow);
+
+			// A second window keeps the window list non-empty while the HUD is torn
+			// down below — emptying it fires window-all-closed, which quits the app.
+			await hudWindow.getByTestId("launch-source-selector-button").click();
+			await app.waitForEvent("window", {
+				predicate: (w) => w.url().includes("windowType=source-selector"),
+				timeout: 15_000,
+			});
+
+			// Recreate the HUD through the app's own path (second-instance →
+			// showMainWindow → createHudOverlayWindow) with the native call taped.
+			// Nothing awaits between the tape going on and the snapshot coming off,
+			// so no IPC from the renderer can slip into it: what comes back is
+			// construction, and construction only.
+			const duringConstruction = await app.evaluate(({ app: electronApp, BrowserWindow }) => {
+				const tape: unknown[][] = [];
+				const original = BrowserWindow.prototype.setIgnoreMouseEvents;
+				globalThis.__hudTape = tape;
+				globalThis.__hudSetIgnoreMouseEvents = original;
+				BrowserWindow.prototype.setIgnoreMouseEvents = function patched(
+					this: InstanceType<typeof BrowserWindow>,
+					...args: Parameters<typeof original>
+				) {
+					tape.push(args);
+					return original.apply(this, args);
+				};
+
+				BrowserWindow.getAllWindows()
+					.find((w) => w.webContents.getURL().includes("windowType=hud-overlay"))
+					?.destroy();
+				electronApp.emit("second-instance");
+
+				return tape.slice();
+			});
+
+			expect(duringConstruction).toEqual([]);
+
+			// And the renderer does ask, once it has mounted.
+			await expect
+				.poll(() => app.evaluate(() => globalThis.__hudTape ?? []), { timeout: 20_000 })
+				.toContainEqual([true]);
+		} finally {
+			await app.evaluate(({ BrowserWindow }) => {
+				const original = globalThis.__hudSetIgnoreMouseEvents;
+				if (original) {
+					BrowserWindow.prototype.setIgnoreMouseEvents = original;
+				}
+				globalThis.__hudTape = undefined;
+				globalThis.__hudSetIgnoreMouseEvents = undefined;
+			});
+			await closeApp(app);
+		}
+	});
 });
+
+declare global {
+	// Set inside the main process by the click-through test above, read back by a
+	// second evaluate — the only way to observe calls that land between two of them.
+	var __hudTape: unknown[][] | undefined;
+	var __hudSetIgnoreMouseEvents:
+		| ((ignore: boolean, options?: { forward?: boolean }) => void)
+		| undefined;
+}

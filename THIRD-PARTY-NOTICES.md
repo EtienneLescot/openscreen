@@ -26,11 +26,11 @@ distributed by their own registries, not redistributed inside our binaries.
   verifies this before vendoring — it reads `ffmpeg -L`, `-buildconf` and
   `-encoders` and refuses any binary that reports otherwise.
 - **Upstream binaries**: BtbN/FFmpeg-Builds, release
-  `autobuild-2026-07-30-13-32`, the `*-lgpl-shared-8.1` assets. Pinned by
+  `autobuild-2026-07-31-14-10`, the `*-lgpl-shared-8.1` assets. Pinned by
   SHA-256 in `scripts/fetch-ffmpeg.mjs`; the digests there identify the exact
   artifacts we ship.
-  <https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-07-30-13-32>
-- **Corresponding source**: FFmpeg n8.1.2, commit `cfa62de001`, from
+  <https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-07-31-14-10>
+- **Corresponding source**: FFmpeg n8.1.2, commit `9b6c8969e0`, from
   <https://github.com/FFmpeg/FFmpeg>. The build configuration and scripts that
   produced these exact binaries are published at
   <https://github.com/BtbN/FFmpeg-Builds>.
@@ -48,6 +48,20 @@ distributed by their own registries, not redistributed inside our binaries.
   revision is in `electron/native/whisper-stt/CMakeLists.txt`.
 - The speech model (`ggml-*.bin`) is **not** bundled — it is downloaded into the
   user's data directory on first use by `electron/stt/modelManager.ts`.
+
+## Microsoft OpenMP runtime — `vcomp140.dll` (Windows only)
+
+- **Component**: `resources/electron/native/bin/win32-x64/vcomp140.dll`.
+- **License**: redistributable under the Microsoft Visual C++ Redistributable
+  terms accompanying Visual Studio; the copy shipped is taken from the
+  `VC\Redist\MSVC\<version>\x64\Microsoft.VC<nnn>.OpenMP\` directory of the
+  Visual Studio installation that builds the release, never from `System32`.
+- **Why it ships**: the ggml backends above are compiled with OpenMP and import
+  it. It is **not** part of Windows, so without it `whisper-stt-server` dies in
+  the loader before `main()` on any machine that has no Visual C++
+  Redistributable, and transcription and captions fail with no usable error.
+  Staged by `scripts/stage-vcomp-runtime.mjs`; `scripts/before-pack.cjs` refuses
+  to package if it is missing while anything still imports it.
 
 ## PipeWire — headers (Linux only)
 

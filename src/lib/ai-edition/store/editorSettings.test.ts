@@ -39,7 +39,7 @@ describe("getEditorSettings", () => {
 		const snap = getEditorSettings(baseDoc);
 		expect(snap.wallpaper).toBe(DEFAULT_EDITOR_SETTINGS.wallpaper);
 		expect(snap.aspectRatio).toBe("16:9");
-		expect(snap.shadowIntensity).toBe(0);
+		expect(snap.shadowIntensity).toBe(DEFAULT_EDITOR_SETTINGS.shadowIntensity);
 		expect(snap.showBlur).toBe(false);
 		expect(snap.webcamLayoutPreset).toBe(DEFAULT_WEBCAM_LAYOUT_PRESET);
 		expect(snap.webcamMaskShape).toBe(DEFAULT_WEBCAM_MASK_SHAPE);
@@ -91,7 +91,7 @@ describe("patchEditorSettings", () => {
 		const next = patchEditorSettings(baseDoc, { showBlur: true });
 		const snap = getEditorSettings(next);
 		expect(snap.showBlur).toBe(true);
-		expect(snap.shadowIntensity).toBe(0);
+		expect(snap.shadowIntensity).toBe(DEFAULT_EDITOR_SETTINGS.shadowIntensity);
 		expect(snap.cropRegion).toEqual(DEFAULT_CROP_REGION);
 	});
 
@@ -142,5 +142,18 @@ describe("patchEditorSettings", () => {
 		};
 		const snap = getEditorSettings(doc);
 		expect(snap.webcamPosition).toEqual({ cx: 1, cy: 0 });
+	});
+
+	it("preserves a non-zero crop at the bottom-right edge", () => {
+		const doc: AxcutDocument = {
+			...baseDoc,
+			legacyEditor: { webcamCropRegion: { x: 1, y: 1, width: 0.5, height: 0.5 } },
+		};
+
+		const crop = getEditorSettings(doc).webcamCropRegion;
+		expect(crop.x).toBeCloseTo(0.99);
+		expect(crop.y).toBeCloseTo(0.99);
+		expect(crop.width).toBeCloseTo(0.01);
+		expect(crop.height).toBeCloseTo(0.01);
 	});
 });

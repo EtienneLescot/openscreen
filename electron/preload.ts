@@ -80,6 +80,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	setHudOverlayIgnoreMouseEvents: (ignore: boolean) => {
 		ipcRenderer.send("hud-overlay-ignore-mouse-events", ignore);
 	},
+	onHudOverlayCursor: (callback: (x: number, y: number) => void) => {
+		const listener = (_e: Electron.IpcRendererEvent, x: number, y: number) => callback(x, y);
+		ipcRenderer.on("hud-overlay-cursor", listener);
+		return () => ipcRenderer.removeListener("hud-overlay-cursor", listener);
+	},
 	beginHudOverlayDrag: () => {
 		ipcRenderer.send("hud-overlay-drag-start");
 	},
@@ -209,6 +214,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		recordingId: number;
 		webcam: { fileName: string; videoData: ArrayBuffer };
 		cursorCaptureMode?: import("../src/lib/recordingSession").CursorCaptureMode;
+		durationMs?: number;
 		webcamOffsetMs?: number;
 	}) => {
 		return ipcRenderer.invoke("attach-native-linux-webcam-recording", payload);
@@ -242,6 +248,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		recordingId: number;
 		webcam: { fileName: string; videoData: ArrayBuffer };
 		cursorCaptureMode?: import("../src/lib/recordingSession").CursorCaptureMode;
+		durationMs?: number;
 		webcamOffsetMs?: number;
 	}) => {
 		return ipcRenderer.invoke("attach-native-mac-webcam-recording", payload);

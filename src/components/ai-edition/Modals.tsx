@@ -9,6 +9,7 @@ import {
 	Plus,
 	RefreshCw,
 	RotateCcw,
+	Trash2,
 	Triangle,
 	X,
 } from "lucide-react";
@@ -133,6 +134,7 @@ interface OpenProjectModalProps extends BaseModalProps {
 	projects: ProjectItem[];
 	activeProjectId: string | null;
 	onSelect: (id: string) => void;
+	onDelete: (id: string) => void;
 	onBrowse: () => void;
 }
 
@@ -142,10 +144,19 @@ export function OpenProjectModal({
 	projects,
 	activeProjectId,
 	onSelect,
+	onDelete,
 	onBrowse,
 }: OpenProjectModalProps) {
 	const t = useScopedT("editor");
+	const tc = useScopedT("common");
 	const [query, setQuery] = useState("");
+	// Deleting a project cannot be undone, so the trash icon arms an inline
+	// confirm on its own row instead of deleting on the first click. One row at a
+	// time, and closing the dialog disarms it.
+	const [confirmId, setConfirmId] = useState<string | null>(null);
+	useEffect(() => {
+		if (!open) setConfirmId(null);
+	}, [open]);
 	const filtered = projects.filter((p) => p.title.toLowerCase().includes(query.toLowerCase()));
 	return (
 		<ModalShell
@@ -197,74 +208,142 @@ export function OpenProjectModal({
 				) : (
 					filtered.map((p) => {
 						const isActive = p.id === activeProjectId;
-						return (
-							<button
-								type="button"
-								key={p.id}
-								onClick={() => {
-									onSelect(p.id);
-									onClose();
-								}}
-								style={{
-									display: "grid",
-									gridTemplateColumns: "36px 1fr auto",
-									alignItems: "center",
-									gap: 12,
-									padding: "10px 12px",
-									border: "none",
-									borderRadius: "var(--r-md)",
-									background: isActive ? "var(--accent-wash)" : "transparent",
-									boxShadow: isActive ? "inset 0 0 0 1px var(--accent)" : "none",
-									color: "var(--fg)",
-									cursor: "pointer",
-									textAlign: "left",
-									font: "inherit",
-								}}
-							>
+						if (p.id === confirmId) {
+							return (
 								<div
+									key={p.id}
 									style={{
-										width: 36,
-										height: 36,
-										borderRadius: "var(--r-sm)",
-										background: "linear-gradient(135deg, var(--brand-lo), var(--brand))",
-										display: "grid",
-										placeItems: "center",
-										color: "var(--accent-on)",
+										display: "flex",
+										alignItems: "center",
+										gap: 8,
+										padding: "10px 12px",
+										borderRadius: "var(--r-md)",
+										background: "var(--danger-soft)",
+										boxShadow: "inset 0 0 0 1px var(--danger-hatch)",
 									}}
 								>
-									<FolderOpen size={18} />
+									<div style={{ minWidth: 0, flex: 1 }}>
+										<div
+											style={{
+												font: "500 13px/1.3 var(--font-body)",
+												overflow: "hidden",
+												textOverflow: "ellipsis",
+												whiteSpace: "nowrap",
+											}}
+										>
+											{p.title}
+										</div>
+										<div
+											style={{
+												font: "400 11px/1.4 var(--font-body)",
+												color: "var(--muted)",
+												marginTop: 2,
+											}}
+										>
+											{t("openProjectDialog.confirmDelete")}
+										</div>
+									</div>
+									<button
+										type="button"
+										className={`${styles.btn} ${styles.btnSecondary}`}
+										onClick={() => setConfirmId(null)}
+									>
+										{tc("actions.cancel")}
+									</button>
+									<button
+										type="button"
+										className={`${styles.btn} ${styles.dangerBtn}`}
+										onClick={() => {
+											setConfirmId(null);
+											onDelete(p.id);
+										}}
+									>
+										<Trash2 size={14} />
+										{tc("actions.delete")}
+									</button>
 								</div>
-								<div style={{ minWidth: 0 }}>
+							);
+						}
+						return (
+							<div key={p.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+								<button
+									type="button"
+									onClick={() => {
+										onSelect(p.id);
+										onClose();
+									}}
+									style={{
+										flex: 1,
+										minWidth: 0,
+										display: "grid",
+										gridTemplateColumns: "36px 1fr auto",
+										alignItems: "center",
+										gap: 12,
+										padding: "10px 12px",
+										border: "none",
+										borderRadius: "var(--r-md)",
+										background: isActive ? "var(--accent-wash)" : "transparent",
+										boxShadow: isActive ? "inset 0 0 0 1px var(--accent)" : "none",
+										color: "var(--fg)",
+										cursor: "pointer",
+										textAlign: "left",
+										font: "inherit",
+									}}
+								>
 									<div
 										style={{
-											font: "500 13px/1.3 var(--font-body)",
-											overflow: "hidden",
-											textOverflow: "ellipsis",
+											width: 36,
+											height: 36,
+											borderRadius: "var(--r-sm)",
+											background: "linear-gradient(135deg, var(--brand-lo), var(--brand))",
+											display: "grid",
+											placeItems: "center",
+											color: "var(--accent-on)",
+										}}
+									>
+										<FolderOpen size={18} />
+									</div>
+									<div style={{ minWidth: 0 }}>
+										<div
+											style={{
+												font: "500 13px/1.3 var(--font-body)",
+												overflow: "hidden",
+												textOverflow: "ellipsis",
+												whiteSpace: "nowrap",
+											}}
+										>
+											{p.title}
+										</div>
+										<div
+											style={{
+												font: "400 11px/1.4 var(--font-mono)",
+												color: "var(--muted)",
+												marginTop: 2,
+											}}
+										>
+											id: {p.id.slice(0, 8)}
+										</div>
+									</div>
+									<span
+										style={{
+											font: "400 11px/1 var(--font-mono)",
+											color: "var(--meta)",
 											whiteSpace: "nowrap",
 										}}
 									>
-										{p.title}
-									</div>
-									<div
-										style={{
-											font: "400 11px/1.4 var(--font-mono)",
-											color: "var(--muted)",
-											marginTop: 2,
-										}}
-									>
-										id: {p.id.slice(0, 8)}
-									</div>
-								</div>
-								<span
-									style={{
-										font: "400 11px/1 var(--font-mono)",
-										color: "var(--meta)",
-										whiteSpace: "nowrap",
-									}}
+										{new Date(p.updatedAt).toLocaleDateString()}
+									</span>
+								</button>
+								<button
+									type="button"
+									className={styles.iconBtn}
+									onClick={() => setConfirmId(p.id)}
+									title={t("openProjectDialog.deleteProject")}
+									aria-label={t("openProjectDialog.deleteProject")}
 								>
-									{new Date(p.updatedAt).toLocaleDateString()}
-								</span>
-							</button>
+									<Trash2 size={14} />
+								</button>
+							</div>
 						);
 					})
 				)}
@@ -1512,7 +1591,13 @@ export function SourceTranscriptModal({
 		const v = videoRef.current;
 		if (!v) return;
 		if (v.paused) {
-			void v.play();
+			// Same catch as VirtualPreview's: `play()` rejects on the autoplay policy
+			// or when a new load interrupts it, and `isPlaying` is driven by the
+			// element's own play/pause events — so a rejection leaves nothing to
+			// reconcile, it just must not escape as an unhandled rejection.
+			void v.play().catch(() => {
+				// swallow: rejection just means playback never started
+			});
 		} else {
 			v.pause();
 		}
@@ -1528,7 +1613,11 @@ export function SourceTranscriptModal({
 	const requestFullscreen = () => {
 		const v = videoRef.current;
 		if (!v) return;
-		void v.requestFullscreen?.();
+		// Rejects when the gesture isn't accepted or the element can't go fullscreen.
+		// Nothing to reconcile — the document stays as it was.
+		void v.requestFullscreen?.().catch(() => {
+			// swallow: rejection just means we stayed windowed
+		});
 	};
 
 	return (

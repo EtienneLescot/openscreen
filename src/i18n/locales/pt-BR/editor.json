@@ -42,6 +42,8 @@
 		"cameraDenied": "Acesso à câmera negado. A gravação continuará sem webcam.",
 		"cameraDisconnected": "Webcam desconectada.",
 		"cameraNotFound": "Câmera não encontrada.",
+		"cameraCaptureUnavailable": "Não foi possível abrir a câmera. Gravando sem ela.",
+		"microphoneDefaulted": "Não foi possível identificar o microfone escolhido. Gravando a entrada padrão.",
 		"permissionDenied": "Permissão de gravação negada. Por favor, permita a gravação de tela.",
 		"accessibilityAllowAndRetry": "Permita o acesso de Acessibilidade para o OpenScreen e pressione gravar novamente para iniciar a contagem regressiva.",
 		"selectSource": "Por favor, selecione uma fonte para gravar"
@@ -132,6 +134,8 @@
 		"emptyHint": "Ainda não há mídia — importe uma gravação para começar.",
 		"importMedia": "Importar mídia",
 		"added": "{{label}} adicionado",
+		"addToTimeline": "Adicionar à linha do tempo",
+		"addedToTimeline": "{{label}} adicionado à linha do tempo",
 		"sourceTranscript": "Transcrição da Fonte",
 		"close": "Fechar",
 		"transcriptReady": "Transcrição pronta",
@@ -146,6 +150,7 @@
 		"transcribingEllipsis": "Transcrevendo…",
 		"pendingTranscription": "Transcrição pendente",
 		"transcriptionFailed": "Falha na transcrição",
+		"cpuBackendHint": "Executando na CPU — cerca de 2× mais lento do que na GPU",
 		"noTranscript": "Sem transcrição",
 		"generating": "Gerando",
 		"generationFailed": "Falha na geração",
@@ -235,6 +240,8 @@
 		"selectModelFailed": "Não foi possível selecionar o modelo",
 		"providerSettings": "Configurações do provedor…",
 		"applyEditsFailed": "Não foi possível aplicar as edições do agente",
+		"agentEditConflict": "As edições do agente não foram aplicadas porque o projeto mudou durante o processamento.",
+		"applyAnyway": "Aplicar mesmo assim",
 		"chatFailed": "Falha no chat",
 		"rewindFailed": "Falha ao rebobinar",
 		"rewoundSuccess": "Rebobinado até o início dessa mensagem",
@@ -281,7 +288,7 @@
 		"sendTitle": "Enviar (Enter)",
 		"send": "Enviar",
 		"rewindConfirmTitle": "Rebobinar até aqui?",
-		"rewindConfirmBody": "As edições do agente e as interações seguintes a partir deste ponto serão desfeitas. O projeto, a conversa e o estado do agente serão restaurados.",
+		"rewindConfirmBody": "As edições do agente e as interações seguintes a partir deste ponto serão desfeitas. O projeto, a conversa e o estado do agente serão restaurados. As edições que você fez desde então também serão substituídas.",
 		"rewindConfirm": "Rebobinar",
 		"configureModel": "Configurar modelo de IA",
 		"historyDialog": {
@@ -311,7 +318,9 @@
 		"noMatches": "Nenhum projeto corresponde a \"{{query}}\".",
 		"navigateHint": "para navegar ·",
 		"openHint": "para abrir",
-		"browseFiles": "Procurar arquivos…"
+		"browseFiles": "Procurar arquivos…",
+		"deleteProject": "Excluir projeto",
+		"confirmDelete": "Excluir este projeto? Suas gravações são mantidas."
 	},
 	"editClipDialog": {
 		"title": "Editar clipe",
@@ -359,7 +368,13 @@
 	},
 	"preview": {
 		"videoPreview": "Pré-visualização do vídeo",
-		"webcamPreview": "Pré-visualização da webcam (arraste para reposicionar)"
+		"webcamPreview": "Pré-visualização da webcam (arraste para reposicionar)",
+		"mediaError": {
+			"title": "Pré-visualização interrompida",
+			"description": "Não foi possível decodificar o vídeo. O arquivo pode estar danificado, ainda sendo gravado ou não estar mais onde o projeto espera — seu projeto continua intacto.",
+			"retry": "Tentar novamente",
+			"detail": "Detalhes: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "Anotação",

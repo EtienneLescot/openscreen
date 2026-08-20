@@ -80,6 +80,13 @@ function resolveFfmpegDir() {
 }
 
 /**
+ * Debian/Ubuntu multiarch triplet for the host. Hardcoding the x86_64 one made
+ * both libclang and gcc's stddef.h invisible on arm64, where the same libraries
+ * live under /usr/lib/aarch64-linux-gnu.
+ */
+const MULTIARCH = process.arch === "arm64" ? "aarch64-linux-gnu" : "x86_64-linux-gnu";
+
+/**
  * bindgen loads libclang at runtime. crates/.cargo/config.toml hardcodes a
  * Windows LLVM path, so on Linux we locate it ourselves rather than making
  * every contributor export LIBCLANG_PATH by hand.
@@ -88,7 +95,7 @@ function resolveLibclangDir() {
 	if (process.env.LIBCLANG_PATH) {
 		return process.env.LIBCLANG_PATH;
 	}
-	const roots = ["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib"];
+	const roots = [`/usr/lib/${MULTIARCH}`, "/usr/lib64", "/usr/lib"];
 	for (const llvmRoot of ["/usr/lib"]) {
 		if (!fs.existsSync(llvmRoot)) continue;
 		for (const entry of fs.readdirSync(llvmRoot)) {
@@ -111,25 +118,15 @@ function resolveLibclangDir() {
 	return found;
 }
 
-/**
- * On distributions that ship only `libclang.so.1` (no -dev package) clang also
- * cannot find its own `stddef.h`. Point it at gcc's copy in that case rather
- * than making the caller discover it.
- */
-function bindgenClangArgs() {
-	if (process.env.BINDGEN_EXTRA_CLANG_ARGS) {
-		return process.env.BINDGEN_EXTRA_CLANG_ARGS;
-	}
-	const gccIncludeRoot = "/usr/lib/gcc/x86_64-linux-gnu";
-	if (!fs.existsSync(gccIncludeRoot)) {
-		return "";
-	}
-	const withStddef = fs
-		.readdirSync(gccIncludeRoot)
-		.map((version) => path.join(gccIncludeRoot, version, "include"))
-		.filter((dir) => fs.existsSync(path.join(dir, "stddef.h")));
-	return withStddef.length > 0 ? `-I${withStddef[0]}` : "";
-}
+// No BINDGEN_EXTRA_CLANG_ARGS is set below, on purpose. On distributions shipping only
+// `libclang.so.1` (no -dev package) clang cannot find its own `stddef.h`, and this
+// script used to paper over that by pointing bindgen at gcc's copies. That only ever
+// covered the build that goes through here: `cargo check -p openscreen-compositor` on a
+// stock Ubuntu still died on `'stddef.h' file not found`, x86_64 included. The fallback
+// now lives in crates/compositor/build.rs (`freestanding_header_args()`), which covers
+// both entry points — and, being the only claimant, cannot lose to a worse guess made
+// here. Setting the variable again would suppress it, since build.rs defers to a
+// caller-supplied value.
 
 /**
  * Prefix applied to every ffmpeg dynamic symbol. Anything unique works; this one is
@@ -282,7 +279,6 @@ await run("cargo", ["build", "-p", "compositor-view-napi", "--release"], {
 		FFMPEG_DIR: stagedFfmpegDir,
 		OPENSCREEN_FFMPEG_SYMBOL_PREFIX: SYMBOL_PREFIX,
 		LIBCLANG_PATH: resolveLibclangDir(),
-		BINDGEN_EXTRA_CLANG_ARGS: bindgenClangArgs(),
 		// `$ORIGIN` is resolved by the dynamic linker against the directory the
 		// .node itself lives in, so the ffmpeg copies below are found wherever the
 		// app is installed. Single-quoted on purpose: the shell must not expand it.

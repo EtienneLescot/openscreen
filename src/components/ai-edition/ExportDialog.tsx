@@ -20,6 +20,7 @@ import {
 } from "@/lib/ai-edition/document/outputFormat";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
+import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import {
 	type ExportFormat,
@@ -62,24 +63,21 @@ function buildNativeClipList(document: AxcutDocument): CompositorClipInput[] {
 		if (!asset?.originalPath) {
 			return [];
 		}
-		const cam = asset.cameraTrack;
+		const camera = assetCameraSource(asset);
 		// sourceEndSec is optional in the schema (unknown until probed) — fall back through
 		// the single canonical precedence used by every consumer (clip.probe → asset.duration
 		// → timeline-length guess). See `resolveClipSourceEndSec` for the full order.
 		const sourceEndSec = resolveClipSourceEndSec(clip, asset);
-		// ponytail: matches the rule in `buildSceneDescription` — screen recordings
-		// from this app always carry a decodable audio track (the webcam path
-		// never does), so the only clips that reach this branch already have audio.
-		// If a per-asset audio-probe flag lands on the schema later, swap to
-		// `Boolean(asset.audio)` here too and keep these two derivation paths in
-		// lock-step with `buildSceneDescription` in src/native/sceneDescription.ts.
+		// ponytail: `hasAudio` stays optimistic for the same reason as in
+		// `buildSceneDescription` — nothing populates `asset.audio` yet, and the
+		// native side degrades cleanly on a stream-less file.
 		return [
 			{
 				screenPath: asset.originalPath,
-				webcamPath: cam?.sourcePath ?? asset.originalPath,
+				webcamPath: camera.path,
 				sourceStartSec: clip.sourceStartSec,
 				sourceEndSec,
-				webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+				webcamOffsetSec: camera.offsetSec,
 				hasAudio: true,
 			},
 		];
@@ -316,7 +314,12 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 					action: {
 						label: t("exportDialog.showInFolder"),
 						onClick: () => {
-							void window.electronAPI?.revealInFolder?.(pickedPath);
+							// `revealInFolder` is a bare ipcRenderer.invoke, so it rejects when
+							// the main handler throws. The export already succeeded — failing to
+							// open the folder is not worth a second toast, but it is worth a line.
+							void window.electronAPI?.revealInFolder?.(pickedPath).catch((err) => {
+								console.warn("[export] failed to reveal the file in its folder:", err);
+							});
 						},
 					},
 				});
@@ -567,7 +570,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 							</div>
 						</div>
 						<div className={styles.paneRow} style={{ margin: 0 }}>
-							<span className="label">{t("exportDialog.loopGif")}</span>
+							<span className={styles.label}>{t("exportDialog.loopGif")}</span>
 							<button
 								type="button"
 								className={`${styles.toggle} ${gifLoop ? styles.isOn : ""}`}

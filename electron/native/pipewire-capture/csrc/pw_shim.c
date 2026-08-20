@@ -29,10 +29,13 @@
 
 #include <dlfcn.h>
 #include <errno.h>
+#include <linux/dma-buf.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include <pipewire/pipewire.h>
@@ -43,9 +46,51 @@
 
 #include "pw_shim.h"
 
+/* Defined next to osc_map_dmabuf; used earlier, at format negotiation. */
+static int osc_debug_enabled(void);
+
 #include "pw_internal.h"
 
 #define OSC_PW_SONAME "libpipewire-0.3.so.0"
+
+/*
+ * DRM format modifiers, spelled out rather than pulled from <drm/drm_fourcc.h>.
+ *
+ * They are ABI constants — LINEAR has been 0 and INVALID has been
+ * ((1ULL << 56) - 1) since the modifier API was introduced — and taking the
+ * header would put libdrm-dev in the build path of every contributor and CI
+ * runner for two integers. That is the same trade the dlopen above makes.
+ *
+ * These two are the ONLY modifiers this helper advertises, and the reason is
+ * osc_map_dmabuf(): a linear or implicit buffer can be read through a plain
+ * mmap of the dmabuf fd, while a tiled or compression-enabled one cannot — its
+ * bytes are not in raster order, so handing them to the encoder would produce a
+ * scrambled recording rather than an error. Anything else needs a real GPU
+ * import (EGL/gbm), which this helper deliberately does not link.
+ */
+#define OSC_DRM_FORMAT_MOD_LINEAR 0ULL
+#define OSC_DRM_FORMAT_MOD_INVALID 0x00ffffffffffffffULL
+
+/*
+ * Mapped dmabuf fds, keyed by fd.
+ *
+ * PipeWire reuses a small, fixed buffer set for the life of a negotiation, so
+ * the mapping is established once per buffer in add_buffer and torn down in
+ * remove_buffer. Doing it per frame instead would mean an mmap and an munmap of
+ * a full framebuffer 60 times a second.
+ *
+ * The bound matches the ceiling we ask for in SPA_PARAM_BUFFERS_buffers
+ * (CHOICE_RANGE_Int(4, 2, 16)), with headroom; a compositor handing back more
+ * than it was offered is a protocol violation, but the table refuses to overflow
+ * rather than trusting that.
+ */
+#define OSC_MAX_DMABUF_MAPS 32
+
+struct osc_dmabuf_map {
+    int fd;
+    void *ptr;
+    size_t len;
+};
 
 /*
  * Cursor metadata budget: `struct spa_meta_cursor` + `struct spa_meta_bitmap` +
@@ -134,6 +179,14 @@ struct osc_pw_session {
     struct spa_video_info_raw format;
     int buffer_info_reports;
     int want_video;
+    /* Set from the negotiated format's SPA_VIDEO_FLAG_MODIFIER, which is what
+     * decides whether buffers arrive as dmabuf fds or shared memory. */
+    int uses_dmabuf;
+    struct osc_dmabuf_map dmabuf_maps[OSC_MAX_DMABUF_MAPS];
+    /* fd whose DMA_BUF_SYNC_START has not been closed by its END yet, or -1.
+     * The bracket has to span the on_frame callback, not just osc_read_frame,
+     * because the callback is where the pixels are actually read. */
+    int dmabuf_sync_fd;
 };
 
 struct osc_pw_audio_api osc_audio_api;
@@ -311,6 +364,77 @@ static const struct spa_pod *osc_build_enum_format(struct spa_pod_builder *build
 }
 
 /*
+ * The same format, plus SPA_FORMAT_VIDEO_modifier — and the modifier property is
+ * the entire reason this second object exists.
+ *
+ * WHAT BREAKS WITHOUT IT. A compositor that can only produce DMA-BUF publishes
+ * its EnumFormat with `VideoModifier` carrying SPA_POD_PROP_FLAG_MANDATORY.
+ * spa_pod_filter treats a mandatory producer property that the consumer does not
+ * mention as fatal for the WHOLE object:
+ *
+ *     else if ((p1->flags & SPA_POD_PROP_FLAG_MANDATORY) != 0)
+ *             res = -EINVAL;                     (spa/pod/filter.h:352)
+ *
+ * so every one of its formats is filtered out and the link dies reporting
+ * "no more input formats" — issue #287, niri on Arch, reproduced against the
+ * vendored headers by osc_pw_enum_format_accepts_dmabuf_producer() below.
+ * mutter is not affected because it publishes shm pods too, several of them
+ * without any modifier at all.
+ *
+ * ORDER IS THE SAFETY PROPERTY. osc_pw_start sends the shm object FIRST and this
+ * one second, and pw_stream keeps that as a preference order. A compositor that
+ * can do shared memory therefore still negotiates shared memory, exactly as
+ * before this object existed — GNOME and KDE are bit-for-bit unchanged. Only a
+ * producer with nothing to offer but DMA-BUF reaches this fallback.
+ *
+ * NO SPA_POD_PROP_FLAG_DONT_FIXATE. That flag asks the producer to leave the
+ * modifier unresolved so the consumer can pick one after querying its GPU, and
+ * it obliges us to renegotiate with a fixated format. We advertise exactly two
+ * modifiers, both of which are readable through a plain mmap and neither of
+ * which needs a GPU query, so letting the producer fixate is both simpler and
+ * one fewer round trip that can go wrong.
+ */
+static const struct spa_pod *osc_build_enum_format_dmabuf(struct spa_pod_builder *builder)
+{
+    struct spa_pod_frame object_frame;
+    struct spa_pod_frame choice_frame;
+
+    spa_pod_builder_push_object(builder, &object_frame, SPA_TYPE_OBJECT_Format,
+                                SPA_PARAM_EnumFormat);
+    spa_pod_builder_add(builder, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
+                        SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+                        SPA_FORMAT_VIDEO_format,
+                        SPA_POD_CHOICE_ENUM_Id(5, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_BGRx,
+                                               SPA_VIDEO_FORMAT_RGBx, SPA_VIDEO_FORMAT_BGRA,
+                                               SPA_VIDEO_FORMAT_RGBA),
+                        0);
+
+    /* Built with the explicit prop/choice calls rather than the varargs macro
+     * because the macro has no way to set a property flag, and MANDATORY here is
+     * what tells the producer we genuinely handle modifiers rather than merely
+     * tolerating the key. */
+    spa_pod_builder_prop(builder, SPA_FORMAT_VIDEO_modifier, SPA_POD_PROP_FLAG_MANDATORY);
+    spa_pod_builder_push_choice(builder, &choice_frame, SPA_CHOICE_Enum, 0);
+    /* Default first, then every alternative — the default is repeated, same
+     * idiom as SPA_POD_CHOICE_ENUM_Id above. */
+    spa_pod_builder_long(builder, (int64_t)OSC_DRM_FORMAT_MOD_LINEAR);
+    spa_pod_builder_long(builder, (int64_t)OSC_DRM_FORMAT_MOD_LINEAR);
+    spa_pod_builder_long(builder, (int64_t)OSC_DRM_FORMAT_MOD_INVALID);
+    spa_pod_builder_pop(builder, &choice_frame);
+
+    spa_pod_builder_add(
+        builder, SPA_FORMAT_VIDEO_size,
+        SPA_POD_CHOICE_RANGE_Rectangle(&SPA_RECTANGLE(1920, 1080), &SPA_RECTANGLE(1, 1),
+                                       &SPA_RECTANGLE(16384, 16384)),
+        SPA_FORMAT_VIDEO_framerate,
+        SPA_POD_CHOICE_RANGE_Fraction(&SPA_FRACTION(30, 1), &SPA_FRACTION(0, 1),
+                                      &SPA_FRACTION(240, 1)),
+        0);
+
+    return spa_pod_builder_pop(builder, &object_frame);
+}
+
+/*
  * The consumer side of the SPA_META_Cursor negotiation, in one place so the
  * bytes a unit test checks are literally the bytes sent on the wire.
  */
@@ -372,6 +496,62 @@ int osc_pw_cursor_meta_accepts_producer_size(uint32_t width, uint32_t height)
     return spa_pod_filter(&result, &filtered, producer, consumer) < 0 ? 0 : 1;
 }
 
+/*
+ * Reproduces issue #287 offline: run spa_pod_filter against a producer object
+ * shaped the way a DMA-BUF-only compositor publishes one, and report whether our
+ * EnumFormat survives it.
+ *
+ * `with_modifier` selects which of our two objects to test, so the test can
+ * assert both halves of the contract — the shm object must still be rejected by
+ * such a producer (otherwise the second object would be pointless and the
+ * ordering argument in osc_build_enum_format_dmabuf would be untested), and the
+ * dmabuf object must be accepted.
+ *
+ * The producer's modifier property carries SPA_POD_PROP_FLAG_MANDATORY, which is
+ * what niri emits (src/screencasting/pw_utils.rs) and what turns a missing
+ * consumer property into -EINVAL for the entire object rather than a merely
+ * narrower intersection.
+ */
+int osc_pw_enum_format_accepts_dmabuf_producer(int with_modifier, int64_t producer_modifier)
+{
+    uint8_t ours_storage[1024];
+    uint8_t theirs_storage[1024];
+    uint8_t result_storage[2048];
+    struct spa_pod_builder ours = SPA_POD_BUILDER_INIT(ours_storage, sizeof(ours_storage));
+    struct spa_pod_builder theirs = SPA_POD_BUILDER_INIT(theirs_storage, sizeof(theirs_storage));
+    struct spa_pod_builder result = SPA_POD_BUILDER_INIT(result_storage, sizeof(result_storage));
+    struct spa_pod_frame object_frame;
+    struct spa_pod_frame choice_frame;
+    struct spa_pod *filtered = NULL;
+    const struct spa_pod *consumer;
+    const struct spa_pod *producer;
+
+    consumer = with_modifier ? osc_build_enum_format_dmabuf(&ours) : osc_build_enum_format(&ours);
+    if (consumer == NULL) {
+        return -1;
+    }
+
+    spa_pod_builder_push_object(&theirs, &object_frame, SPA_TYPE_OBJECT_Format,
+                                SPA_PARAM_EnumFormat);
+    spa_pod_builder_add(&theirs, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
+                        SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+                        SPA_FORMAT_VIDEO_format, SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx), 0);
+    spa_pod_builder_prop(&theirs, SPA_FORMAT_VIDEO_modifier, SPA_POD_PROP_FLAG_MANDATORY);
+    spa_pod_builder_push_choice(&theirs, &choice_frame, SPA_CHOICE_Enum, 0);
+    spa_pod_builder_long(&theirs, producer_modifier);
+    spa_pod_builder_long(&theirs, producer_modifier);
+    spa_pod_builder_pop(&theirs, &choice_frame);
+    spa_pod_builder_add(&theirs, SPA_FORMAT_VIDEO_size, SPA_POD_Rectangle(&SPA_RECTANGLE(2560, 1080)),
+                        SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&SPA_FRACTION(59978, 1000)),
+                        0);
+    producer = spa_pod_builder_pop(&theirs, &object_frame);
+    if (producer == NULL) {
+        return -1;
+    }
+
+    return spa_pod_filter(&result, &filtered, producer, consumer) < 0 ? 0 : 1;
+}
+
 static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_pod *param)
 {
     struct osc_pw_session *session = userdata;
@@ -404,26 +584,53 @@ static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_p
     }
 
     /*
+     * The negotiated format tells us which kind of buffer to ask for. A format
+     * carrying SPA_VIDEO_FLAG_MODIFIER came from the DMA-BUF EnumFormat object,
+     * so the producer is going to hand out dmabuf fds and asking for shared
+     * memory would intersect to nothing.
+     */
+    session->uses_dmabuf = (session->format.flags & SPA_VIDEO_FLAG_MODIFIER) != 0;
+
+    if (osc_debug_enabled()) {
+        fprintf(stderr, "[osc-dmabuf] negotiated %ux%u uses_dmabuf=%d modifier=0x%llx\n",
+                session->format.size.width, session->format.size.height, session->uses_dmabuf,
+                (unsigned long long)session->format.modifier);
+    }
+
+    /*
      * No `size`/`stride` constraint is published: the compositor's own choice is
      * fine, and osc_read_frame validates whatever comes back.
      *
      * The dataType set differs by mode, and the difference is load-bearing.
      * Cursor-only advertises everything, so that on_buffer_info reports what the
-     * compositor would PREFER rather than what we forced it into. Video mode
-     * advertises shared memory only: pw_stream does not map DmaBuf even with
-     * PW_STREAM_FLAG_MAP_BUFFERS, so accepting one would leave `datas[0].data`
-     * NULL and produce a recording of nothing. Importing DmaBuf properly is its
-     * own piece of work; until then, not offering it is what makes the
-     * compositor fall back to memfd instead.
+     * compositor would PREFER rather than what we forced it into.
+     *
+     * Video mode follows the format that was just negotiated. It used to
+     * advertise shared memory unconditionally, on the reasoning that "not
+     * offering DmaBuf is what makes the compositor fall back to memfd" — true of
+     * mutter and KWin, false of a compositor with no memfd path at all, which is
+     * the case of issue #287. Against those, this is the second wall behind the
+     * EnumFormat modifier: fixing only the format would move the failure from
+     * "no more input formats" to an empty buffer intersection.
+     *
+     * Not "every Smithay/wlroots compositor", as this comment used to claim:
+     * sway 1.9 through xdg-desktop-portal-wlr negotiates WL_SHM here and takes
+     * the memfd path like GNOME does (measured 2026-08-09). Reproducing the
+     * DMA-BUF path locally needs OPENSCREEN_PIPEWIRE_FORCE_DMABUF below.
+     *
+     * pw_stream still does not map dmabuf itself even with
+     * PW_STREAM_FLAG_MAP_BUFFERS, so `datas[0].data` stays NULL and the mapping
+     * is ours to do — see osc_map_dmabuf and osc_on_add_buffer.
      */
     params[0] = spa_pod_builder_add_object(
         &builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers, SPA_PARAM_BUFFERS_buffers,
         SPA_POD_CHOICE_RANGE_Int(4, 2, 16), SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(1),
         SPA_PARAM_BUFFERS_dataType,
-        SPA_POD_CHOICE_FLAGS_Int(session->want_video
-                                     ? ((1 << SPA_DATA_MemPtr) | (1 << SPA_DATA_MemFd))
-                                     : ((1 << SPA_DATA_MemPtr) | (1 << SPA_DATA_MemFd) |
-                                        (1 << SPA_DATA_DmaBuf))));
+        SPA_POD_CHOICE_FLAGS_Int(
+            session->want_video
+                ? (session->uses_dmabuf ? (1 << SPA_DATA_DmaBuf)
+                                        : ((1 << SPA_DATA_MemPtr) | (1 << SPA_DATA_MemFd)))
+                : ((1 << SPA_DATA_MemPtr) | (1 << SPA_DATA_MemFd) | (1 << SPA_DATA_DmaBuf))));
 
     params[1] = spa_pod_builder_add_object(
         &builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta, SPA_PARAM_META_type,
@@ -446,6 +653,220 @@ static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_p
     session->buffer_info_reports = 0;
 
     api.stream_update_params(session->stream, params, SPA_N_ELEMENTS(params));
+}
+
+/*
+ * Map a dmabuf fd for CPU reads.
+ *
+ * This is the cheap import, and it is only correct because of what
+ * osc_build_enum_format_dmabuf advertises. A dmabuf whose modifier is LINEAR or
+ * INVALID is in raster order, so the bytes behind a plain mmap are the bytes the
+ * encoder wants. A tiled or DCC-compressed buffer is not, and reading one this
+ * way yields a scrambled image rather than a failure — which is exactly why
+ * those modifiers are never offered. The real alternative is an EGL/gbm import,
+ * a GPU context and two more link-time dependencies in a helper that
+ * deliberately dlopens everything.
+ *
+ * mmap on a dmabuf fd is optional for the exporter (it requires a .mmap in the
+ * dma_buf_ops), so this can legitimately fail on some drivers. It returns NULL
+ * and the caller turns that into a visible error rather than a black recording.
+ */
+/*
+ * Opt-in tracing for the DMA-BUF path, off unless OPENSCREEN_PIPEWIRE_DEBUG is
+ * set. This path never runs under mutter, which hands out memfd, so on a GNOME
+ * machine there is otherwise no way to tell whether a capture exercised it at
+ * all — the helper reports the same success either way.
+ */
+static int osc_debug_enabled(void)
+{
+    static int cached = -1;
+
+    if (cached < 0) {
+        const char *value = getenv("OPENSCREEN_PIPEWIRE_DEBUG");
+        cached = (value != NULL && value[0] != '\0') ? 1 : 0;
+    }
+    return cached;
+}
+
+/*
+ * `why` receives a caller-reportable reason on failure. The three ways this can
+ * fail are not interchangeable, and conflating them sent the one real
+ * investigation of this path looking at the GPU driver for an hour.
+ */
+static void *osc_map_dmabuf(int fd, size_t *len, const char **why)
+{
+    void *ptr;
+
+    if (fd < 0) {
+        *why = "the compositor handed us a DMA-BUF plane with no file descriptor";
+        return NULL;
+    }
+    /*
+     * A DmaBuf plane legitimately carries maxsize = 0: the size of a dmabuf is a
+     * property of the exporting buffer, not of the SPA descriptor, and wlroots
+     * leaves it unset. Every dmabuf fd is seekable to its own length, which is
+     * the documented way to recover it. Without this the mmap was never even
+     * attempted and the failure was reported as "this driver does not allow CPU
+     * mapping" — blaming the GPU for a size the producer simply had not filled in.
+     */
+    if (*len == 0) {
+        off_t probed = lseek(fd, 0, SEEK_END);
+        if (probed > 0) {
+            *len = (size_t)probed;
+            if (osc_debug_enabled()) {
+                fprintf(stderr, "[osc-dmabuf] maxsize=0, recovered %zu bytes via lseek\n", *len);
+            }
+        }
+    }
+    if (*len == 0) {
+        if (osc_debug_enabled()) {
+            fprintf(stderr, "[osc-dmabuf] refused before mmap: fd=%d, size unknown\n", fd);
+        }
+        *why = "the DMA-BUF plane reports no size and its fd is not seekable";
+        return NULL;
+    }
+    ptr = mmap(NULL, *len, PROT_READ, MAP_SHARED, fd, 0);
+    if (osc_debug_enabled()) {
+        if (ptr == MAP_FAILED) {
+            fprintf(stderr, "[osc-dmabuf] mmap fd=%d len=%zu FAILED errno=%d (%s)\n", fd, *len,
+                    errno, strerror(errno));
+        } else {
+            fprintf(stderr, "[osc-dmabuf] mmap fd=%d len=%zu ok\n", fd, *len);
+        }
+    }
+    if (ptr == MAP_FAILED) {
+        *why = "this driver does not allow CPU mapping of the capture buffer";
+    }
+    return ptr == MAP_FAILED ? NULL : ptr;
+}
+
+static void *osc_find_dmabuf_map(struct osc_pw_session *session, int fd)
+{
+    size_t i;
+
+    for (i = 0; i < OSC_MAX_DMABUF_MAPS; i++) {
+        if (session->dmabuf_maps[i].ptr != NULL && session->dmabuf_maps[i].fd == fd) {
+            return session->dmabuf_maps[i].ptr;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * CPU access to a dmabuf has to be bracketed by DMA_BUF_IOCTL_SYNC, or the
+ * driver is under no obligation to have flushed the GPU's writes into the
+ * mapping. Skipping it does not fail — it tears, intermittently, which is the
+ * worst way for this to be wrong.
+ *
+ * Best-effort by design: a driver that does not implement the ioctl returns
+ * ENOTTY, and refusing the frame over that would be worse than reading it.
+ */
+static void osc_dmabuf_sync(int fd, int start)
+{
+    struct dma_buf_sync sync;
+
+    if (fd < 0) {
+        return;
+    }
+    memset(&sync, 0, sizeof(sync));
+    sync.flags = (start ? DMA_BUF_SYNC_START : DMA_BUF_SYNC_END) | DMA_BUF_SYNC_READ;
+    while (ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) == -1 && errno == EINTR) {
+        /* retry */
+    }
+}
+
+static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
+{
+    struct osc_pw_session *session = userdata;
+    const char *why = "unknown reason";
+    struct spa_data *data;
+    size_t maplen;
+    size_t i;
+
+    if (pw_buf == NULL || pw_buf->buffer == NULL || pw_buf->buffer->n_datas < 1) {
+        return;
+    }
+    data = &pw_buf->buffer->datas[0];
+    if (data->type != SPA_DATA_DmaBuf) {
+        return;
+    }
+
+    for (i = 0; i < OSC_MAX_DMABUF_MAPS; i++) {
+        if (session->dmabuf_maps[i].ptr != NULL) {
+            continue;
+        }
+        /* `maxsize` is the producer's statement of how much of the fd belongs to
+         * this buffer, and mapping exactly that keeps the bounds checks in
+         * osc_read_frame meaningful. It is legitimately 0 for a DMA-BUF plane —
+         * wlroots leaves it unset — in which case osc_map_dmabuf recovers the
+         * real length from the fd and reports it back here. Storing the
+         * producer's 0 instead would leave every later bounds check comparing
+         * against an empty mapping. */
+        maplen = data->maxsize;
+        session->dmabuf_maps[i].ptr = osc_map_dmabuf((int)data->fd, &maplen, &why);
+        if (session->dmabuf_maps[i].ptr == NULL) {
+            /* Reported once, through the buffer-info channel that already exists
+             * for describing what the compositor handed us — a mapping failure
+             * here means no frames at all, and silence would read as a hang.
+             *
+             * The reason is carried up rather than assumed: this used to say the
+             * driver refused CPU mapping no matter what actually went wrong, and
+             * that message sent the one real investigation of this path looking
+             * at the GPU for a size the compositor had simply left at 0. */
+            if (session->callbacks.on_buffer_info != NULL &&
+                session->buffer_info_reports < OSC_BUFFER_INFO_REPORTS) {
+                char detail[256];
+
+                snprintf(detail, sizeof(detail), "dmabuf import failed: %s; capture cannot proceed",
+                         why);
+                session->buffer_info_reports++;
+                session->callbacks.on_buffer_info(session->callbacks.user, data->type,
+                                                  pw_buf->buffer->n_datas, 0, 0, detail);
+            }
+            return;
+        }
+        session->dmabuf_maps[i].fd = (int)data->fd;
+        session->dmabuf_maps[i].len = maplen;
+        return;
+    }
+}
+
+static void osc_on_remove_buffer(void *userdata, struct pw_buffer *pw_buf)
+{
+    struct osc_pw_session *session = userdata;
+    struct spa_data *data;
+    size_t i;
+
+    if (pw_buf == NULL || pw_buf->buffer == NULL || pw_buf->buffer->n_datas < 1) {
+        return;
+    }
+    data = &pw_buf->buffer->datas[0];
+    for (i = 0; i < OSC_MAX_DMABUF_MAPS; i++) {
+        if (session->dmabuf_maps[i].ptr == NULL ||
+            session->dmabuf_maps[i].fd != (int)data->fd) {
+            continue;
+        }
+        munmap(session->dmabuf_maps[i].ptr, session->dmabuf_maps[i].len);
+        session->dmabuf_maps[i].ptr = NULL;
+        session->dmabuf_maps[i].fd = -1;
+        session->dmabuf_maps[i].len = 0;
+        return;
+    }
+}
+
+static void osc_unmap_all_dmabufs(struct osc_pw_session *session)
+{
+    size_t i;
+
+    for (i = 0; i < OSC_MAX_DMABUF_MAPS; i++) {
+        if (session->dmabuf_maps[i].ptr == NULL) {
+            continue;
+        }
+        munmap(session->dmabuf_maps[i].ptr, session->dmabuf_maps[i].len);
+        session->dmabuf_maps[i].ptr = NULL;
+        session->dmabuf_maps[i].fd = -1;
+        session->dmabuf_maps[i].len = 0;
+    }
 }
 
 static void osc_on_state_changed(void *userdata, enum pw_stream_state old,
@@ -565,6 +986,8 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
     int32_t stride;
     int32_t height;
 
+    const uint8_t *base;
+
     memset(out, 0, sizeof(*out));
     out->pts_ns = -1;
 
@@ -572,15 +995,29 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
         return 0;
     }
     data = &buffer->datas[0];
-    /*
-     * NULL means the buffer was never mapped: either this is a cursor-only
-     * session (no PW_STREAM_FLAG_MAP_BUFFERS) or the compositor handed us a
-     * DmaBuf, which pw_stream does not map even with the flag. Neither is an
-     * error here — the format negotiation excludes DmaBuf when want_video is
-     * set, so in practice this is the cursor-only case.
-     */
-    if (data->data == NULL || data->chunk == NULL) {
+    if (data->chunk == NULL) {
         return 0;
+    }
+
+    if (data->type == SPA_DATA_DmaBuf) {
+        /*
+         * pw_stream never populates `datas[0].data` for a dmabuf, so the base
+         * pointer comes from our own mapping, established once per buffer in
+         * osc_on_add_buffer. A miss means the mmap failed there — reported at
+         * that point — and there is nothing readable here.
+         */
+        base = osc_find_dmabuf_map(session, (int)data->fd);
+        if (base == NULL) {
+            return 0;
+        }
+    } else if (data->data == NULL) {
+        /*
+         * NULL on a shared-memory buffer means it was never mapped, which is the
+         * cursor-only case: those sessions do not set PW_STREAM_FLAG_MAP_BUFFERS.
+         */
+        return 0;
+    } else {
+        base = data->data;
     }
     /* A zero-sized chunk is how a compositor ships a cursor update with no new
      * frame attached. Not an error, just not a frame. */
@@ -602,7 +1039,17 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
         return 0;
     }
 
-    out->data = SPA_PTROFF(data->data, offset, const uint8_t);
+    /*
+     * Open the CPU-access window on a dmabuf and leave it open: the pixels are
+     * read by the on_frame callback, not here, so the matching SYNC_END lives in
+     * osc_inspect_buffer once that callback has returned.
+     */
+    if (data->type == SPA_DATA_DmaBuf) {
+        session->dmabuf_sync_fd = (int)data->fd;
+        osc_dmabuf_sync(session->dmabuf_sync_fd, 1);
+    }
+
+    out->data = SPA_PTROFF(base, offset, const uint8_t);
     out->size = size;
     out->stride = stride;
     out->width = (int32_t)session->format.size.width;
@@ -736,8 +1183,16 @@ static void osc_inspect_buffer(struct osc_pw_session *session, const struct spa_
     if (session->want_video && session->callbacks.on_frame != NULL) {
         struct osc_pw_frame frame;
 
+        session->dmabuf_sync_fd = -1;
         if (osc_read_frame(session, buffer, &frame)) {
             session->callbacks.on_frame(session->callbacks.user, &frame);
+        }
+        /* Closes the DMA_BUF_SYNC_START osc_read_frame opened, if any. Placed
+         * here rather than inside it because the callback above is what actually
+         * touches the pixels, and the window has to cover the read. */
+        if (session->dmabuf_sync_fd >= 0) {
+            osc_dmabuf_sync(session->dmabuf_sync_fd, 0);
+            session->dmabuf_sync_fd = -1;
         }
     }
 }
@@ -778,6 +1233,8 @@ static const struct pw_stream_events osc_stream_events = {
     PW_VERSION_STREAM_EVENTS,
     .state_changed = osc_on_state_changed,
     .param_changed = osc_on_param_changed,
+    .add_buffer = osc_on_add_buffer,
+    .remove_buffer = osc_on_remove_buffer,
     .process = osc_on_process,
 };
 
@@ -786,9 +1243,11 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
                                     size_t err_len)
 {
     struct osc_pw_session *session;
-    uint8_t buffer[1024];
+    /* Two EnumFormat objects now, and the DMA-BUF one carries an extra choice —
+     * sized so a builder overflow stays impossible rather than merely unlikely. */
+    uint8_t buffer[2048];
     struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-    const struct spa_pod *params[1];
+    const struct spa_pod *params[2];
     int result;
 
     if (api_handle == NULL) {
@@ -805,6 +1264,10 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
     }
     session->callbacks = *callbacks;
     session->want_video = want_video;
+    /* calloc zeroes these, and 0 is a legitimate fd — so the "nothing pending"
+     * sentinel has to be set explicitly. dmabuf_maps is keyed on ptr != NULL,
+     * which calloc does get right. */
+    session->dmabuf_sync_fd = -1;
 
     session->loop = api.thread_loop_new("openscreen-pipewire", NULL);
     if (session->loop == NULL) {
@@ -847,9 +1310,34 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
     api.stream_add_listener(session->stream, &session->stream_listener, &osc_stream_events,
                             session);
 
+    /*
+     * Shared memory FIRST, DMA-BUF second, and the order is the compatibility
+     * guarantee: pw_stream keeps this as a preference list, so a compositor able
+     * to produce shm still picks shm and nothing changes on GNOME or KDE. The
+     * second object only ever wins against a producer that has no shm path —
+     * niri and the other Smithay/wlroots compositors of issue #287, which
+     * previously failed the whole negotiation with "no more input formats".
+     */
     params[0] = osc_build_enum_format(&builder);
-    if (params[0] == NULL) {
-        osc_set_error(err, err_len, "the EnumFormat POD did not fit its builder");
+    params[1] = osc_build_enum_format_dmabuf(&builder);
+
+    /*
+     * Test affordance. Every compositor available for local testing — mutter,
+     * sway via xdg-desktop-portal-wlr — offers shm, so params[0] always wins and
+     * the DMA-BUF branch below (osc_map_dmabuf, the DMA_BUF_IOCTL_SYNC bracket,
+     * the dmabuf arm of osc_read_frame) never executes outside niri. Dropping
+     * the shm object leaves the producer no choice, which is the only way to
+     * exercise that code without the compositor from issue #287.
+     *
+     * Never set in production: it would break exactly the compatibility the
+     * ordering above exists to preserve.
+     */
+    if (getenv("OPENSCREEN_PIPEWIRE_FORCE_DMABUF") != NULL) {
+        params[0] = params[1];
+    }
+
+    if (params[0] == NULL || params[1] == NULL) {
+        osc_set_error(err, err_len, "the EnumFormat PODs did not fit their builder");
         goto fail;
     }
 
@@ -890,7 +1378,7 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
                                 want_video ? (PW_STREAM_FLAG_AUTOCONNECT |
                                               PW_STREAM_FLAG_MAP_BUFFERS)
                                            : PW_STREAM_FLAG_AUTOCONNECT,
-                                params, 1);
+                                params, SPA_N_ELEMENTS(params));
     if (result < 0) {
         osc_set_error(err, err_len, "pw_stream_connect failed: %s", spa_strerror(result));
         goto fail;
@@ -935,6 +1423,10 @@ void osc_pw_stop(struct osc_pw_session *session)
         api.stream_disconnect(session->stream);
         api.stream_destroy(session->stream);
     }
+    /* After stream_destroy: remove_buffer fires during teardown and unmaps most
+     * of these itself. This is the backstop for anything it did not reach, and
+     * it runs once the loop is joined so nothing can be mapping concurrently. */
+    osc_unmap_all_dmabufs(session);
     if (session->core != NULL) {
         api.core_disconnect(session->core);
     }

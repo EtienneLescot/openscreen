@@ -34,6 +34,18 @@ const SOFTWARE_APPLICATION_LD = {
 	downloadUrl: `${SITE_URL}/download/`,
 	installUrl: "https://github.com/getopenscreen/openscreen/releases",
 	softwareHelp: `${SITE_URL}/docs/intro/`,
+	// No `screenshot`. It pointed at the establishing plate the landing page used
+	// to open with; that page is the scroll recreation now and the plate went with
+	// it, so the URL had been resolving to a 404. Nothing shipped is an honest
+	// replacement — og-image.png is a wordmark card, and the recreation is a
+	// recreation rather than a frame of the running editor — so restoring the
+	// property means shipping a real screenshot, not repointing this at the
+	// nearest available picture.
+	//
+	// Deliberately no VideoObject either: the walkthrough's clips are silent
+	// five-second fragments with no standalone playback page, which is not what
+	// that rich result describes, and declaring a video the page never presents
+	// as one is a manual-action risk.
 	license: "https://github.com/getopenscreen/openscreen/blob/main/LICENSE",
 	isAccessibleForFree: true,
 	// `offers` at price 0 is what lets a result carry a "Free" annotation;

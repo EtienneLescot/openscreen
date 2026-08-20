@@ -1,0 +1,213 @@
+name: Flatpak spike
+
+# THROWAWAY. This workflow exists to answer one question — how far from a Flathub
+# submission is this repository — and should be deleted once it has answered it.
+# It is `workflow_dispatch` only and runs on no event, so it costs nothing until
+# someone asks.
+#
+# Every stage is `continue-on-error` on purpose. A spike that stops at the first
+# failure tells you one thing; this one tells you all of them in a single run, and
+# writes the verdict to the run summary. Read the summary, not the logs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ref to spike (defaults to the branch this is dispatched on)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    name: How far is Flathub
+    runs-on: ubuntu-latest
+    # The full attempt downloads a runtime, an SDK, two SDK extensions, a base app,
+    # every npm tarball in the lockfile and every crate in two Cargo.locks. If it
+    # has not concluded in an hour it has concluded something anyway.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+
+      - name: Install flatpak tooling
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak flatpak-builder python3-venv
+          flatpak remote-add --if-not-exists --user \
+            flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak --version
+          flatpak-builder --version
+
+      # ---------------------------------------------------------------------
+      # Stage A is the cheapest and the most likely to invalidate the manifest:
+      # it asks Flathub what actually exists before anything tries to install it.
+      # The manifest guesses runtime 24.08, node22 and an Electron2 BaseApp at the
+      # same version. Any of the three can simply not be published.
+      - name: "Stage A — what versions actually exist"
+        id: versions
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          echo "## Stage A — availability" >> "$GITHUB_STEP_SUMMARY"
+          # Query ONCE and keep the exit status. Per-id queries behind `|| true`
+          # turn a broken remote into six "NOT PUBLISHED" lines, which is the one
+          # wrong answer this stage must never give: it would read as "Flathub does
+          # not ship the runtime" when it means "the question never got asked".
+          if ! CATALOG=$(flatpak remote-ls flathub --user --columns=application,branch 2>&1); then
+            {
+              echo
+              echo "**QUERY FAILED** — \`flatpak remote-ls\` errored, so nothing below is a"
+              echo "statement about what Flathub publishes. Stage A draws no conclusion."
+              echo
+              echo '```'
+              echo "$CATALOG" | tail -5
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          for id in \
+            org.freedesktop.Platform \
+            org.freedesktop.Sdk \
+            org.electronjs.Electron2.BaseApp \
+            org.freedesktop.Sdk.Extension.node22 \
+            org.freedesktop.Sdk.Extension.node20 \
+            org.freedesktop.Sdk.Extension.rust-stable
+          do
+            FOUND=$(printf '%s\n' "$CATALOG" | awk -v id="$id" '$1 == id { printf "%s ", $2 }')
+            if [[ -n "$FOUND" ]]; then
+              echo "- \`$id\` → branches: $FOUND" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`$id\` → **NOT PUBLISHED**" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: "Stage B — install runtime, SDK, base and extensions"
+        id: install
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          flatpak install -y --user --noninteractive flathub \
+            org.freedesktop.Platform/x86_64/24.08 \
+            org.freedesktop.Sdk/x86_64/24.08 \
+            org.electronjs.Electron2.BaseApp/x86_64/24.08 \
+            org.freedesktop.Sdk.Extension.node22/x86_64/24.08 \
+            org.freedesktop.Sdk.Extension.rust-stable/x86_64/24.08
+
+      # ---------------------------------------------------------------------
+      # Stage C is the single biggest unknown for any Electron app on Flathub:
+      # the sandbox has no network, so every npm tarball must be declared as a
+      # pinned source. flatpak-node-generator derives that from package-lock.json.
+      # If it cannot handle this lockfile, nothing downstream matters.
+      - name: "Stage C — offline npm sources from the lockfile"
+        id: nodegen
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # `node/` is a poetry project exposing the `flatpak-node-generator` console
+          # script — not a loose .py to invoke by path. Pinned: this tool decides
+          # whether the whole port is viable, so it should not change under us
+          # between two runs of the same spike.
+          git clone --filter=blob:none https://github.com/flatpak/flatpak-builder-tools.git /tmp/fbt
+          git -C /tmp/fbt checkout 737c0085912f9f7dabf9341d4608e2a77a51a73a
+          python3 -m venv /tmp/fbt-venv
+          /tmp/fbt-venv/bin/pip install --quiet /tmp/fbt/node
+          /tmp/fbt-venv/bin/flatpak-node-generator npm package-lock.json \
+            -o build/flatpak/generated-sources.json
+          BYTES=$(stat -c%s build/flatpak/generated-sources.json)
+          COUNT=$(python3 -c "import json;print(len(json.load(open('build/flatpak/generated-sources.json'))))")
+          echo "bytes=$BYTES" >> "$GITHUB_OUTPUT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "generated $COUNT sources, $BYTES bytes"
+
+      # ---------------------------------------------------------------------
+      # Stage D: the same problem for Rust. Two lockfiles, and the compositor tree
+      # pulls bindgen, which wants libclang at build time as well as crates.
+      - name: "Stage D — vendor both Cargo lockfiles"
+        id: vendor
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          for dir in crates electron/native/pipewire-capture; do
+            echo "--- $dir ---"
+            ( cd "$dir" && cargo vendor --versioned-dirs /tmp/vendor-$(basename "$dir") \
+              > /tmp/vendor-$(basename "$dir").toml )
+            echo "$dir: $(find /tmp/vendor-$(basename "$dir") -maxdepth 1 -type d | wc -l) crates"
+          done
+
+      # ---------------------------------------------------------------------
+      # Stage E: the manifest ships a deliberately wrong ffmpeg sha256 so that a
+      # guessed digest can never reach a submission. Resolve the real one here.
+      - name: "Stage E — resolve the ffmpeg source digest"
+        id: ffmpeg
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          URL=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+          if curl -fsSL --retry 3 -o /tmp/ffmpeg.tar.xz "$URL"; then
+            SHA=$(sha256sum /tmp/ffmpeg.tar.xz | awk '{print $1}')
+            echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+            echo "$URL → $SHA"
+          else
+            echo "::warning::$URL does not exist — the pinned build is BtbN's n8.1.2-34-g9b6c8969e0, which is a *snapshot*, not an upstream release. The manifest needs a real upstream version, and whichever one is chosen is not the tree the addon was tested against."
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------------
+      # Stage F: the actual build. Expected to fail — the interesting output is
+      # WHERE. Run it even when earlier stages failed, so the log exists.
+      - name: "Stage F — flatpak-builder"
+        id: build
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          flatpak-builder --user --install-deps-from=flathub --force-clean \
+            --disable-rofiles-fuse \
+            /tmp/flatpak-build build/flatpak/com.getopenscreen.OpenScreen.yml \
+            2>&1 | tee /tmp/flatpak-build.log
+
+      - name: Collect artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flatpak-spike
+          path: |
+            /tmp/flatpak-build.log
+            build/flatpak/generated-sources.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Verdict
+        if: always()
+        env:
+          A: ${{ steps.versions.outcome }}
+          B: ${{ steps.install.outcome }}
+          C: ${{ steps.nodegen.outcome }}
+          D: ${{ steps.vendor.outcome }}
+          E: ${{ steps.ffmpeg.outcome }}
+          F: ${{ steps.build.outcome }}
+          NPM_COUNT: ${{ steps.nodegen.outputs.count }}
+          FFMPEG_SHA: ${{ steps.ffmpeg.outputs.sha }}
+        run: |
+          {
+            echo "## Verdict"
+            echo
+            echo "| Stage | Outcome |"
+            echo "|---|---|"
+            echo "| A — versions exist | $A |"
+            echo "| B — runtime/SDK/base install | $B |"
+            echo "| C — offline npm sources (${NPM_COUNT:-n/a} entries) | $C |"
+            echo "| D — cargo vendor, both lockfiles | $D |"
+            echo "| E — ffmpeg source digest (${FFMPEG_SHA:-unresolved}) | $E |"
+            echo "| F — flatpak-builder | $F |"
+            echo
+            echo "Stage F failing is the expected result, not the finding. The finding is"
+            echo "which of A–E failed, because those are the ones that decide whether this"
+            echo "port is a week or a quarter. Read the tail of the build log in the"
+            echo "\`flatpak-spike\` artifact before drawing any conclusion from F."
+          } >> "$GITHUB_STEP_SUMMARY"

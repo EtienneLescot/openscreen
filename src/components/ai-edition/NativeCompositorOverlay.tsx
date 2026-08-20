@@ -3,6 +3,7 @@ import { useScopedT } from "@/contexts/I18nContext";
 import { noteUiProbeClipSwitch } from "@/lib/ai-edition/perf/uiFrameProbe";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveNativePosition } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	pushAllNativeParams,
@@ -89,12 +90,12 @@ export function NativeCompositorOverlay() {
 		if (!primary?.originalPath) {
 			return {};
 		}
+		// `undefined` rather than `""` here ONLY because `useNativeCompositorView`
+		// treats the key's absence as "no webcam source"; the value still comes from
+		// the one accessor, so it can never disagree with the scene or the export.
 		return {
 			screenPath: primary.originalPath,
-			webcamPath:
-				primary.cameraTrack?.visible && primary.cameraTrack.sourcePath
-					? primary.cameraTrack.sourcePath
-					: undefined,
+			webcamPath: assetCameraSource(primary).path || undefined,
 			// sidecar convention (electron/ipc/handlers.ts readCursorRecordingFile) : la
 			// télémétrie curseur vit à côté de la vidéo tant qu'elle n'a pas bougé. Absente →
 			// le natif ignore juste le curseur (CursorTrack::load échoue silencieusement).
@@ -196,8 +197,7 @@ export function NativeCompositorOverlay() {
 		if (!asset?.originalPath) {
 			return;
 		}
-		const cam = asset.cameraTrack;
-		const webcamPath = cam && cam.visible && cam.sourcePath ? cam.sourcePath : "";
+		const camera = assetCameraSource(asset);
 		const targetClipId = activeClipId;
 		// Sonde de fluidité (diagnostic) : sépare les mesures d'avant et d'après un
 		// franchissement de clip, qui se sont déjà révélées non comparables.
@@ -214,8 +214,8 @@ export function NativeCompositorOverlay() {
 		setActiveClip(
 			viewId,
 			asset.originalPath,
-			webcamPath,
-			cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+			camera.path,
+			camera.offsetSec,
 			activeClipIndex,
 			activeSourceTimeSec,
 		)

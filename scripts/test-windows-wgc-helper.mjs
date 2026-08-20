@@ -34,18 +34,47 @@ const WITH_SOFTWARE_FALLBACK =
 	process.argv.includes("--software-fallback");
 const INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV =
 	"OPENSCREEN_WGC_TEST_INJECT_DEFAULT_SINK_WRITER_FAILURE_ONCE";
-const INJECTION_MARKER = "TEST-ONLY: Injected default MFCreateSinkWriterFromURL failure";
+const INJECTION_MARKER = "TEST-ONLY: Injected default sink-writer creation failure";
+const STALL_READBACK_ENV = "OPENSCREEN_WGC_TEST_STALL_READBACK_MS";
+/**
+ * Reproduces issue #252 on ordinary hardware: holds the frame lock across a
+ * stall the way a wedged GPU readback does. Before the fix the helper hung
+ * forever with no `[stop-timing]` output at all; it must now always exit.
+ */
+const WITH_STALLED_READBACK =
+	process.env.OPENSCREEN_WGC_TEST_STALL_READBACK === "true" ||
+	process.argv.includes("--stall-readback");
+const STALL_READBACK_MS = Number(process.env[STALL_READBACK_ENV] ?? 60_000);
+const STOP_BUDGET_ENV = "OPENSCREEN_WGC_STOP_BUDGET_MS";
+/**
+ * The helper's global shutdown ceiling, pinned into its environment below so
+ * the harness and the helper cannot drift apart. It matters because the
+ * encoder-finalize step is the one allowed to spend the whole ceiling — issue
+ * #34 exists because a long software-encoder finalize legitimately takes
+ * seconds — so a limit below it would kill a helper that was still working and
+ * report it as the #252 hang.
+ */
+const STOP_BUDGET_MS = Number(process.env[STOP_BUDGET_ENV] ?? 50_000);
+/** Past the helper's own ceiling it never ended itself, which IS issue #252. */
+const STOP_HANG_LIMIT_MS = STOP_BUDGET_MS + 15_000;
+/** A healthy stop is well under a second. */
+const STOP_LATENCY_BUDGET_MS = 15_000;
 
 if (WITH_SOFTWARE_ENCODER && WITH_SOFTWARE_FALLBACK) {
 	throw new Error("--software-encoder and --software-fallback are mutually exclusive");
 }
 
-function runHelper(config, { injectDefaultSinkWriterFailure = false } = {}) {
+function runHelper(config, { injectDefaultSinkWriterFailure = false, stallReadbackMs = 0 } = {}) {
 	return new Promise((resolve, reject) => {
 		const env = { ...process.env };
 		delete env[INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV];
+		delete env[STALL_READBACK_ENV];
+		env[STOP_BUDGET_ENV] = String(STOP_BUDGET_MS);
 		if (injectDefaultSinkWriterFailure) {
 			env[INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV] = "1";
+		}
+		if (stallReadbackMs > 0) {
+			env[STALL_READBACK_ENV] = String(stallReadbackMs);
 		}
 		const child = spawn(HELPER_PATH, [JSON.stringify(config)], {
 			env,
@@ -56,12 +85,23 @@ function runHelper(config, { injectDefaultSinkWriterFailure = false } = {}) {
 		let stdout = "";
 		let stderr = "";
 		let stopTimer = null;
+		let stopSentAt = null;
+		let stopHung = false;
+		let hangTimer = null;
 		const scheduleStop = () => {
 			if (stopTimer) {
 				return;
 			}
 			stopTimer = setTimeout(() => {
+				stopSentAt = Date.now();
 				child.stdin.write("stop\n");
+				// The whole point of issues #115 and #252 was a helper that never
+				// came back from `stop`. Without a bound here the harness inherits
+				// the hang instead of reporting it.
+				hangTimer = setTimeout(() => {
+					stopHung = true;
+					child.kill();
+				}, STOP_HANG_LIMIT_MS);
 			}, DURATION_MS);
 		};
 		const fallbackTimer = setTimeout(scheduleStop, 15_000);
@@ -81,9 +121,55 @@ function runHelper(config, { injectDefaultSinkWriterFailure = false } = {}) {
 			if (stopTimer) {
 				clearTimeout(stopTimer);
 			}
-			resolve({ code, stdout, stderr });
+			if (hangTimer) {
+				clearTimeout(hangTimer);
+			}
+			resolve({
+				code,
+				stdout,
+				stderr,
+				stopHung,
+				stopLatencyMs: stopSentAt === null ? null : Date.now() - stopSentAt,
+			});
 		});
 	});
+}
+
+/**
+ * Every `[stop-timing]` step the helper *finished*, in order.
+ *
+ * `phase=begin` is the same step announced on entry, so counting both listed
+ * every step twice. `phase=abandoned` is kept: that step did end, just badly.
+ */
+function readStopTimingSteps(stderr) {
+	return [...stderr.matchAll(/\[stop-timing\]\s+step=(\S+)\s+elapsed_ms=\d+(?:\s+phase=(\S+))?/g)]
+		.filter((match) => match[2] !== "begin")
+		.map((match) => match[1]);
+}
+
+function assertStopWasClean(result) {
+	if (result.stopHung) {
+		throw new Error(
+			`Helper did not exit within ${STOP_HANG_LIMIT_MS}ms of "stop" (issue #252). ` +
+				`stop-timing steps seen: ${readStopTimingSteps(result.stderr).join(", ") || "none"}`,
+		);
+	}
+	const steps = readStopTimingSteps(result.stderr);
+	if (!steps.includes("command-received")) {
+		throw new Error(
+			'Helper never acknowledged the stop command ("[stop-timing] step=command-received").',
+		);
+	}
+	if (steps.includes("wgc-session-close") === false) {
+		throw new Error(
+			`Helper stopped without completing its shutdown sequence. Steps: ${steps.join(", ")}`,
+		);
+	}
+	if (result.stopLatencyMs !== null && result.stopLatencyMs > STOP_LATENCY_BUDGET_MS) {
+		throw new Error(
+			`Stop took ${result.stopLatencyMs}ms, over the ${STOP_LATENCY_BUDGET_MS}ms budget.`,
+		);
+	}
 }
 
 function startFixtureWindow() {
@@ -200,6 +286,43 @@ function probeStreams(outputPath) {
 	return JSON.parse(ffprobe.stdout).streams ?? [];
 }
 
+/**
+ * The property the fragmented container exists for, checked without having to
+ * kill anything: a fragmented MP4 carries its index up front and its samples in
+ * self-describing `moof`+`mdat` pairs, so a prefix of the file still decodes. A
+ * plain MP4 only becomes readable when `Finalize()` writes `moov` at the end,
+ * which is exactly the call the shutdown watchdog's `TerminateProcess`
+ * pre-empts in issues #252 / #292 / #327.
+ *
+ * Truncating a copy is a proxy for that kill, not a replacement: it proves the
+ * container survives losing its tail. It does not prove the helper flushed
+ * anything before dying, which only the real kill test can.
+ */
+function assertPrefixIsReadable(outputPath) {
+	const truncatedPath = `${outputPath}.truncated.mp4`;
+	const source = fs.readFileSync(outputPath);
+	fs.writeFileSync(truncatedPath, source.subarray(0, Math.floor(source.length * 0.6)));
+	try {
+		// A plain MP4 does not merely lose its tail here, it fails to open at
+		// all ("moov atom not found"), so the throw and the empty result are the
+		// same finding and get the same message.
+		let truncatedStreams = [];
+		try {
+			truncatedStreams = probeStreams(truncatedPath);
+		} catch {
+			truncatedStreams = [];
+		}
+		if (!truncatedStreams.some((stream) => stream.codec_name === "h264")) {
+			throw new Error(
+				`A 60% prefix of ${outputPath} has no readable H.264 stream, so the recording is ` +
+					"still all-or-nothing: the container is not fragmented.",
+			);
+		}
+	} finally {
+		fs.rmSync(truncatedPath, { force: true });
+	}
+}
+
 function measureFirstFrameLuma(outputPath) {
 	const ffmpeg = spawnSync(
 		"ffmpeg",
@@ -264,11 +387,11 @@ const config = {
 	fps: 30,
 	videoWidth: 1280,
 	videoHeight: 720,
-	displayX: 0,
-	displayY: 0,
-	displayW: 1920,
-	displayH: 1080,
-	hasDisplayBounds: true,
+	// Same reasoning as scripts/diagnostic-tool/diagnostic.mjs: without Electron
+	// there is no honest display rect to send, and the helper reads these as
+	// physical pixels. Omitting them lands on the primary monitor
+	// deterministically instead of by accident (#346).
+	hasDisplayBounds: false,
 	captureSystemAudio: WITH_SYSTEM_AUDIO,
 	captureMic: WITH_MICROPHONE,
 	captureCursor: CAPTURE_CURSOR,
@@ -294,12 +417,44 @@ let result;
 try {
 	result = await runHelper(config, {
 		injectDefaultSinkWriterFailure: WITH_SOFTWARE_FALLBACK,
+		stallReadbackMs: WITH_STALLED_READBACK ? STALL_READBACK_MS : 0,
 	});
 } finally {
 	if (fixtureWindow) {
 		fixtureWindow.child.kill();
 	}
 }
+
+// The regression check for issue #252. With the frame lock deliberately wedged
+// there is no usable recording to assert on -- what matters is only that the
+// helper still noticed the stop and still died, naming the step it died in.
+if (WITH_STALLED_READBACK) {
+	if (result.stopHung) {
+		throw new Error(
+			`Helper survived ${STOP_HANG_LIMIT_MS}ms past "stop" with a stalled readback. ` +
+				"Its shutdown watchdog did not fire (issue #252).",
+		);
+	}
+	const steps = readStopTimingSteps(result.stderr);
+	if (!steps.includes("command-received")) {
+		throw new Error(`Helper never acknowledged "stop". Steps seen: ${steps.join(", ") || "none"}`);
+	}
+	if (!/phase=abandoned/.test(result.stderr)) {
+		throw new Error(
+			`Helper exited without reporting an abandoned shutdown step. stderr:\n${result.stderr}`,
+		);
+	}
+	console.log("WGC helper stalled-readback stop check passed", {
+		stopLatencyMs: result.stopLatencyMs,
+		steps,
+		abandoned: result.stderr.match(/step=(\S+)\s+elapsed_ms=\d+\s+phase=abandoned/)?.[1] ?? null,
+	});
+	fs.rmSync(outputPath, { force: true });
+	process.exit(0);
+}
+
+assertStopWasClean(result);
+
 if (result.code !== 0) {
 	if (
 		WITH_WEBCAM &&
@@ -399,13 +554,26 @@ if (
 		`WGC helper encoder selection was ${JSON.stringify(encoderSelection)}, expected ${expectedEncoderSelection} with preferSoftwareEncoder=${WITH_SOFTWARE_ENCODER}: ${result.stdout}`,
 	);
 }
+// Every fallback path has to stay fragmented, not just the nominal one. The
+// helper degrades to the plain container rather than failing a recording, so
+// without this the fix could quietly stop applying and every other assertion
+// here would still pass.
+if (encoderSelection.container !== "fragmented-mp4") {
+	throw new Error(
+		`WGC helper wrote a ${encoderSelection.container} container, expected fragmented-mp4: ${result.stdout}`,
+	);
+}
+assertPrefixIsReadable(outputPath);
+if (webcamOutputPath && fs.existsSync(webcamOutputPath)) {
+	assertPrefixIsReadable(webcamOutputPath);
+}
 
 const combinedHelperOutput = `${result.stdout}\n${result.stderr}`;
 const helperDiagnosticLines = combinedHelperOutput.split(/\r?\n/).filter(Boolean);
 const injectionLines = helperDiagnosticLines.filter((line) => line.includes(INJECTION_MARKER));
 const fallbackDiagnosticPatterns = [
 	INJECTION_MARKER,
-	"WARNING: Default MFCreateSinkWriterFromURL failed (hr=0x80070003)",
+	"WARNING: Sink-writer creation failed (hr=0x80070003)",
 	"retrying with the Microsoft software H.264 encoder.",
 	"INFO: Registered the Microsoft software H.264 MFT locally for this helper process.",
 	"INFO: Created the real software H.264 sink writer successfully.",
@@ -451,6 +619,8 @@ console.log(
 	JSON.stringify(
 		{
 			success: true,
+			stopLatencyMs: result.stopLatencyMs,
+			stopTimingSteps: readStopTimingSteps(result.stderr),
 			outputPath,
 			webcamOutputPath,
 			bytes: fs.statSync(outputPath).size,

@@ -348,6 +348,32 @@ export const addTrimArgs = z.object({
 	reason: z.string().default(""),
 });
 
+/**
+ * ponytail: the element schema is `addTrimArgs` itself, not a copy of it.
+ *
+ * A batch is N unitary calls and nothing else — same validation, same clip
+ * resolution, same refusal wording — so the two can never drift into meaning
+ * different things. A separate element schema would be one more place to forget
+ * `clipId` the next time the unitary one grows a field.
+ *
+ * The `union(…, unknown)` is what makes "each item stands or falls alone" true for
+ * MALFORMED items too, not just unplaceable ones. A bare `z.array(addTrimArgs)`
+ * rejects the whole call the moment one entry is bad — and it rejects it in
+ * LangChain, before `applyBatch` runs — so nine good cuts would be thrown away
+ * with the tenth and `refused[index]` could never name it. Advertising the
+ * union keeps the element shape in the JSON schema the model reads (it shows up
+ * as `anyOf: [addTrim, {}]`) while letting a bad entry through to the unitary
+ * executor, which refuses it by itself with the wording it always uses.
+ *
+ * No cap on the array. A half-hour recording has hundreds of silences, and the
+ * point of this tool is precisely that it should not have to guess how many are
+ * too many. Picking a number here would repeat the mistake `getTranscript` made
+ * with its 800.
+ */
+export const addTrimsArgs = z.object({
+	ranges: z.array(z.union([addTrimArgs, z.unknown()])).min(1),
+});
+
 export const setTrimArgs = z.object({
 	trimRangeId: z.string().min(1),
 	startSec: secondsSchema,
@@ -410,6 +436,12 @@ export const addZoomArgs = z.object({
 	focus: focusSchema.default({ cx: 0.5, cy: 0.5 }),
 });
 
+/** Same contract as `addTrimsArgs`: the element schema IS the unitary one, and
+ *  it is advertised rather than enforced so a bad region is refused by itself. */
+export const addZoomsArgs = z.object({
+	regions: z.array(z.union([addZoomArgs, z.unknown()])).min(1),
+});
+
 export const setZoomArgs = z.object({
 	zoomId: z.string().min(1),
 	startSec: secondsSchema.optional(),
@@ -470,6 +502,80 @@ export const removeClipArgs = z.object({
 });
 
 /**
+ * Every tool the model is handed, in the order `buildTools` builds them.
+ *
+ * The roster lives here, beside `MUTATING_TOOL_NAMES`, rather than in
+ * `deep-agent/service.ts` where `buildTools` is: the workbench needs to name the
+ * surface from its L0 layer, and importing the service would drag LangChain into
+ * a layer that deliberately runs on zod and pure document helpers alone.
+ *
+ * It is hand-written — the schemas differ per tool, so nothing can generate it —
+ * but it is not free-floating: `deep-agent/service.test.ts` asserts it equals
+ * `buildTools(...).map(t => t.name)`, and that test runs in CI. Adding a tool
+ * without adding it here fails the suite.
+ *
+ * ponytail: there used to be two more copies of this list, one in that test and
+ * one in `workbench/lib/prompts.ts`, neither derived from anything. The
+ * workbench's copy sat at 19 entries from the day it was written while the agent
+ * grew to 21 (`addTrims`/`addZooms`, commit 560d368e). Nothing caught it,
+ * because `npm run wb` is not part of CI — so the bench asserted a surface the
+ * product had not had for some time.
+ */
+export const OPENSCREEN_TOOL_NAMES = [
+	"getCurrentDocument",
+	"getTranscript",
+	"getCursorTrack",
+	"addTrim",
+	"addTrims",
+	"setTrim",
+	"setClipRange",
+	"moveClip",
+	"replaceTimeline",
+	"addZoom",
+	"addZooms",
+	"setZoom",
+	"addSpeed",
+	"setSpeed",
+	"addAnnotation",
+	"setAnnotation",
+	"addCameraFullscreen",
+	"setCameraFullscreen",
+	"removeTrim",
+	"removeModifier",
+	"removeClip",
+] as const;
+
+/**
+ * The tools `createDeepAgent` used to inject on top of ours, over an in-memory
+ * backend that was EMPTY and that the model was not told was empty — the
+ * mechanical cause of D1, where the agent ran `ls`/`glob` against that sandbox
+ * and reported in good faith that the project held no cursor telemetry.
+ *
+ * The surface is gone, so this is no longer "tools we also get": it is the list
+ * of names that must never appear again. A call to one of them now means the
+ * model is hallucinating a filesystem it was never offered, which is a rarer but
+ * still exact D1 tell — which is why the workbench scores it as well as pinning
+ * it here.
+ *
+ * `execute` is included even though it vanished at runtime: it is in the
+ * middleware's list too and only disappeared because the default backend is not
+ * a sandbox. A sandbox backend would have made it a 26th tool. The workbench's
+ * own copy of this list omitted it, so `isPhantomTool` could not flag the one
+ * name a sandbox backend would have brought back.
+ */
+export const PHANTOM_TOOL_NAMES = [
+	"ls",
+	"read_file",
+	"write_file",
+	"edit_file",
+	"glob",
+	"grep",
+	"execute",
+	"write_todos",
+	"task",
+] as const;
+
+/**
  * The tools that change the document. A LIST, not an inference: it gates the
  * checkpoint the chat-service takes before a write and the mutating/non-mutating
  * split the workbench scores its DSL axis on, and neither should quietly change
@@ -486,6 +592,8 @@ export const removeClipArgs = z.object({
  */
 export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addTrim",
+	"addTrims",
+	"addZooms",
 	"setTrim",
 	"setClipRange",
 	"moveClip",
@@ -652,6 +760,79 @@ export function documentSnapshotForModel(
 
 function failure(message: string): AgentToolExecution {
 	return { ok: false, resultJson: JSON.stringify({ error: message }) };
+}
+
+/**
+ * Runs `unitName` once per item, folding the document forward.
+ *
+ * ponytail: the batch tools exist to save ROUND TRIPS, not to mean something new.
+ * Replaying the unitary executor is what guarantees that — anchoring, clip
+ * resolution, clamping, the wording of every refusal, all identical by
+ * construction rather than by a second implementation staying in step. A batch
+ * of N is exactly N unitary calls minus N-1 round trips, and `agent-tools.test`
+ * asserts that against a document built the long way.
+ *
+ * ponytail: PARTIAL application, deliberately. `replaceTimeline` is the repo's
+ * other array-taking tool and it refuses in one block — "Refused … Nothing was
+ * modified" — which is right for a tool that rebuilds the whole timeline and
+ * ruinous for one that adds ten independent cuts: a single bad bound would throw
+ * away nine good ones and the model would have to guess which. So each item
+ * stands or falls alone, and the result says which did what. `ok:false` is kept
+ * for the case where NOTHING landed, because that is the only one where the
+ * document did not move.
+ */
+function applyBatch(
+	document: AxcutDocument,
+	unitName: "addTrim" | "addZoom",
+	items: unknown[],
+	options: AgentToolOptions | undefined,
+	noun: string,
+): AgentToolExecution {
+	let current = document;
+	const applied: Array<Record<string, unknown>> = [];
+	const refused: Array<{ index: number; error: string }> = [];
+
+	items.forEach((item, index) => {
+		const execution = executeAgentTool(current, unitName, JSON.stringify(item), options);
+		let payload: Record<string, unknown> = {};
+		try {
+			payload = JSON.parse(execution.resultJson) as Record<string, unknown>;
+		} catch {
+			payload = { error: execution.resultJson };
+		}
+		if (execution.ok && execution.document) {
+			current = execution.document;
+			applied.push({ index, ...payload });
+		} else {
+			refused.push({ index, error: String(payload.error ?? "refused") });
+		}
+	});
+
+	// Nothing landed: the document is untouched, so say so the way every other
+	// refusal does rather than reporting a success with an empty list.
+	if (applied.length === 0) {
+		return failure(
+			`No ${noun} was added. ` +
+				refused.map((r) => `[${r.index}] ${r.error}`).join(" | ") +
+				" Nothing was modified.",
+		);
+	}
+
+	const refusedSuffix = refused.length ? `, ${refused.length} refused` : "";
+	return {
+		ok: true,
+		document: current,
+		// The counts come first on purpose: the model must be able to see that one
+		// of ten was refused WITHOUT re-reading the document, and know which one.
+		resultJson: JSON.stringify({
+			requested: items.length,
+			appliedCount: applied.length,
+			refusedCount: refused.length,
+			applied,
+			...(refused.length ? { refused } : {}),
+		}),
+		summary: `added ${applied.length} ${noun}${applied.length === 1 ? "" : "s"}${refusedSuffix}`,
+	};
 }
 
 /** The clips as the model would have to name them, for an error about an id it
@@ -854,9 +1035,21 @@ export function executeAgentTool(
 			if (!transcript) {
 				return failure(`No transcript for asset ${assetId ?? "(none)"}.`);
 			}
-			// ponytail: segments only — words would blow the context for long
-			// recordings and the segment text already carries the content.
-			const segments = transcript.segments.slice(0, 800).map((s) => ({
+			// ponytail: no cap. There used to be a `.slice(0, 800)` here, guarded by
+			// "words would blow the context" — written believing a segment was a
+			// phrase. On the production path a segment IS one word
+			// (src/lib/captioning/transcribe.ts: whisper's word timings are mapped
+			// one-to-one), so the cap cut the transcript at the 800th WORD — around
+			// five minutes of speech — and said nothing about it. The model read a
+			// fifth of a half-hour recording, cut the silences it could see, and
+			// reported the job done, because nothing in the payload told it otherwise.
+			//
+			// A whole 30-minute transcript is ~285k characters, ~70k tokens: large,
+			// and well inside every model this app talks to. If a recording ever does
+			// get near a window, the honest fix is to know the window — the app has no
+			// per-model context budget today — not to guess a number here and drop the
+			// rest in silence.
+			const segments = transcript.segments.map((s) => ({
 				id: s.id,
 				kind: s.kind,
 				startSec: s.startSec,
@@ -930,6 +1123,12 @@ export function executeAgentTool(
 				resultJson: JSON.stringify({ trimRangeId: trim.id, startSec, endSec }),
 				summary: `added trim ${formatSec(startSec)} – ${formatSec(endSec)}`,
 			};
+		}
+
+		case "addTrims": {
+			const parsed = addTrimsArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			return applyBatch(document, "addTrim", parsed.data.ranges, options, "trim");
 		}
 
 		case "setTrim": {
@@ -1165,6 +1364,12 @@ export function executeAgentTool(
 					`at ${effectiveZoomScale(zoom).toFixed(2)}×` +
 					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
+		}
+
+		case "addZooms": {
+			const parsed = addZoomsArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			return applyBatch(document, "addZoom", parsed.data.regions, options, "zoom");
 		}
 
 		case "setZoom": {

@@ -1,45 +1,31 @@
-> [!NOTE]
-> This repository is an independent continuation of OpenScreen.
->
-> OpenScreen was originally created by [Siddharth Vaddem](https://github.com/siddharthvaddem). The original repository was archived after v1.5.0 and remains available here: [siddharthvaddem/openscreen](https://github.com/siddharthvaddem/openscreen).
->
-> This fork continues development under the OpenScreen name with the original author's approval, while remaining fully MIT open source.
-
-> [!WARNING]
-> OpenScreen is not production-grade software. You should expect bugs, rough edges, and occasional breaking changes.
-
 <p align="center">
   <img src="public/openscreen.png" alt="OpenScreen Logo" width="64" />
 </p>
 
 # <p align="center">OpenScreen</p>
 
-<p align="center"><strong>OpenScreen is a free, open-source tool for creating polished screen recordings, product demos, and walkthroughs.</strong></p>
+<p align="center"><strong>A free, open-source desktop app for recording your screen and turning the result into polished product demos and walkthroughs.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/EtienneLescot/openscreen/blob/main/LICENSE"><img src="https://img.shields.io/github/license/EtienneLescot/openscreen?style=for-the-badge&label=License" alt="License" /></a>
-  <a href="https://github.com/EtienneLescot/openscreen/releases/latest"><img src="https://img.shields.io/github/v/release/EtienneLescot/openscreen?style=for-the-badge&label=Release" alt="Latest Release" /></a>
-  <a href="https://github.com/EtienneLescot/openscreen/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/EtienneLescot/openscreen/ci.yml?style=for-the-badge&label=CI" alt="CI Status" /></a>
+  <img src="public/demo.gif" alt="Editing a recording in OpenScreen: wallpaper and video effects, an AI-assisted cut driven from the chat, then export" width="100%" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/getopenscreen/openscreen/blob/main/LICENSE"><img src="https://img.shields.io/github/license/getopenscreen/openscreen?style=for-the-badge&label=License" alt="License" /></a>
+  <a href="https://github.com/getopenscreen/openscreen/releases/latest"><img src="https://img.shields.io/github/v/release/getopenscreen/openscreen?style=for-the-badge&label=Release" alt="Latest Release" /></a>
+  <a href="https://github.com/getopenscreen/openscreen/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/getopenscreen/openscreen/ci.yml?style=for-the-badge&label=CI" alt="CI Status" /></a>
   <a href="https://discord.gg/VvT6Vtnyh"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=for-the-badge" alt="Platform" />
 </p>
 
-
-OpenScreen was originally positioned as a free, open-source alternative to Screen Studio: something you can use to create quick, polished product demos and walkthroughs for X, Reddit, YouTube, documentation, landing pages, or internal demos.
-
-It is not a 1:1 clone of Screen Studio. Screen Studio is an excellent commercial product. OpenScreen focuses on covering the core open-source workflow: recording, zooms, cursor effects, webcam overlay, captions, editing, annotations, and export.
-
-The goal of this continuation is to keep OpenScreen alive as a fully open-source project and progressively evolve it toward a broader recording and editing workflow.
-
-**100% free** for both **personal** and **commercial** use. Use it, modify it, distribute it. Please respect the license.
-
 > [!NOTE]
-> Software should be accessible. OpenScreen has no paid tiers, premium features, upsells, or functionality locked behind a paywall.
+> **This is OpenScreen, continued.** [Siddharth Vaddem](https://github.com/siddharthvaddem) created the project and [archived the original repository](https://github.com/siddharthvaddem/openscreen) after v1.5.0. Development moved here with his approval, under the same name and the same MIT license.
 
-<p align="center">
-  <img src="public/demo.png" alt="" width="48%" />
-  <img src="public/sample.png" alt="" width="48%" />
-</p>
+A raw capture goes in and comes out ready to post — on X, Reddit, YouTube, a docs page, or a landing page. That is the category Screen Studio defined; OpenScreen is the open-source entry in it, and not a clone.
+
+**100% free** for personal and commercial use, with nothing held behind a paywall.
+
+**Project status.** OpenScreen is under active development — expect rough edges and occasional breaking changes, including to the `.openscreen` project format and the CLI. Bug reports are welcome: [open an issue](https://github.com/getopenscreen/openscreen/issues).
 
 ## Core Features
 - Record a specific window, or your whole screen.
@@ -74,39 +60,58 @@ See [docs/cli.md](./docs/cli.md).
 
 ## Installation
 
-Download the latest installer for your platform from the [GitHub Releases](https://github.com/EtienneLescot/openscreen/releases) page.
+Every platform has a recommended route below. On Windows that is the Microsoft Store; everywhere else it is the installer from the [GitHub Releases](https://github.com/getopenscreen/openscreen/releases) page.
 
 ### macOS
 
-Download the `.dmg` installer directly from the [Releases page](https://github.com/EtienneLescot/openscreen/releases). If Gatekeeper blocks the app, you can bypass it by running the following command in your terminal after installation:
+Download the `.dmg` installer directly from the [Releases page](https://github.com/getopenscreen/openscreen/releases) and drag OpenScreen into your Applications folder. Builds from 1.9.0 onward are signed with a Developer ID certificate and notarized by Apple, so Gatekeeper does not block them and no terminal step is needed.
 
-```bash
-xattr -rd com.apple.quarantine /Applications/Openscreen.app
-```
-
-Note: Give your terminal Full Disk Access in **System Settings > Privacy & Security** to grant you access and then run the above command.
-
-After running this command, proceed to **System Settings > Privacy & Security** to grant the necessary permissions for "screen recording" and "accessibility". Once permissions are granted, you can launch the app.
+On first launch, open **System Settings > Privacy & Security** and grant the two permissions OpenScreen needs: **Screen Recording** and **Accessibility**. Recording cannot start until both are granted.
 
 > [!NOTE]
-> **Upgrading from an older version and hitting permission issues?** If you already had OpenScreen installed and the new version won't record (Screen Recording or Accessibility keep failing even after you grant them), uninstall the old version, remove OpenScreen's existing entries under **System Settings > Privacy & Security** (both Screen Recording and Accessibility), then do a fresh install and grant the permissions again when prompted.
+> **macOS 15 and later re-ask for screen-recording permission periodically.** That prompt comes from macOS itself and applies to every third-party screen recorder — it is not a sign that anything is wrong with your install or that an update broke something. Grant it again when asked.
+
+> [!NOTE]
+> **Upgrading from a version older than 1.9.0?** Those builds were not signed with a Developer ID certificate, and macOS ties Screen Recording and Accessibility grants to an app's signature — so it cannot tell the new build is the same app, and the permissions you granted the old one do not carry over. If the new version won't record even after you grant them, remove OpenScreen's existing entries under **System Settings > Privacy & Security** (both Screen Recording and Accessibility), then launch it again and grant them when prompted.
 
 ### Windows
 
-Download the `.exe` installer directly from the [Releases page](https://github.com/EtienneLescot/openscreen/releases).
+**Recommended — Microsoft Store**
+
+[Get OpenScreen from the Microsoft Store](https://apps.microsoft.com/detail/9MXQ1HQJL5G5), or from a terminal:
+
+```powershell
+winget install --source msstore OpenScreen
+```
+
+Microsoft signs the Store package during certification, so it installs with no security warning and updates itself.
+
+**Alternative — standalone installer**
+
+Download the `.exe` from the [Releases page](https://github.com/getopenscreen/openscreen/releases). Use this if you can't reach the Store — Windows LTSC, a locked-down work machine, an offline install, or if you want a specific older version.
+
+> [!NOTE]
+> The `.exe` is not code-signed, so Windows SmartScreen shows **"Windows protected your PC"** and reports an unknown publisher. Choose **More info** → **Run anyway** to continue.
+>
+> This is not a sign that something is wrong with the download: an unsigned installer earns SmartScreen's trust per file, so a brand-new build always starts out untrusted no matter how many people installed the previous one. Verifying the signature isn't an option here — there is nothing to verify. If you want the checked path, use the Store build above. If you use the `.exe`, download it only from the Releases page linked here.
 
 ### Linux
 
-Three packages are published to the [Releases page](https://github.com/EtienneLescot/openscreen/releases) for each version. Pick the one that matches your distro:
+Four packages are published to the [Releases page](https://github.com/getopenscreen/openscreen/releases) for each version. Pick the one that matches your distro:
 
 **Debian / Ubuntu / Pop!_OS (`.deb`)**
 ```bash
-sudo apt install ./Openscreen-Linux-latest.deb
+sudo apt install ./Openscreen-Linux-*.deb
+```
+
+**Fedora / RHEL / CentOS (`.rpm`)**
+```bash
+sudo dnf install ./Openscreen-Linux-*.rpm
 ```
 
 **Arch / Manjaro (`.pacman`)**
 ```bash
-sudo pacman -U Openscreen-Linux-latest.pacman
+sudo pacman -U Openscreen-Linux-*.pacman
 ```
 
 **Any distro (`.AppImage`)**
@@ -119,18 +124,18 @@ chmod +x Openscreen-Linux-*.AppImage
 
 Try without installing:
 ```bash
-nix run github:EtienneLescot/openscreen
+nix run github:getopenscreen/openscreen
 ```
 
 Install into your user profile:
 ```bash
-nix profile install github:EtienneLescot/openscreen
+nix profile install github:getopenscreen/openscreen
 ```
 
 For a NixOS system config (flake):
 ```nix
 {
-  inputs.openscreen.url = "github:EtienneLescot/openscreen";
+  inputs.openscreen.url = "github:getopenscreen/openscreen";
 
   outputs = { nixpkgs, openscreen, ... }: {
     nixosConfigurations.<host> = nixpkgs.lib.nixosSystem {
@@ -171,7 +176,7 @@ This repository is the community-maintained continuation of OpenScreen.
 Official / trusted links:
 
 * Original archived repository: https://github.com/siddharthvaddem/openscreen
-* Community continuation: https://github.com/EtienneLescot/openscreen
+* Community continuation: https://github.com/getopenscreen/openscreen
 
 For safety, download OpenScreen only from the official GitHub Releases linked from this repository. Third-party websites using the OpenScreen name are not affiliated with this continuation unless explicitly listed here.
 
@@ -180,7 +185,7 @@ For safety, download OpenScreen only from the official GitHub Releases linked fr
 OpenScreen is community-driven. If you need help, want to report a bug, or just want to chat with other users and contributors:
 
 - 💬 **Discord** — [Join the OpenScreen Discord](https://discord.gg/VvT6Vtnyh) for real-time help, showcase, and discussion
-- 🐞 **[GitHub Issues](https://github.com/EtienneLescot/openscreen/issues)** — bug reports and feature requests
+- 🐞 **[GitHub Issues](https://github.com/getopenscreen/openscreen/issues)** — bug reports and feature requests
 - 🗺️ **[Roadmap](./ROADMAP.md)** — see what we're building next
 
 ---

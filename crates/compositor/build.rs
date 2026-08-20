@@ -124,6 +124,15 @@ fn main() {
         .derive_default(true)
         .layout_tests(false);
 
+    // Linux uniquement : cf. `freestanding_header_args()`. Sur macOS le sysroot arrive
+    // par `xcrun` juste en dessous, sur Windows par MSVC — dans les deux cas clang a
+    // déjà ses en-têtes builtin et injecter ceux de gcc n'aurait aucun sens.
+    if target_os == "linux" {
+        for arg in freestanding_header_args() {
+            builder = builder.clang_arg(arg);
+        }
+    }
+
     // Sur macOS le bindgen doit viser aarch64-apple-darwin pour que les layouts
     // générés (long=8, etc.) matchent la cible. Sans ce flag, bindgen utilise
     // le défaut du host (probablement x86_64), et les structs ffmpeg sont mal
@@ -160,6 +169,61 @@ fn main() {
     if let Ok(prefix) = env::var("OPENSCREEN_FFMPEG_SYMBOL_PREFIX") {
         prefix_ffmpeg_symbols(&ffi_path, &prefix);
     }
+}
+
+/// Flags `-I` supplémentaires pour que clang trouve les en-têtes « freestanding » qu'il
+/// embarque normalement lui-même (`stddef.h`, `limits.h`, `stdint.h`).
+///
+/// Ubuntu scinde libclang : `libclang.so.1` vient du paquet runtime, le répertoire
+/// d'en-têtes builtin de `libclang-N-dev`. Avec seulement le premier — le cas courant —
+/// parser n'importe quel header réel échoue sur
+/// `/usr/include/stdio.h: 'stddef.h' file not found`, parce que la copie de la glibc fait
+/// un `#include_next` de celle du compilateur et qu'il n'y en a aucune. Celles de gcc
+/// sont interchangeables pour cet usage : on y pointe clang plutôt que d'imposer une
+/// seconde toolchain à chaque contributeur.
+///
+/// Jumeau de `freestanding_header_args()` dans
+/// electron/native/pipewire-capture/build.rs, et comme lui ça vit DANS build.rs plutôt
+/// que dans scripts/build-linux-compositor-addon.mjs : tant que seul le script posait
+/// `BINDGEN_EXTRA_CLANG_ARGS`, un `cargo check -p openscreen-compositor` nu échouait sur
+/// une Ubuntu de série — y compris en x86_64.
+fn freestanding_header_args() -> Vec<String> {
+    if let Ok(extra) = env::var("BINDGEN_EXTRA_CLANG_ARGS") {
+        // Déjà configuré par l'appelant ; bindgen le lit de lui-même.
+        if !extra.trim().is_empty() {
+            return Vec::new();
+        }
+    }
+    // Le triplet vendeur n'est PAS codé en dur : c'est `x86_64-linux-gnu` sur Debian/
+    // Ubuntu amd64, `aarch64-linux-gnu` sur arm64 et `x86_64-pc-linux-gnu` sur Arch.
+    // Matcher sur le préfixe d'architecture de la CIBLE couvre les trois, et sur une
+    // machine où un cross-gcc est installé refuse quand même les en-têtes de l'AUTRE
+    // architecture, dont les largeurs de types seraient fausses.
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| env::consts::ARCH.to_string());
+    let prefix = format!("{arch}-");
+    let Ok(vendors) = std::fs::read_dir("/usr/lib/gcc") else {
+        return Vec::new();
+    };
+    // Les DEUX en-têtes sont exigés : l'échec observé porte tantôt sur `stddef.h`
+    // (compositor) tantôt sur `limits.h` (pipewire-capture), et un répertoire qui n'a
+    // que l'un des deux ne réglerait qu'une moitié du problème tout en ayant l'air
+    // d'un candidat valable.
+    let mut dirs: Vec<PathBuf> = vendors
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .filter_map(|vendor| std::fs::read_dir(vendor.path()).ok())
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path().join("include"))
+        .filter(|dir| dir.join("limits.h").is_file() && dir.join("stddef.h").is_file())
+        .collect();
+    // gcc le plus récent d'abord, pour une machine qui en a plusieurs.
+    dirs.sort();
+    dirs.reverse();
+    dirs.into_iter()
+        .take(1)
+        .map(|dir| format!("-I{}", dir.display()))
+        .collect()
 }
 
 /// Ajoute `#[link_name = "<prefix><nom>"]` devant chaque `pub fn` ffmpeg de `ffi.rs`.

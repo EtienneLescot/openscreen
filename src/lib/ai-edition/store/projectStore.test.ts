@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProjectStore } from "./projectStore";
 
@@ -294,6 +295,58 @@ describe("useProjectStore", () => {
 
 		expect(toastMocks.error).toHaveBeenCalledTimes(1);
 		expect(toastMocks.error.mock.calls[0][0]).toContain("video.mp4");
+	});
+
+	// The save boundary. Every write in the app funnels through `saveDocument`, and
+	// almost every caller `void`s it from a click handler, so what this function does
+	// with a failure IS what the user sees.
+	describe("saveDocument reports a failed write instead of rejecting", () => {
+		it("resolves false, tells the user, and leaves the document alone", async () => {
+			useProjectStore.setState({
+				projectId: "proj_test",
+				document: sampleDoc,
+				revision: 3,
+				status: "ready",
+				dirty: true,
+			});
+			bridgeMocks.save.mockResolvedValue({ success: false, error: "EACCES" });
+
+			const edited = { ...sampleDoc, project: { ...sampleDoc.project, title: "Edited" } };
+			await expect(useProjectStore.getState().saveDocument(edited)).resolves.toBe(false);
+
+			expect(toastMocks.error).toHaveBeenCalledWith("Failed to save project", {
+				description: "EACCES",
+			});
+			const state = useProjectStore.getState();
+			expect(state.document?.project.title).toBe("Test");
+			expect(state.revision).toBe(3);
+			// Still dirty: `dirty` is the only input to the beforeunload guard and to
+			// `setHasUnsavedChanges`, so a failed write is the last moment to claim clean.
+			expect(state.dirty).toBe(true);
+		});
+
+		it("never rejects, so a detached caller cannot leak an unhandled rejection", async () => {
+			useProjectStore.setState({ projectId: "proj_test", document: sampleDoc, dirty: true });
+			bridgeMocks.save.mockRejectedValue(new Error("bridge is gone"));
+
+			await expect(useProjectStore.getState().saveDocument(sampleDoc)).resolves.toBe(false);
+			expect(toastMocks.error).toHaveBeenCalledWith("Failed to save project", {
+				description: "bridge is gone",
+			});
+		});
+
+		it("resolves true and commits on success", async () => {
+			const saved = { ...sampleDoc, project: { ...sampleDoc.project, title: "Saved" } };
+			useProjectStore.setState({ projectId: "proj_test", document: sampleDoc, dirty: true });
+			bridgeMocks.save.mockResolvedValue({ success: true, document: saved });
+
+			await expect(useProjectStore.getState().saveDocument(saved)).resolves.toBe(true);
+
+			expect(toastMocks.error).not.toHaveBeenCalled();
+			const state = useProjectStore.getState();
+			expect(state.document?.project.title).toBe("Saved");
+			expect(state.dirty).toBe(false);
+		});
 	});
 
 	it("removeAsset requires a loaded project", async () => {

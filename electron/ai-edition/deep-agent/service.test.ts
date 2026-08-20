@@ -27,7 +27,12 @@ import {
 	ZOOM_DEPTH_LEGEND,
 	ZOOM_DEPTH_SCALES,
 } from "../../../src/lib/ai-edition/timeline/zoom-scale";
-import { executeAgentTool, isMutatingTool } from "../agent-tools";
+import {
+	executeAgentTool,
+	isMutatingTool,
+	OPENSCREEN_TOOL_NAMES,
+	PHANTOM_TOOL_NAMES,
+} from "../agent-tools";
 import {
 	anthropicCachingMiddleware,
 	buildSystemPrompt,
@@ -37,43 +42,13 @@ import {
 	TOOL_DESCRIPTIONS,
 } from "./service";
 
-const OPENSCREEN_TOOLS = [
-	"getCurrentDocument",
-	"getTranscript",
-	"getCursorTrack",
-	"addTrim",
-	"setTrim",
-	"setClipRange",
-	"moveClip",
-	"replaceTimeline",
-	"addZoom",
-	"setZoom",
-	"addSpeed",
-	"setSpeed",
-	"addAnnotation",
-	"setAnnotation",
-	"addCameraFullscreen",
-	"setCameraFullscreen",
-	"removeTrim",
-	"removeModifier",
-	"removeClip",
-];
-
-/** The tools `createDeepAgent` used to add. None of them may ever be built here
- * again: `execute` is in the middleware's list too and only disappeared at
- * runtime because the default backend is not a sandbox, so it is listed as
- * well — a sandbox backend would have made it a 26th tool. */
-const PHANTOM_TOOLS = [
-	"ls",
-	"read_file",
-	"write_file",
-	"edit_file",
-	"glob",
-	"grep",
-	"execute",
-	"write_todos",
-	"task",
-];
+// Both rosters used to be re-typed here, and a third time in the workbench. This
+// file is the one that runs in CI, so its copy stayed right and the bench's went
+// stale at 19 tools — asserting a surface the product had outgrown. One list now,
+// in `agent-tools.ts`; this suite is what pins it to what `buildTools` actually
+// builds, and the bench reads the same array.
+const OPENSCREEN_TOOLS: readonly string[] = OPENSCREEN_TOOL_NAMES;
+const PHANTOM_TOOLS: readonly string[] = PHANTOM_TOOL_NAMES;
 
 /** Valid arguments for every tool, chosen so the executor's verdict is split
  * across the table: some succeed, some are refused for an unknown id, and
@@ -84,11 +59,13 @@ const ARGS: Record<string, unknown> = {
 	getTranscript: {},
 	getCursorTrack: {},
 	addTrim: { startSec: 1, endSec: 2 },
+	addTrims: { ranges: [{ startSec: 1, endSec: 2 }] },
 	setTrim: { trimRangeId: "trim_1", startSec: 1, endSec: 2 },
 	setClipRange: { clipId: "clip_1", sourceStartSec: 0, sourceEndSec: 10 },
 	moveClip: { clipId: "clip_1", beforeClipId: null },
 	replaceTimeline: { intervals: [{ startSec: 0, endSec: 10 }] },
 	addZoom: { startSec: 1, endSec: 2 },
+	addZooms: { regions: [{ startSec: 1, endSec: 2 }] },
 	setZoom: { zoomId: "zoom_nope" },
 	addSpeed: { startSec: 1, endSec: 2 },
 	setSpeed: { speedId: "speed_nope" },
@@ -171,7 +148,7 @@ function recordingSink(): { sink: OpenScreenAgentSink; events: SinkEvent[] } {
 }
 
 /** `buildTools` returns a tuple with a DISTINCT type per tool, one per zod
- * schema, so `tools.find(...)` is a 19-way union — and `.invoke` is generic, a
+ * schema, so `tools.find(...)` is a 21-way union — and `.invoke` is generic, a
  * shape TypeScript will not call through a union (TS2349). Widening to the
  * interface every one of them implements is what the model is handed anyway:
  * `createAgent` takes them as `ClientTool`, i.e. exactly this. Nothing the
@@ -187,7 +164,9 @@ function toolsFor(document: AxcutDocument) {
 }
 
 describe("the tool surface handed to the model", () => {
-	it("is exactly OpenScreen's 19 tools", () => {
+	// No count in the title: the number moved twice without either copy of the
+	// roster following, and a title is the one place a stale number cannot fail.
+	it("is exactly the tools OpenScreen declares, in that order", () => {
 		const { tools } = toolsFor(fixtureDocument());
 		expect(tools.map((t) => t.name)).toEqual(OPENSCREEN_TOOLS);
 	});
@@ -286,6 +265,23 @@ describe("the sink announces each call exactly once, with the real verdict", () 
 		expect(String(result)).toContain("No transcript");
 		expect(events).toHaveLength(2);
 		expect(events[1]).toMatchObject({ kind: "toolEnd", name: "getTranscript", ok: false });
+	});
+
+	it("lets a malformed batch entry reach the executor instead of throwing at the schema", async () => {
+		// LangChain parses the tool's schema BEFORE calling us, so a batch schema
+		// that enforced its element shape would reject the whole call here — the
+		// per-item `refused[index]` that `addTrims` promises the model could never
+		// happen on the product path, only in a direct-executor test.
+		const { tools, holder } = toolsFor(fixtureDocument());
+		const tool = tools.find((t) => t.name === "addTrims");
+		if (!tool) throw new Error("addTrims is not built");
+
+		const result = JSON.parse(
+			String(await tool.invoke({ ranges: [{ startSec: 1, endSec: 2 }, { startSec: "oops" }] })),
+		);
+		expect(result.appliedCount).toBe(1);
+		expect(result.refused[0].index).toBe(1);
+		expect(holder.current.timeline.trimRanges).toHaveLength(2);
 	});
 
 	it("advances the holder on a write, and leaves it alone on a refusal", async () => {
@@ -398,7 +394,7 @@ describe("the prompt when the user has turned project edits off", () => {
 });
 
 describe("the tools when the user has turned project edits off", () => {
-	it("still builds all 18 — the model has to be able to NAME the edit", () => {
+	it("still builds every one — the model has to be able to NAME the edit", () => {
 		const { sink } = recordingSink();
 		const tools: BuiltTool[] = buildTools({ current: fixtureDocument() }, sink, false);
 		expect(tools.map((t) => t.name)).toEqual(OPENSCREEN_TOOLS);

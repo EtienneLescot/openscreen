@@ -109,6 +109,36 @@ describe("diffMatches", () => {
 		expect(diffMatches(document, call)).toBe(true);
 	});
 
+	it("vérifie CHAQUE élément d'un appel par lot, pas seulement l'enveloppe", () => {
+		// Un lot ne porte aucun id au premier niveau : ils sont dans `applied`.
+		// Sans la branche qui les lit, ce check rendrait « vrai à vide » sur
+		// exactement les appels qui écrivent le plus, et il s'éteindrait sans
+		// qu'un seul test devienne rouge.
+		const { document, call } = apply(singleClip(), "addTrims", {
+			ranges: [
+				{ startSec: 2, endSec: 4 },
+				{ startSec: 8, endSec: 10 },
+			],
+		});
+		expect(JSON.parse(call.resultJson ?? "{}").appliedCount).toBe(2);
+		expect(diffMatches(document, call)).toBe(true);
+
+		// Le même appel dont UN élément ment sur ses bornes doit tomber.
+		const lying: WireCall = {
+			...call,
+			resultJson: JSON.stringify({
+				requested: 2,
+				appliedCount: 2,
+				refusedCount: 0,
+				applied: [
+					{ index: 0, ...JSON.parse(call.resultJson ?? "{}").applied[0] },
+					{ index: 1, trimRangeId: "trim_nope", startSec: 30, endSec: 40 },
+				],
+			}),
+		};
+		expect(diffMatches(document, lying)).toBe(false);
+	});
+
 	it("catches a report about a region the document does not carry", () => {
 		// The shape of DSL-4 and of a silently re-derived-away region: the tool
 		// answers with the bounds it was ASKED for, the document says otherwise.

@@ -1,11 +1,14 @@
 #include "wgc_session.h"
 
 #include <Windows.Graphics.Capture.Interop.h>
+#include <d3d10.h>
 #include <dxgi1_2.h>
 #include <inspectable.h>
 #include <winrt/base.h>
 
+#include <chrono>
 #include <iostream>
+#include <thread>
 
 namespace wf = winrt::Windows::Foundation;
 namespace wgcap = winrt::Windows::Graphics::Capture;
@@ -61,7 +64,7 @@ WgcSession::~WgcSession() {
 }
 
 bool WgcSession::createD3DDevice() {
-    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 #if defined(_DEBUG)
     flags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
@@ -106,6 +109,12 @@ bool WgcSession::createD3DDevice() {
     if (!succeeded(hr, "D3D11CreateDevice")) {
         return false;
     }
+
+    Microsoft::WRL::ComPtr<ID3D10Multithread> multithread;
+    if (!succeeded(d3dContext_.As(&multithread), "Query ID3D10Multithread")) {
+        return false;
+    }
+    multithread->SetMultithreadProtected(TRUE);
 
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
     if (!succeeded(d3dDevice_.As(&dxgiDevice), "Query IDXGIDevice")) {
@@ -273,23 +282,81 @@ bool WgcSession::start() {
     return true;
 }
 
+bool WgcSession::quiesceCapture(int drainTimeoutMs) {
+    if (quiesced_) {
+        return callbacksInFlight_.load() == 0;
+    }
+    quiesced_ = true;
+
+    try {
+        if (framePool_) {
+            framePool_.FrameArrived(frameArrivedToken_);
+        }
+    } catch (...) {
+        // Revoking a handler the runtime has already torn down is not a reason
+        // to abandon the rest of the shutdown.
+    }
+    {
+        // Drop the callback under the same lock onFrameArrived copies it under,
+        // so any handler that has not read it yet becomes a no-op...
+        std::scoped_lock lock(callbackMutex_);
+        frameCallback_ = nullptr;
+    }
+    // ...then wait out the handlers that already read it. Without this, stop()
+    // could Reset() the D3D context while a callback was still issuing
+    // CopyResource on it.
+    //
+    // Bounded, because a callback wedged inside the display driver never
+    // finishes and this runs on paths that have no watchdog above them (the
+    // first-frame timeout in main.cpp). Giving up is reported rather than
+    // papered over: the caller keeps the device alive instead, which leaks it
+    // until the process exits and is the lesser of the two failures.
+    const auto drainDeadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(drainTimeoutMs);
+    while (callbacksInFlight_.load() > 0) {
+        if (std::chrono::steady_clock::now() >= drainDeadline) {
+            std::cerr << "WARNING: A WGC frame callback did not finish; leaving the device alive"
+                      << std::endl;
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // Close() is a C++/WinRT projection and throws hresult_error on failure.
+    // Letting that escape would take the process down through std::terminate
+    // mid-shutdown, discarding a recording that is already finalized by the time
+    // this runs. There is nothing to do about a capture session that refuses to
+    // close except stop caring about it.
+    try {
+        if (session_) {
+            session_.Close();
+        }
+        if (framePool_) {
+            framePool_.Close();
+        }
+    } catch (winrt::hresult_error const& error) {
+        std::cerr << "WARNING: Failed to close the WGC session (hr=0x" << std::hex
+                  << static_cast<uint32_t>(error.code()) << std::dec << ")" << std::endl;
+    } catch (...) {
+        std::cerr << "WARNING: Failed to close the WGC session" << std::endl;
+    }
+    session_ = nullptr;
+    framePool_ = nullptr;
+    started_ = false;
+    return true;
+}
+
 void WgcSession::stop() {
-    if (framePool_) {
-        framePool_.FrameArrived(frameArrivedToken_);
-    }
-    if (session_) {
-        session_.Close();
-        session_ = nullptr;
-    }
-    if (framePool_) {
-        framePool_.Close();
-        framePool_ = nullptr;
+    if (!quiesceCapture()) {
+        // A callback is still inside the driver holding this context. Releasing
+        // it now would pull the device out from under a live CopyResource, so
+        // leak it and let process exit reclaim it.
+        return;
     }
     item_ = nullptr;
     winrtDevice_ = nullptr;
     d3dContext_.Reset();
     d3dDevice_.Reset();
-    started_ = false;
 }
 
 void WgcSession::onFrameArrived(
@@ -312,10 +379,30 @@ void WgcSession::onFrameArrived(
     {
         std::scoped_lock lock(callbackMutex_);
         callback = frameCallback_;
+        if (callback) {
+            // Counted under the same lock quiesceCapture() clears the callback
+            // under, so once it has cleared it no new callback can start and
+            // the counter it then drains cannot go back up.
+            callbacksInFlight_ += 1;
+        }
     }
 
     if (callback) {
+        // Scoped rather than a bare decrement after the call, for two reasons:
+        // a callback that left by exception would otherwise strand
+        // quiesceCapture()'s drain forever, and the guard has to outlive
+        // frame.Close() -- dropping the count first would let quiesce return and
+        // close the frame pool while this handler is still closing a frame that
+        // pool owns.
+        struct InFlightGuard {
+            std::atomic<int>& counter;
+            ~InFlightGuard() {
+                counter -= 1;
+            }
+        } guard{callbacksInFlight_};
         callback(texture.Get(), timeSpanToHns(frame.SystemRelativeTime()));
+        frame.Close();
+        return;
     }
     frame.Close();
 }

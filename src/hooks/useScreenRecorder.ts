@@ -20,6 +20,7 @@ import type { CursorCaptureMode, RecordedVideoAssetInput } from "@/lib/recording
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { createRecorderHandle, type RecorderHandle } from "./recorderHandle";
+import { webcamDeviceIdentityFrom } from "./webcamDeviceIdentity";
 
 const TARGET_FRAME_RATE = 60;
 const MIN_FRAME_RATE = 30;
@@ -143,8 +144,67 @@ export function webcamOffsetMsFrom(
 	return -Math.round(nativeStartedAtMs - webcamStartedAtMs);
 }
 
+/**
+ * Turn a finished webcam recorder into the asset the native attach IPC wants, or
+ * into the reason it cannot be saved. Shared by the macOS and Linux finalizers,
+ * which differ only in the name they log under.
+ *
+ * A streamed recording resolves an empty blob by design — its bytes are already
+ * on disk — so it hands over the file name alone and the main process closes the
+ * stream and patches the duration there. Only a buffered recording is read into
+ * memory, and flattening one of those into a single ArrayBuffer is exactly what
+ * used to throw past ~2 GB and cost the user the whole camera track (#253).
+ *
+ * Never resolves to "nothing happened": every failure comes back with a reason,
+ * because the screen recording still saves and a silent drop just opens the
+ * editor with the camera mysteriously absent.
+ */
+export async function finalizeWebcamAsset(
+	webcamRecorder: RecorderHandle,
+	fileName: string,
+	durationMs: number,
+	platformLabel: string,
+): Promise<{ asset?: RecordedVideoAssetInput; error?: string }> {
+	try {
+		if (webcamRecorder.recorder.state !== "inactive") {
+			webcamRecorder.recorder.stop();
+		}
+		// Rejects on a mid-stream write failure, so a truncated recording lands in
+		// the catch below rather than passing for a good one.
+		const webcamBlob = await webcamRecorder.recordedBlobPromise;
+		if (webcamRecorder.isStreaming()) {
+			return { asset: { videoData: new ArrayBuffer(0), fileName } };
+		}
+		if (!webcamBlob || webcamBlob.size === 0) {
+			return { error: "the webcam produced no data" };
+		}
+		const fixedWebcamBlob = await fixWebmDuration(webcamBlob, durationMs);
+		return { asset: { videoData: await fixedWebcamBlob.arrayBuffer(), fileName } };
+	} catch (error) {
+		console.error(`Failed to finalize native ${platformLabel} webcam recording:`, error);
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
 export function useScreenRecorder(): UseScreenRecorderReturn {
 	const t = useScopedT("editor");
+	/**
+	 * `t` through a ref, for the callbacks that must not be rebuilt when it
+	 * changes identity.
+	 *
+	 * `finalizeNativeWindowsRecording` is one of them: it sits in the dependency
+	 * array of the unmount effect below, whose cleanup bumps `countdownRunId` and
+	 * discards any native recording in flight. Recreating that callback therefore
+	 * re-runs the effect, and its cleanup silently cancels the countdown a
+	 * recording is starting from — the take never begins, with nothing logged.
+	 */
+	const tRef = useRef(t);
+	// In an effect, not during render: a render React discards still leaves a ref
+	// written there, and a later recording error would then be worded by a UI that
+	// never reached the screen.
+	useEffect(() => {
+		tRef.current = t;
+	}, [t]);
 	const [recording, setRecording] = useState(false);
 	const [paused, setPaused] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -166,15 +226,29 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	// defaults every time startNewRecording() switches to the HUD window.
 	useEffect(() => {
 		let cancelled = false;
-		void window.electronAPI?.getRecordingPrefs?.().then((prefs) => {
-			if (cancelled || !prefs) return;
-			setMicrophoneEnabled(prefs.micEnabled);
-			if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
-			setWebcamEnabledState(prefs.camEnabled);
-			if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
-			setSystemAudioEnabled(prefs.systemAudioEnabled);
-			setCursorCaptureMode(prefs.cursorCaptureMode);
-		});
+		void window.electronAPI
+			?.getRecordingPrefs?.()
+			.then((prefs) => {
+				if (cancelled || !prefs) return;
+				setMicrophoneEnabled(prefs.micEnabled);
+				if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
+				// The name matters as much as the id: the native Windows helper picks
+				// the microphone by NAME, and falls back to the Windows default
+				// endpoint when it is empty. Seeding only the id left an auto-started
+				// recording racing this window's own device enumeration for it, and
+				// losing (getopenscreen/openscreen#404).
+				if (prefs.micDeviceName) setMicrophoneDeviceName(prefs.micDeviceName);
+				setWebcamEnabledState(prefs.camEnabled);
+				if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
+				setSystemAudioEnabled(prefs.systemAudioEnabled);
+				setCursorCaptureMode(prefs.cursorCaptureMode);
+			})
+			.catch((err) => {
+				// Bare ipcRenderer.invoke — rejects if the main handler throws. Falling
+				// back to this hook's own defaults is acceptable; an unhandled rejection
+				// on every HUD mount is not.
+				console.warn("Failed to seed the recording prefs:", err);
+			});
 		return () => {
 			cancelled = true;
 		};
@@ -267,6 +341,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			mixingContext.current = null;
 		}
 	}, []);
+
+	/**
+	 * The camera to name in a native capture request. See
+	 * `webcamDeviceIdentityFrom` for why it is read off the live track rather than
+	 * off this hook's two separate pieces of state. Must be called before
+	 * `stopWebcamPreviewStream()`, which is why the Windows path captures it up
+	 * front instead of at the point of use.
+	 */
+	const readWebcamDeviceIdentity = useCallback(
+		() => webcamDeviceIdentityFrom(webcamStream.current, webcamDeviceId, webcamDeviceName),
+		[webcamDeviceId, webcamDeviceName],
+	);
 
 	const stopWebcamPreviewStream = useCallback(() => {
 		if (!webcamStream.current) {
@@ -536,11 +622,29 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			if (!result.success) {
 				console.error("Failed to stop native Windows recording:", result.error);
 				toast.error(result.error ?? "Failed to stop native Windows recording");
-				activeNativeRecording.finalizing = false;
+				// Clear anyway. The main process releases its helper handle
+				// unconditionally, so holding on here left the two sides
+				// disagreeing about whether anything was recording: the HUD kept
+				// showing a stop button, and pressing it sent a second stop that
+				// came back "Native Windows capture is not running." (issue #252).
+				// Reaching here now means the take really is unreadable -- a failed
+				// stop that left a playable fragmented file comes back `success`
+				// with a session and takes the editor path below, so this branch no
+				// longer decides the fate of a recoverable recording.
+				clearNativeRecordingState();
 				return true;
 			}
 
 			clearNativeRecordingState();
+			// The other way a camera goes missing, and the quieter one: the device
+			// opened, so nothing warned at start, but it never produced a frame and
+			// the file it left behind was empty. Say so before the editor opens
+			// without a camera and leaves the user to work out why. Through `tRef`
+			// because this callback has to stay referentially stable — see the ref's
+			// own comment.
+			if (result.webcamDropped) {
+				toast.error(tRef.current("recording.cameraCaptureUnavailable"));
+			}
 			if (result.session) {
 				await window.electronAPI.setCurrentRecordingSession(result.session);
 			} else if (result.path) {
@@ -554,7 +658,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to save native Windows recording",
 			);
-			activeNativeRecording.finalizing = false;
+			clearNativeRecordingState();
 			return true;
 		} finally {
 			if (discardRecordingId.current === activeNativeRecording.recordingId) {
@@ -580,38 +684,23 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			if (activeWebcamRecorder && webcamRecorder.current === activeWebcamRecorder) {
 				webcamRecorder.current = null;
 			}
-			const webcamAssetPromise = (async (): Promise<RecordedVideoAssetInput | undefined> => {
-				if (!activeWebcamRecorder) {
-					return undefined;
-				}
-
-				try {
-					if (activeWebcamRecorder.recorder.state !== "inactive") {
-						activeWebcamRecorder.recorder.stop();
-					}
-					const webcamBlob = await activeWebcamRecorder.recordedBlobPromise;
-					if (!webcamBlob || webcamBlob.size === 0) {
-						return undefined;
-					}
-					// The webcam MediaRecorder started before the native recording did (see
-					// webcamOffsetMs on NativeMacRecordingHandle), so its real content is
-					// longer than the screen's active `duration` by that same head start.
-					// Patching the WebM's declared duration to the screen's shorter duration
-					// would make that extra leading footage unseekable in a standard <video>
-					// element (which trusts the container's declared duration/seek range) --
-					// exactly the footage the editor needs to skip into to compensate for
-					// webcamOffsetMs, so it must stay reachable.
-					const webcamHeadStartMs = Math.max(0, -(activeNativeRecording.webcamOffsetMs ?? 0));
-					const fixedWebcamBlob = await fixWebmDuration(webcamBlob, duration + webcamHeadStartMs);
-					return {
-						videoData: await fixedWebcamBlob.arrayBuffer(),
-						fileName: `${RECORDING_FILE_PREFIX}${activeNativeRecording.recordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`,
-					};
-				} catch (error) {
-					console.error("Failed to finalize native macOS webcam recording:", error);
-					return undefined;
-				}
-			})();
+			// The webcam MediaRecorder started before the native recording did (see
+			// webcamOffsetMs on NativeMacRecordingHandle), so its real content is
+			// longer than the screen's active `duration` by that same head start.
+			// Patching the WebM's declared duration to the screen's shorter duration
+			// would make that extra leading footage unseekable in a standard <video>
+			// element (which trusts the container's declared duration/seek range) --
+			// exactly the footage the editor needs to skip into to compensate for
+			// webcamOffsetMs, so it must stay reachable.
+			const webcamHeadStartMs = Math.max(0, -(activeNativeRecording.webcamOffsetMs ?? 0));
+			const webcamDurationMs = duration + webcamHeadStartMs;
+			const webcamFileName = `${RECORDING_FILE_PREFIX}${activeNativeRecording.recordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`;
+			const webcamResultPromise: Promise<{
+				asset?: RecordedVideoAssetInput;
+				error?: string;
+			}> = activeWebcamRecorder
+				? finalizeWebcamAsset(activeWebcamRecorder, webcamFileName, webcamDurationMs, "macOS")
+				: Promise.resolve({});
 
 			const clearNativeRecordingState = () => {
 				nativeMacRecording.current = null;
@@ -622,9 +711,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				segmentStartedAt.current = null;
 			};
 
+			let webcamSaved = false;
 			try {
 				const result = await window.electronAPI.stopNativeMacRecording(discard);
-				const webcamAsset = await webcamAssetPromise;
+				const webcamResult = await webcamResultPromise;
 				if (discard || result.discarded) {
 					clearNativeRecordingState();
 					return true;
@@ -632,26 +722,36 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (!result.success) {
 					console.error("Failed to stop native macOS recording:", result.error);
 					toast.error(result.error ?? "Failed to stop native macOS recording");
-					activeNativeRecording.finalizing = false;
+					// See the Windows finalizer: the main process has already
+					// released its helper handle, so keeping ours leaves the HUD
+					// stuck in a recording state the app can never be stopped out
+					// of (issue #252).
+					clearNativeRecordingState();
 					return true;
 				}
 
-				if (webcamAsset && result.path) {
+				if (webcamResult.asset && result.path) {
 					const attachResult = await window.electronAPI.attachNativeMacWebcamRecording({
 						screenVideoPath: result.path,
 						recordingId: activeNativeRecording.recordingId,
-						webcam: webcamAsset,
+						webcam: webcamResult.asset,
 						cursorCaptureMode,
+						durationMs: webcamDurationMs,
 						...(typeof activeNativeRecording.webcamOffsetMs === "number"
 							? { webcamOffsetMs: activeNativeRecording.webcamOffsetMs }
 							: {}),
 					});
 					if (attachResult.success) {
 						result.session = attachResult.session;
+						webcamSaved = true;
 					} else {
 						console.error("Failed to attach native macOS webcam recording:", attachResult.error);
 						toast.error(attachResult.error ?? "Failed to store webcam recording");
 					}
+				} else if (webcamResult.error) {
+					// The screen recording still saves, so without this the editor just
+					// opens with the camera missing and nothing said about it (#253).
+					toast.error(`Webcam not saved (${webcamResult.error}). The screen recording was kept.`);
 				}
 
 				clearNativeRecordingState();
@@ -668,9 +768,15 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				toast.error(
 					error instanceof Error ? error.message : "Failed to save native macOS recording",
 				);
-				activeNativeRecording.finalizing = false;
+				clearNativeRecordingState();
 				return true;
 			} finally {
+				// A webcam stream that wasn't folded into a saved session has to be closed
+				// and its partial file removed, or a discarded or failed take orphans a
+				// half-written .webm now that the bytes go to disk as they arrive.
+				if (activeWebcamRecorder && !webcamSaved) {
+					await activeWebcamRecorder.discard().catch(() => undefined);
+				}
 				if (discardRecordingId.current === activeNativeRecording.recordingId) {
 					discardRecordingId.current = null;
 				}
@@ -701,33 +807,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			if (activeWebcamRecorder && webcamRecorder.current === activeWebcamRecorder) {
 				webcamRecorder.current = null;
 			}
-			const webcamAssetPromise = (async (): Promise<RecordedVideoAssetInput | undefined> => {
-				if (!activeWebcamRecorder) {
-					return undefined;
-				}
-
-				try {
-					if (activeWebcamRecorder.recorder.state !== "inactive") {
-						activeWebcamRecorder.recorder.stop();
-					}
-					const webcamBlob = await activeWebcamRecorder.recordedBlobPromise;
-					if (!webcamBlob || webcamBlob.size === 0) {
-						return undefined;
-					}
-					// See the identical comment in finalizeNativeMacRecording: the
-					// leading footage recorded while the portal picker was up must
-					// stay seekable, so the declared duration includes it.
-					const webcamHeadStartMs = Math.max(0, -(activeNativeRecording.webcamOffsetMs ?? 0));
-					const fixedWebcamBlob = await fixWebmDuration(webcamBlob, duration + webcamHeadStartMs);
-					return {
-						videoData: await fixedWebcamBlob.arrayBuffer(),
-						fileName: `${RECORDING_FILE_PREFIX}${activeNativeRecording.recordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`,
-					};
-				} catch (error) {
-					console.error("Failed to finalize native Linux webcam recording:", error);
-					return undefined;
-				}
-			})();
+			// See the identical comment in finalizeNativeMacRecording: the
+			// leading footage recorded while the portal picker was up must
+			// stay seekable, so the declared duration includes it.
+			const webcamHeadStartMs = Math.max(0, -(activeNativeRecording.webcamOffsetMs ?? 0));
+			const webcamDurationMs = duration + webcamHeadStartMs;
+			const webcamFileName = `${RECORDING_FILE_PREFIX}${activeNativeRecording.recordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`;
+			const webcamResultPromise: Promise<{
+				asset?: RecordedVideoAssetInput;
+				error?: string;
+			}> = activeWebcamRecorder
+				? finalizeWebcamAsset(activeWebcamRecorder, webcamFileName, webcamDurationMs, "Linux")
+				: Promise.resolve({});
 
 			const clearNativeRecordingState = () => {
 				nativeLinuxRecording.current = null;
@@ -738,9 +829,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				segmentStartedAt.current = null;
 			};
 
+			let webcamSaved = false;
 			try {
 				const result = await window.electronAPI.stopNativeLinuxRecording(discard);
-				const webcamAsset = await webcamAssetPromise;
+				const webcamResult = await webcamResultPromise;
 				if (discard || result.discarded) {
 					clearNativeRecordingState();
 					return true;
@@ -748,26 +840,36 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (!result.success) {
 					console.error("Failed to stop native Linux recording:", result.error);
 					toast.error(result.error ?? "Failed to stop native Linux recording");
-					activeNativeRecording.finalizing = false;
+					// See the Windows finalizer: the main process has already
+					// released its helper handle, so keeping ours leaves the HUD
+					// stuck in a recording state the app can never be stopped out
+					// of (issue #252).
+					clearNativeRecordingState();
 					return true;
 				}
 
-				if (webcamAsset && result.path) {
+				if (webcamResult.asset && result.path) {
 					const attachResult = await window.electronAPI.attachNativeLinuxWebcamRecording({
 						screenVideoPath: result.path,
 						recordingId: activeNativeRecording.recordingId,
-						webcam: webcamAsset,
+						webcam: webcamResult.asset,
 						cursorCaptureMode,
+						durationMs: webcamDurationMs,
 						...(typeof activeNativeRecording.webcamOffsetMs === "number"
 							? { webcamOffsetMs: activeNativeRecording.webcamOffsetMs }
 							: {}),
 					});
 					if (attachResult.success) {
 						result.session = attachResult.session;
+						webcamSaved = true;
 					} else {
 						console.error("Failed to attach native Linux webcam recording:", attachResult.error);
 						toast.error(attachResult.error ?? "Failed to store webcam recording");
 					}
+				} else if (webcamResult.error) {
+					// The screen recording still saves, so without this the editor just
+					// opens with the camera missing and nothing said about it (#253).
+					toast.error(`Webcam not saved (${webcamResult.error}). The screen recording was kept.`);
 				}
 
 				clearNativeRecordingState();
@@ -784,9 +886,15 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				toast.error(
 					error instanceof Error ? error.message : "Failed to save native Linux recording",
 				);
-				activeNativeRecording.finalizing = false;
+				clearNativeRecordingState();
 				return true;
 			} finally {
+				// A webcam stream that wasn't folded into a saved session has to be closed
+				// and its partial file removed, or a discarded or failed take orphans a
+				// half-written .webm now that the bytes go to disk as they arrive.
+				if (activeWebcamRecorder && !webcamSaved) {
+					await activeWebcamRecorder.discard().catch(() => undefined);
+				}
 				if (discardRecordingId.current === activeNativeRecording.recordingId) {
 					discardRecordingId.current = null;
 				}
@@ -995,11 +1103,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const displayId = Number(selectedSource.display_id);
 			const sourceType = selectedSource.id.startsWith("window:") ? "window" : "display";
 			const windowHandle = parseWindowHandleFromSourceId(selectedSource.id);
+			let webcamIdentity = { deviceId: webcamDeviceId, deviceName: webcamDeviceName };
 			if (webcamEnabled) {
 				await waitForWebcamReady();
 				if (!isCountdownRunActive(countdownRunToken)) {
 					return true;
 				}
+				// Read the device off the live track before letting go of it: this is
+				// the only moment where the id and the name are known to describe the
+				// same camera (see readWebcamDeviceIdentity).
+				webcamIdentity = readWebcamDeviceIdentity();
 				// Release the renderer-side validation stream before asking the native
 				// helper to open the same device: most webcams only allow one exclusive
 				// capture session, and native (Media Foundation/DirectShow) now owns
@@ -1035,8 +1148,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				},
 				webcam: {
 					enabled: webcamEnabled,
-					deviceId: webcamDeviceId,
-					deviceName: webcamDeviceName,
+					deviceId: webcamIdentity.deviceId,
+					deviceName: webcamIdentity.deviceName,
 					width: 0,
 					height: 0,
 					fps: WEBCAM_TARGET_FRAME_RATE,
@@ -1048,6 +1161,17 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const result = await window.electronAPI.startNativeWindowsRecording(request);
 			if (!result.success || !result.recordingId) {
 				throw new Error(result.error ?? "Native Windows capture failed.");
+			}
+
+			// The take goes on without the camera rather than failing, so this is the
+			// only moment the user can learn about it while it is still cheap to stop
+			// and retry. Left unsaid, the camera's absence was discovered in the
+			// editor, long after the moment was gone.
+			if (result.webcamUnavailable) {
+				toast.error(t("recording.cameraCaptureUnavailable"));
+			}
+			if (result.microphoneDefaulted) {
+				toast.error(t("recording.microphoneDefaulted"));
 			}
 
 			// Tell the user when the helper silently switched away from the default
@@ -1136,10 +1260,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 				if (webcamStream.current) {
 					nativeWebcamRecorderStartedAtMs = performance.now();
-					nativeWebcamRecorder = createRecorderHandle(webcamStream.current, {
-						mimeType: selectMimeType(),
-						videoBitsPerSecond: BITRATE_BASE,
-					});
+					// Stream to disk. Buffered in memory, a long take had to be flattened
+					// into one ArrayBuffer at finalize -- past ~2GB that throws, and the
+					// camera was dropped without a word (#253). The main process reuses the
+					// recordingId we send here, so this name is the one finalize rebuilds.
+					nativeWebcamRecorder = createRecorderHandle(
+						webcamStream.current,
+						{
+							mimeType: selectMimeType(),
+							videoBitsPerSecond: BITRATE_BASE,
+						},
+						`${RECORDING_FILE_PREFIX}${activeRecordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`,
+					);
 				} else {
 					webcamAcquireId.current++;
 					setWebcamEnabledState(false);
@@ -1177,8 +1309,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				},
 				webcam: {
 					enabled: webcamEnabled,
-					deviceId: webcamDeviceId,
-					deviceName: webcamDeviceName,
+					// Same pairing rule as the Windows path; here the stream is still
+					// open, so the identity can be read at the point of use.
+					...readWebcamDeviceIdentity(),
 					width: 0,
 					height: 0,
 					fps: WEBCAM_TARGET_FRAME_RATE,
@@ -1320,10 +1453,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 				if (webcamStream.current) {
 					nativeWebcamRecorderStartedAtMs = performance.now();
-					nativeWebcamRecorder = createRecorderHandle(webcamStream.current, {
-						mimeType: selectMimeType(),
-						videoBitsPerSecond: BITRATE_BASE,
-					});
+					// See the identical comment in the macOS path: stream to disk so a long
+					// take is never flattened into one ArrayBuffer at finalize (#253).
+					nativeWebcamRecorder = createRecorderHandle(
+						webcamStream.current,
+						{
+							mimeType: selectMimeType(),
+							videoBitsPerSecond: BITRATE_BASE,
+						},
+						`${RECORDING_FILE_PREFIX}${activeRecordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`,
+					);
 				} else {
 					webcamAcquireId.current++;
 					setWebcamEnabledState(false);

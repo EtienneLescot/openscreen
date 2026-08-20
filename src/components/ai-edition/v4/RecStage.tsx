@@ -23,6 +23,7 @@ import styles from "./EditorShellV4.module.css";
 interface RecordingPrefsState {
 	micEnabled: boolean;
 	micDeviceId: string | null;
+	micDeviceName: string | null;
 	camEnabled: boolean;
 	camDeviceId: string | null;
 	systemAudioEnabled: boolean;
@@ -32,6 +33,7 @@ interface RecordingPrefsState {
 const DEFAULT_PREFS: RecordingPrefsState = {
 	micEnabled: false,
 	micDeviceId: null,
+	micDeviceName: null,
 	camEnabled: false,
 	camDeviceId: null,
 	systemAudioEnabled: false,
@@ -62,9 +64,16 @@ export function RecStage({
 	const [prefs, setPrefsState] = useState<RecordingPrefsState>(DEFAULT_PREFS);
 	useEffect(() => {
 		let cancelled = false;
-		void window.electronAPI?.getRecordingPrefs?.().then((p) => {
-			if (!cancelled && p) setPrefsState(p as RecordingPrefsState);
-		});
+		void window.electronAPI
+			?.getRecordingPrefs?.()
+			.then((p) => {
+				if (!cancelled && p) setPrefsState(p as RecordingPrefsState);
+			})
+			.catch((err) => {
+				// Bare ipcRenderer.invoke — rejects if the main handler throws. Keeping
+				// DEFAULT_PREFS is a fine outcome; an unhandled rejection is not.
+				console.warn("[rec-stage] failed to read the recording prefs:", err);
+			});
 		return () => {
 			cancelled = true;
 		};
@@ -72,7 +81,9 @@ export function RecStage({
 	const updatePrefs = (patch: Partial<RecordingPrefsState>) => {
 		setPrefsState((prev) => {
 			const next = { ...prev, ...patch };
-			void window.electronAPI?.setRecordingPrefs?.(patch);
+			void window.electronAPI?.setRecordingPrefs?.(patch).catch((err) => {
+				console.warn("[rec-stage] failed to persist the recording prefs:", err);
+			});
 			return next;
 		});
 	};
@@ -112,7 +123,12 @@ export function RecStage({
 	// ── capture source (screen/window) ──────────────────────────────
 	const [source, setSource] = useState<ProcessedDesktopSource | null>(null);
 	useEffect(() => {
-		void window.electronAPI?.getSelectedSource?.().then((s) => setSource(s ?? null));
+		void window.electronAPI
+			?.getSelectedSource?.()
+			.then((s) => setSource(s ?? null))
+			.catch((err) => {
+				console.warn("[rec-stage] failed to read the selected source:", err);
+			});
 	}, []);
 	const [sourceModalOpen, setSourceModalOpen] = useState(false);
 	const [sourceTab, setSourceTab] = useState<"screen" | "window">("screen");
@@ -258,8 +274,16 @@ export function RecStage({
 											className={styles.recSelect}
 											value={prefs.micDeviceId ?? micDevices.selectedDeviceId}
 											onChange={(e) => {
-												micDevices.setSelectedDeviceId(e.target.value);
-												updatePrefs({ micDeviceId: e.target.value });
+												const deviceId = e.target.value;
+												micDevices.setSelectedDeviceId(deviceId);
+												// The label travels with the id: the native Windows
+												// helper selects a microphone by NAME, and records the
+												// Windows default endpoint when it is missing.
+												updatePrefs({
+													micDeviceId: deviceId,
+													micDeviceName:
+														micDevices.devices.find((d) => d.deviceId === deviceId)?.label ?? null,
+												});
 											}}
 										>
 											{micDevices.devices.map((d) => (

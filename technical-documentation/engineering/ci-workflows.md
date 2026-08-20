@@ -21,7 +21,7 @@ flowchart TD
         ReleaseBuild["build.yml<br/>v* tag or dispatch"] --> Win[Windows NSIS]
         ReleaseBuild --> Store[Windows AppX]
         ReleaseBuild --> Mac["macOS arm64 and x64 DMGs"]
-        ReleaseBuild --> Linux["AppImage, deb, pacman"]
+        ReleaseBuild --> Linux["AppImage, deb, pacman, rpm"]
         Win --> Publish[GitHub release]
         Mac --> Publish
         Linux --> Publish
@@ -86,7 +86,10 @@ The STT workflow uploads standalone archives for binary refresh and does not cur
 | `typecheck` | Ubuntu | `npx tsc --noEmit` |
 | `test` | Ubuntu | Vitest unit tests, Chromium installation, then browser-mode Vitest |
 | `build` | Ubuntu | `npx vite build`; this is not electron-builder packaging |
+| `appstream` | Ubuntu | `appstreamcli validate` on `build/com.getopenscreen.OpenScreen.metainfo.xml` |
 | `semantic-pr` | Ubuntu | Validates Conventional Commit-style PR titles |
+
+`build/com.getopenscreen.OpenScreen.metainfo.xml` is upstream AppStream metadata: the name, summary, description, licence, screenshots and release history a software centre shows instead of a bare icon. Nothing in this repository consumes it yet — the shipped deb installs a `.desktop` file and nine icon sizes and no `/usr/share/metainfo/` at all — so the `appstream` job is the only thing that can catch a broken edit before a Flathub reviewer does. Its component ID is `com.getopenscreen.OpenScreen`, deliberately not the Electron `appId` `com.etiennelescot.openscreen`: Flathub requires the ID to map to a domain the project controls, and `getopenscreen.com` is that domain.
 
 Jobs that need the root dependencies use `.github/actions/setup`, which requests Node 22 and runs `npm ci`; callers perform checkout themselves.
 
@@ -100,8 +103,8 @@ A `v*` tag or manual dispatch starts platform builds. Dispatch accepts `arch` (`
 
 - `build-windows` runs `npm run build:win` and uploads `openscreen-windows` for 30 days.
 - `build-windows-store` runs `npm run build:win:store` and uploads `openscreen-windows-store` for 30 days.
-- `build-macos` is an `arm64`/`x64` matrix. It builds Vite/Electron and native helpers, packages and optionally signs the app, creates DMGs, notarizes stable signed builds, and uploads one artifact per architecture for 30 days.
-- `build-linux` produces AppImage, zsync, deb, and pacman files and uploads `openscreen-linux` for 30 days.
+- `build-macos` is an `arm64`/`x64` matrix. It builds Vite/Electron and native helpers, packages and optionally signs the app, creates DMGs, notarizes every signed build including pre-releases, and uploads one artifact per architecture for 30 days.
+- `build-linux` produces AppImage, deb, pacman, and rpm files and uploads `openscreen-linux` for 30 days. It asserts one artifact per format before uploading, because `if-no-files-found: error` evaluates the union of the upload globs and so cannot catch a single format that stopped being produced. No zsync: that is electron-updater's delta format, this repo ships no updater, and app-builder-lib 26.x embeds a block map in the AppImage instead.
 - `publish-release` waits for Windows NSIS, macOS, and Linux jobs; the Store job is not a dependency. It checks the tag against `package.json`, downloads the NSIS/macOS/Linux artifacts, and creates or updates a GitHub release with `OPENSCREEN_RELEASE_TOKEN`.
 
 The build comments and package behavior refer to the local Whisper architecture documented in [transcription and captions](../architecture/transcription-and-captions.md). The STT model downloads to user data at runtime and is not a release-build asset.
@@ -120,12 +123,12 @@ At a high level, the RC workflow creates or reuses `release/vX.Y.Z`, tags its ti
 
 These workflows run for stable published releases and support manual replay with a tag:
 
-- `update-homebrew-cask.yml` waits for both macOS DMGs, hashes them, writes a cask, and pushes to the configured tap.
+- `update-homebrew-cask.yml` waits for both macOS DMGs, hashes them, writes a cask, and pushes to the configured tap. Manual replay refuses any tag that is not a stable `vMAJOR.MINOR.PATCH`, because `workflow_dispatch` takes free text and the `prerelease` filter only covers the `release` event.
 - `publish-winget.yml` passes the matching NSIS release asset to `winget-releaser`.
 - `bump-nix-package.yml` computes `npmDepsHash`, updates `nix/package.nix`, and opens a PR.
 - `aur-publish.yml` hashes the pacman release asset, updates `PKGBUILD` and `.SRCINFO`, and pushes over SSH.
 
-Each workflow gates itself on its required variables or credentials. `bump-nix-package.yml` uses the repository `GITHUB_TOKEN`; the others require external registry credentials described in [release and secrets](release-and-secrets.md).
+Each workflow needs variables or credentials, and where it checks for them decides whether a missing one is visible. `update-homebrew-cask.yml` and `publish-winget.yml` check inside a step that emits a warning, so an unconfigured channel says so in the run summary; a job-level `if:` would instead report `skipped`, which reads as green and hid #148 for eight releases and the Homebrew cask for its entire existence (#335). `bump-nix-package.yml` uses the repository `GITHUB_TOKEN`; the others require the external registry credentials described in [release and secrets](release-and-secrets.md).
 
 ## Tier 4: automation and diagnostics
 
