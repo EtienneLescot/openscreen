@@ -91,6 +91,9 @@
 		"micHint": "Speak to check your microphone",
 		"noMicrophones": "No microphone found",
 		"preview": "Preview",
-		"previewUnavailable": "Preview unavailable"
+		"previewUnavailable": "Preview unavailable",
+		"about": "About",
+		"version": "Version {{version}}",
+		"checkingForUpdates": "Checking…"
 	}
 }

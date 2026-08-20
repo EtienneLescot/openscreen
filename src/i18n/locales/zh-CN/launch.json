@@ -91,6 +91,9 @@
 		"micHint": "说话以测试麦克风",
 		"noMicrophones": "未找到麦克风",
 		"preview": "预览",
-		"previewUnavailable": "预览不可用"
+		"previewUnavailable": "预览不可用",
+		"about": "关于",
+		"version": "版本 {{version}}",
+		"checkingForUpdates": "正在检查…"
 	}
 }

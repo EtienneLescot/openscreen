@@ -91,6 +91,9 @@
 		"micHint": "說話以測試麥克風",
 		"noMicrophones": "找不到麥克風",
 		"preview": "預覽",
-		"previewUnavailable": "預覽無法使用"
+		"previewUnavailable": "預覽無法使用",
+		"about": "關於",
+		"version": "版本 {{version}}",
+		"checkingForUpdates": "檢查中…"
 	}
 }

@@ -91,6 +91,9 @@
 		"micHint": "マイクをテストするには話してください",
 		"noMicrophones": "マイクが見つかりません",
 		"preview": "プレビュー",
-		"previewUnavailable": "プレビューを利用できません"
+		"previewUnavailable": "プレビューを利用できません",
+		"about": "情報",
+		"version": "バージョン {{version}}",
+		"checkingForUpdates": "確認中…"
 	}
 }

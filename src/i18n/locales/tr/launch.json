@@ -91,6 +91,9 @@
 		"micHint": "Mikrofonunuzu test etmek için konuşun",
 		"noMicrophones": "Mikrofon bulunamadı",
 		"preview": "Önizleme",
-		"previewUnavailable": "Önizleme kullanılamıyor"
+		"previewUnavailable": "Önizleme kullanılamıyor",
+		"about": "Hakkında",
+		"version": "Sürüm {{version}}",
+		"checkingForUpdates": "Denetleniyor…"
 	}
 }

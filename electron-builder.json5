@@ -10,6 +10,12 @@
     "**/*.node"
   ],
   "productName": "Openscreen",
+  // Declared rather than left to default BECAUSE the default is package.json's `author` — one
+  // name, where LICENSE has two holders. Feeds Info.plist's NSHumanReadableCopyright and the
+  // Windows LegalCopyright, so leaving it implicit put an attribution on the binary that the
+  // LICENSE it ships alongside does not make. Any other surface that renders this line must
+  // repeat it byte-for-byte.
+  "copyright": "© 2025-2026 OpenScreen contributors — MIT License",
   // Declared explicitly, NOT to start publishing from CI — every build still passes
   // `--publish never`, which suppresses uploading only. What this turns on is the update
   // METADATA: `latest.yml` / `latest-mac.yml` / `latest-linux.yml`, the `.blockmap` used for

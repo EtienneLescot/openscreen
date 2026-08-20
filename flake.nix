@@ -18,7 +18,10 @@
       # -- Per-system outputs (packages, dev shells) --
 
       packages = forAllSystems (pkgs: {
-        openscreen = pkgs.callPackage ./nix/package.nix { };
+        compositor-view = pkgs.callPackage ./nix/compositor-view.nix { };
+        openscreen = pkgs.callPackage ./nix/package.nix {
+          compositor-view = pkgs.callPackage ./nix/compositor-view.nix { };
+        };
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.openscreen;
       });
 

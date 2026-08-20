@@ -20,6 +20,7 @@ import { AlertCircle, Check, Loader2, Unplug, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
+import { useProviderSettings } from "@/contexts/ProviderSettingsContext";
 import { nativeBridgeClient } from "@/native/client";
 import type { AiEditionLlmConfig, AiEditionLlmSnapshot } from "@/native/contracts";
 import {
@@ -201,6 +202,20 @@ export function ProviderSettings({
 			) : null}
 		</ModalShell>
 	);
+}
+
+/**
+ * The one mount of {@link ProviderSettings} in the editor window, bound to the context that
+ * carries its open state.
+ *
+ * It sits beside `ShortcutsConfigDialog` in `App.tsx` rather than inside the chat panel, so the
+ * app menu can offer it in every mode (issue #420). The dialog above stays a plain
+ * `open` / `onClose` component: the settings unification this is the first step of will render
+ * it as a section of a larger dialog, which is not a thing that can mount itself.
+ */
+export function ProviderSettingsDialog() {
+	const { isProviderSettingsOpen, closeProviderSettings } = useProviderSettings();
+	return <ProviderSettings open={isProviderSettingsOpen} onClose={closeProviderSettings} />;
 }
 
 function ProviderList({

@@ -323,6 +323,30 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 - [ ] Select a different aspect ratio from the timeline aspect-ratio menu and confirm the preview frame changes shape.
 - [ ] Press `Esc` or click outside an open menu, popover, or dialog and confirm it closes.
 
+### App menu, About, and updates
+
+- [ ] On macOS, open the application menu and confirm About OpenScreen is followed by Check for Updates.
+- [ ] On Windows and Linux, right-click the tray icon and confirm it lists Check for Updates and About OpenScreen. Outside the editor the tray is the only surface reachable by default there: the HUD is frameless and the editor and notes windows auto-hide their menu bar, so the Help menu appears only while Alt is held over one of those two windows.
+- [ ] On Windows and Linux, open the editor, hold Alt, and confirm the Help menu lists Check for Updates and About OpenScreen.
+- [ ] In the editor, click the OpenScreen wordmark in the top bar and confirm it opens a menu listing Keyboard Shortcuts, AI settings, Check for Updates and About OpenScreen. This is the discoverable path on Windows and Linux, where the two above are not.
+- [ ] Confirm the About row in that menu shows the running version, and that it matches what the About box then reports.
+- [ ] Open the wordmark menu and pick Keyboard Shortcuts; confirm it opens the same dialog the top bar's gear does, and that only one dialog appears.
+- [ ] Open the wordmark menu and pick AI settings; confirm it opens the same provider dialog the AI panel's gear does, and that only one dialog appears.
+- [ ] Repeat that in Media mode, in Rec mode, and in Edit mode with the chat panel collapsed — the three states in which the dialog had no owner before, and the reason the row must not be Edit-only.
+- [ ] Connect or disconnect a provider from the menu's dialog while the chat panel is open behind it, close the dialog, and confirm the composer and the model pill follow without reopening the panel.
+- [ ] Open the wordmark menu, then press Escape, click elsewhere in the top bar, and click the wordmark again — confirm each closes it and that the window does not start dragging instead of registering the click.
+- [ ] With the wordmark menu open, walk it with the Down and Up arrows and confirm focus wraps at both ends.
+- [ ] Switch the app language and confirm the wordmark menu's four labels follow — the first two matching the dialogs they open, the last two the wording the macOS app menu and the tray use.
+- [ ] Open About and confirm it names the running version, the Electron/Chromium/Node versions, and the install channel.
+- [ ] Confirm the About box opens in front of the HUD rather than behind it.
+- [ ] On Windows and Linux, press Copy in the About box and confirm the clipboard holds that same block.
+- [ ] Open the HUD's device-settings panel and confirm its About row reports the same version.
+- [ ] Run Check for Updates from the menu, from the tray, and from the HUD panel, and confirm each reaches the same result dialog.
+- [ ] Start a second check while one is still running and confirm the HUD button stays disabled and reads "Checking…" until the first check's dialogs are done, rather than re-enabling into a click that does nothing.
+- [ ] Start a recording, then confirm Check for Updates is gone from the app menu, the Help menu and the tray for as long as the take runs, and returns when it stops.
+- [ ] Open the HUD's device-settings panel, start a recording with it still open, and confirm the update button disappears while the version stays. Then stop the take, reopen the panel, and confirm the button is back — a HUD that mounts mid-take must not lose it permanently.
+- [ ] On a Microsoft Store, Flathub, Snap, or Nix install, confirm no update affordance appears in the menu, the tray, or the HUD panel, while the version still shows.
+
 ### New effects and controls — v1.8.0
 
 - [ ] Set a zoom's custom scale beyond the preset levels, commit it, and confirm the preview scale and the retained value both follow.
@@ -395,6 +419,8 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 - [ ] Confirm local transcription reports the device it actually ran on and completes on a Metal-capable machine.
 - [ ] Confirm the packaged `.app` contains the compositor addon and that the addon carries no build-machine path.
 - [ ] Confirm the packaged `.app` bundles its ffmpeg libraries and runs on a machine with no developer toolchain installed.
+- [ ] **On a Retina/HiDPI display**, record the screen and confirm the recorded frame is filled edge to edge — not the desktop drawn small in one corner of a black rectangle. Then do the same for a single window. Issue #418 shipped exactly this, invisible on every 1× display because a point size and a pixel size are the same number there; `SCStreamConfiguration` does not scale a frame up to fill an oversized buffer, so the surplus stays background black. Check the frame, not just the file's dimensions — the reporter's `.mp4` was 3024×1898 as expected and still wrong inside.
+- [ ] **With a second display attached at a different scale factor**, record each display in turn and confirm both fill their frame. A machine whose displays all share one scale factor cannot catch a units mix-up.
 
 ### Linux
 

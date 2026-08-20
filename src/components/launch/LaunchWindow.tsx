@@ -62,6 +62,9 @@ function getAvailableScreenHeight(): number {
 /** Launches the floating recording HUD and its recorder controls. */
 export function LaunchWindow() {
 	const t = useScopedT("launch");
+	// The update-check label is shared with the app menu and the tray, which read it from
+	// `common`. A second copy under `launch` drifted from it in en and ar before it ever shipped.
+	const tCommon = useScopedT("common");
 	const {
 		locale,
 		setLocale,
@@ -119,6 +122,14 @@ export function LaunchWindow() {
 	);
 	const [supportsCursorModeToggle, setSupportsCursorModeToggle] = useState(false);
 	const [isLinuxHud, setIsLinuxHud] = useState(false);
+	// The running version, and whether this copy may offer an update check at all — a
+	// Store/Flathub/Snap/Nix install is kept current by its package manager and is offered
+	// nothing (electron/install-channel.ts). Asked once: neither answer changes while the app
+	// runs, and the HUD is rebuilt for every recording anyway.
+	const [appInfo, setAppInfo] = useState<{ version: string; canCheckForUpdates: boolean } | null>(
+		null,
+	);
+	const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false);
 	/**
 	 * Narrower than [`isLinuxHud`] on purpose: without the helper the recorder
 	 * falls back to Chromium's capture, which DOES take a source id, so the
@@ -228,6 +239,38 @@ export function LaunchWindow() {
 		return () => {
 			cancelled = true;
 		};
+	}, []);
+
+	useEffect(() => {
+		const getAppInfo = window.electronAPI?.getAppInfo;
+		if (!getAppInfo) return;
+		let cancelled = false;
+		getAppInfo()
+			.then((info) => {
+				if (!cancelled) setAppInfo(info);
+			})
+			.catch((error) => {
+				// Leaves the About block out entirely rather than showing "Version undefined".
+				console.warn("Failed to read app info:", error);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	const handleCheckForUpdates = useCallback(() => {
+		const checkForUpdates = window.electronAPI?.checkForUpdates;
+		if (!checkForUpdates) return;
+		setIsCheckingForUpdates(true);
+		// Resolves on the verdict, not on the dialogs it leads to — the main process owns
+		// those, and a download the user approves must not leave this button spinning.
+		checkForUpdates()
+			.catch((error) => {
+				console.error("Update check failed:", error);
+			})
+			.finally(() => {
+				setIsCheckingForUpdates(false);
+			});
 	}, []);
 
 	useEffect(() => {
@@ -425,7 +468,13 @@ export function LaunchWindow() {
 	useEffect(() => {
 		setHudMouseEventsEnabled(false);
 		return () => {
-			window.electronAPI?.setHudOverlayIgnoreMouseEvents?.(false);
+			// Through the wrapper, not the bridge under it: the wrapper owns
+			// `hudIgnoreMouseEventsRef`, and a raw send here leaves that mirror
+			// describing a state the main process has already left. The next run
+			// then dedupes against a mirror that is wrong and sends nothing — under
+			// StrictMode that is every mount, so the click-through path quietly
+			// stops being exercised on the machine it is developed on.
+			setHudMouseEventsEnabled(true);
 		};
 	}, [setHudMouseEventsEnabled]);
 
@@ -837,9 +886,14 @@ export function LaunchWindow() {
 			cameraUnavailable: t("webcam.unavailable"),
 			preview: t("deviceSettings.preview"),
 			previewUnavailable: t("deviceSettings.previewUnavailable"),
+			about: t("deviceSettings.about"),
+			checkForUpdates: tCommon("actions.checkForUpdates"),
+			checkingForUpdates: t("deviceSettings.checkingForUpdates"),
 		}),
-		[t],
+		[t, tCommon],
 	);
+
+	const versionLabel = appInfo ? t("deviceSettings.version", { version: appInfo.version }) : null;
 
 	const hasNotices = Boolean(systemLocaleSuggestion) || softwareEncoderFallbackNoticeVisible;
 
@@ -1037,8 +1091,16 @@ export function LaunchWindow() {
 								cameraLoading={isCameraDevicesLoading}
 								cameraError={cameraDevicesError}
 								labels={deviceSettingsLabels}
+								versionLabel={versionLabel}
+								// `canCheckForUpdates` is the install channel's answer, fixed for the
+								// process. The recording veto is applied here because the gear is
+								// disabled mid-take but a panel already open stays mounted, and the
+								// main process refuses the check then — an offered button would be dead.
+								canCheckForUpdates={(appInfo?.canCheckForUpdates ?? false) && !recording}
+								checkingForUpdates={isCheckingForUpdates}
 								onSelectMic={handleSelectMicDevice}
 								onSelectCamera={handleSelectCameraDevice}
+								onCheckForUpdates={handleCheckForUpdates}
 								onClose={closeDeviceSettings}
 								panelRef={setPopoverEl}
 							/>

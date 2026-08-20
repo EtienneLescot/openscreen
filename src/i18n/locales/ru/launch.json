@@ -91,6 +91,9 @@
 		"micHint": "Скажите что-нибудь, чтобы проверить микрофон",
 		"noMicrophones": "Микрофон не найден",
 		"preview": "Предпросмотр",
-		"previewUnavailable": "Предпросмотр недоступен"
+		"previewUnavailable": "Предпросмотр недоступен",
+		"about": "О программе",
+		"version": "Версия {{version}}",
+		"checkingForUpdates": "Проверка…"
 	}
 }

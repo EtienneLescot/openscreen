@@ -158,7 +158,7 @@ test.describe("Windows native checklist smoke tests", () => {
 	// Both halves matter — that nothing asks during construction, and that the
 	// renderer still does after mount.
 	//
-	// The second assertion also pins `forward` OFF. It used to be the only route back
+	// The tape assertions also pin `forward` OFF. It used to be the only route back
 	// out of click-through, via a global WH_MOUSE_LL hook that Windows can refuse or
 	// silently revoke — which is how #385 reproduced a dead HUD on a build that already
 	// carried the #266 fix. The way out is now the "hud-overlay-cursor" poll in
@@ -196,7 +196,7 @@ test.describe("Windows native checklist smoke tests", () => {
 			// so no IPC from the renderer can slip into it: what comes back is
 			// construction, and construction only.
 			const duringConstruction = await app.evaluate(({ app: electronApp, BrowserWindow }) => {
-				const tape: unknown[][] = [];
+				const tape: Array<{ hud: boolean; args: unknown[] }> = [];
 				const original = BrowserWindow.prototype.setIgnoreMouseEvents;
 				globalThis.__hudTape = tape;
 				globalThis.__hudSetIgnoreMouseEvents = original;
@@ -204,7 +204,19 @@ test.describe("Windows native checklist smoke tests", () => {
 					this: InstanceType<typeof BrowserWindow>,
 					...args: Parameters<typeof original>
 				) {
-					tape.push(args);
+					// The patch is on the prototype, so every window's calls land here.
+					// Tag them: an unfiltered tape would let another overlay's options
+					// object fail the `forward` claim under this test's name, and let its
+					// bare [true] satisfy the first-ask claim. Tag rather than filter,
+					// because loadURL runs after this handler is installed — during
+					// construction the URL is still "", and that is exactly the window
+					// the empty-tape assertion below has to be able to see.
+					tape.push({
+						hud: this.isDestroyed()
+							? false
+							: this.webContents.getURL().includes("windowType=hud-overlay"),
+						args,
+					});
 					return original.apply(this, args);
 				};
 
@@ -218,10 +230,29 @@ test.describe("Windows native checklist smoke tests", () => {
 
 			expect(duringConstruction).toEqual([]);
 
-			// And the renderer does ask, once it has mounted.
+			// And the renderer does ask, once it has mounted. Keep the snapshot the
+			// poll settled on rather than fetching a second time, so all three claims
+			// below are made about one state of the tape and not three.
+			let hudCalls: unknown[][] = [];
 			await expect
-				.poll(() => app.evaluate(() => globalThis.__hudTape ?? []), { timeout: 20_000 })
+				.poll(
+					async () => {
+						hudCalls = await app.evaluate(() =>
+							(globalThis.__hudTape ?? []).filter((entry) => entry.hud).map((entry) => entry.args),
+						);
+						return hudCalls;
+					},
+					{ timeout: 20_000 },
+				)
 				.toContainEqual([true]);
+
+			// Containment is not enough by itself: a second caller asking with
+			// `forward` would sit in the tape beside the renderer's own bare [true]
+			// and still satisfy it, which is exactly the shape a re-arm of the hook
+			// takes. So pin the HUD's whole tape — the first ask is the renderer's,
+			// and no ask carries an options object, the only way `forward` returns.
+			expect(hudCalls[0]).toEqual([true]);
+			expect(hudCalls.filter((call) => call.length > 1)).toEqual([]);
 		} finally {
 			await app.evaluate(({ BrowserWindow }) => {
 				const original = globalThis.__hudSetIgnoreMouseEvents;
@@ -239,7 +270,7 @@ test.describe("Windows native checklist smoke tests", () => {
 declare global {
 	// Set inside the main process by the click-through test above, read back by a
 	// second evaluate — the only way to observe calls that land between two of them.
-	var __hudTape: unknown[][] | undefined;
+	var __hudTape: Array<{ hud: boolean; args: unknown[] }> | undefined;
 	var __hudSetIgnoreMouseEvents:
 		| ((ignore: boolean, options?: { forward?: boolean }) => void)
 		| undefined;

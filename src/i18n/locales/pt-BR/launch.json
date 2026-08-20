@@ -91,6 +91,9 @@
 		"micHint": "Fale para testar seu microfone",
 		"noMicrophones": "Nenhum microfone encontrado",
 		"preview": "Pré-visualização",
-		"previewUnavailable": "Pré-visualização indisponível"
+		"previewUnavailable": "Pré-visualização indisponível",
+		"about": "Sobre",
+		"version": "Versão {{version}}",
+		"checkingForUpdates": "Verificando…"
 	}
 }
