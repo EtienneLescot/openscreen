@@ -126,17 +126,21 @@ jobs:
           echo "--- openscreen sources --json ---"
           RC=0
           run_cli $SANDBOX sources --json >/tmp/sources.json 2>/tmp/sources.err || RC=$?
-          if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
-            echo "::error::openscreen sources --json did not return within 120s. A CLI that hangs on a headless host cannot be scripted, and headless is what --json is for."
-            echo "--- stderr, last 20 lines before the timeout ---"
-            tail -20 /tmp/sources.err || true
-            exit 1
-          fi
 
+          # Both streams get reported before anything decides the outcome. The
+          # previous shape returned early on a timeout and threw away the very
+          # thing the run was for: a hang left stdout unseen, so a run that cost
+          # a runner slot said nothing about whether the logging fix had worked.
+          # Whatever the process wrote before it was killed is still on disk.
           echo "--- stdout, first 400 bytes ---"
           head -c 400 /tmp/sources.json; echo
           echo "--- stderr, first 3 lines ---"
           head -3 /tmp/sources.err || true
+
+          if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
+            echo "::error::openscreen sources --json did not return within 120s. A CLI that hangs on a headless host cannot be scripted, and headless is what --json is for."
+            exit 1
+          fi
 
           python3 <<'PY'
           import json
