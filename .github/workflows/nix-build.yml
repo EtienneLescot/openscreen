@@ -187,16 +187,15 @@ jobs:
           PY
           fi
 
+          # Noted, not acted on yet. Enumeration is flaky here and the export
+          # assertion below is the more important question; letting one flaky
+          # attempt exit the step meant the run never reached it. Verdict at the
+          # end, once both have had their say.
           if [ "$HUNG" -gt 0 ]; then
             echo "::error::openscreen sources had to be killed on $HUNG of $ATTEMPTS attempts. Its own bound on source enumeration should have fired first."
           fi
           if [ "$FAILED" -gt 0 ]; then
             echo "::error::openscreen sources failed on $FAILED of $ATTEMPTS attempts. The capture path is not reliable on this host."
-            exit 1
-          fi
-          if [ "$OK" -eq 0 ]; then
-            echo "::error::no attempt produced a usable result"
-            exit 1
           fi
 
           # The real acceptance test. Everything above proves the package starts
@@ -234,23 +233,29 @@ jobs:
             break
           done
 
+          EXPORT_OK=0
           if [ -z "$EXPORTED" ]; then
             echo "::error::No attempt produced an MP4. The compositor addon is packaged but the export path does not work."
-            exit 1
+          else
+            SIZE=$(wc -c < "$EXPORTED")
+            # An MP4 opens with a 4-byte length then 'ftyp'. A zero-length or
+            # truncated file would otherwise pass a mere existence check.
+            MAGIC=$(dd if="$EXPORTED" bs=1 skip=4 count=4 2>/dev/null || true)
+            echo "exported $SIZE bytes, magic at offset 4: $MAGIC"
+            if [ "$MAGIC" != "ftyp" ]; then
+              echo "::error::output is not an MP4 (no ftyp box)"
+            elif [ "$SIZE" -lt 10000 ]; then
+              echo "::error::MP4 is only $SIZE bytes, too small to hold two seconds of video"
+            else
+              echo "Export works: $SIZE bytes of MP4."
+              EXPORT_OK=1
+            fi
           fi
 
-          SIZE=$(wc -c < "$EXPORTED")
-          echo "exported $SIZE bytes"
-          # An MP4 opens with a 4-byte length then 'ftyp'. A zero-length or
-          # truncated file would otherwise pass a mere existence check.
-          MAGIC=$(dd if="$EXPORTED" bs=1 skip=4 count=4 2>/dev/null)
-          echo "magic at offset 4: $MAGIC"
-          if [ "$MAGIC" != "ftyp" ]; then
-            echo "::error::output is not an MP4 (no ftyp box)"
+          # One verdict, after both questions have been asked. Enumeration being
+          # flaky must not hide whether export works, which is the whole point of
+          # having packaged the compositor addon.
+          echo "=== verdict: enumeration $OK/$ATTEMPTS ok, export $EXPORT_OK ==="
+          if [ "$EXPORT_OK" -ne 1 ] || [ "$FAILED" -ne 0 ] || [ "$OK" -eq 0 ]; then
             exit 1
           fi
-          if [ "$SIZE" -lt 10000 ]; then
-            echo "::error::MP4 is only $SIZE bytes, which is too small to hold two seconds of video"
-            exit 1
-          fi
-          echo "Export works: $SIZE bytes of MP4."
