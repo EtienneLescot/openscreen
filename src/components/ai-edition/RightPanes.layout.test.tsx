@@ -118,7 +118,9 @@ describe("LayoutPane camera availability", () => {
 		expect(screen.getByText("Shrink on Zoom")).toBeInTheDocument();
 		expect(screen.getByText("Webcam Size")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Rounded" })).toBeEnabled();
-		expect(screen.getByRole("slider")).toBeEnabled();
+		// Named, because the pane holds four sliders now — webcam size plus the three
+		// webcam-framing ones. This one is the size slider the line above just found.
+		expect(screen.getByRole("slider", { name: "Webcam Size" })).toBeEnabled();
 
 		// The camera-less hint must not leak into the normal case.
 		await user.click(screen.getByRole("button", { name: "Help" }));

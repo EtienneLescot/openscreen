@@ -1670,6 +1670,7 @@ export function LayoutPane() {
 							<span className={styles.val}>{Math.round(settings.webcamSizePreset)}%</span>
 						</div>
 						<input
+							aria-label={ts("layout.webcamSize")}
 							type="range"
 							min={10}
 							max={50}
@@ -2004,7 +2005,12 @@ export function SliderCell({
 					</span>
 				) : null}
 			</div>
+			{/* The visible label is a <span>, not a <label htmlFor>, so without this the
+			    input has no accessible name at all — a screen reader announces "slider",
+			    and a test cannot tell two of them apart. That was survivable while a pane
+			    held one slider; the webcam framing row makes it four. */}
 			<input
+				aria-label={label}
 				type="range"
 				min={min}
 				max={max}

@@ -171,6 +171,7 @@ describe("useSequentialTimelineOps", () => {
 
 		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
 			useProjectStore.getState().setDocument(doc);
+			return true;
 		});
 
 		const { result } = renderHook(() =>
@@ -203,6 +204,7 @@ describe("useSequentialTimelineOps", () => {
 
 		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
 			useProjectStore.getState().setDocument(doc);
+			return true;
 		});
 
 		const { result } = renderHook(() =>
