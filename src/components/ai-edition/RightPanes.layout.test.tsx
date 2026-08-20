@@ -134,8 +134,14 @@ describe("LayoutPane camera availability", () => {
 describe("LayoutPane webcam crop pan", () => {
 	const zoom = () => screen.getByRole("slider", { name: "Zoom" });
 	const panX = () => screen.getByRole("slider", { name: "Pan horizontally" });
+	const panY = () => screen.getByRole("slider", { name: "Pan vertically" });
 	const set = (slider: HTMLElement, value: number) =>
 		fireEvent.change(slider, { target: { value: String(value) } });
+	const storedCrop = () =>
+		useProjectStore.getState().document?.legacyEditor as unknown as {
+			webcamCropRegion: { x: number; y: number; width: number; height: number };
+			webcamCropPan: { x: number; y: number };
+		};
 
 	it("keeps the pan across a round trip through 100% zoom", () => {
 		renderLayout(seedProject(true));
@@ -165,6 +171,22 @@ describe("LayoutPane webcam crop pan", () => {
 			set(zoom(), pct);
 			expect(panX()).toHaveValue("75");
 		}
+	});
+
+	it("wires the vertical slider to the vertical axis", () => {
+		// The two sliders differ by one character in the handler they call. Without this,
+		// a Y slider wired to "x" would pass every other test in this block.
+		renderLayout(seedProject(true));
+
+		set(zoom(), 200);
+		set(panY(), 80);
+
+		expect(panY()).toHaveValue("80");
+		expect(storedCrop().webcamCropPan.y).toBeCloseTo(0.8);
+		expect(storedCrop().webcamCropRegion.y).toBeCloseTo(0.4);
+		// ...and it left the horizontal axis alone.
+		expect(panX()).toHaveValue("50");
+		expect(storedCrop().webcamCropRegion.x).toBeCloseTo(0.25);
 	});
 
 	it("puts the crop where the pan says, at any zoom", () => {
