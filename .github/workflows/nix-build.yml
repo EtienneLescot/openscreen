@@ -136,13 +136,11 @@ jobs:
           # Every invocation is bounded. A CLI that never returns is a failure
           # mode this workflow has already produced once, and an unbounded
           # command turns it into a full runner slot spent learning nothing.
-          # An explicit screen rather than whatever this xvfb-run defaults to,
-          # and --disable-dev-shm-usage, which is the standard answer to Chromium
-          # in a container: /dev/shm is typically 64M there and Chromium expects
-          # far more. Two changes at once, deliberately -- each run costs ten
-          # minutes and the capture path has never once worked here, so getting
-          # it to work matters more right now than attributing which knob did it.
-          # Worth bisecting afterwards if it goes green.
+          # Both of these were guesses at the X11 capture failure and the
+          # measurements above disproved both: this xvfb-run already defaults to
+          # 24-bit, and /dev/shm is 7.9G and empty. They stay because they are
+          # harmless and explicit beats inherited, but neither is the fix, and
+          # the capture failure remains unexplained.
           XVFB_SCREEN="-screen 0 1920x1080x24"
           CHROME_FLAGS="--disable-dev-shm-usage"
           run_cli() { timeout --signal=TERM --kill-after=10s "${CLI_TIMEOUT:-120}" xvfb-run -a -s "$XVFB_SCREEN" ./result/bin/openscreen "$@"; }
