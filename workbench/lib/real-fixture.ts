@@ -11,9 +11,10 @@
 // transcribed by the local Whisper helper, with its own cursor sidecar. Nothing
 // is normalised, rounded or tidied on the way in — the document reaches the
 // model in the state it has on disk, `originalPath`, absent `cameraTrack` and
-// all. See `workbench/fixtures/README.md` for where it comes from and for the
-// single field that was removed from the sidecar (11 base64 pointer bitmaps,
-// 112 kB, referenced by id and never decoded).
+// all. Where it comes from — and the single field removed from the sidecar (11
+// base64 pointer bitmaps, 112 kB, referenced by id and never decoded) — is in
+// `workbench/README.md` § "La prise réelle". `workbench/fixtures/` is gitignored,
+// so it holds no README any clone can read; do not point readers into it.
 //
 // The ground truth of what the user was DOING lives nowhere near here. It
 // belongs to the assertions; a scenario that let it reach the model would be

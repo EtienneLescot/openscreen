@@ -501,9 +501,16 @@ modèle qui apprend la forme de notre générateur obtient une bonne note sans a
 `realScreencastDocument()` charge à la place une **vraie prise** — 66,154 s de screencast,
 transcrites par le Whisper local (129 mots français horodatés, aucun silence stocké : ils se
 déduisent des écarts), avec son sidecar de curseur (1521 échantillons, ~23 Hz, 11 formes de
-pointeur, aucun clic). Les deux fichiers sont dans `workbench/fixtures/`, avec leur provenance et
-la liste de ce qui en a été retiré : `workbench/fixtures/README.md`. Rien d'autre ne doit les
-ouvrir.
+pointeur, aucun clic). Les deux fichiers vivent dans `workbench/fixtures/`, **gitignoré**
+(`.gitignore:126`) : ils ne sont dans aucun clone, et leur provenance est ce paragraphe — il n'y a
+pas de `fixtures/README.md` versionné à aller lire, seulement celui que se garde qui possède la
+prise. Rien d'autre que `lib/real-fixture.ts` ne doit les ouvrir.
+
+Conséquence à connaître avant de lancer le banc : **44 tests L0 échouent dans un clone neuf**,
+tous sur le même `ENOENT` (`l0/real-fixture.wb.ts`, `real-screencast-truth.wb.ts`,
+`quality.wb.ts`, et `score.wb.ts` qui construit le document de chaque scénario du registre).
+Fournir sa propre prise donnera d'autres chiffres que ceux assertés ici. Rien de tout cela n'est
+vu par le CI, qui ne lance pas le banc.
 
 Le document arrive **tel qu'il est sur le disque**, y compris son `cameraTrack: null` alors qu'un
 fichier webcam existe à côté de l'enregistrement. Ce n'est pas un oubli de la copie ; c'est l'état
@@ -515,12 +522,17 @@ au-dessus de `electron/media/cursorSidecar.ts`, le parseur de production. Un sc�
 par `cursorReader:` — **exclusif** de `cursorTelemetry:`, que `defineScenario` refuse de voir
 coexister avec lui.
 
-**Ce que ça coûte au tour, mesuré** : `getCursorTrack` rend **356 points, 24 238 caractères**
-(5 Hz + 56 points gardés pour des changements de forme du pointeur). C'est 2,3× le transcript
-entier, et la requête suivante passe de ~17 k à ~45 k caractères. Les chiffres sont **assertés**
-dans `l0/real-fixture.wb.ts` : ils bougent quand `buildCursorTrack` bouge, et c'est voulu.
-Au-delà de ~25 000 caractères, c'est une trouvaille à signaler — pas un défaut à faire disparaître
-en baissant `DEFAULT_TRACK_HZ`.
+**Ce que ça coûte au tour, mesuré** : `getCursorTrack` rend **148 points, 7 797 caractères** —
+une réduction en keyframes des 1521 échantillons, plus les points qu'aucune interpolation ne
+remet (changement de forme du pointeur, événement autre qu'un déplacement, bornes d'un arrêt).
+C'est **sous** le transcript (10 496). Les chiffres sont **assertés** dans
+`l0/real-fixture.wb.ts` : ils bougent quand `buildCursorTrack` bouge, et c'est voulu. Au-delà de
+~25 000 caractères, c'est une trouvaille à signaler — pas un défaut à faire disparaître en
+baissant `DEFAULT_TRACK_HZ`.
+
+C'était 356 points et 24 238 caractères avant la réduction, soit 2,3× le transcript. Le chiffre
+est gardé ici parce qu'il continue de circuler dans les notes de l'époque : s'il réapparaît
+quelque part, c'est qu'on lit un texte périmé.
 
 Quatre scénarios notés tournent maintenant sur cette fixture (`scenarios/real-screencast.scn.ts`).
 Ce qu'ils mesurent a besoin de la vérité terrain — ce que l'utilisateur faisait, annoté à la main —
@@ -564,6 +576,20 @@ trajectoire » sont **deux checks séparés**.
    repose** : observation live, ou mécanisme lu dans le code. Une prédiction n'y a pas sa place.
 9. `npm run wb && npm run wb:typecheck && npx biome check --write workbench`.
 
+### Répondre à un échec sans surajuster au banc
+
+Un échec mesuré donne envie d'ajouter la ligne de prompt qui règle ce cas précis. Fait huit fois,
+le prompt système devient la liste des réponses au jeu de tests, et le banc mesure sa propre
+mémoire. Le garde-fou est une question, à se poser avant de committer :
+
+> **Ce correctif se justifie-t-il sans mentionner le scénario qui l'a révélé ?**
+
+Si la seule façon de le défendre est « sinon `describe-zooms` est rouge », ce n'est pas un
+correctif, c'est une réponse apprise. Un correctif légitime se formule comme une propriété du
+produit — « le modèle n'a aucun moyen de savoir qu'un `customScale` rend le `depth` inerte » — et
+le scénario n'en est que le témoin. Cela vaut pour le prompt système comme pour les descriptions
+d'outils, qui sont du prompt sous un autre nom.
+
 ### Où vit quoi
 
 ```
@@ -581,7 +607,7 @@ lib/rubrics.ts     les rubrics partagés — une propriété par rubric, aucun s
 lib/language.ts    ce qui reste des prédicats de texte : de la notation, et du sursis
 lib/fixtures.ts    les documents de référence, écrits en code
 lib/real-fixture.ts le chargeur de la PRISE RÉELLE (projet + sidecar de curseur sur disque)
-fixtures/          les deux fichiers de cette prise, et d'où ils viennent (README.md)
+fixtures/          les deux fichiers de cette prise — GITIGNORÉ, absent de tout clone
 lib/score.ts       deux axes, porte min(), checks structurels injectés partout,
                    et le poids indéterminé tenu hors des deux termes du ratio
 lib/baseline.ts    le ratchet bidirectionnel, plus le seau des non-mesurés
