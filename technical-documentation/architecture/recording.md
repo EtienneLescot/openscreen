@@ -69,6 +69,8 @@ Windows and macOS both write their screen video as a fragmented MP4 — `MFCreat
 
 A session writes a screen video and a `.session.json` manifest. Windows normally muxes the webcam into that MP4; when `webcamPath` is supplied, it writes a separate webcam video. macOS currently writes the webcam as a separate Electron sidecar (`webcamVideoPath`) because native webcam composition is not part of the helper. Linux follows the Electron recorder's separate media-path convention. Audio that the selected backend captures is encoded into its screen output.
 
+The Windows helper mixes system loopback and microphone into one track, and timestamps it from a running count of emitted frames. That count is advanced by a clock rather than by the arrival of samples: a chunk goes out every 10 ms for as long as the recording runs, filled from whichever source has data and with silence where neither does. Advancing it only when a queue held samples is what made a take that began in silence emit nothing at all — WASAPI loopback delivers no packets while nothing is playing — so the first sound landed at timestamp zero and the track came out shorter than the take. A working microphone concealed it by streaming continuously, which is why it appeared as a system-audio desync on a machine whose microphone had failed. `npm run test:wgc-audio-timeline:win` measures where a tone played at a known instant actually lands.
+
 Cursor samples are persisted as cursor telemetry rather than baked into editable-overlay recordings. The loader resolves the sidecar at `<videoPath>.cursor.json` or through the recording links; see [cursor.md](cursor.md) for the telemetry format and rendering path.
 
 ## Known gaps
