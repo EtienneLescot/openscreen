@@ -160,7 +160,7 @@ export function LaunchWindow() {
 		devices: micDevices,
 		selectedDeviceId: selectedMicId,
 		setSelectedDeviceId: setSelectedMicId,
-	} = useMicrophoneDevices(microphoneEnabled || isDeviceSettingsOpen);
+	} = useMicrophoneDevices(microphoneEnabled || isDeviceSettingsOpen, microphoneDeviceId);
 
 	useEffect(() => {
 		if (selectedMicId && selectedMicId !== "default") {
@@ -649,10 +649,15 @@ export function LaunchWindow() {
 	 * previous device. Best-effort on purpose: failing to persist a preference
 	 * must not stop a recording.
 	 */
-	const persistCameraPrefs = useCallback(
-		(patch: { camEnabled?: boolean; camDeviceId?: string }) => {
+	const persistRecordingPrefs = useCallback(
+		(patch: {
+			camEnabled?: boolean;
+			camDeviceId?: string;
+			micDeviceId?: string;
+			micDeviceName?: string;
+		}) => {
 			void window.electronAPI?.setRecordingPrefs?.(patch).catch((error) => {
-				console.warn("Failed to persist the camera preference:", error);
+				console.warn("Failed to persist the device preference:", error);
 			});
 		},
 		[],
@@ -662,9 +667,9 @@ export function LaunchWindow() {
 		if (controlsLocked) return;
 		const next = !webcamEnabled;
 		void setWebcamEnabled(next).then((ok) => {
-			if (ok) persistCameraPrefs({ camEnabled: next });
+			if (ok) persistRecordingPrefs({ camEnabled: next });
 		});
-	}, [controlsLocked, persistCameraPrefs, setWebcamEnabled, webcamEnabled]);
+	}, [controlsLocked, persistRecordingPrefs, setWebcamEnabled, webcamEnabled]);
 
 	// Selecting a device never switches it on. If the device is already live the
 	// recorder re-acquires on the id change; if it isn't, this just records which
@@ -674,8 +679,9 @@ export function LaunchWindow() {
 			setSelectedMicId(device.deviceId);
 			setMicrophoneDeviceId(device.deviceId);
 			setMicrophoneDeviceName(device.label);
+			persistRecordingPrefs({ micDeviceId: device.deviceId, micDeviceName: device.label });
 		},
-		[setMicrophoneDeviceId, setMicrophoneDeviceName, setSelectedMicId],
+		[persistRecordingPrefs, setMicrophoneDeviceId, setMicrophoneDeviceName, setSelectedMicId],
 	);
 
 	const handleSelectCameraDevice = useCallback(
@@ -683,9 +689,9 @@ export function LaunchWindow() {
 			setSelectedCameraId(device.deviceId);
 			setWebcamDeviceId(device.deviceId);
 			setWebcamDeviceName(device.label);
-			persistCameraPrefs({ camDeviceId: device.deviceId });
+			persistRecordingPrefs({ camDeviceId: device.deviceId });
 		},
-		[persistCameraPrefs, setSelectedCameraId, setWebcamDeviceId, setWebcamDeviceName],
+		[persistRecordingPrefs, setSelectedCameraId, setWebcamDeviceId, setWebcamDeviceName],
 	);
 
 	const toggleDeviceSettings = useCallback(() => {

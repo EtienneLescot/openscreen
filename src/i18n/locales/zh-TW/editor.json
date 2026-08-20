@@ -44,6 +44,7 @@
 		"cameraDisconnected": "網路攝影機已中斷連線。",
 		"cameraNotFound": "找不到攝影機。",
 		"cameraCaptureUnavailable": "無法開啟攝影機，將在沒有攝影機的情況下錄製。",
+		"microphoneDefaulted": "無法辨識所選麥克風，將錄製預設輸入裝置。",
 		"accessibilityAllowAndRetry": "允許 OpenScreen 使用輔助使用權限，然後再次按下錄製以開始倒數。",
 		"selectSource": "請選擇要錄製的來源"
 	},

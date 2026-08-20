@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
+	readMicrophoneDefaulted,
 	readStoppedPath,
 	readWebcamFormat,
 	readWebcamUnavailable,
@@ -96,6 +97,21 @@ describe("readWebcamUnavailable", () => {
 			'{"event":"webcam-format","schemaVersion":2,"width":1920,"height":1080,"fps":30,"deviceName":"Camera (NVIDIA Broadcast)"}\n' +
 			"Recording started\n";
 		expect(readWebcamUnavailable(output)).toBe(false);
+	});
+});
+
+describe("readMicrophoneDefaulted", () => {
+	it("sees the helper falling back to the default input", () => {
+		const output =
+			"WARNING: Could not resolve microphone by name; using default capture endpoint\n" +
+			'{"event":"warning","code":"microphone-defaulted","message":"No microphone name was supplied; capturing the default input"}\n';
+		expect(readMicrophoneDefaulted(output)).toBe(true);
+	});
+
+	it("is false when the requested microphone was found", () => {
+		const output =
+			'{"event":"audio-format","schemaVersion":2,"microphone":true,"microphoneDeviceName":"Microphone (Logitech PRO X)"}\n';
+		expect(readMicrophoneDefaulted(output)).toBe(false);
 	});
 });
 

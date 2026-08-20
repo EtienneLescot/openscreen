@@ -110,6 +110,19 @@ export function readWebcamUnavailable(output: string) {
 }
 
 /**
+ * Did the helper record the Windows default input instead of the microphone
+ * that was asked for?
+ *
+ * It falls back rather than failing, which is right — a take with the wrong
+ * microphone still holds the screen and the moment. But it used to fall back in
+ * silence, and the only symptom was a recording that sounded wrong
+ * (getopenscreen/openscreen#404).
+ */
+export function readMicrophoneDefaulted(output: string) {
+	return output.includes('"code":"microphone-defaulted"');
+}
+
+/**
  * Index of the `}` that closes the object starting at `start`, or -1.
  *
  * Stopping at the first `}` is wrong for a value that contains one, and a

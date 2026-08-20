@@ -75,6 +75,7 @@ import { toHelperRect } from "../native-bridge/helperCoordinates";
 import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
+	readMicrophoneDefaulted,
 	readWebcamFormat,
 	readWebcamUnavailable,
 	terminateNativeWindowsCapture,
@@ -474,6 +475,18 @@ let currentRecordingSession: RecordingSession | null = null;
 export interface RecordingPrefs {
 	micEnabled: boolean;
 	micDeviceId: string | null;
+	/**
+	 * The microphone's LABEL, carried beside its id because the native Windows
+	 * helper selects by name and Chromium selects by id.
+	 *
+	 * Without it, a HUD rebuilt for a new recording restored the id and had to
+	 * re-derive the name from its own `enumerateDevices()` — which needs a full
+	 * getUserMedia permission round-trip first, and an auto-started recording
+	 * beat it. The request then went out with no name at all, and the helper
+	 * answers that by recording the Windows default endpoint instead of the
+	 * microphone the user picked (getopenscreen/openscreen#404).
+	 */
+	micDeviceName: string | null;
 	camEnabled: boolean;
 	camDeviceId: string | null;
 	systemAudioEnabled: boolean;
@@ -482,6 +495,7 @@ export interface RecordingPrefs {
 let recordingPrefs: RecordingPrefs = {
 	micEnabled: false,
 	micDeviceId: null,
+	micDeviceName: null,
 	camEnabled: false,
 	camDeviceId: null,
 	systemAudioEnabled: false,
@@ -2459,6 +2473,17 @@ export function registerIpcHandlers(
 				// whose camera is working perfectly.
 				const webcamUnavailable =
 					request.webcam.enabled && readWebcamUnavailable(nativeWindowsCaptureOutput);
+				// Same shape as the camera notice: the helper records the Windows
+				// default input rather than failing, so this take is usable but is
+				// almost certainly the wrong microphone.
+				const microphoneDefaulted =
+					request.audio.microphone.enabled && readMicrophoneDefaulted(nativeWindowsCaptureOutput);
+				if (microphoneDefaulted) {
+					console.warn("[native-wgc] recording the default input; the microphone was not named", {
+						deviceId: request.audio.microphone.deviceId,
+						deviceName: request.audio.microphone.deviceName,
+					});
+				}
 				if (webcamUnavailable) {
 					console.warn("[native-wgc] recording without a camera; the helper could not open it", {
 						deviceId: request.webcam.deviceId,
@@ -2473,6 +2498,7 @@ export function registerIpcHandlers(
 					helperPath,
 					videoEncoderSelection: encoderSelection?.video ?? null,
 					webcamUnavailable,
+					microphoneDefaulted,
 				};
 			} catch (error) {
 				console.error("Failed to start native Windows recording:", error);

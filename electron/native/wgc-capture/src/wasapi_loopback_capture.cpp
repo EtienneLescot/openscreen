@@ -168,6 +168,18 @@ bool WasapiLoopbackCapture::initialize(WasapiCaptureEndpoint endpoint, const std
         }
     }
 
+    // A microphone was asked for and neither its id nor its name could name a
+    // device, so the recording is about to capture whatever Windows calls the
+    // default input. That is worth saying out loud: the caller sends an empty
+    // name whenever it could not resolve one in time, and the take then sounds
+    // like the wrong microphone with nothing anywhere explaining why
+    // (getopenscreen/openscreen#404).
+    if (endpoint == WasapiCaptureEndpoint::Microphone && !device_ && deviceName.empty()) {
+        std::cerr << "{\"event\":\"warning\",\"code\":\"microphone-defaulted\","
+                     "\"message\":\"No microphone name was supplied; capturing the default input\"}"
+                  << std::endl;
+    }
+
     if (!device_) {
         const EDataFlow flow =
             endpoint == WasapiCaptureEndpoint::SystemLoopback ? eRender : eCapture;
