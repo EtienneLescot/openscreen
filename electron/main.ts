@@ -39,7 +39,7 @@ import {
 	unregisterAllGlobalShortcuts,
 } from "./globalShortcut";
 import { mainT, setMainLocale } from "./i18n";
-import { getInstallChannel, offersUpdateCheck } from "./install-channel";
+import { getInstallChannel, offersUpdateCheck, platformOwnsUpdates } from "./install-channel";
 import { getSelectedDesktopSource, registerIpcHandlers } from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
 import { registerSttIpc, shutdownStt } from "./stt";
@@ -410,6 +410,15 @@ let updateCheckAbort: AbortController | null = null;
  *  surface is rebuilt when the flag flips (see `setupApplicationMenu`/`updateTrayMenu`). */
 function canOfferUpdateCheck(): boolean {
 	return offersUpdateCheck(getInstallChannel(), { recording: isRecording });
+}
+
+/** What the HUD is told at mount, and only the permanent half of the veto. The recording half
+ *  is transient and the renderer already knows whether it is recording, so folding it into a
+ *  once-per-mount answer would strand the button off for the rest of a HUD that happened to
+ *  mount mid-take — and the HUD is rebuilt for every recording. The renderer applies the
+ *  transient half itself; `check-for-updates` still enforces both. */
+function channelAllowsUpdateCheck(): boolean {
+	return !platformOwnsUpdates(getInstallChannel());
 }
 
 /** Message boxes must be owned by a window. The HUD is `alwaysOnTop` and `skipTaskbar`
@@ -1003,7 +1012,7 @@ appReady?.then(async () => {
 	// CLI boot path and in a losing second instance that is on its way to app.quit().
 	ipcMain.handle("get-app-info", () => ({
 		version: app.getVersion(),
-		canCheckForUpdates: canOfferUpdateCheck(),
+		canCheckForUpdates: channelAllowsUpdateCheck(),
 	}));
 
 	ipcMain.handle("check-for-updates", async () => {

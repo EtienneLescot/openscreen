@@ -927,6 +927,28 @@ describe("LaunchWindow device settings", () => {
 		expect(recorderState.value.setMicrophoneEnabled).not.toHaveBeenCalled();
 	});
 
+	// The gear is disabled while recording, but a panel that was already open stays mounted —
+	// and the main process refuses the check for the length of a take. Offering the button then
+	// would give the user a click that does nothing at all: no dialog, no error, no feedback.
+	it("withdraws the update check when a recording starts under an open panel", async () => {
+		const { rerender } = renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-device-settings-button"));
+		const panel = await screen.findByTestId("hud-device-settings");
+		expect(await within(panel).findByTestId("hud-check-for-updates")).toBeInTheDocument();
+
+		recorderState.value.recording = true;
+		rerender(
+			<TooltipProvider>
+				<LaunchWindow />
+			</TooltipProvider>,
+		);
+
+		// The version stays: "what am I running" is exactly the question a take does not change.
+		expect(within(panel).queryByTestId("hud-check-for-updates")).not.toBeInTheDocument();
+		expect(within(panel).getByText("Version 1.9.6")).toBeInTheDocument();
+	});
+
 	it("is unavailable while recording, when devices can't be changed anyway", async () => {
 		recorderState.value.recording = true;
 

@@ -1092,7 +1092,11 @@ export function LaunchWindow() {
 								cameraError={cameraDevicesError}
 								labels={deviceSettingsLabels}
 								versionLabel={versionLabel}
-								canCheckForUpdates={appInfo?.canCheckForUpdates ?? false}
+								// `canCheckForUpdates` is the install channel's answer, fixed for the
+								// process. The recording veto is applied here because the gear is
+								// disabled mid-take but a panel already open stays mounted, and the
+								// main process refuses the check then — an offered button would be dead.
+								canCheckForUpdates={(appInfo?.canCheckForUpdates ?? false) && !recording}
 								checkingForUpdates={isCheckingForUpdates}
 								onSelectMic={handleSelectMicDevice}
 								onSelectCamera={handleSelectCameraDevice}
