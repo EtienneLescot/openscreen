@@ -62,6 +62,25 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      # The compositor renders through wgpu, so exporting needs a Vulkan ICD.
+      # A GitHub runner has no GPU and ships no software rasteriser either, and
+      # the app says so itself when it gets there:
+      #
+      #   aucun pilote Vulkan sur cet hote ... le repli logiciel a echoue aussi
+      #   (aucun rasteriseur logiciel Vulkan (lavapipe))
+      #
+      # lavapipe is what makes the export assertion below mean anything here.
+      # This is the runner acquiring a capability a desktop already has, not the
+      # derivation gaining a dependency -- the same shape as the missing dbus.
+      - name: Install a software Vulkan rasteriser
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mesa-vulkan-drivers vulkan-tools
+          echo "ICDs now present:"
+          ls -1 /usr/share/vulkan/icd.d/ || true
+          vulkaninfo --summary 2>/dev/null | head -20 || echo "(vulkaninfo reported nothing)"
+
       - name: Build
         run: nix build .#openscreen --print-build-logs
 
