@@ -182,7 +182,7 @@ export function CaptionsPane() {
 			</header>
 			<div className={styles.paneBody} style={{ padding: 0 }}>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.show")}</span>
+					<span className={styles.label}>{t("captions.show")}</span>
 					<Toggle
 						checked={settings.enabled}
 						disabled={disabled || !hasTranscript}
@@ -275,7 +275,7 @@ export function CaptionsPane() {
 				{/* ── Language ───────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.language")}</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.displayLanguage")}</span>
+					<span className={styles.label}>{t("captions.displayLanguage")}</span>
 					<select
 						value={settings.language ?? ""}
 						disabled={disabled}
@@ -358,7 +358,7 @@ export function CaptionsPane() {
 				{/* ── Text ───────────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.text")}</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.font")}</span>
+					<span className={styles.label}>{t("captions.font")}</span>
 					<select
 						value={settings.fontFamily}
 						disabled={disabled}
@@ -373,7 +373,7 @@ export function CaptionsPane() {
 					</select>
 				</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.bold")}</span>
+					<span className={styles.label}>{t("captions.bold")}</span>
 					<Toggle
 						checked={settings.fontWeight === "bold"}
 						disabled={disabled}
@@ -393,7 +393,7 @@ export function CaptionsPane() {
 					/>
 				</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.textColor")}</span>
+					<span className={styles.label}>{t("captions.textColor")}</span>
 					<ColorField
 						label={t("captions.textColor")}
 						value={settings.color}
@@ -409,7 +409,7 @@ export function CaptionsPane() {
 				    background: the swatch keeps showing the remembered colour while the
 				    plate is off, because that is what turning it back on will draw. */}
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.background")}</span>
+					<span className={styles.label}>{t("captions.background")}</span>
 					<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
 						<ColorField
 							label={t("captions.backgroundColor")}
@@ -488,7 +488,7 @@ export function CaptionsPane() {
 				{/* ── Line length ────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.lineLength")}</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.minWords")}</span>
+					<span className={styles.label}>{t("captions.minWords")}</span>
 					<select
 						value={settings.minWordsPerLine}
 						disabled={disabled}
@@ -503,7 +503,7 @@ export function CaptionsPane() {
 					</select>
 				</div>
 				<div className={styles.paneRow} style={{ marginBottom: 16 }}>
-					<span className="label">{t("captions.maxWords")}</span>
+					<span className={styles.label}>{t("captions.maxWords")}</span>
 					<select
 						value={settings.maxWordsPerLine}
 						disabled={disabled}
