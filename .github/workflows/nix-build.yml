@@ -154,7 +154,12 @@ jobs:
             echo "=== attempt $i/$ATTEMPTS ==="
             RC=0
             CLI_TIMEOUT=60 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>"/tmp/sources.$i.err" || RC=$?
+            # Every non-zero outcome is a failure. The kill is tracked on top of
+            # that rather than instead of it, because it carries its own meaning:
+            # the CLI's internal bound on getSources is supposed to fire first,
+            # so reaching the outer kill says that bound did not work.
             if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
+              FAILED=$((FAILED + 1))
               HUNG=$((HUNG + 1))
               echo "HUNG after 60s. Milestones reached:"
               # Read from stdout, not stderr. The probe above shows this host's
@@ -179,7 +184,7 @@ jobs:
             fi
           done
 
-          echo "=== $ATTEMPTS attempts: $OK ok, $FAILED failed, $HUNG hung ==="
+          echo "=== $ATTEMPTS attempts: $OK ok, $FAILED failed ($HUNG of them killed on timeout) ==="
 
           # A run where nothing hung still has to prove the -o channel works.
           if [ -n "$LAST_OK" ]; then
@@ -196,11 +201,10 @@ jobs:
           fi
 
           if [ "$HUNG" -gt 0 ]; then
-            echo "::error::openscreen sources hung on $HUNG of $ATTEMPTS attempts. A CLI that never returns cannot be scripted."
-            exit 1
+            echo "::error::openscreen sources had to be killed on $HUNG of $ATTEMPTS attempts. Its own bound on source enumeration should have fired first."
           fi
           if [ "$FAILED" -gt 0 ]; then
-            echo "::error::openscreen sources failed on $FAILED of $ATTEMPTS attempts. Bounded and reported, but the capture path is still not reliable on this host."
+            echo "::error::openscreen sources failed on $FAILED of $ATTEMPTS attempts. The capture path is not reliable on this host."
             exit 1
           fi
           if [ "$OK" -eq 0 ]; then
