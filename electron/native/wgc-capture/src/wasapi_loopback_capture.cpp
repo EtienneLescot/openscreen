@@ -66,6 +66,34 @@ std::wstring normalizeDeviceName(const std::wstring& value) {
 }
 
 /**
+ * Does `needle` appear in `haystack` as whole words?
+ *
+ * Plain containment is what let a requested "Micro" answer for
+ * "Microphone (Logitech StreamCam)" -- the request is inside the name, just not
+ * as a word -- and a requested "Logi" for "Logitech". Either resolved an
+ * endpoint nobody asked for, and silenced the fallback warning by doing so.
+ *
+ * Both sides are normalized, so a boundary is the start of the string, the end,
+ * or a space.
+ */
+bool containsAsWords(const std::wstring& haystack, const std::wstring& needle) {
+    if (haystack.empty() || needle.empty()) {
+        return false;
+    }
+    size_t pos = haystack.find(needle);
+    while (pos != std::wstring::npos) {
+        const bool startsOnBoundary = pos == 0 || haystack[pos - 1] == L' ';
+        const size_t after = pos + needle.size();
+        const bool endsOnBoundary = after == haystack.size() || haystack[after] == L' ';
+        if (startsOnBoundary && endsOnBoundary) {
+            return true;
+        }
+        pos = haystack.find(needle, pos + 1);
+    }
+    return false;
+}
+
+/**
  * How well a candidate endpoint answers a requested name, or 0 for "not this
  * one" -- which the caller must treat as a real answer.
  *
@@ -91,10 +119,10 @@ int scoreDeviceName(const std::wstring& candidateName, const std::wstring& candi
     if (candidate == requested) {
         return 1000;
     }
-    if (!candidate.empty() && (candidate.find(requested) != std::wstring::npos || requested.find(candidate) != std::wstring::npos)) {
+    if (containsAsWords(candidate, requested) || containsAsWords(requested, candidate)) {
         return 900;
     }
-    if (!id.empty() && (id.find(requested) != std::wstring::npos || requested.find(id) != std::wstring::npos)) {
+    if (containsAsWords(id, requested) || containsAsWords(requested, id)) {
         return 800;
     }
 
