@@ -14,6 +14,7 @@
   rustfmt,
   patchelfUnstable,
   binutils,
+  vulkan-loader,
 }:
 
 let
@@ -50,7 +51,28 @@ rustPlatform.buildRustPackage {
   pname = "openscreen-compositor-view";
   version = (lib.importJSON ../package.json).version;
 
-  src = lib.cleanSource ../crates;
+  # cleanSource is not enough here: it filters .git and editor backups and
+  # honours neither crates/.gitignore nor git tracking. On any machine that has
+  # run `npm run build:native:compositor` or `npm run fetch:ffmpeg`, that means
+  # the local `target/` and the ~160 MB vendored `thirdparty/` land in the store,
+  # the src hash changes after every cargo invocation so nothing ever caches, and
+  # installPhase's `find target` can match a stale libcompositor_view.so from
+  # that tree instead of the one just built.
+  #
+  # Same shape as nix/package.nix, including its fallback: gitTracked fails when
+  # the source is already a store path (path: flake inputs).
+  src =
+    let
+      fs = lib.fileset;
+      isStorePath =
+        builtins.storeDir
+        == builtins.substring 0 (builtins.stringLength builtins.storeDir) (toString ../.);
+      baseFiles = if isStorePath then fs.fromSource (lib.cleanSource ../.) else fs.gitTracked ../.;
+    in
+    fs.toSource {
+      root = ../crates;
+      fileset = fs.intersection baseFiles ../crates;
+    };
 
   # No git dependencies in the lockfile, so this needs no hash of its own and
   # cannot go stale the way npmDepsHash did.
@@ -165,7 +187,37 @@ rustPlatform.buildRustPackage {
     # from there rather than through any system path.
     cp "$NIX_BUILD_TOP"/ffmpeg-renamed/lib/*.so.* "$out/lib/"
     chmod u+w "$out/lib/compositor_view.node"
-    patchelf --set-rpath '$ORIGIN' "$out/lib/compositor_view.node"
+
+    # --add-rpath, not --set-rpath: the latter replaces what nixpkgs' ld-wrapper
+    # computed for the addon's own dependencies -- libgcc_s.so.1 among them, which
+    # a gnu-target Rust cdylib links for unwinding -- and nothing here would put it
+    # back, since fixupPhase only shrinks. The reference build appends too
+    # (scripts/build-linux-compositor-addon.mjs passes -Wl,-rpath,$ORIGIN at link
+    # time rather than rewriting afterwards).
+    patchelf --add-rpath '$ORIGIN' "$out/lib/compositor_view.node"
+
+    # The Vulkan loader, which nothing else pulls in: wgpu reaches Vulkan through
+    # ash's dlopen("libvulkan.so.1"), never a DT_NEEDED, which is why this
+    # derivation builds without it and then fails at export time. The ICD stays
+    # the host's job -- forcing a rasteriser would put every user with a real GPU
+    # into software rendering -- but the loader cannot be, because NixOS has no
+    # ld.so.cache and /run/opengl-driver/lib carries ICDs, not libvulkan.so.1.
+    patchelf --add-rpath "${lib.makeLibraryPath [ vulkan-loader ]}" "$out/lib/compositor_view.node"
+
+    # What the reference build ends with (assertNoUnprefixedFfmpegImports in
+    # scripts/build-linux-compositor-addon.mjs). preBuild's `count -eq 0` proves
+    # only that the rename map was non-empty. A cdylib tolerates undefined
+    # symbols, so any name bindgen declared that the map missed links fine, and
+    # binds to Chromium's libffmpeg.so at dlopen -- silently, which is the whole
+    # failure this scheme exists to prevent.
+    leaked=$(nm -D --undefined-only "$out/lib/compositor_view.node" \
+      | awk '{ n = $2; sub(/@.*/, "", n); if (n ~ /^(av|sws_|swr_)/ && n !~ /^osff_/) print n }')
+    if [ -n "$leaked" ]; then
+      echo "ffmpeg symbols still imported unprefixed; the addon would bind to Chromium's ffmpeg:" >&2
+      echo "$leaked" >&2
+      exit 1
+    fi
+    echo "verified: no unprefixed ffmpeg imports remain in the addon"
     runHook postInstall
   '';
 
