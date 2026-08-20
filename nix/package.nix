@@ -4,6 +4,7 @@
   nodejs_22,
   electron,
   ffmpeg-headless,
+  compositor-view,
   makeWrapper,
   makeDesktopItem,
   copyDesktopItems,
@@ -96,7 +97,8 @@ buildNpmPackage {
     makeWrapper "${electron}/bin/electron" "$out/bin/openscreen" \
       --add-flags "$out/lib/openscreen" \
       --set ELECTRON_IS_DEV 0 \
-      --set OPENSCREEN_FFMPEG_PATH "${ffmpeg-headless}/bin/ffmpeg"
+      --set OPENSCREEN_FFMPEG_PATH "${ffmpeg-headless}/bin/ffmpeg" \
+      --set OPENSCREEN_COMPOSITOR_VIEW_NODE "${compositor-view}/lib/compositor_view.node"
 
     # Install icons to hicolor theme
     for size in 16 24 32 48 64 128 256 512 1024; do
