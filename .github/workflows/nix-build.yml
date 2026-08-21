@@ -187,7 +187,19 @@ jobs:
           # the capture failure remains unexplained.
           XVFB_SCREEN="-screen 0 1920x1080x24"
           CHROME_FLAGS="--disable-dev-shm-usage"
-          run_cli() { timeout --signal=TERM --kill-after=10s "${CLI_TIMEOUT:-120}" xvfb-run -a -s "$XVFB_SCREEN" ./result/bin/openscreen "$@"; }
+          # Counted, because position is the variable under test and it is not
+          # fixed. The sandbox probe costs one invocation or two depending on the
+          # host, and the record loop breaks on first success, so it costs anywhere
+          # between two and six. An aggregate success rate therefore cannot be
+          # attributed to position on its own -- the workload ahead of it moved
+          # too. Labelling every block with the invocation it starts at is what
+          # makes the rates comparable across runs; reading them unlabelled is the
+          # mistake this counter exists to prevent.
+          RUN_CLI_N=0
+          run_cli() {
+            RUN_CLI_N=$((RUN_CLI_N + 1))
+            timeout --signal=TERM --kill-after=10s "${CLI_TIMEOUT:-120}" xvfb-run -a -s "$XVFB_SCREEN" ./result/bin/openscreen "$@"
+          }
 
           SANDBOX=""
           echo "--- probe: as shipped ---"
@@ -216,17 +228,28 @@ jobs:
           # two had was position. run_cli spawns a fresh `xvfb-run -a` per
           # invocation, so record was always invocations 6-8 of the step, after
           # five Xvfb servers had been started and torn down, while sources ran at
-          # 4-8. If display churn is what drives the failures, the rates should now
-          # swap: record improving AND sources getting worse. If record stays at
-          # roughly 1 in 10 from this position, position was never the cause and
-          # something in the record path itself is, which is a different search.
+          # 4-8. If display churn is what drives the failures, record should now
+          # improve. If it stays at roughly 1 in 10 from this position, position
+          # was never the cause and something in the record path itself is, which
+          # is a different search.
           #
-          # Read the next run as that A/B, not as a verdict on the package. Put it
+          # The other half of that prediction -- sources getting worse -- is NOT
+          # readable from its aggregate rate, and an earlier draft of this comment
+          # claimed it was. The workload ahead of sources is not fixed: the sandbox
+          # probe costs one invocation or two, and the loop below breaks on first
+          # success, so it costs between two and six. Sources therefore starts at a
+          # different position on different runs, and a rate averaged over runs
+          # confounds the two. Hence the run_cli counter: every attempt now prints
+          # the invocation it is, so the rates can be stratified by position across
+          # several runs. One run does not settle this; the counter is what makes
+          # several of them add up.
+          #
+          # Read the next runs as that A/B, not as a verdict on the package. Put it
           # back if the rates do not move.
           #
           # Up to three goes, because screen capture on this host is unreliable in
           # its own right. One success is enough for the question being asked here.
-          echo "--- record then export ---"
+          echo "--- record then export (first run_cli here is #$((RUN_CLI_N + 1))) ---"
           EXPORTED=""
           # Tracked apart from EXPORTED so the verdict can name the stage that
           # actually failed. Every run so far has died in record without export
@@ -236,7 +259,7 @@ jobs:
           # to vouch for.
           RECORDED=0
           for i in 1 2 3; do
-            echo "=== export attempt $i/3 ==="
+            echo "=== export attempt $i/3 (run_cli #$((RUN_CLI_N + 1))) ==="
             rm -f /tmp/demo.openscreen /tmp/demo.mp4
             RC=0
             CLI_TIMEOUT=120 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS record --duration 2 --project /tmp/demo.openscreen >"/tmp/rec.$i.out" 2>&1 || RC=$?
@@ -313,7 +336,7 @@ jobs:
           FAILED=0
           LAST_OK=""
           for i in $(seq 1 "$ATTEMPTS"); do
-            echo "=== attempt $i/$ATTEMPTS ==="
+            echo "=== attempt $i/$ATTEMPTS (run_cli #$((RUN_CLI_N + 1))) ==="
             RC=0
             # 120, matching record: the renderer's own bounds can legitimately
             # spend 35s here (20s on getSources, then up to 3x5s on the audio
@@ -400,7 +423,7 @@ jobs:
           # per-attempt warnings above keep that flakiness visible without letting
           # it decide the build; tighten this to $ATTEMPTS once the capture failure
           # is understood and fixed.
-          echo "=== verdict: enumeration $OK/$ATTEMPTS ok, record $RECORDED, export $EXPORT_OK ==="
+          echo "=== verdict: enumeration $OK/$ATTEMPTS ok, record $RECORDED, export $EXPORT_OK, $RUN_CLI_N run_cli invocations ==="
           if [ "$EXPORT_OK" -ne 1 ] || [ "$OK" -eq 0 ]; then
             exit 1
           fi
