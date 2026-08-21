@@ -69,11 +69,26 @@ export function useEditorSettings(): UseEditorSettingsResult {
 
 	// A drag does not always end in a commit -- the gradient editor's is a 400ms timer
 	// its own unmount cleanup cancels -- and nothing else empties these, so left alone
-	// they pin two whole documents for the lifetime of the hook instance. The editor
-	// mounts six `useEditorSettings()` at once and annotations can carry base64 image
-	// data URLs, so that is not a small pin. Release them when the project changes,
-	// which is the guard `useTimeline` carries, keyed on the same thing, for the same
-	// reason. What it is NOT is the reason a snapshot of the project the user left
+	// they pin two whole documents for the lifetime of the hook instance, and
+	// annotations can carry base64 image data URLs. What the pin is worth, since a
+	// count is easy to get wrong here: ten components call `useEditorSettings()`, at
+	// most FIVE are mounted together (`PreviewCanvas` with `VirtualPreview` and
+	// `WebcamOverlay` inside it, `V4Timeline`, and one inspector body), and of those
+	// only two can ever fill these refs, because only `PreviewCanvas` and the pane the
+	// inspector is showing call `setLive` -- the five `RightPanes` exports are
+	// `FacetBody`'s mutually exclusive branches, so one at a time. Two instances, two
+	// documents each.
+	//
+	// Release them when the project changes, which is the guard `useTimeline` carries,
+	// keyed on the same thing, for the same reason -- and its two drag commits carry
+	// the identity test below too, so the pair is symmetric in shape. It is not
+	// symmetric in what a stale snapshot COSTS: `commitZoomFocus` and
+	// `commitAnnotationChange` also write theirs back into the store when the save
+	// fails, so a stale one there is a DOCUMENT and silently drops every edit since.
+	// This hook has no rollback path, so the same staleness costs a history step and
+	// nothing else.
+	//
+	// What this effect is NOT is the reason a snapshot of the project the user left
 	// cannot reach the undo stack: `commit` below decides that, and decides it for a
 	// project that never changed too.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: projectId is the trigger, not a read — the body only clears refs.
