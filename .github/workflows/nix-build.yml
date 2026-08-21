@@ -198,41 +198,56 @@ jobs:
           # green with the hand-added RPATH missing entirely -- validating
           # everything except the one thing this packaging adds.
           #
-          # Read the RPATH out of the binary instead, and require that one of its
-          # directories actually holds the soname the shim hands to dlopen.
-          HELPER=$(wrapper_value OPENSCREEN_LINUX_CURSOR_HELPER_EXE)
-          if [ -n "$HELPER" ]; then
-            echo "--- helper dlopen contract ---"
-            # DT_RPATH or DT_RUNPATH: the derivation asks for the former, but read
+          # Read the RPATH out of the object instead, and require that one of its
+          # directories actually holds the soname handed to dlopen.
+          #
+          # Both components have one. The helper's libpipewire entry is the one
+          # that caught a real regression; the addon's libvulkan entry is the same
+          # construction and was silently being stripped too, unnoticed because
+          # ubuntu-latest has a system libvulkan that satisfies the dlopen anyway.
+          # That is exactly why it needs asserting rather than exercising: the
+          # runner cannot reproduce the host where it matters.
+          check_dlopen_rpath() {
+            local what="$1" obj="$2" soname="$3"
+            [ -n "$obj" ] || return 0
+            echo "--- $what dlopen contract ---"
+            # DT_RPATH or DT_RUNPATH: the derivations ask for the former, but read
             # whichever is there rather than asserting which, so a silent
             # conversion is reported instead of looking like an absent RPATH.
-            RPATH=$(readelf -d "$HELPER" | sed -nE 's/.*\((RPATH|RUNPATH)\).*\[(.*)\]/\2/p' | tail -1)
-            echo "rpath: ${RPATH:-<none>}"
-            found=""
-            origin=$(dirname "$HELPER")
-            IFS=: read -ra dirs <<<"$RPATH"
+            local rpath
+            rpath=$(readelf -d "$obj" | sed -nE 's/.*\((RPATH|RUNPATH)\).*\[(.*)\]/\2/p' | tail -1)
+            echo "rpath: ${rpath:-<none>}"
+            local origin found="" dirs dir
+            origin=$(dirname "$obj")
+            IFS=: read -ra dirs <<<"$rpath"
             for dir in ${dirs[@]+"${dirs[@]}"}; do
-              # $ORIGIN is relative to the binary; the ffmpeg entries use it.
+              # $ORIGIN is relative to the object; the ffmpeg entries use it.
               dir=${dir//\$ORIGIN/$origin}
-              if [ -e "$dir/libpipewire-0.3.so.0" ]; then
+              if [ -e "$dir/$soname" ]; then
                 found="$dir"
                 break
               fi
             done
             if [ -z "$found" ]; then
-              echo "::error::no RPATH entry of the helper holds libpipewire-0.3.so.0; its dlopen will fail on any host without an ld.so.cache"
+              echo "::error::no RPATH entry of the $what holds $soname; its dlopen will fail on any host without an ld.so.cache"
               missing=$((missing + 1))
             else
-              echo "libpipewire-0.3.so.0 resolves from $found"
+              echo "$soname resolves from $found"
             fi
             # Unresolved DT_NEEDED entries are a different fault, and this is
             # where they would show.
-            if ldd "$HELPER" | grep -q "not found"; then
-              echo "::error::the helper has unresolved DT_NEEDED libraries"
-              ldd "$HELPER" | grep "not found"
+            if ldd "$obj" | grep -q "not found"; then
+              echo "::error::the $what has unresolved DT_NEEDED libraries"
+              ldd "$obj" | grep "not found"
               missing=$((missing + 1))
             fi
-          fi
+          }
+
+          check_dlopen_rpath "PipeWire helper" \
+            "$(wrapper_value OPENSCREEN_LINUX_CURSOR_HELPER_EXE)" libpipewire-0.3.so.0
+          check_dlopen_rpath "compositor addon" \
+            "$(wrapper_value OPENSCREEN_COMPOSITOR_VIEW_NODE)" libvulkan.so.1
+
           [ "$missing" -eq 0 ]
 
       # Electron initialises Chromium even for the headless CLI, so it needs a
