@@ -204,7 +204,7 @@ The hook now reads `electron/native/bin/darwin-<arch>/` — the directory `mac.e
 | Required | Without it |
 |---|---|
 | `compositor_view.node` | preview and every export render nothing |
-| `libavcodec/libavformat/libavutil/libavfilter.*.dylib` | the addon cannot load at all (dyld error at `require()`) |
+| `libavcodec/libavformat/libavutil/libavfilter/libswresample/libswscale.*.dylib` | the addon cannot load at all (dyld error at `require()`) |
 | `whisper-stt-server` | transcription and captions fail with a developer error shown to end users |
 | `libggml*.dylib` | the helper dies in dyld before `main()`; STT times out with no diagnostic |
 | `openscreen-screencapturekit-helper` | native screen capture unavailable |
