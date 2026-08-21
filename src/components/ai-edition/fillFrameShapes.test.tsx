@@ -5,7 +5,7 @@
 // document, with clips of two shapes, and the frame already zeroed — so it gets its own file.
 
 import "@testing-library/jest-dom";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
@@ -68,6 +68,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("a mixed timeline gets a shape to choose, not a shape imposed", () => {
+	it("names the current fill by RESOLUTION, not by ratio token", () => {
+		// `16:9` is readable; `683:384` and `64:27` are not. What a user recognises about
+		// their own footage is its resolution, so that is what the control says.
+		mount(documentWithShapes([[1920, 1080]]));
+		expect(screen.getByRole("button", { name: /1920 × 1080/ })).toBeInTheDocument();
+	});
+
 	it("offers every distinct shape, with the clip count behind each", () => {
 		// Five landscape clips and two portrait inserts: picking the majority silently would
 		// mean the portrait ones can never be made to fill.
@@ -82,11 +89,24 @@ describe("a mixed timeline gets a shape to choose, not a shape imposed", () => {
 				[1080, 1920],
 			]),
 		);
+		fireEvent.click(screen.getByRole("button", { name: /1920 × 1080/ }));
 
-		expect(screen.getByRole("button", { name: /16:9/ })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /9:16/ })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /16:9\s*5/ })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /9:16\s*2/ })).toBeInTheDocument();
+		const menu = screen.getByRole("menu");
+		expect(within(menu).getByRole("menuitem", { name: /1920 × 1080.*5/ })).toBeInTheDocument();
+		expect(within(menu).getByRole("menuitem", { name: /1080 × 1920.*2/ })).toBeInTheDocument();
+	});
+
+	it("offers a way back out of the menu it opened", () => {
+		mount(
+			documentWithShapes([
+				[1920, 1080],
+				[1080, 1920],
+			]),
+		);
+		fireEvent.click(screen.getByRole("button", { name: /1920 × 1080/ }));
+		expect(
+			within(screen.getByRole("menu")).getByRole("menuitem", { name: "Restore the frame" }),
+		).toBeInTheDocument();
 	});
 
 	it("says the other shapes still show the background", () => {
@@ -101,15 +121,18 @@ describe("a mixed timeline gets a shape to choose, not a shape imposed", () => {
 		);
 	});
 
-	it("offers no choice when every clip is the same shape — there is nothing to arbitrate", () => {
+	it("asks nothing when every clip is the same shape — the button just acts", () => {
 		mount(
 			documentWithShapes([
 				[1920, 1080],
 				[3840, 2160],
 			]),
 		);
-		// 1920x1080 and 3840x2160 are both 16:9: one shape, so no chooser and no caveat.
+		// 1920x1080 and 3840x2160 are both 16:9, so they collapse to ONE shape — labelled with
+		// the biggest representative, the same rule the ratio menu uses so the label shows the
+		// best resolution available. One shape means no menu and no caveat.
+		fireEvent.click(screen.getByRole("button", { name: /3840 × 2160/ }));
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 		expect(screen.queryByRole("note")).not.toBeInTheDocument();
-		expect(screen.queryByRole("group")).not.toBeInTheDocument();
 	});
 });

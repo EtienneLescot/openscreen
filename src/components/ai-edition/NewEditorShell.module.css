@@ -987,12 +987,71 @@
 	color: var(--fg-2);
 	margin: 4px var(--sp-4) 8px;
 }
-/* Clip count riding along a shape chip — present, but never louder than the shape. */
-.tabCount {
-	margin-left: 5px;
-	opacity: 0.6;
+/* ─── row action + its menu ───────────────────────────────────── */
+/* Sits where a Toggle would, and reads as the current answer rather than as on/off. */
+.rowAction {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 5px 8px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg);
+	color: var(--fg-2);
+	font: 500 var(--fs-app-sm)/1 var(--font-body);
 	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+	transition: border-color 150ms ease, color 150ms ease;
 }
+.rowAction:hover:not(:disabled) { border-color: var(--brand); color: var(--fg); }
+.rowAction:disabled { cursor: default; opacity: 0.5; }
+.actionMenu {
+	min-width: 216px;
+	padding: 6px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface-1);
+	box-shadow: var(--elev-pop);
+	/* Ten shapes must cost no more room than two. */
+	max-height: min(var(--radix-popover-content-available-height, 60vh), 320px);
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+.actionMenuTitle {
+	margin: 4px 8px 6px;
+	font: 600 11px/1 var(--font-body);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--muted);
+}
+.actionMenuRow {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 8px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--fg);
+	cursor: pointer;
+	text-align: left;
+}
+.actionMenuRow:hover { background: var(--surface-2); }
+.actionMenuRow.isActive { background: color-mix(in oklab, var(--brand), transparent 82%); }
+/* Resolution leads: it is the thing a user recognises about their own footage. */
+.actionMenuMain { font: 600 12.5px var(--font-display); font-variant-numeric: tabular-nums; }
+/* The ratio token second, for whoever does read them — `64:27` means nothing alone. */
+.actionMenuMeta { font: 400 11px var(--font-body); color: var(--muted); }
+.actionMenuCount {
+	margin-left: auto;
+	font: 500 11px var(--font-body);
+	font-variant-numeric: tabular-nums;
+	color: var(--meta);
+}
+.actionMenuReset { border-top: 1px solid var(--border-soft); border-radius: 0 0 8px 8px; margin-top: 4px; padding-top: 10px; }
+.actionMenuReset .actionMenuMain { font-weight: 500; color: var(--fg-2); }
 
 /* Caveat under a control, when the control is true but not the whole story. */
 .paneHint {

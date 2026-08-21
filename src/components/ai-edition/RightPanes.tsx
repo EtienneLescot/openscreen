@@ -1548,11 +1548,15 @@ export function VideoEffectsPane() {
 	// contain-fits (see compositeLayout.ts), so anything not in the chosen shape keeps its
 	// bars. The switch is honest about the SETTINGS; without this it would also be read as a
 	// claim about the picture, and be wrong on every mixed timeline.
+	const filledFormat = frameIsFilled
+		? nativeFormats.find((f) => f.token === settings.aspectRatio)
+		: undefined;
 	const clipsStillFramed = useMemo(() => {
 		const filled = nativeFormats.find((f) => f.token === settings.aspectRatio);
 		const total = nativeFormats.reduce((n, f) => n + f.clipCount, 0);
 		return total - (filled?.clipCount ?? 0);
 	}, [nativeFormats, settings.aspectRatio]);
+	const [fillMenuOpen, setFillMenuOpen] = useState(false);
 
 	// Le rayon natif = rayon de base de la fixture (~24px @1920) × cette échelle. Diviser la
 	// valeur px de l'UI par ce même rayon de base fait que le coin natif ≈ les px affichés
@@ -1563,8 +1567,7 @@ export function VideoEffectsPane() {
 	// un effet de montage ici ne poussait rien tant que ce panneau precis n'avait pas
 	// ete ouvert. Les handlers par controle ci-dessous poussent toujours leurs diffs.
 
-	const toggleFillFrame = (on: boolean) => {
-		const patch = fillFramePatch(on, nativeFormats[0]?.token ?? settings.aspectRatio);
+	const pushFramePatch = (patch: EditorSettingsPatch) => {
 		void set(patch);
 		if (isNativeCompositorActive()) {
 			setNativeParam("padding", (patch.padding ?? 0) / 100);
@@ -1572,6 +1575,11 @@ export function VideoEffectsPane() {
 			setNativeParam("shadow", patch.shadowIntensity ?? 0);
 		}
 	};
+	/** Fill to a shape the user named. */
+	const applyFillFrame = (token: AspectRatio) => pushFramePatch(fillFramePatch(true, token));
+	/** Fill to the majority shape, or restore — the no-decision-to-make path. */
+	const toggleFillFrame = (on: boolean) =>
+		pushFramePatch(fillFramePatch(on, nativeFormats[0]?.token ?? settings.aspectRatio));
 
 	return (
 		<Pane
@@ -1585,45 +1593,97 @@ export function VideoEffectsPane() {
 			<BackgroundSection />
 			<div className={styles.sectionLabel}>{ts("effects.frame")}</div>
 			{/* #84: "how do I turn the background off". The honest answer was four settings in
-			    three places, so nobody found it. This is that answer as one control — and it
-			    stays a derived view of those settings, so moving any slider below simply turns
-			    it back off rather than leaving a lying switch behind. Disabled without a
-			    timeline: there is no footage whose shape we could fill to. */}
+			    three places, so nobody found it. This is that answer as one control.
+			
+			    An ACTION, not a switch. A switch has room for one outcome, and on a timeline
+			    with several shapes there are several — one per shape — with no way for a
+			    boolean to say which it took. It took the majority, silently. Worse, the shapes
+			    it was choosing between were shown as raw ratio tokens: `16:9` is readable,
+			    `683:384` and `64:27` are not, and ten of them do not fit a row of chips.
+			
+			    So the button says what is filling the frame right now, and opens a list when
+			    there is a choice to make — the same shape the "edit clip" rail button has.
+			    Rows lead with the RESOLUTION, which users recognise, and carry their clip
+			    count so the trade is visible. The list scrolls, so ten shapes cost no more
+			    than two. */}
 			<div className={styles.paneRow}>
 				<span className={styles.label}>{ts("effects.fillFrame")}</span>
-				<Toggle
-					checked={frameIsFilled}
-					disabled={!hasDocument || nativeFormats.length === 0}
-					ariaLabel={ts("effects.fillFrame")}
-					onChange={toggleFillFrame}
-				/>
-			</div>
-			{/* WHICH shape to fill is only a question when the timeline has more than one, and
-			    then it is the user's to answer, not ours: picking the majority silently means a
-			    project that is mostly landscape with two portrait inserts can never be made to
-			    fill on the portrait ones. Each shape carries its clip count, so the trade is
-			    visible — same information the ratio menu's ORIGINAL section shows. */}
-			{frameIsFilled && nativeFormats.length > 1 ? (
-				<>
-					<div className={styles.paneTabs} role="group" aria-label={ts("effects.fillFrame")}>
-						{nativeFormats.map((format) => (
-							<button
-								type="button"
-								key={format.token}
-								className={format.token === settings.aspectRatio ? styles.isActive : ""}
-								onClick={() => void set({ aspectRatio: format.token })}
-							>
-								{format.token}
-								<span className={styles.tabCount}>{format.clipCount}</span>
-							</button>
-						))}
-					</div>
-					{clipsStillFramed > 0 ? (
-						<div className={styles.paneHint} role="note">
-							{ts("effects.fillFrameMixed")}
+				<Popover open={fillMenuOpen} onOpenChange={setFillMenuOpen}>
+					<PopoverTrigger asChild>
+						<button
+							type="button"
+							className={styles.rowAction}
+							disabled={!hasDocument || nativeFormats.length === 0}
+							onClick={(e) => {
+								// One shape means no decision to delegate: act, do not ask.
+								if (nativeFormats.length <= 1) {
+									e.preventDefault();
+									toggleFillFrame(!frameIsFilled);
+								}
+							}}
+						>
+							{filledFormat
+								? `${filledFormat.width} × ${filledFormat.height}`
+								: ts("effects.fillFrameOff")}
+							{nativeFormats.length > 1 ? <ChevronDown size={11} /> : null}
+						</button>
+					</PopoverTrigger>
+					<PopoverContent
+						align="end"
+						sideOffset={6}
+						collisionPadding={12}
+						animated={false}
+						className="w-auto border-0 bg-transparent p-0 shadow-none"
+					>
+						<div
+							className={styles.actionMenu}
+							role="menu"
+							aria-label={ts("effects.fillFrameChoose")}
+						>
+							<p className={styles.actionMenuTitle}>{ts("effects.fillFrameChoose")}</p>
+							{nativeFormats.map((format) => (
+								<button
+									type="button"
+									role="menuitem"
+									key={format.token}
+									className={`${styles.actionMenuRow}${
+										frameIsFilled && format.token === settings.aspectRatio
+											? ` ${styles.isActive}`
+											: ""
+									}`}
+									onClick={() => {
+										setFillMenuOpen(false);
+										applyFillFrame(format.token);
+									}}
+								>
+									<span className={styles.actionMenuMain}>
+										{format.width} × {format.height}
+									</span>
+									<span className={styles.actionMenuMeta}>{format.token}</span>
+									<span className={styles.actionMenuCount}>{format.clipCount}</span>
+								</button>
+							))}
+							{frameIsFilled ? (
+								<button
+									type="button"
+									role="menuitem"
+									className={`${styles.actionMenuRow} ${styles.actionMenuReset}`}
+									onClick={() => {
+										setFillMenuOpen(false);
+										toggleFillFrame(false);
+									}}
+								>
+									<span className={styles.actionMenuMain}>{ts("effects.fillFrameRestore")}</span>
+								</button>
+							) : null}
 						</div>
-					) : null}
-				</>
+					</PopoverContent>
+				</Popover>
+			</div>
+			{frameIsFilled && clipsStillFramed > 0 ? (
+				<div className={styles.paneHint} role="note">
+					{ts("effects.fillFrameMixed")}
+				</div>
 			) : null}
 			<div className={styles.sliderGrid}>
 				<SliderCell

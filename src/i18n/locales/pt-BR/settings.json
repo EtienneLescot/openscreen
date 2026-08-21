@@ -76,6 +76,9 @@
 		"padding": "Espaçamento",
 		"frame": "Moldura",
 		"fillFrame": "Preencher a moldura",
+		"fillFrameOff": "Desativado",
+		"fillFrameChoose": "Escolha o que preenche a moldura",
+		"fillFrameRestore": "Restaurar a moldura",
 		"fillFrameMixed": "Clipes com outro formato ainda mostram o fundo.",
 		"motion": "Movimento",
 		"help": "Estilo do quadro da gravação: desfoque de fundo, sombra, desfoque de movimento, raio dos cantos e margem em volta do vídeo."
