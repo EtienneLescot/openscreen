@@ -21,9 +21,6 @@
   stdenv,
   cmake,
   fetchurl,
-  shaderc,
-  vulkan-headers,
-  vulkan-loader,
 }:
 
 let
@@ -69,32 +66,39 @@ stdenv.mkDerivation {
       fileset = fs.intersection baseFiles helper;
     };
 
-  nativeBuildInputs = [
-    cmake
-    # glslc, for whisper.cpp's vulkan-shaders-gen. Only reachable with
-    # OSC_ENABLE_VULKAN=ON below, and the sub-project fails at configure time
-    # without it rather than degrading.
-    shaderc
-  ];
+  nativeBuildInputs = [ cmake ];
 
-  buildInputs = [
-    vulkan-headers
-    vulkan-loader
-  ];
-
-  # OSC_ENABLE_VULKAN=ON is what scripts/build-whisper-stt.sh selects for
-  # linux-x64 and linux-arm64, and matching it is the point: the alternative is a
-  # CPU-only binary, which works but is the same class of silent reduction this
-  # packaging exists to remove. ggml links libvulkan normally here -- unlike the
-  # compositor addon and the PipeWire helper, nothing is dlopen'd by soname, so
-  # the linker records it and no RPATH surgery is needed.
+  # CPU-ONLY, AND NOT BY PREFERENCE.
   #
-  # OSC_NATIVE_CPU is left off, deliberately and per the CMakeLists' own warning:
-  # ON would compile with -march=native for whichever machine ran the build, and
-  # a nix package is precisely a thing built once and run elsewhere.
+  # This was OSC_ENABLE_VULKAN=ON, matching what scripts/build-whisper-stt.sh
+  # selects for Linux, on the argument that a CPU-only binary is the same class of
+  # silent reduction this packaging exists to remove. The argument is sound and it
+  # lost to an observation: the build does not complete. ggml's vulkan-shaders-gen
+  # forks a glslc per shader variant and there are thousands of them --
+  # matmul_id_subgroup_iq3_s_f32_f16acc_cm1 and its many siblings, mostly
+  # quantisation formats a whisper model never uses. On a GitHub runner inside the
+  # nix sandbox that exhausts the process table:
+  #
+  #   Cannot allocate memory
+  #   Error executing command for matmul_id_subgroup_q5_k_f16_fp32: Failed to fork process
+  #   ... 631 more, then collect2: error: ld returned 1 exit status
+  #
+  # A component that does not build is a worse reduction than one that runs on the
+  # CPU backend, so the trade inverts. Captions still work, slower on a machine
+  # with a usable GPU; gpuDetector selects the backend at runtime either way.
+  #
+  # Re-enabling this needs the shader generation bounded, not the flag flipped
+  # back -- a jobs limit for vulkan-shaders-gen, or a builder with more headroom
+  # than a standard runner. With Vulkan off there is nothing to compile shaders
+  # with and nothing to link, so shaderc, vulkan-headers and vulkan-loader went
+  # with it.
+  #
+  # OSC_NATIVE_CPU stays off, per the CMakeLists' own warning: ON would compile
+  # with -march=native for whichever machine ran the build, and a nix package is
+  # precisely a thing built once and run elsewhere.
   cmakeFlags = [
     "-DCMAKE_BUILD_TYPE=Release"
-    "-DOSC_ENABLE_VULKAN=ON"
+    "-DOSC_ENABLE_VULKAN=OFF"
     "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"
   ];
 
