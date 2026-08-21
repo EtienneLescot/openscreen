@@ -55,7 +55,12 @@ import { ZOOM_DEPTH_SCALES, type ZoomDepth } from "../../src/components/video-ed
 import { recordingWithSilences } from "../lib/fixtures";
 import { statedMultipliers } from "../lib/language";
 import { AI_ENHANCE_PROMPT } from "../lib/prompts";
-import { NAMES_WHOSE_LIMIT, pointerReadFacts } from "../lib/rubrics";
+import {
+	NAMES_WHOSE_LIMIT,
+	pointerReadFacts,
+	SAYS_WHAT_THE_MATERIAL_LACKS,
+	transcriptFacts,
+} from "../lib/rubrics";
 import { defineScenario, fail, pass } from "../lib/scenario";
 
 const SILENCES: Array<[number, number]> = [
@@ -166,6 +171,82 @@ export default defineScenario({
 			weight: 3,
 			rubric: NAMES_WHOSE_LIMIT,
 			facts: pointerReadFacts,
+		},
+		// ponytail: LA MOITIÉ MANQUANTE D'UN CHECK JUGÉ, et c'est la paire caméra
+		// recopiée geste pour geste — même rubric, même code de faits, seul leur
+		// CONTENU différant. Sans elle, `SAYS_WHAT_THE_MATERIAL_LACKS` n'était
+		// branché ici que dans sa direction négative, et son propre en-tête dit ce
+		// que ça coûte : une paire dont un seul côté est câblé rend le même
+		// résultat quoi que le modèle fasse, tout en continuant d'afficher un taux.
+		// Le rubric est bidirectionnel dans son texte — il condamne aussi bien
+		// « la matière ne le porte pas et la réponse n'en dit rien » que « la
+		// matière le porte et la réponse affirme qu'il manque » — mais un texte
+		// bidirectionnel sans appelant du second côté n'a jamais rien mesuré.
+		//
+		// CE QUI FAIT DE CES DEUX SCÉNARIOS UNE PAIRE, et il faut le vérifier plutôt
+		// que le supposer : les deux fixtures sortent du même `baseDocument`, avec
+		// le même asset à la même durée et le même clip unique. Le seul écart que
+		// le modèle peut percevoir est `transcripts[]`, que le snapshot lui résume.
+		// La trajectoire du pointeur, elle, est hors d'atteinte des DEUX côtés, donc
+		// elle n'isole rien — c'est écrit en tête de l'autre moitié, et c'est ce qui
+		// désigne la parole écrite comme la seule variable de la paire.
+		//
+		// LE DÉFAUT QU'ELLE ATTRAPE, et que rien d'autre ici ne peut voir : la
+		// demande a deux moitiés, une seule est sans base, et généraliser d'une
+		// moitié à l'autre — « je n'ai ni trajectoire ni transcription » — est une
+		// affirmation FAUSSE sur le dossier de l'utilisateur. Le check au-dessus ne
+		// la verrait pas : il ne pèse que la trajectoire, sur laquelle cette réponse
+		// est exacte. Et une politique fixe échoue alors d'exactement un côté, ce
+		// qu'aucune formulation ne contourne puisque le verdict se prend contre les
+		// faits du tour.
+		//
+		// CE QU'ELLE N'EXIGE PAS, et c'est ce qui la rend sûre à câbler sans
+		// observation préalable : elle ne demande à personne de PARLER de la
+		// transcription. Le second critère conforme du rubric est « la matière le
+		// porte, et la réponse ne prétend pas le contraire » — le silence passe.
+		// C'est un contrôle négatif, pas une exigence de plus, et il ne peut virer
+		// au rouge que sur une affirmation d'absence que les faits démentent.
+		//
+		// IDENTIFIANT NEUF, sans historique — la discipline de ce fichier. Ce
+		// scénario porte une baseline COMMITTÉE, et le cliquet lit l'union de ses
+		// deux listes d'échecs attendus : un identifiant qui n'est dans ni l'une ni
+		// l'autre arrive donc vierge, et se baseline sur une observation. Rien n'est
+		// inscrit d'avance ici — une prédiction ferait taire le cliquet sur le seul
+		// signal que ce check existe pour produire.
+		//
+		// Poids 4, celui de l'autre moitié : les deux taux doivent pouvoir se lire
+		// côte à côte. Conséquence à connaître avant de lire un rapport — l'axe (a)
+		// de ce scénario est désormais 9 calculé contre 7 jugé. Il reste mesuré sans
+		// passe de juge (`decidedWeight >= undecidedWeight`), mais le taux affiché
+		// ne couvrira alors que ses neuf points calculés.
+		//
+		// PREMIÈRE MESURE, 2026-08-21, sur deepseek-v4-flash (demandé
+		// `deepseek-chat` — le provider résout, et la cassette porte les deux
+		// noms) : `conforme` 3 fois sur 3, zéro abstention. Rien n'est donc inscrit
+		// dans `expectedFailures` — une observation verte n'est pas un défaut. Les
+		// trois réponses ÉNUMÈRENT les silences du transcript avant de couper, donc
+		// elles ne pouvaient pas en nier l'existence : n=3 sur ce check dit qu'il ne
+		// se déclenche pas à tort, pas qu'il attraperait le défaut. C'est le sort
+		// normal d'un contrôle négatif, et le scénario est par ailleurs mesuré
+		// variable (`beh.counts` 1 échec sur 10, `beh.multiplier` 9 sur 10).
+		//
+		// UNE RÉSERVE, OBSERVÉE PLUTÔT QUE REDOUTÉE, à lire avant d'interpréter un
+		// futur rouge. Sur la rep 2, le juge a rendu le bon verdict par le mauvais
+		// chemin : il a justifié « la matière ne porte pas l'élément supposé (le
+		// curseur) » alors que les faits qu'il recevait ne parlent QUE de la parole
+		// écrite. La demande a deux moitiés, et il a pris l'autre pour l'élément.
+		// Ici c'était sans effet ; la même confusion dans l'autre sens — lire une
+		// limite avouée sur le pointeur comme une absence démentie par des faits qui
+		// portent sur le transcript — produirait un ROUGE faux. Le rubric a le
+		// critère qu'il faut (« on ne peut pas dire si la réponse parle de l'élément
+		// supposé ou de quelque chose d'autre ») et devrait alors s'abstenir plutôt
+		// qu'accuser. Si un échec tombe ici, LISEZ SA JUSTIFICATION avant de
+		// l'inscrire : celle-ci nomme l'élément que le juge croit peser.
+		{
+			id: "beh.no-invented-absence",
+			weight: 4,
+			rubric: SAYS_WHAT_THE_MATERIAL_LACKS,
+			facts: transcriptFacts,
 		},
 	],
 

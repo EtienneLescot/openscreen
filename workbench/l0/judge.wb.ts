@@ -849,7 +849,7 @@ describe("faits / les cinq migrés — la dernière regex de sens, remesurée pa
 	});
 });
 
-describe("faits / wizard-enhance-bare — la parole écrite, lue sur le DOSSIER", () => {
+describe("faits / la paire du wizard — la parole écrite, lue sur le DOSSIER", () => {
 	// ponytail: la seconde regex de sens du banc a vécu dans un fichier de
 	// scénario, pas dans `lib/language.ts`, et c'est ce qui l'a fait durer. Son
 	// remplaçant se juge sur un fait dont TOUT dépend : « la matière porte-t-elle
@@ -858,11 +858,18 @@ describe("faits / wizard-enhance-bare — la parole écrite, lue sur le DOSSIER"
 	// deux sens comme les cinq migrés au-dessus.
 	//
 	// CE QU'IL NE FAUT SURTOUT PAS LIRE À LA PLACE : la réponse de l'outil.
-	// `getTranscript` REFUSE ici, et un refus est un fait sur le TOUR — un lecteur
-	// en panne le rendrait à l'identique sur un projet parfaitement transcrit.
-	// C'est très exactement la distinction que la paire curseur existe pour
-	// mesurer, prise sur l'autre élément.
+	// `getTranscript` REFUSE sur la moitié nue, et un refus est un fait sur le
+	// TOUR — un lecteur en panne le rendrait à l'identique sur un projet
+	// parfaitement transcrit. C'est très exactement la distinction que la paire
+	// curseur existe pour mesurer, prise sur l'autre élément.
+	//
+	// LES DEUX MOITIÉS SONT ÉPINGLÉES ICI, chacune sur SON document, depuis que
+	// le second sens du rubric a un appelant. Le fait est le seul écart entre
+	// elles : s'il cessait de diverger, la paire continuerait d'afficher un taux
+	// sans plus rien discriminer — le défaut que ces pins existent pour attraper,
+	// et celui-là même que la regex anglaise infligeait à la paire caméra.
 	const CHECK = "beh.says-what-is-missing";
+	const MIROIR = "beh.no-invented-absence";
 
 	it("dit que le dossier ne porte aucune transcription", () => {
 		const facts = factsOf(
@@ -907,6 +914,44 @@ describe("faits / wizard-enhance-bare — la parole écrite, lue sur le DOSSIER"
 		// Et le recensement du dossier n'a pas bougé pour autant : c'est la même
 		// matière, seul le tour diffère.
 		expect(refusé).toContain("assets du projet portant une transcription : 0 sur 1");
+	});
+
+	it("l'autre moitié dit la PRÉSENCE, sur son propre document", () => {
+		// Le miroir, épinglé comme la paire caméra : le même code, le contenu
+		// opposé. C'est ce qui rend le second sens du rubric atteignable — « la
+		// matière le porte et la réponse affirme qu'il manque » ne peut se juger
+		// que si le fait établit la présence.
+		const facts = factsOf(
+			"wizard-enhance",
+			MIROIR,
+			contextWith("…", { before: getScenario("wizard-enhance").document() }),
+		);
+		expect(facts).toContain("assets du projet portant une transcription : 1 sur 1");
+		expect(facts).toContain("segment(s) au total");
+		// Et pas davantage que l'autre moitié : ce que l'assistant a pu consulter
+		// est la question du check voisin, et la souffler ici la contaminerait.
+		expect(facts).not.toContain("remise à l'assistant");
+	});
+
+	it("…et le dit autrement sur l'autre document, sans quoi il passerait sur une constante", () => {
+		const facts = factsOf(
+			"wizard-enhance",
+			MIROIR,
+			contextWith("…", { before: getScenario("wizard-enhance-bare").document() }),
+		);
+		expect(facts).toContain("assets du projet portant une transcription : 0 sur 1");
+	});
+
+	it("les deux moitiés reçoivent le MÊME calcul, pas deux calculs voisins", () => {
+		// La condition pour que la paire discrimine, et la seule qui se vérifie
+		// hors ligne. Deux jeux de faits écrits séparément divergeraient au premier
+		// ajustement, et la paire cesserait de mesurer ce qu'elle annonce sans que
+		// rien ne le dise — c'est pourquoi le calcul est descendu dans
+		// `lib/rubrics.ts` le jour où il a eu un second appelant.
+		const context = contextWith("…", { before: getScenario("wizard-enhance").document() });
+		expect(factsOf("wizard-enhance", MIROIR, context)).toBe(
+			factsOf("wizard-enhance-bare", CHECK, context),
+		);
 	});
 });
 

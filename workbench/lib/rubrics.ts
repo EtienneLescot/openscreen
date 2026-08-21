@@ -215,6 +215,50 @@ const POINTER_READER = "getCursorTrack";
 export const pointerReadFacts = (c: EvalContext): string[] => readFacts(c, POINTER_READER);
 
 /**
+ * Ce que le dossier porte en fait de parole écrite, et ce que le tour a pu en
+ * lire — les deux tenus SÉPARÉS.
+ *
+ * ponytail: lu sur le DOCUMENT, jamais sur le refus de l'outil, et c'est ce
+ * choix qui décide le verdict. Un refus de `getTranscript` est un fait sur le
+ * TOUR : un lecteur en panne le rendrait à l'identique sur un projet
+ * parfaitement transcrit. Ce que pèse le rubric nourri d'ici est l'état du
+ * dossier de l'utilisateur, et il se lit là où il est écrit — `transcripts[]`,
+ * la liste même que l'exécuteur consulte avant de refuser et que le snapshot
+ * résume au modèle. Passer par `readFacts` aurait affirmé au juge
+ * « available: false », que l'outil n'a jamais répondu : le fait faux qui
+ * fabrique le verdict faux, puisque le juge croit les faits contre la réponse.
+ *
+ * Les appels sont donnés à CÔTÉ, sans être fondus dedans : « il n'a pas
+ * regardé » et « il a regardé et il n'y avait rien » se corrigent à des endroits
+ * opposés, et le second seul dit quelque chose du modèle.
+ *
+ * ponytail: DESCENDU d'un fichier de scénario le jour où il a eu un second
+ * appelant, et deux appelants sont le seuil. Les deux moitiés d'une paire
+ * doivent recevoir le MÊME calcul — seul son contenu doit différer, et c'est
+ * très exactement ce que la paire existe pour mesurer. Un fait recopié diverge
+ * au premier ajustement sans que rien ne le dise, et le prix est déjà payé dans
+ * ce dépôt : la regex de permission a vécu en deux exemplaires légèrement
+ * différents parce que l'un d'eux était logé dans un scénario, et personne ne
+ * l'avait vu parce que les deux copies passaient les mêmes tests.
+ */
+export function transcriptFacts(c: EvalContext): string[] {
+	const transcribed = c.before.assets.filter(
+		(asset) =>
+			c.before.transcripts.some((t) => t.assetId === asset.id) ||
+			c.before.transcript?.assetId === asset.id,
+	);
+	const segments = c.before.transcripts.reduce((n, t) => n + t.segments.length, 0);
+	const calls = c.calls("getTranscript");
+	return [
+		`assets du projet portant une transcription : ${transcribed.length} sur ` +
+			`${c.before.assets.length}` +
+			(transcribed.length === 0 ? "" : ` (${segments} segment(s) au total)`),
+		`appels à getTranscript émis pendant le tour : ${calls.length}` +
+			(calls.length === 0 ? "" : ` (dont ${calls.filter((k) => !k.resultOk).length} refusé(s))`),
+	];
+}
+
+/**
  * Remplace `REFUSES_HONESTLY`, la regex.
  *
  * Ce qu'elle faisait : chercher « i cannot / there is no tool / out of scope »
