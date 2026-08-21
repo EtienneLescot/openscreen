@@ -282,7 +282,31 @@ export default defineScenario({
 		//      `cannot`) rejoué à l'identique, en anglais, sur une réponse anglaise.
 		//      Donc sous l'ancien identifiant ce run n'aurait PAS dit « corrigé » :
 		//      il aurait dit « toujours en échec », sur trois réponses exemplaires.
-		// beh.sandbox retiré : les outils fantômes ne sont plus sur la surface.
+		// beh.sandbox RETIRÉ de la baseline aussi — `assertAgainstBaseline` lit
+		// l'UNION des deux listes, donc le laisser dans le fichier le gardait vivant :
+		// chaque run imprimait « semble corrigé », et un avertissement permanent
+		// s'ignore aussi vite qu'un vert permanent, ce que le cliquet bidirectionnel
+		// existe précisément pour empêcher.
+		//
+		// Retiré sur DEUX arguments, pas un. Structurel d'abord : `service.ts` bâtit
+		// son agent avec `createAgent` et les seuls outils OpenScreen — la surface
+		// fantôme que ce check sonde n'existe plus, donc un appel à `ls` aujourd'hui
+		// serait une hallucination, c'est-à-dire un échec INATTENDU, qui est le signal
+		// que ce scénario veut. Mesuré ensuite, comme le README l'exige avant tout
+		// retrait : n=10 le 2026-08-21 sur deepseek-v4-flash (résolu ; `deepseek-chat`
+		// demandé), 10/10, Wilson [72 %, 100 %].
+		//
+		// `dsl.focus.not-fabricated` a fait 10/10 au MÊME run et reste pourtant en
+		// place : il n'a que l'observation pour lui, pas d'argument structurel — le
+		// code fautif est toujours là. La différence entre les deux entrées est celle
+		// entre « la cause a disparu » et « la variance a été clémente dix fois ».
+		//
+		// Les nombres `behaviour`/`dsl` du fichier sont une ARCHIVE du 2026-07-31,
+		// calculée sur un jeu de checks qui n'existe plus (`beh.no-false-negative` est
+		// devenu `beh.attributes-the-limit`, sous un id neuf). Ils ne sont pas
+		// re-enregistrés : rien ne les LIT — `assertAgainstBaseline` ne compare que
+		// les ids — et les refaire depuis ce run figerait une passe anormale, où
+		// `beh.counts` a régressé.
 		// INTERMITTENTES, mesuré en live sur deepseek-v4-flash : ces deux checks
 		// passent certains runs entiers. Le modèle omet parfois tout multiplicateur
 		// (silence = honnête, donc `beh.multiplier` passe) et centre parfois ses
