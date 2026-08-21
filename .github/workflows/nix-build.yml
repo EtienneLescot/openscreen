@@ -48,9 +48,14 @@ concurrency:
   # evicted the previous run before it finished: the first four runs on main were
   # cancelled at 21m38s, 25s, 7m05s and then one that only survived because the
   # merges happened to stop. A cancelled run is not a failure either, so the
-  # branch showed nothing while the workflow reported nothing. Queueing instead
-  # costs at most one pending run -- GitHub keeps a single pending entry per group
-  # and replaces it -- and every merge eventually gets an answer.
+  # branch showed nothing while the workflow reported nothing.
+  #
+  # What this buys is that a started run finishes, not that every merge is
+  # verified: GitHub holds a single pending entry per group and a newer push
+  # replaces it, so merges landing while a run is in flight still go unbuilt.
+  # That is the affordable half. Verifying each merge would need a queue this
+  # workflow does not have, and is not worth it for a half-hour job whose purpose
+  # is catching drift rather than gating a commit.
   cancel-in-progress: false
 
 jobs:
