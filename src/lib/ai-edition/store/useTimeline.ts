@@ -712,8 +712,12 @@ export function useTimeline() {
 		// See `commitZoomFocus`: the snapshot counts only while the document on screen is
 		// still the one this hook's live writes produced. This is the reachable half.
 		// The inspector's annotation `<textarea>` calls `updateAnnotationLive` on every
-		// keystroke and commits `onBlur`, and closing the panel or deleting the region
-		// removes the focused node without firing blur; `SliderCell` then wires mouseup
+		// keystroke and commits `onBlur`, and closing the panel unmounts the focused node
+		// before blur can fire: `V4Timeline`'s `startScrub` clears the selection from a
+		// pointerdown handler, and React flushes discrete events synchronously, so the
+		// textarea is gone before mousedown moves focus. (Deleting the region does NOT
+		// reach here — its button is an `onClick`, which runs after blur has committed.)
+		// `SliderCell` then wires mouseup
 		// straight to `onCommit`, so a bare click on a stroke-width thumb lands here
 		// carrying the typing's base. `NewEditorShell` builds one `useTimeline()` for
 		// both, so it is one instance's ref.

@@ -1098,8 +1098,9 @@ describe("useTimeline undo history", () => {
 // `zoomFocusRollbackRef` / `annotationRollbackRef` hold the document a drag started
 // from, kept until the commit that records it. A drag does not always reach a commit,
 // and both commits are reachable without one: the inspector's annotation `<textarea>`
-// writes live on every keystroke and commits `onBlur`, so closing the panel or deleting
-// the region removes the focused node without ever firing blur -- and `SliderCell` wires
+// writes live on every keystroke and commits `onBlur`, so closing the panel unmounts the
+// focused node before blur can fire (the region's own delete button is an `onClick`, which
+// runs after blur, so that route does not reach here) -- and `SliderCell` wires
 // mouseup/touchend/keyup straight to `onCommit` with no `onChange` in front, so a bare
 // click on a stroke-width thumb reaches `commitAnnotationChange()` carrying that
 // leftover. `NewEditorShell` builds ONE `useTimeline()` and hands it to the inspector,
