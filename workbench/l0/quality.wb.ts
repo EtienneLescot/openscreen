@@ -435,6 +435,11 @@ describe("zoomPlacement — précision ET rappel, jamais une note unique", () =>
 		// un défaut de placement.
 		const placement = zoomPlacement(document, [{ startSec: 8, endSec: 15, label: "zone" }]);
 		expect(placement.zoomSec).toBeCloseTo(7, 4);
+		// Les deux termes séparément, pas seulement leur rapport : un rapport se lit
+		// juste quand numérateur ET dénominateur double-comptent de concert. Ici
+		// `zoomSec` suffirait à l'attraper, mais le lecteur ne devrait pas avoir à
+		// le déduire d'un ratio pour savoir ce que l'oracle compte.
+		expect(placement.onZoneSec).toBeCloseTo(7, 4);
 		expect(placement.precision).toBeCloseTo(1, 4);
 	});
 
