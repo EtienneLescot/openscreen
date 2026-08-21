@@ -422,4 +422,64 @@ describe("useProjectStore", () => {
 		// document is the one being dropped.
 		expect(past).toHaveLength(0);
 	});
+	describe("addAsset drops work the user has already moved on from", () => {
+		// `addAsset` awaits the native add, a camera lookup, a dimension probe and a save,
+		// and then writes the store unconditionally. Anything the user does in those gaps
+		// -- deleting the open project, switching to another one -- used to lose to the
+		// write that landed last.
+		function pendingAdd() {
+			let release!: (value: { document: typeof sampleDoc }) => void;
+			bridgeMocks.addAsset.mockReturnValue(
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+			);
+			return { release };
+		}
+
+		beforeEach(() => {
+			// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
+			(window as any).electronAPI = {
+				findRecordingCamera: vi.fn().mockResolvedValue({ success: false }),
+			};
+		});
+
+		it("does not reinstall a deleted project's document", async () => {
+			bridgeMocks.create.mockResolvedValue({ success: true, document: sampleDoc });
+			await useProjectStore.getState().createProject("Test");
+
+			const { release } = pendingAdd();
+			const pending = useProjectStore.getState().addAsset("C:/clip.mp4");
+
+			// The user deletes the project while the add is still in flight.
+			useProjectStore.getState().clear();
+			release({ document: sampleDoc });
+
+			await expect(pending).resolves.toBeNull();
+			expect(useProjectStore.getState().document).toBeNull();
+			expect(useProjectStore.getState().projectId).toBeNull();
+		});
+
+		it("does not drop one project's asset into the project the user switched to", async () => {
+			bridgeMocks.create.mockResolvedValue({ success: true, document: sampleDoc });
+			await useProjectStore.getState().createProject("Test");
+
+			const { release } = pendingAdd();
+			const pending = useProjectStore.getState().addAsset("C:/clip.mp4");
+
+			const other = {
+				...sampleDoc,
+				project: { ...sampleDoc.project, id: "proj_other", title: "Other" },
+			};
+			bridgeMocks.get.mockResolvedValue({ success: true, document: other });
+			await useProjectStore.getState().loadProject("proj_other");
+
+			release({ document: sampleDoc });
+
+			await expect(pending).resolves.toBeNull();
+			// Still the project the user chose, not the one the add was building on.
+			expect(useProjectStore.getState().projectId).toBe("proj_other");
+			expect(useProjectStore.getState().document?.project.id).toBe("proj_other");
+		});
+	});
 });

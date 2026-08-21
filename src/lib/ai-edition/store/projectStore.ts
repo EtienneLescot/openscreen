@@ -226,7 +226,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	async addAsset(path, label) {
 		const { projectId } = get();
 		if (!projectId) throw new Error("No project loaded");
+		// Everything below awaits: the native add, a camera lookup, a dimension probe and a
+		// save. `clear()` and `loadProject()` can all land in those gaps, and the store write
+		// at the end is unconditional — so without this it can reinstall a deleted project's
+		// document, or drop one project's asset into the one the user switched to. Same pair
+		// `saveDocument` samples: the id says WHICH project, the epoch says whether anything
+		// superseded the write while it was in flight.
+		const epoch = currentWriteEpoch();
+		const superseded = () => get().projectId !== projectId || currentWriteEpoch() !== epoch;
 		const result = await nativeBridgeClient.aiEdition.addAsset(projectId, path, label);
+		if (superseded()) return null;
 		let document = parseDocument(result.document);
 		const addedAsset =
 			document.assets.find((a) => a.originalPath === path && (label ? a.label === label : true)) ??
@@ -306,6 +315,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			}
 		}
 
+		if (superseded()) return null;
 		set({
 			document,
 			revision: get().revision + 1,
