@@ -143,12 +143,21 @@ describe("describe-project / beh.counts and beh.no-fabrication", () => {
 // NEUF — `beh.attributes-the-limit` — parce que celui-ci portait un défaut D1
 // dans une baseline committée : y changer d'instrument sous le même nom aurait
 // fait imprimer au cliquet « D1 semble corrigé ». Ce qui reste épinglable hors
-// ligne est le FAIT remis au juge, et il l'est dans les deux sens, sur les deux
-// scénarios, dans `l0/judge.wb.ts`.
+// ligne est le FAIT remis au juge, et il l'est dans les deux sens, sur les SEPT
+// scénarios qui portent le check, dans `l0/judge.wb.ts`.
 //
-// Le prédicat lui-même n'est pas mort : `l0/scenario-pack.wb.ts` continue de
-// l'épingler pour les trois scénarios de la prise réelle, qui ne peuvent pas
-// migrer tant que la prise manque au clone.
+// Le prédicat, lui, est mort : plus aucun appelant, supprimé de `language.ts`.
+// Les CINQ scénarios ont migré, les trois de la prise réelle compris — le check
+// ne lisait que la réponse du modèle, jamais la vérité terrain, donc rien dans
+// son câblage ne demandait la prise.
+//
+// ponytail: ce qui manque à ces trois-là n'est PAS l'épinglage, c'est la
+// vérification. Le rubric est épinglé, et l'était déjà par `cursor-question`,
+// qui est synthétique et a tourné en live. Ce qu'aucun clone ne peut faire est
+// de juger ces trois scénarios sur LEUR matière, faute de la prise. Un check
+// jamais joué sur son propre matériau n'est pas un check faux, c'est un check
+// non observé : la distinction est la même que celle du troisième verdict, et
+// elle se dit plutôt qu'elle ne se déduit du silence.
 
 describe("wizard-enhance / beh.sandbox", () => {
 	const scenario = getScenario("wizard-enhance");
