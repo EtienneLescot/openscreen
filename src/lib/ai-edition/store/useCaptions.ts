@@ -65,23 +65,29 @@ export function useCaptions(): UseCaptionsResult {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			const next = patchCaptionSettings(doc, patch);
-			setDocument(next);
-			await saveDocument(next);
+			// The optimistic write is not the edit — the save is. Only the one that can
+			// fail records, and it names `doc` as what Ctrl+Z returns to because by then
+			// the store already holds `next`.
+			setDocument(next, { history: false });
+			await saveDocument(next, { history: true, historyBase: doc });
 		},
 		[setDocument, saveDocument],
 	);
 
 	// See `useEditorSettings.setLive`: one undo step per slider drag, not one per
 	// pointer move. `liveDocRef` holds what this hook last wrote, so only a write
-	// landing on someone else's document opens a new history entry.
+	// landing on someone else's document opens a new history entry -- and that entry
+	// is `liveBaseRef`, handed to the commit rather than recorded on the spot.
 	const liveDocRef = useRef<AxcutDocument | null>(null);
+	const liveBaseRef = useRef<AxcutDocument | null>(null);
 
 	const setLive = useCallback(
 		(patch: CaptionSettingsPatch) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			const next = patchCaptionSettings(doc, patch);
-			setDocument(next, { history: liveDocRef.current !== doc });
+			if (liveDocRef.current !== doc) liveBaseRef.current = doc;
+			setDocument(next, { history: false });
 			liveDocRef.current = next;
 		},
 		[setDocument],
@@ -90,7 +96,10 @@ export function useCaptions(): UseCaptionsResult {
 	const commit = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		await saveDocument(doc);
+		const base = liveBaseRef.current;
+		liveBaseRef.current = null;
+		liveDocRef.current = null;
+		await saveDocument(doc, { history: true, historyBase: base });
 	}, [saveDocument]);
 
 	const saveTranslation = useCallback<UseCaptionsResult["saveTranslation"]>(
@@ -98,8 +107,8 @@ export function useCaptions(): UseCaptionsResult {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			const next = putCaptionTranslation(doc, input);
-			setDocument(next);
-			await saveDocument(next);
+			setDocument(next, { history: false });
+			await saveDocument(next, { history: true, historyBase: doc });
 		},
 		[setDocument, saveDocument],
 	);
@@ -115,8 +124,8 @@ export function useCaptions(): UseCaptionsResult {
 				getCaptionSettings(cleared).language === language
 					? patchCaptionSettings(cleared, { language: null })
 					: cleared;
-			setDocument(next);
-			await saveDocument(next);
+			setDocument(next, { history: false });
+			await saveDocument(next, { history: true, historyBase: doc });
 		},
 		[setDocument, saveDocument],
 	);

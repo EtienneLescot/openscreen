@@ -20,15 +20,38 @@ export type ProjectStatus = "idle" | "loading" | "ready" | "error";
 
 export interface DocumentWriteOptions {
 	/**
-	 * Record the outgoing document on the undo stack. Defaults to `true`: a write
-	 * is a user edit unless the caller says otherwise.
+	 * Record the outgoing document on the undo stack.
 	 *
-	 * Pass `false` for writes the user never asked for -- probe backfills,
-	 * transcripts arriving from a background job, the restore an undo itself
-	 * persists. Those must not become Ctrl+Z steps, and a persist that re-recorded
-	 * the document it just restored would undo the undo.
+	 * REQUIRED, and deliberately not defaulted either way. A default is a decision
+	 * nobody makes: defaulting to `true` let `probeAndCorrectClip` push a background
+	 * probe's document onto the stack simply by not mentioning it, so the first
+	 * Ctrl+Z after a drop snapped the clip back to its 60s placeholder instead of
+	 * removing it -- and defaulting to `false` would recreate #433 itself the next
+	 * time somebody added an edit. Making it a compile error to omit is the only
+	 * version a new call site cannot get wrong by saying nothing.
+	 *
+	 * `true` for anything the user did. `false` for writes they never asked for:
+	 * probe backfills, transcripts arriving from a background job, the camera
+	 * auto-link, the optimistic half of an optimistic-write-then-save pair, and the
+	 * persist an undo itself triggers (which would otherwise undo the undo).
 	 */
-	history?: boolean;
+	history: boolean;
+	/**
+	 * The document Ctrl+Z should return to, when it is NOT the one the store holds
+	 * at the moment of the write.
+	 *
+	 * A live drag writes every pointermove straight into the store with
+	 * `history: false`, so by the time the pointerup commit runs, the "previous"
+	 * document the store holds is the dragged one -- recording that would make the
+	 * gesture un-undoable. The commit passes the PRE-DRAG document here instead, and
+	 * because `saveDocument` records only after the write succeeded, a failed commit
+	 * records nothing at all and its rollback has nothing to pop.
+	 *
+	 * `null` means "there is no state to go back to" and records nothing. Omitting
+	 * the field falls back to the store's current document, which is what an
+	 * ordinary edit wants.
+	 */
+	historyBase?: AxcutDocument | null;
 }
 
 export interface ProjectState {
@@ -64,8 +87,8 @@ export interface ProjectState {
 	 * an unhandled rejection in the renderer with no toast, no log and no clue --
 	 * change a caption font on a read-only project and the edit was simply gone.
 	 */
-	saveDocument: (document: AxcutDocument, opts?: DocumentWriteOptions) => Promise<boolean>;
-	setDocument: (document: AxcutDocument, opts?: DocumentWriteOptions) => void;
+	saveDocument: (document: AxcutDocument, opts: DocumentWriteOptions) => Promise<boolean>;
+	setDocument: (document: AxcutDocument, opts: DocumentWriteOptions) => void;
 	replaceTimeline: (intervals: Interval[], reason: string) => Promise<void>;
 	restoreFullTimeline: () => Promise<void>;
 	setSourceDuration: (sec: number) => void;
@@ -80,10 +103,19 @@ function parseDocument(value: unknown): AxcutDocument {
 }
 
 /**
- * Record `prev` as the state Ctrl+Z returns to, unless the caller opted out or
- * this write is not a change (`commit`-style re-saves hand back the very object
- * the store already holds, and a live drag's `setLive` then `commit` pair would
- * otherwise take two undos to reverse one gesture).
+ * The document a write should record as the state Ctrl+Z returns to. Read
+ * SYNCHRONOUSLY, before any await: after one, `get().document` is whatever the
+ * write installed.
+ */
+function historyBaseFor(opts: DocumentWriteOptions, current: AxcutDocument | null) {
+	return opts.historyBase !== undefined ? opts.historyBase : current;
+}
+
+/**
+ * Push `prev` onto the undo stack, unless the caller opted out or this write is
+ * not a change (`commit`-style re-saves hand back the very object the store
+ * already holds, and an optimistic `setDocument` then `saveDocument` pair would
+ * otherwise take two undos to reverse one edit).
  *
  * Synchronous on purpose -- see the header of `undoStack.ts` for what the
  * deferred `import("./undo")` this replaced did to redo.
@@ -91,9 +123,9 @@ function parseDocument(value: unknown): AxcutDocument {
 function recordHistory(
 	prev: AxcutDocument | null,
 	next: AxcutDocument,
-	opts?: DocumentWriteOptions,
+	opts: DocumentWriteOptions,
 ) {
-	if (opts?.history === false) return;
+	if (!opts.history) return;
 	if (!prev || prev === next) return;
 	pushHistory({ projectId: prev.project.id, doc: structuredClone(prev) });
 }
@@ -276,13 +308,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	},
 
 	async saveDocument(document, opts) {
-		// Snapshot BEFORE the await, while `get().document` is still the pre-edit one.
+		// Read BEFORE the await, while `get().document` is still the pre-edit one.
 		// This is where undo history actually comes from: the editor writes through
 		// `saveDocument` for every user edit -- add a region, delete one, rename the
 		// project, every timeline op -- and `setDocument` is reserved for the handful
 		// of live/optimistic paths. Recording only in `setDocument` left `past` empty
 		// for everything the user does, so Ctrl+Z was a no-op (#433).
-		recordHistory(get().document, document, opts);
+		const base = historyBaseFor(opts, get().document);
 		try {
 			const result = await nativeBridgeClient.aiEdition.save(document);
 			if (!result.success || !result.document) {
@@ -295,6 +327,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 				dirty: false,
 				lastSavedAt: new Date(),
 			});
+			// Recorded HERE, below the write, and not above it. `saveDocument` resolves
+			// false on a handled failure (a read-only project) and callers read that as
+			// "the edit did not happen". Recording first left `past` holding a snapshot
+			// identical to the live document and `future` wiped, so the next Ctrl+Z
+			// visibly did nothing and redo was gone -- #433's own symptom, re-created by
+			// the fix for it. Nothing between the `set` above and this line awaits, so no
+			// undo can observe the half-applied state.
+			recordHistory(base, document, opts);
 			return true;
 		} catch (error) {
 			// Logged as well as toasted: a toast is gone in five seconds, and "my edit
@@ -312,7 +352,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	},
 
 	setDocument(document, opts) {
-		recordHistory(get().document, document, opts);
+		// No await to sit above: this write cannot fail, so recording it up front is
+		// the same thing as recording it afterwards.
+		recordHistory(historyBaseFor(opts, get().document), document, opts);
 		set({
 			document,
 			revision: get().revision + 1,
@@ -324,14 +366,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		const doc = get().document;
 		if (!doc) throw new Error("No project loaded");
 		const next = replaceTimelineOp(doc, intervals, reason);
-		await get().saveDocument(next);
+		await get().saveDocument(next, { history: true });
 	},
 
 	async restoreFullTimeline() {
 		const doc = get().document;
 		if (!doc) throw new Error("No project loaded");
 		const next = restoreFullTimelineOp(doc);
-		await get().saveDocument(next);
+		await get().saveDocument(next, { history: true });
 	},
 
 	setSourceDuration(sec) {

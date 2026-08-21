@@ -48,8 +48,11 @@ export function useEditorSettings(): UseEditorSettingsResult {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			const next = patchEditorSettings(doc, patch);
-			setDocument(next);
-			await saveDocument(next);
+			// The optimistic write is not the edit — the save is. Only the one that can
+			// fail records, and it names `doc` as what Ctrl+Z returns to because by then
+			// the store already holds `next`.
+			setDocument(next, { history: false });
+			await saveDocument(next, { history: true, historyBase: doc });
 		},
 		[setDocument, saveDocument],
 	);
@@ -57,15 +60,19 @@ export function useEditorSettings(): UseEditorSettingsResult {
 	// The document this hook's own last `setLive` produced. A slider drag fires one
 	// `setLive` per pointer move, and recording each of them buried the real history
 	// under sixty one-pixel steps; only the first write of a drag — the one editing a
-	// document this callback did not produce — is a state worth returning to.
+	// document this callback did not produce — is a state worth returning to. It is
+	// held in `liveBaseRef` and recorded by `commit`, not here: a snapshot pushed
+	// mid-drag is on the stack whether or not the commit that follows ever lands.
 	const liveDocRef = useRef<AxcutDocument | null>(null);
+	const liveBaseRef = useRef<AxcutDocument | null>(null);
 
 	const setLive = useCallback(
 		(patch: EditorSettingsPatch) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			const next = patchEditorSettings(doc, patch);
-			setDocument(next, { history: liveDocRef.current !== doc });
+			if (liveDocRef.current !== doc) liveBaseRef.current = doc;
+			setDocument(next, { history: false });
 			liveDocRef.current = next;
 		},
 		[setDocument],
@@ -74,7 +81,10 @@ export function useEditorSettings(): UseEditorSettingsResult {
 	const commit = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		await saveDocument(doc);
+		const base = liveBaseRef.current;
+		liveBaseRef.current = null;
+		liveDocRef.current = null;
+		await saveDocument(doc, { history: true, historyBase: base });
 	}, [saveDocument]);
 
 	return { settings, hasDocument, set, setLive, commit };

@@ -74,7 +74,7 @@ describe("useSequentialTimelineOps", () => {
 			// Mirror the real store: write the saved doc back so the next
 			// call in the queue sees the latest committed state, and report
 			// success the way `projectStore.saveDocument` does.
-			useProjectStore.getState().setDocument(doc);
+			useProjectStore.getState().setDocument(doc, { history: true });
 			callOrder.push(doc.timeline.trimRanges[0]?.startSec.toString() ?? "empty");
 			return true;
 		});
@@ -128,7 +128,7 @@ describe("useSequentialTimelineOps", () => {
 			.fn<(doc: AxcutDocument) => Promise<boolean>>()
 			.mockResolvedValueOnce(false)
 			.mockImplementationOnce(async (doc) => {
-				useProjectStore.getState().setDocument(doc);
+				useProjectStore.getState().setDocument(doc, { history: true });
 				return true;
 			});
 
@@ -162,7 +162,7 @@ describe("useSequentialTimelineOps", () => {
 		expect(secondResult).not.toBeNull();
 		// The queue survived the first failure — both saves were attempted.
 		expect(saveDocument).toHaveBeenCalledTimes(2);
-		expect(saveDocument).toHaveBeenNthCalledWith(2, secondResult);
+		expect(saveDocument).toHaveBeenNthCalledWith(2, secondResult, { history: true });
 	});
 
 	it("runs an enqueued write after the op ahead of it has committed", async () => {
@@ -170,7 +170,7 @@ describe("useSequentialTimelineOps", () => {
 		useProjectStore.setState({ document: seed });
 
 		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
-			useProjectStore.getState().setDocument(doc);
+			useProjectStore.getState().setDocument(doc, { history: true });
 			return true;
 		});
 
@@ -203,7 +203,7 @@ describe("useSequentialTimelineOps", () => {
 		useProjectStore.setState({ document: seed });
 
 		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
-			useProjectStore.getState().setDocument(doc);
+			useProjectStore.getState().setDocument(doc, { history: true });
 			return true;
 		});
 
@@ -261,7 +261,7 @@ describe("useSequentialTimelineOps", () => {
 		useProjectStore.setState({ document: seed });
 
 		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
-			useProjectStore.getState().setDocument(doc);
+			useProjectStore.getState().setDocument(doc, { history: true });
 			return true;
 		});
 

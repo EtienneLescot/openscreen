@@ -312,7 +312,9 @@ describe("useProjectStore", () => {
 			bridgeMocks.save.mockResolvedValue({ success: false, error: "EACCES" });
 
 			const edited = { ...sampleDoc, project: { ...sampleDoc.project, title: "Edited" } };
-			await expect(useProjectStore.getState().saveDocument(edited)).resolves.toBe(false);
+			await expect(
+				useProjectStore.getState().saveDocument(edited, { history: true }),
+			).resolves.toBe(false);
 
 			expect(toastMocks.error).toHaveBeenCalledWith("Failed to save project", {
 				description: "EACCES",
@@ -329,7 +331,9 @@ describe("useProjectStore", () => {
 			useProjectStore.setState({ projectId: "proj_test", document: sampleDoc, dirty: true });
 			bridgeMocks.save.mockRejectedValue(new Error("bridge is gone"));
 
-			await expect(useProjectStore.getState().saveDocument(sampleDoc)).resolves.toBe(false);
+			await expect(
+				useProjectStore.getState().saveDocument(sampleDoc, { history: true }),
+			).resolves.toBe(false);
 			expect(toastMocks.error).toHaveBeenCalledWith("Failed to save project", {
 				description: "bridge is gone",
 			});
@@ -340,7 +344,9 @@ describe("useProjectStore", () => {
 			useProjectStore.setState({ projectId: "proj_test", document: sampleDoc, dirty: true });
 			bridgeMocks.save.mockResolvedValue({ success: true, document: saved });
 
-			await expect(useProjectStore.getState().saveDocument(saved)).resolves.toBe(true);
+			await expect(useProjectStore.getState().saveDocument(saved, { history: true })).resolves.toBe(
+				true,
+			);
 
 			expect(toastMocks.error).not.toHaveBeenCalled();
 			const state = useProjectStore.getState();

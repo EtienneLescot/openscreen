@@ -25,19 +25,27 @@ export async function applyAgentDocumentIfCurrent(
 	const previous = store.document;
 	const previousDirty = store.dirty;
 	// Both calls, not just the save. `setDocument` puts the agent's document on screen
-	// NOW, without waiting on the disk round-trip `saveDocument` awaits. Both record the
-	// outgoing document on the undo stack, and recording it twice is not a risk: the
-	// second sees the document the first already installed and skips.
-	store.setDocument(parsed);
-	if (await store.saveDocument(parsed)) return "applied";
+	// NOW, without waiting on the disk round-trip `saveDocument` awaits.
+	//
+	// Only the SAVE records history, and `historyBase` is what makes that possible: by
+	// the time it runs, the store already holds the agent's document, so its own idea
+	// of "previous" is useless. Recording on the `setDocument` instead put the entry on
+	// the stack before the write was known to have landed — and the rollback below, a
+	// `setState` by design, could not take it back off. A rejected agent edit left a
+	// phantom Ctrl+Z step and a cleared `future` for something that never happened.
+	store.setDocument(parsed, { history: false });
+	if (await store.saveDocument(parsed, { history: true, historyBase: previous })) {
+		return "applied";
+	}
 
 	// The edits are on screen by now. Leaving them there while the caller says they
 	// were not applied tells the user two opposite things at once, and worse: `dirty`
 	// is set, so the next unrelated save would quietly persist the document we just
 	// said was rejected.
 	//
-	// Restored through `setState` rather than `setDocument`, so the rejected document
-	// does not land on the undo stack. `revision` keeps the bump: it did move, and
+	// Restored through `setState` rather than `setDocument`, so the restore itself is
+	// not recorded — and there is nothing on the stack to take back off either, because
+	// the write above records only on success. `revision` keeps the bump: it did move, and
 	// leaving it forward makes any in-flight guard read "conflict", which is the safe
 	// direction to be wrong in.
 	//

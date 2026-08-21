@@ -33,6 +33,7 @@ import {
 import { parseCliArgs } from "./cli/args";
 import { runCli } from "./cli/cliMain";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "./diagnostics/main-log-buffer";
+import { buildEditMenuSubmenu, type EditorUndoRedoChannel } from "./edit-menu";
 import {
 	loadAndRegisterGlobalShortcut,
 	registerOpenAppShortcut,
@@ -189,6 +190,25 @@ function sendEditorMenuAction(
 	targetWindow.webContents.send(channel);
 }
 
+/**
+ * Route the Edit menu's Undo/Redo to whoever should service it.
+ *
+ * Unlike `sendEditorMenuAction` this never CREATES an editor window: Cmd+Z is not
+ * a request to open the editor. And when the focused window is not the editor --
+ * the launch window, the notes window -- the web-editing undo the `undo` role used
+ * to provide is the right one after all, so fall through to it.
+ */
+function sendEditorUndoRedo(channel: EditorUndoRedoChannel) {
+	const targetWindow = BrowserWindow.getFocusedWindow() ?? mainWindow;
+	if (!targetWindow || targetWindow.isDestroyed()) return;
+	if (!isEditorWindow(targetWindow)) {
+		if (channel === "menu-undo") targetWindow.webContents.undo();
+		else targetWindow.webContents.redo();
+		return;
+	}
+	targetWindow.webContents.send(channel);
+}
+
 function setupApplicationMenu() {
 	const isMac = process.platform === "darwin";
 	const template: Electron.MenuItemConstructorOptions[] = [];
@@ -274,32 +294,11 @@ function setupApplicationMenu() {
 		},
 		{
 			label: mainT("common", "actions.edit") || "Edit",
-			submenu: [
-				// `registerAccelerator: false` on both: the roles run `webContents.undo()`,
-				// the WEB EDITING undo, which does nothing outside a focused text field —
-				// and registering their accelerators lets the native menu eat Ctrl+Z /
-				// Ctrl+Shift+Z before the renderer's document-level handler
-				// (`useUndoRedoShortcuts`) ever sees the keydown. The items stay, greyed
-				// shortcut text and all, so text fields keep their menu entries.
-				{
-					role: "undo",
-					label: mainT("common", "actions.undo") || "Undo",
-					registerAccelerator: false,
-				},
-				{
-					role: "redo",
-					label: mainT("common", "actions.redo") || "Redo",
-					registerAccelerator: false,
-				},
-				{ type: "separator" },
-				{ role: "cut", label: mainT("common", "actions.cut") || "Cut" },
-				{ role: "copy", label: mainT("common", "actions.copy") || "Copy" },
-				{ role: "paste", label: mainT("common", "actions.paste") || "Paste" },
-				{
-					role: "selectAll",
-					label: mainT("common", "actions.selectAll") || "Select All",
-				},
-			],
+			// Built in `edit-menu.ts` — read its header for why Undo/Redo are not roles.
+			submenu: buildEditMenuSubmenu({
+				label: (key, fallback) => mainT("common", key) || fallback,
+				dispatch: sendEditorUndoRedo,
+			}),
 		},
 		{
 			label: mainT("common", "actions.view") || "View",

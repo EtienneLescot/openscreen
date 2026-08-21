@@ -165,7 +165,7 @@ export function NewEditorShell() {
 	// edit the user just undid came back. `history: false` is load-bearing — a
 	// recording save here would push the restored document straight back onto the
 	// stack and clear the redo the undo had just created.
-	useUndoRedoShortcuts(() => {
+	const { runUndo, runRedo } = useUndoRedoShortcuts(() => {
 		const doc = useProjectStore.getState().document;
 		if (doc) void useProjectStore.getState().saveDocument(doc, { history: false });
 	});
@@ -317,7 +317,7 @@ export function NewEditorShell() {
 			const doc = useProjectStore.getState().document;
 			// The store already toasted the reason; answering false is what keeps the
 			// window open on top of it.
-			if (doc) return await saveDocument(doc);
+			if (doc) return await saveDocument(doc, { history: true });
 			return true;
 		});
 
@@ -651,15 +651,20 @@ export function NewEditorShell() {
 	const handleSave = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		if (await saveDocument(doc)) toast.success("Project saved");
+		if (await saveDocument(doc, { history: true })) toast.success("Project saved");
 	}, [saveDocument]);
 
 	// Native File menu (electron/main.ts) → v4 actions. The menu is shown via
 	// Menu.setApplicationMenu and dispatches these IPC events; the old editor
 	// listened to them, but the v4 shell replaced it, leaving the File items
 	// dead. Wire them to the same handlers the top-bar buttons use so the
-	// File/Edit/View menu bar works again (Edit/View items use Electron roles).
+	// File/Edit/View menu bar works again (the View items still use Electron roles).
 	// The v4 editor has no separate "Save As" location, so it maps to Save.
+	//
+	// Edit > Undo/Redo are here too, and not roles: on macOS the menu's Cmd+Z key
+	// equivalent is matched by AppKit before the key event reaches the renderer, so
+	// this subscription is the ONLY thing that makes Ctrl+Z work there. See
+	// `electron/edit-menu.ts`.
 	useEffect(() => {
 		const api = window.electronAPI;
 		if (!api) return;
@@ -668,18 +673,20 @@ export function NewEditorShell() {
 			api.onMenuLoadProject?.(() => setOpenProjectOpen(true)),
 			api.onMenuSaveProject?.(() => void handleSave()),
 			api.onMenuSaveProjectAs?.(() => void handleSave()),
+			api.onMenuUndo?.(runUndo),
+			api.onMenuRedo?.(runRedo),
 		];
 		return () => {
 			for (const unsub of unsubscribers) unsub?.();
 		};
-	}, [handleSave]);
+	}, [handleSave, runUndo, runRedo]);
 
 	const handleRenameProject = useCallback(
 		async (title: string) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			if (title === doc.project.title) return;
-			await saveDocument({ ...doc, project: { ...doc.project, title } });
+			await saveDocument({ ...doc, project: { ...doc.project, title } }, { history: true });
 		},
 		[saveDocument],
 	);
@@ -703,7 +710,7 @@ export function NewEditorShell() {
 					// A failed save cancels the action that prompted this dialog. The store has
 					// already said why -- which is what the bare `catch {}` here used to swallow,
 					// leaving the window refusing to close with nothing on screen explaining it.
-					if (doc && !(await saveDocument(doc))) {
+					if (doc && !(await saveDocument(doc, { history: true }))) {
 						resolve("cancel");
 						return;
 					}
@@ -797,24 +804,33 @@ export function NewEditorShell() {
 		);
 
 		if (snapshot.kind === "zoom") {
-			await saveDocument({
-				...doc,
-				zoomRanges: [...doc.zoomRanges, ...anchored] as typeof doc.zoomRanges,
-			});
+			await saveDocument(
+				{
+					...doc,
+					zoomRanges: [...doc.zoomRanges, ...anchored] as typeof doc.zoomRanges,
+				},
+				{ history: true },
+			);
 		} else if (snapshot.kind === "annotation") {
-			await saveDocument({
-				...doc,
-				annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
-			});
+			await saveDocument(
+				{
+					...doc,
+					annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
+				},
+				{ history: true },
+			);
 		} else {
 			// speed and cameraFullscreen are both plain spans on legacyEditor.
 			const key = snapshot.kind === "speed" ? "speedRegions" : "cameraFullscreenRegions";
 			const legacy = (doc.legacyEditor as Record<string, unknown>) ?? {};
 			const prev = (legacy[key] as unknown[]) ?? [];
-			await saveDocument({
-				...doc,
-				legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
-			});
+			await saveDocument(
+				{
+					...doc,
+					legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
+				},
+				{ history: true },
+			);
 		}
 		toast.success("Region pasted");
 		// `tl` belongs here now that the trim branch calls tl.addTrim: useTimeline
@@ -889,7 +905,7 @@ export function NewEditorShell() {
 					if (choice === "save") {
 						const doc = useProjectStore.getState().document;
 						// Stay put if the save did not land -- the store has already said why.
-						if (doc && !(await saveDocument(doc))) return;
+						if (doc && !(await saveDocument(doc, { history: true }))) return;
 					}
 					setNewProjectOpen(true);
 				})();
@@ -903,7 +919,7 @@ export function NewEditorShell() {
 					if (choice === "save") {
 						const doc = useProjectStore.getState().document;
 						// Stay put if the save did not land -- the store has already said why.
-						if (doc && !(await saveDocument(doc))) return;
+						if (doc && !(await saveDocument(doc, { history: true }))) return;
 					}
 					setOpenProjectOpen(true);
 				})();

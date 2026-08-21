@@ -181,10 +181,13 @@ export function CaptionsPane() {
 	const clearLegacyCaptionAnnotations = async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		await saveDocument({
-			...doc,
-			annotations: doc.annotations.filter((a) => a.annotationSource !== "auto-caption"),
-		});
+		await saveDocument(
+			{
+				...doc,
+				annotations: doc.annotations.filter((a) => a.annotationSource !== "auto-caption"),
+			},
+			{ history: true },
+		);
 	};
 
 	return (
