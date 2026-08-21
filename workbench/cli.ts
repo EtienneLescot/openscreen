@@ -407,6 +407,19 @@ async function commandJudge(options: Options): Promise<number> {
 		} catch (error) {
 			interrompu = error instanceof Error ? error.message : String(error);
 		} finally {
+			// ponytail: lu AVANT `close()`. Le nom affiché au lancement est celui de
+			// la config ; le provider est libre de résoudre l'alias vers autre chose,
+			// et il le fait. Sans cette ligne une passe entière s'attribue au modèle
+			// demandé — c'est exactement l'erreur qui s'est écrite dans une PR, où
+			// des verdicts rendus par `deepseek-v4-flash` ont été présentés comme
+			// venant de `deepseek-chat`. Une divergence est une NOTICE, pas un
+			// échec : elle n'invalide rien, elle nomme ce qui a répondu.
+			const servi = endpoint.resolvedModel;
+			if (env && servi && servi !== env.model) {
+				const message = `MODÈLE RÉSOLU ${scenario.id} : demandé ${env.model}, a répondu ${servi}`;
+				notices.push(message);
+				log(`  ~ ${message}`);
+			}
 			endpoint.close();
 		}
 		try {

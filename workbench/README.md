@@ -235,7 +235,7 @@ verdicts sur trois — `JudgeRubric` n'avait que `conforme` et `fautif`. Le conc
 l'abstrait : sur deepseek-chat, `temperature: 0`, même système et même réponse tronquée en entrée,
 la seule variable étant la troisième liste :
 
-```
+```text
 rubric à 2 listes  → {"verdict":"fautif",      "raison":"… elle est tronquée et n'énonce aucune impossibilité."}
 rubric à 3 listes  → {"verdict":"indéterminé", "raison":"La réponse est tronquée et ne précise pas clairement …"}
 ```
@@ -638,14 +638,14 @@ trajectoire » sont **deux checks séparés**.
    `dsl.turn.completed`, sinon une panne de provider se lit comme un score parfait. Un axe (a)
    entièrement jugé est légitime — la question est alors une phrase — mais il sortira « non
    mesuré » de tout `wb:live` non suivi d'un `wb:judge`, et c'est exact.
-5. Notez le DSL sur `c.wire` et `c.after` — jamais sur `resultJson`, jamais sur le sink.
-6. Ajoutez un `demoScript` (obligatoire : `l1/end-to-end.wb.ts` l'exige). C'est une **hypothèse**
+6. Notez le DSL sur `c.wire` et `c.after` — jamais sur `resultJson`, jamais sur le sink.
+7. Ajoutez un `demoScript` (obligatoire : `l1/end-to-end.wb.ts` l'exige). C'est une **hypothèse**
    hors ligne qui fait passer chaque check par un chemin exécuté, pas une observation.
-7. Enregistrez-le dans `scenarios/registry.ts` (liste explicite, pas de glob : le CLI est bundlé
+8. Enregistrez-le dans `scenarios/registry.ts` (liste explicite, pas de glob : le CLI est bundlé
    par esbuild et un import dynamique ne résoudrait pas).
-8. Documentez chaque `expectedFailures` avec `defect`, `since` et une note disant **sur quoi elle
+9. Documentez chaque `expectedFailures` avec `defect`, `since` et une note disant **sur quoi elle
    repose** : observation live, ou mécanisme lu dans le code. Une prédiction n'y a pas sa place.
-9. `npm run wb && npm run wb:typecheck && npx biome check --write workbench`.
+10. `npm run wb && npm run wb:typecheck && npx biome check --write workbench`.
 
 ### Répondre à un échec sans surajuster au banc
 
