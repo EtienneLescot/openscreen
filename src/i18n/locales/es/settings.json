@@ -74,6 +74,7 @@
 		"roundness": "Redondez",
 		"padding": "Relleno",
 		"frame": "Marco",
+		"fillFrame": "Llenar el marco",
 		"motion": "Movimiento",
 		"on": "activado",
 		"help": "Estilo del marco de la grabación: desenfoque de fondo, sombra, desenfoque de movimiento, radio de esquinas y margen alrededor del vídeo."
