@@ -553,13 +553,21 @@ describe("WhisperServerManager", () => {
 
 	it("logs a readiness timeout, which no exit listener would ever see", async () => {
 		// The other direction: nothing exits, so the startup catch is the ONLY voice
-		// on this failure and must not be silenced by the de-duplication above. Same
-		// fake-timer shape as the probe test further up — the helper is alive and
-		// simply never answers ok.
+		// on this failure and must not be silenced by the de-duplication above.
+		//
+		// ponytail: the clock is moved, not the timers. `pollUntilReady` bounds
+		// itself with `Date.now()`, so a clock that leaps 60 s per reading walks past
+		// the 30 s deadline on its own — no fake timers, and therefore nothing that
+		// has to also drive the real socket I/O `pickFreePort` waits on. An earlier
+		// version of this test did use fake timers and deadlocked on Linux CI while
+		// passing on Windows, which is a worse failure than the one it tests for.
 		const fs = await import("node:fs/promises");
 		const { spawn } = await import("node:child_process");
 		const dir = await mkdtemp(path.join(tmpdir(), "whisper-timeout-log-"));
 		const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const realNow = Date.now;
+		let nowSpy = vi.spyOn(Date, "now");
+		let clock = realNow();
 		try {
 			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
 			const fakeBinaryPath = path.join(
@@ -573,6 +581,7 @@ describe("WhisperServerManager", () => {
 				stdout: new EventEmitter(),
 				stderr: new EventEmitter(),
 				pid: 4322,
+				// Alive until asked to stop — `stop()` awaits the exit it triggers.
 				kill: vi.fn(() => {
 					queueMicrotask(() => child.emit("exit", 0));
 					return true;
@@ -580,25 +589,27 @@ describe("WhisperServerManager", () => {
 			});
 			vi.mocked(spawn).mockImplementationOnce(() => child as never);
 			vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false } as Response));
-			vi.useFakeTimers();
+
+			clock = realNow();
+			nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+				clock += 60_000;
+				return clock;
+			});
 
 			const mgr = new WhisperServerManager();
-			const started = mgr.start({
-				modelPath,
-				binaryPath: fakeBinaryPath,
-				backend: "whispercpp-cpu",
-			});
-			const assertion = expect(started).rejects.toThrow(/did not respond within/);
-			await vi.advanceTimersByTimeAsync(31_000);
-			await assertion;
+			await expect(
+				mgr.start({ modelPath, binaryPath: fakeBinaryPath, backend: "whispercpp-cpu" }),
+			).rejects.toThrow(/did not respond within/);
 
 			const stt = errors.mock.calls.map(String).filter((line) => line.startsWith("[stt] "));
 			expect(stt, `lignes [stt] émises : ${JSON.stringify(stt)}`).toHaveLength(1);
 			expect(stt[0]).toMatch(/did not respond within/);
 		} finally {
-			vi.useRealTimers();
-			vi.unstubAllGlobals();
+			// Targeted, not `restoreAllMocks()`: the module-level `spawn` stub belongs
+			// to the whole file and the next test relies on it.
+			nowSpy.mockRestore();
 			errors.mockRestore();
+			vi.unstubAllGlobals();
 			await rm(dir, { recursive: true, force: true });
 		}
 	});
