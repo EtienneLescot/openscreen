@@ -15,6 +15,15 @@ export interface Baseline {
 	scenario: string;
 	/** Check ids known to fail when the baseline was recorded. */
 	expectedFailures: string[];
+	/**
+	 * Check ids qui n'ont PAS été tranchés quand la baseline a été enregistrée.
+	 *
+	 * ponytail: sans ce champ, `behaviour: 0.87` se lit comme couvrant tous les
+	 * checks de l'axe, alors qu'il ne porte que sur les tranchés. Absent des
+	 * trois baselines déjà commitées, donc lu avec `?? []` — un fichier antérieur
+	 * au troisième verdict ne pouvait rien avoir à y mettre.
+	 */
+	undecided?: string[];
 	behaviour: number;
 	dsl: number;
 	recordedAt: string;
@@ -29,6 +38,14 @@ export interface BaselineVerdict {
 	regressions: string[];
 	/** Checks listed as known-broken that now pass — delete them. */
 	fixed: string[];
+	/**
+	 * Checks restés `indéterminé`. Troisième seau, et non un sous-cas des deux
+	 * premiers : une abstention n'est ni la preuve d'un défaut ni celle d'une
+	 * correction. La ranger dans `regressions` remplirait le cliquet de bruit à
+	 * chaque réponse ambiguë ; la ranger dans `fixed` ferait retirer une entrée
+	 * sur un tour que personne n'a lu.
+	 */
+	undecided: string[];
 	/** expectedFailures entries older than STALE_AFTER_DAYS. */
 	stale: Array<{ id: string; defect: string; since: string; ageDays: number }>;
 	messages: string[];
@@ -70,7 +87,15 @@ export function assertAgainstBaseline(options: {
 
 	const regressions: string[] = [];
 	const fixed: string[] = [];
+	const undecided: string[] = [];
 	for (const result of options.results) {
+		// Trié en premier : un indéterminé porte `ok: false`, donc sans cette
+		// branche il tomberait dans `regressions` et accuserait le modèle d'un
+		// défaut dont la seule preuve est que le juge n'a pas tranché.
+		if (result.indeterminate) {
+			undecided.push(result.id);
+			continue;
+		}
 		if (!result.ok && !known.has(result.id)) regressions.push(result.id);
 		if (result.ok && known.has(result.id)) fixed.push(result.id);
 	}
@@ -100,6 +125,12 @@ export function assertAgainstBaseline(options: {
 				"puis retirez-le de expectedFailures et de la baseline.",
 		);
 	}
+	for (const id of undecided) {
+		messages.push(
+			`NON MESURÉ ${options.scenario.id}/${id} : verdict indéterminé — ce check ne compte ` +
+				"ni pour ni contre, et le taux affiché sur cet axe ne le couvre pas.",
+		);
+	}
 	for (const entry of stale) {
 		messages.push(
 			`REVUE ${options.scenario.id}/${entry.id} : ${entry.defect} accepté depuis ` +
@@ -108,9 +139,17 @@ export function assertAgainstBaseline(options: {
 	}
 
 	return {
+		// ponytail: un indéterminé ne casse PAS le cliquet. Il n'est la preuve de
+		// rien, et faire échouer le run dessus rendrait `wb:live` rouge en
+		// permanence tant que `wb:judge` n'a pas tourné — un rouge permanent
+		// s'ignore aussi vite qu'un vert permanent. Ce qui l'empêche de passer en
+		// silence est ailleurs, et à trois endroits : `AxisScore.measured` refuse
+		// de déclarer un axe passé, le message ci-dessus le nomme dans le rapport,
+		// et `baselineFromRun` refuse de l'inscrire en défaut connu.
 		ok: regressions.length === 0 && fixed.length === 0,
 		regressions,
 		fixed,
+		undecided,
 		stale,
 		messages,
 	};
@@ -126,8 +165,16 @@ export function baselineFromRun(options: {
 }): Baseline {
 	return {
 		scenario: options.scenarioId,
+		// ponytail: `!r.ok && !r.indeterminate`. Un indéterminé porte `ok: false` :
+		// sans le second terme, le premier `--update-baseline` graverait « le juge
+		// n'a pas tranché » en défaut connu, et le cliquet se tairait ensuite sur
+		// le seul signal que le check existe pour produire.
 		expectedFailures: options.results
-			.filter((r) => !r.ok)
+			.filter((r) => !r.ok && !r.indeterminate)
+			.map((r) => r.id)
+			.sort(),
+		undecided: options.results
+			.filter((r) => r.indeterminate)
 			.map((r) => r.id)
 			.sort(),
 		behaviour: Number(options.behaviour.toFixed(4)),

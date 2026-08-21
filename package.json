@@ -63,6 +63,8 @@
 		"wb:build": "esbuild workbench/cli-entry.ts --bundle --platform=node --format=cjs --packages=external --outfile=workbench/.build/cli.cjs",
 		"wb:live": "npm run wb:build --silent && node --env-file=.env.workbench workbench/.build/cli.cjs run",
 		"wb:record": "npm run wb:build --silent && node --env-file=.env.workbench workbench/.build/cli.cjs run --record",
+		"wb:judge": "npm run wb:build --silent && node --env-file=.env.workbench workbench/.build/cli.cjs judge",
+		"wb:judge:replay": "npm run wb:build --silent && node workbench/.build/cli.cjs judge --replay",
 		"wb:compare": "npm run wb:build --silent && node workbench/.build/cli.cjs compare",
 		"test:watch": "vitest",
 		"test:cursor-native:win": "node scripts/test-windows-native-cursor.mjs",

@@ -32,7 +32,7 @@ import {
 	DENIES_CURSOR_DATA,
 	FLAGS_MISSING_CAMERA,
 	FLAGS_OUT_OF_RANGE,
-	REFUSES_HONESTLY,
+	statedDurations,
 	statedMultipliers,
 } from "../lib/language";
 import { buildEvalContext } from "../lib/oracles";
@@ -162,24 +162,26 @@ describe("language / DENIES_CURSOR_DATA vs ADMITS_BLINDNESS", () => {
 	});
 });
 
-describe("language / REFUSES_HONESTLY", () => {
-	it("accepts a plain statement that the tool does not exist", () => {
-		for (const answer of [
-			"I cannot change the background — my tools only reach the timeline.",
-			"There is no tool exposed to me for the subtitle font.",
-			"I don't have a tool to reorder clips.",
-		]) {
-			expect(REFUSES_HONESTLY.test(answer)).toBe(true);
-		}
+describe("language / statedDurations", () => {
+	// `REFUSES_HONESTLY` vivait ici. Il est parti chez le juge (`SAYS_IT_CANNOT`,
+	// `lib/rubrics.ts`), épinglé dans les deux sens par `l0/judge.wb.ts` — la
+	// même obligation, sur le prédicat qui l'a remplacé.
+	//
+	// `statedDurations`, lui, RESTE : il rend un nombre, pas une lecture. Ce qui
+	// suit est la moitié qui manquait, et elle manquait dans le sens silencieux —
+	// une durée écrite en français ne rendait rien du tout, donc « aucune durée
+	// citée », donc le check `describe-project` qui compare les durées annoncées
+	// au document ne voyait jamais rien à contredire.
+	it("reads the notation whatever the language wraps it in", () => {
+		expect(statedDurations("le clip dure 24,7 secondes")).toEqual([24.7]);
+		expect(statedDurations("une seule seconde")).toEqual([]);
+		expect(statedDurations("the clip is 24.7 seconds long")).toEqual([24.7]);
+		expect(statedDurations("la coupe va de 0:12 à 0:14")).toEqual([12, 14]);
+		expect(statedDurations("un trim de 1,8 s")).toEqual([1.8]);
 	});
 
-	it("rejects an answer that just does the thing", () => {
-		for (const answer of [
-			"I swapped the clips — the demo now plays first.",
-			"I changed the background to a dark gradient.",
-		]) {
-			expect(REFUSES_HONESTLY.test(answer)).toBe(false);
-		}
+	it("reports nothing when no duration was stated", () => {
+		expect(statedDurations("J'ai ajouté un zoom sur le second clip.")).toEqual([]);
 	});
 });
 
