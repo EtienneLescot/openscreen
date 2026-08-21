@@ -213,6 +213,9 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useSequentialTimelineOps.ts", "apply", "save", "forwarded"),
 
 	// Every timeline edit the user makes with the mouse or the keyboard.
+	// The Edit Clip dialog's Apply: source range and crop composed into ONE save (#355),
+	// where they used to be two writes that overwrote each other.
+	w("src/lib/ai-edition/store/useTimeline.ts", "applyClipEdit", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addAnnotation", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addCameraFullscreen", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addSpeed", "save", "gesture"),
@@ -242,8 +245,6 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAnnotationLive", "set", "automatic"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAnnotationSpan", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateCameraFullscreenSpan", "save", "gesture"),
-	w("src/lib/ai-edition/store/useTimeline.ts", "updateClipCrop", "save", "gesture"),
-	w("src/lib/ai-edition/store/useTimeline.ts", "updateClipSourceRange", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateSpeedSpan", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateSpeedValue", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateTrim", "save", "gesture"),
