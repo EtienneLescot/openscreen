@@ -23,11 +23,30 @@
 //
 // So: this file is the table. A new write, a moved one, or a changed `history`
 // value fails here with a diff, and the only way to make it pass is to write down
-// what triggers it. `recordHistory` is unreachable except through the two writers
-// enumerated below, and the only other way an entry reaches a stack is undo/redo
-// stepping over one -- the tests after the table pin both, and the stacks are
-// `readonly` so there is no third way that skips a name this file can count. The
-// table is the whole surface, not a sample of it.
+// what triggers it.
+//
+// What a green run here means, exactly. The scan is SYNTACTIC: it walks the
+// non-test `.ts`/`.tsx` under `src/`, matches calls on the callee's written name,
+// and reads each one's trigger off the object literal at the call site. So the
+// table covers every `saveDocument` / `setDocument` written as such in shipped
+// renderer code, and the tests below it pin the names an entry can reach a stack
+// through -- `recordHistory`, called only by those two writers, then `pushHistory`,
+// plus undo/redo's own two pushes for the entries they step over.
+//
+// What it does not see, so nobody reads more into that than is in it:
+//   - INDIRECTION, both ways round. The callee name is whatever the source says,
+//     so a write reached through an alias or a callback is not a row at all. And
+//     `readonly` on the stacks is erased at runtime, so `(past as Snapshot[]).push(...)`
+//     compiles, runs, and appears nowhere here -- the `@ts-expect-error`s below
+//     pin the un-cast form only.
+//   - DATAFLOW. `forwarded` asks where the identifier handed on was BOUND, not
+//     what value arrives in it. A parameter reassigned to a hardcode is still a
+//     parameter, and so is a callback parameter the same expression supplies from
+//     a literal. Both read as forwarded; the last describe in this file pins them
+//     saying so.
+// None of that is in the tree today, and finding it is a reading job, not this
+// file's. What this file guarantees is the part a reading job keeps missing: that
+// nobody added a write in plain sight without saying who asked for it.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
@@ -280,11 +299,18 @@ function declaresInList(list: ts.VariableDeclarationList, name: string): boolean
 
 /** Whether this scope binds `name` as a LOCAL — the thing a forward is not. */
 function scopeDeclaresLocal(scope: ts.Node, name: string): boolean {
-	const inStatements = (statements: readonly ts.Statement[]) =>
-		statements.some(
-			(statement) =>
-				ts.isVariableStatement(statement) && declaresInList(statement.declarationList, name),
-		);
+	const declares = (statement: ts.Statement): boolean => {
+		if (ts.isVariableStatement(statement)) return declaresInList(statement.declarationList, name);
+		// `function opts() {}` and `class opts {}` bind the name exactly as a `const`
+		// does, and shadow an outer parameter of that name exactly as one does. Reading
+		// only variable statements meant the walk could not SEE those bindings, so it
+		// carried on outwards and reported the shadowed parameter — answering "where was
+		// this name bound" with a scope the name does not come from.
+		if (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement))
+			return statement.name?.text === name;
+		return false;
+	};
+	const inStatements = (statements: readonly ts.Statement[]) => statements.some(declares);
 	if (ts.isSourceFile(scope) || ts.isBlock(scope) || ts.isModuleBlock(scope))
 		return inStatements(scope.statements);
 	if (ts.isCaseBlock(scope)) return scope.clauses.some((clause) => inStatements(clause.statements));
@@ -417,7 +443,7 @@ describe("every write that can reach the undo stack", () => {
 		expect(scanned.writes.map(sortKey).sort()).toEqual(DECLARED.map(sortKey).sort());
 	});
 
-	// The table is only the whole surface while these two hold. `recordHistory` is
+	// The table stands in for the stack only while these two hold. `recordHistory` is
 	// module-private to `projectStore`, and `pushHistory` is reachable from anywhere
 	// that imports `undoStack` — so the stack grows one more entry point the moment
 	// somebody calls it directly, and the table would stop being the audit.
@@ -437,8 +463,9 @@ describe("every write that can reach the undo stack", () => {
 	it("grows the stacks only through `pushHistory` and undo/redo's own two pushes", () => {
 		// `undo` and `redo` hand each other the document they are stepping over, which
 		// is not a new edit and must not clear the other stack -- so they cannot go
-		// through `pushHistory`. Those two calls are the whole remainder, and the rows
-		// below are what makes that a checked statement rather than a claim.
+		// through `pushHistory`. Those two calls are the whole remainder of the ones
+		// written under their own name, and the rows below are what makes that a
+		// checked statement rather than a claim.
 		expect(scanned.callsTo.get("pushPast")).toEqual([
 			{ file: "src/lib/ai-edition/store/undo.ts", fn: "redo" },
 		]);
@@ -447,7 +474,7 @@ describe("every write that can reach the undo stack", () => {
 		]);
 	});
 
-	it("cannot be grown by an importer reaching around those names", () => {
+	it("does not let an importer push to the stacks in passing", () => {
 		// The hole this closes. `past` and `future` were exported as `Snapshot[]`, and
 		// `const` binds the reference, not the contents -- so `past.push(...)` from any
 		// importer recorded history, and the scan above could not see it: it keys on the
@@ -455,7 +482,10 @@ describe("every write that can reach the undo stack", () => {
 		//
 		// The assertions are the `@ts-expect-error`s. Each one is an error itself the
 		// moment the directive stops suppressing anything, so this test fails the
-		// typecheck pass if the stacks ever go mutable again.
+		// typecheck pass if the stacks ever go mutable again. "In passing" is the whole
+		// claim: `readonly` is a compile-time thing, so somebody who WANTS to write to
+		// these arrays still can, by casting the type back off -- and the scan will not
+		// see that either.
 		// @ts-expect-error `past` is `readonly Snapshot[]`; record through `pushHistory`.
 		past.push({ projectId: "project_x", doc: {} });
 		// @ts-expect-error `future` is `readonly Snapshot[]`; step forward through `pushFuture`.
@@ -552,5 +582,60 @@ describe("how a write's trigger is read off its call site", () => {
 				}
 			`),
 		).toBe("no options argument");
+	});
+
+	it.each([
+		["function", "function opts() {}"],
+		["class", "class opts {}"],
+	])("reads a local %s declaration as a local, not as a forward", (_kind, declaration) => {
+		// The scope walk used to read variable statements and nothing else, so these two
+		// bindings were invisible to it: it walked straight past them to the `opts`
+		// parameter outside and called the call forwarded. Neither shape is a valid
+		// options object, so this is not a hole anything could have fallen through -- it
+		// is the walk answering "where was this name bound" correctly.
+		expect(
+			classify(`
+				function wrapper(opts) {
+					return () => {
+						${declaration}
+						saveDocument(doc, opts);
+					};
+				}
+			`),
+		).toBe("local variable \`opts\`");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// And the rule's edge, pinned as it actually is. `forwarded` is a question about
+// BINDINGS, not about values, and these two are where those answers part company.
+// They are here so the header's "does not catch" is a measured statement rather
+// than a remembered one, and so a future tightening has a fixture to flip rather
+// than a paragraph to argue with.
+// ---------------------------------------------------------------------------
+
+describe("what reading the call site cannot tell you", () => {
+	it("calls a callback parameter forwarded even when the caller is the local hardcode", () => {
+		// `forEach` supplies `opts` from a literal three lines up. Nobody outside decided
+		// anything, but the binding really is a parameter, and a binding is all the walk
+		// looks at.
+		expect(
+			classify(`
+				[{ history: true }].forEach((opts) => saveDocument(doc, opts));
+			`),
+		).toBe("forwarded");
+	});
+
+	it("calls a parameter forwarded after it has been reassigned to a hardcode", () => {
+		// The value reaching the writer is the literal on the line above. Following that
+		// is dataflow analysis, which this file does not do.
+		expect(
+			classify(`
+				function wrapper(doc, opts) {
+					opts = { history: true };
+					saveDocument(doc, opts);
+				}
+			`),
+		).toBe("forwarded");
 	});
 });
