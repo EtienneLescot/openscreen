@@ -38,6 +38,7 @@ import {
 	replacePillSpan,
 	resolvePillIds,
 } from "../../src/lib/ai-edition/timeline/timelineMap";
+import { trimAppliesToClip } from "../../src/lib/ai-edition/timeline/trim-mapping";
 // ponytail: relative, and it has to stay that way — `electron/` never resolves
 // the `@/` alias (the main-process build does not declare it), which is why the
 // scale table was moved out of `components/video-editor/types.ts` to be
@@ -932,6 +933,146 @@ export function resolveCursorAssetId(
 	return assetId ?? document.project.primaryAssetId ?? document.assets[0]?.id ?? null;
 }
 
+// ─── What the pointer was doing where the zoom landed ──────────────────────
+//
+// ponytail: `focus` is the one thing a zoom write says that nothing ever
+// checked. A span covering no clip is refused, a depth outside the table is
+// refused, and the result reports the span that really landed — but a focus on
+// the pointer and a focus half a frame off it produced byte-identical results,
+// so a caller had no way to find out which of the two it had just written. The
+// result now carries where the pointer ACTUALLY was over the window the zoom
+// landed on, beside the focus the call used.
+//
+// It informs; it decides nothing. Framing a slide, a face, or a corner the
+// pointer never visits is a legitimate zoom: nothing is moved, nothing is
+// refused, and this is a measurement the caller is free to disagree with. The
+// only thing that changes is that the difference is on the page instead of
+// nowhere.
+
+/** Per-axis median, not the mean. A pointer that crosses the frame and comes
+ *  back averages to the middle of a path it spent no time on, while the median
+ *  lands where it actually sat. `spread` is what says whether either number
+ *  describes anything. */
+function medianOf(values: number[]): number {
+	const sorted = [...values].sort((a, b) => a - b);
+	const mid = sorted.length >> 1;
+	return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function round3(value: number): number {
+	return Math.round(value * 1000) / 1000;
+}
+
+/**
+ * Where the recorded pointer was over the span a zoom write LANDED on.
+ *
+ * A zoom is authored in VIRTUAL seconds and the pointer is recorded on the
+ * asset's SOURCE clock, so something has to map between them — and that map
+ * already exists, computed once by `anchorRawRegionsToClips`, which writes
+ * `sourceStartSec`/`sourceEndSec` onto every fragment as it ventilates a span
+ * across clips. So the source windows are read back OFF THE FRAGMENTS the write
+ * just stored, never re-derived from `timelineStartSec`. A second derivation
+ * would be free to drift, and it would drift on exactly the cases that make this
+ * report worth having: a CLAMPED span and a span SPLIT across two clips both
+ * land on source windows that are not the ones asked for, and both are already
+ * right in the anchors. A fragment whose clip draws on another asset contributes
+ * nothing — this telemetry does not describe that media.
+ *
+ * Absence is never a claim. The field is left OFF when the runtime holds no
+ * telemetry for the footage under the span, which covers "no reader wired",
+ * "this asset has no sidecar" and "the zoom landed on another asset's clip"
+ * alike; none of those is evidence about the recording, and the tool description
+ * says so. `available: false` is emitted only for the two things that ARE
+ * findings about this span: nothing was recorded over it, or everything recorded
+ * over it is cut out of playback.
+ */
+function cursorAnchorReport(
+	// `id` is not read; it is what makes this a fragment of a stored region rather
+	// than an all-optional bag TypeScript would let any object satisfy.
+	regions: Array<{ id: string; clipId?: string; sourceStartSec?: number; sourceEndSec?: number }>,
+	document: AxcutDocument,
+	focus: { cx: number; cy: number },
+	telemetry: CursorTelemetryContext | undefined,
+): Record<string, unknown> | undefined {
+	const load = telemetry?.load;
+	if (load?.status !== "ok") return undefined;
+	const byId = new Map(document.timeline.clips.map((c) => [c.id, c]));
+	const windows = regions.flatMap((region) => {
+		const clip = region.clipId ? byId.get(region.clipId) : undefined;
+		if (!clip || clip.assetId !== load.assetId) return [];
+		if (region.sourceStartSec === undefined || region.sourceEndSec === undefined) return [];
+		return [{ clip, startSec: region.sourceStartSec, endSec: region.sourceEndSec }];
+	});
+	if (windows.length === 0) return undefined;
+
+	const xs: number[] = [];
+	const ys: number[] = [];
+	let cutOut = 0;
+	for (const sample of load.samples) {
+		if (
+			!Number.isFinite(sample.timeMs) ||
+			!Number.isFinite(sample.cx) ||
+			!Number.isFinite(sample.cy)
+		) {
+			continue;
+		}
+		const atSec = sample.timeMs / 1000;
+		const covering = windows.find((w) => atSec >= w.startSec && atSec <= w.endSec);
+		if (!covering) continue;
+		// `trimAppliesToClip` is THE rule for "is this cut on this clip", and the
+		// fragment names its clip, so the question is answered exactly once here.
+		// A trimmed instant is one the viewer never reaches: a position argued from
+		// frames that do not play would be the same kind of untruth as a span that
+		// reports the edges it was asked for rather than the ones it got.
+		if (
+			document.timeline.trimRanges.some(
+				(t) => trimAppliesToClip(t, covering.clip) && atSec >= t.startSec && atSec <= t.endSec,
+			)
+		) {
+			cutOut += 1;
+			continue;
+		}
+		xs.push(sample.cx);
+		ys.push(sample.cy);
+	}
+
+	if (xs.length === 0) {
+		return cutOut > 0
+			? {
+					available: false,
+					reason: "trimmed-out",
+					note:
+						"The pointer WAS recorded over this span, but a trim cuts every one of those " +
+						"instants out of playback, so none of them describes what a viewer sees here.",
+				}
+			: {
+					available: false,
+					reason: "no-samples",
+					note:
+						"This recording's pointer telemetry covers no instant of this span. That is a " +
+						"fact about this span, not about the recording.",
+				};
+	}
+
+	const cx = medianOf(xs);
+	const cy = medianOf(ys);
+	let spread = 0;
+	for (let i = 0; i < xs.length; i += 1) {
+		spread = Math.max(spread, Math.hypot(xs[i] - cx, ys[i] - cy));
+	}
+	return {
+		available: true,
+		// Echoed, including the default a call that omitted `focus` silently got:
+		// "you asked for the centre" is the half of the comparison the caller
+		// cannot reconstruct from its own arguments.
+		focus: { cx: focus.cx, cy: focus.cy },
+		cursor: { cx: round3(cx), cy: round3(cy) },
+		offset: round3(Math.hypot(cx - focus.cx, cy - focus.cy)),
+		spread: round3(spread),
+		samples: xs.length,
+	};
+}
+
 export function executeAgentTool(
 	document: AxcutDocument,
 	name: string,
@@ -1348,6 +1489,10 @@ export function executeAgentTool(
 				...document,
 				zoomRanges: [...document.zoomRanges, ...placed] as AxcutDocument["zoomRanges"],
 			};
+			// Measured over what was STORED, never over what was asked for: `placed`
+			// is the clamped, ventilated truth, so the report cannot end up
+			// describing a window the zoom does not occupy.
+			const anchor = cursorAnchorReport(placed, document, zoom.focus, options?.cursorTelemetry);
 			return {
 				ok: true,
 				document: next,
@@ -1358,6 +1503,7 @@ export function executeAgentTool(
 					// model turns into "3×" for a frame that renders 1.80×.
 					renderedScale: effectiveZoomScale(zoom),
 					...landingReport(landing, startMs / 1000, endMs / 1000),
+					...(anchor ? { cursorAnchor: anchor } : {}),
 				}),
 				summary:
 					`added zoom ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)} ` +
@@ -1419,6 +1565,18 @@ export function executeAgentTool(
 			// re-ventilated, and `renderedScale` is the only number the viewer sees.
 			const landed = new Set(landing.ids);
 			const strength = rebuiltZooms.find((z) => landed.has(z.id));
+			// The EFFECTIVE focus, read off the document exactly like `renderedScale`
+			// is: a setZoom that moved only the span still gets told what its
+			// untouched focus now looks at, which is most of the reason to reshape a
+			// zoom at all.
+			const anchor = strength
+				? cursorAnchorReport(
+						rebuiltZooms.filter((z) => landed.has(z.id)),
+						document,
+						strength.focus,
+						options?.cursorTelemetry,
+					)
+				: undefined;
 			return {
 				ok: true,
 				document: next,
@@ -1429,6 +1587,7 @@ export function executeAgentTool(
 						: {}),
 					...(clearsCustomScale ? { clearedCustomScale: true } : {}),
 					...landingReport(landing, startMs / 1000, endMs / 1000),
+					...(anchor ? { cursorAnchor: anchor } : {}),
 				}),
 				summary:
 					`updated zoom ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
