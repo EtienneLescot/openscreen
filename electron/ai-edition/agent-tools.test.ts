@@ -7,8 +7,21 @@ import {
 import { ZOOM_DEPTH_SCALES } from "../../src/lib/ai-edition/timeline/zoom-scale";
 import { executeAgentTool, isMutatingTool, MUTATING_TOOL_NAMES } from "./agent-tools";
 
+/** ponytail: every fixture in this file starts from the SAME instant.
+ *  `createEmptyDocument` reads the wall clock when a caller hands it no
+ *  `createdAt`, so two documents built by two calls carry different
+ *  `createdAt`/`updatedAt` whenever the calls straddle a millisecond — and any
+ *  assertion that compares two of them is a coin flip on a loaded runner. That
+ *  already failed a PR touching none of this code. No test here reads the value,
+ *  so pinning it costs nothing and makes every document in the file comparable. */
+const FIXTURE_CREATED_AT = "2026-01-01T00:00:00.000Z";
+
 function fixtureDocument(): AxcutDocument {
-	const base = createEmptyDocument({ title: "Test", projectId: "proj_1" });
+	const base = createEmptyDocument({
+		title: "Test",
+		projectId: "proj_1",
+		createdAt: FIXTURE_CREATED_AT,
+	});
 	return documentSchema.parse({
 		...base,
 		project: { ...base.project, primaryAssetId: "asset_1" },
@@ -75,7 +88,11 @@ function fixtureDocument(): AxcutDocument {
 /** One clip whose end is NOT a round number — the real recording length that
  * made the clamp visible (24.703979 s of source, stored as 24 704 ms). */
 function shortSingleClip(): AxcutDocument {
-	const base = createEmptyDocument({ title: "Short", projectId: "proj_short" });
+	const base = createEmptyDocument({
+		title: "Short",
+		projectId: "proj_short",
+		createdAt: FIXTURE_CREATED_AT,
+	});
 	return documentSchema.parse({
 		...base,
 		project: { ...base.project, primaryAssetId: "asset_1" },
@@ -1133,7 +1150,11 @@ describe("replaceTimeline refuses what it would destroy", () => {
 	/** The workbench's `twoClipsWithTrim`: clips placed by the AGENT, which is
 	 *  exactly what the old `origin === "user"` guard could not see. */
 	function twoAgentClipsWithTrim(): AxcutDocument {
-		const base = createEmptyDocument({ title: "Two clips", projectId: "proj_two" });
+		const base = createEmptyDocument({
+			title: "Two clips",
+			projectId: "proj_two",
+			createdAt: FIXTURE_CREATED_AT,
+		});
 		return documentSchema.parse({
 			...base,
 			project: { ...base.project, primaryAssetId: "asset_1" },
@@ -1267,7 +1288,11 @@ describe("replaceTimeline refuses what it would destroy", () => {
 
 describe("moveClip — the tool the prompt used to promise", () => {
 	function twoClips(): AxcutDocument {
-		const base = createEmptyDocument({ title: "Two clips", projectId: "proj_move" });
+		const base = createEmptyDocument({
+			title: "Two clips",
+			projectId: "proj_move",
+			createdAt: FIXTURE_CREATED_AT,
+		});
 		return documentSchema.parse({
 			...base,
 			project: { ...base.project, primaryAssetId: "asset_1" },
@@ -1673,7 +1698,11 @@ function withTrack(
  *  from IDENTICAL source windows, which is what makes reading one asset's track
  *  as if it described the other silently plausible. */
 function twoAssetDocument(): AxcutDocument {
-	const base = createEmptyDocument({ title: "Two", projectId: "proj_two" });
+	const base = createEmptyDocument({
+		title: "Two",
+		projectId: "proj_two",
+		createdAt: FIXTURE_CREATED_AT,
+	});
 	return documentSchema.parse({
 		...base,
 		project: { ...base.project, primaryAssetId: "asset_1" },
@@ -1761,12 +1790,11 @@ describe("addZoom answers for the focus it was given", () => {
 		// that can read telemetry and one written by a runtime that cannot must be
 		// the same zoom, in the same place, described to the user the same way.
 		const args = JSON.stringify({ startSec: 2, endSec: 6, focus: { cx: 0.2, cy: 0.1 } });
-		// ponytail: ONE base for both runs. Two `fixtureDocument()` calls are two
-		// different inputs — `createEmptyDocument` stamps `createdAt`/`updatedAt`
-		// with the wall clock, so the pair differs whenever the calls straddle a
-		// millisecond, and this assertion was a coin flip on a loaded runner. The
-		// invariant is about the same document written by two runtimes; handing them
-		// the same document is what states it.
+		// ponytail: ONE base for both runs. The invariant is about the same document
+		// written by two runtimes, and comparing the outputs of two separate
+		// `fixtureDocument()` calls was never that claim. (The wall-clock stamps that
+		// made the two-call form flake are pinned at `FIXTURE_CREATED_AT` now — the
+		// argument for one base is the invariant, not the flake.)
 		const base = fixtureDocument();
 		const blind = executeAgentTool(base, "addZoom", args);
 		const seeing = executeAgentTool(
