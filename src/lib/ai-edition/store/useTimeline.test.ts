@@ -341,7 +341,7 @@ describe("useTimeline backfills missing source dimensions on load", () => {
 	});
 });
 
-describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
+describe("useTimeline.applyClipEdit (Edit-clip modal)", () => {
 	const anchoredZoom = (id: string, s: number, e: number) => ({
 		id,
 		startMs: s * 1000,
@@ -380,7 +380,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 		const { result } = renderTimeline();
 		// Trim the 10s clip down to its first 4s of source.
 		await act(async () => {
-			await result.current.updateClipSourceRange("clip_a", 0, 4);
+			await result.current.applyClipEdit("clip_a", 0, 4);
 		});
 		const clip = useProjectStore.getState().document?.timeline.clips[0];
 		expect(clip).toMatchObject({ sourceStartSec: 0, sourceEndSec: 4 });
@@ -392,7 +392,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 	it("drops a pill sitting over the truncated tail and keeps the one that survives", async () => {
 		const { result } = renderTimeline();
 		await act(async () => {
-			await result.current.updateClipSourceRange("clip_a", 0, 4);
+			await result.current.applyClipEdit("clip_a", 0, 4);
 		});
 		const zooms = useProjectStore.getState().document?.zoomRanges ?? [];
 		// z_keep (source 2-3) stays; z_drop (source 6-8) is entirely past the new 4s end.
@@ -414,7 +414,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 		});
 		const { result } = renderTimeline();
 		await act(async () => {
-			await result.current.updateClipSourceRange("clip_a", 0, 5);
+			await result.current.applyClipEdit("clip_a", 0, 5);
 		});
 		const zooms = useProjectStore.getState().document?.zoomRanges ?? [];
 		expect(zooms).toHaveLength(1);
@@ -425,6 +425,57 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 			startMs: 3000,
 			endMs: 5000,
 		});
+	});
+
+	// #355. Apply used to fire `updateClipSourceRange` and `updateClipCrop` as two
+	// concurrent saves, each built from the same pre-Apply document — so the second
+	// write clobbered the first and one of the two edits vanished with no error and no
+	// toast. Which one survived depended on IPC timing, which is why it read as "the app
+	// randomly forgets my crop".
+	it("keeps BOTH the source range and the crop when Apply changes them together", async () => {
+		const { result } = renderTimeline();
+		const crop = { x: 0.1, y: 0.2, width: 0.5, height: 0.5 };
+		await act(async () => {
+			await result.current.applyClipEdit("clip_a", 0, 4, crop);
+		});
+		const clip = useProjectStore.getState().document?.timeline.clips[0];
+		expect(clip).toMatchObject({ sourceStartSec: 0, sourceEndSec: 4, cropRegion: crop });
+		// The width still followed the range edit — the crop is applied to the
+		// RESEQUENCED clips, not to a stale copy of them.
+		expect(clip?.timelineEndSec).toBe(4);
+		// One user action, one document, one write: two saves is the race itself.
+		expect(bridgeMocks.save).toHaveBeenCalledTimes(1);
+	});
+
+	it("clears the crop on an explicit null and leaves it alone on undefined", async () => {
+		useProjectStore.setState({
+			document: {
+				...sampleDoc,
+				timeline: {
+					...sampleDoc.timeline,
+					clips: [
+						{ ...sampleDoc.timeline.clips[0], cropRegion: { x: 0, y: 0, width: 0.5, height: 1 } },
+					],
+				},
+			},
+		});
+		const { result } = renderTimeline();
+		// `undefined` is the modal's "crop section untouched" — the stored region stays.
+		await act(async () => {
+			await result.current.applyClipEdit("clip_a", 0, 6);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips[0].cropRegion).toEqual({
+			x: 0,
+			y: 0,
+			width: 0.5,
+			height: 1,
+		});
+		// `null` is "reset to no crop", stored as an absent field rather than the
+		// identity region.
+		await act(async () => {
+			await result.current.applyClipEdit("clip_a", 0, 6, null);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips[0].cropRegion).toBeUndefined();
 	});
 });
 

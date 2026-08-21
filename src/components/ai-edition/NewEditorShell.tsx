@@ -1331,8 +1331,14 @@ export function NewEditorShell() {
 				videoSources={videoSources}
 				onApply={(sStart, sEnd, cropRegion) => {
 					if (!editClipTarget) return;
-					void tl.updateClipSourceRange(editClipTarget.id, sStart, sEnd);
-					if (cropRegion !== undefined) void tl.updateClipCrop(editClipTarget.id, cropRegion);
+					const clipId = editClipTarget.id;
+					// One user action, one document, one save. This used to be two calls —
+					// `updateClipSourceRange` then `updateClipCrop` — each building its next
+					// document from the same pre-Apply one, so the second write clobbered the
+					// first and one of the two edits vanished silently (#355). It goes on the
+					// shared write queue for the same reason every other timeline edit does:
+					// so it can't clobber, or be clobbered by, a save already in flight.
+					void enqueueTimelineWrite(() => tl.applyClipEdit(clipId, sStart, sEnd, cropRegion));
 					setEditClipTarget(null);
 				}}
 			/>
