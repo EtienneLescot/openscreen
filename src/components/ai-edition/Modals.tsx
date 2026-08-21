@@ -704,7 +704,7 @@ interface EditClipModalProps extends BaseModalProps {
 // a draggable dual-handle range over the asset's full source duration —
 // replaces the old numeric-input-only form. Trim range AND crop are both
 // per-clip and both edited here (see clipSchema.cropRegion / useTimeline's
-// updateClipSourceRange + updateClipCrop) — crop used to be a document-wide
+// applyClipEdit, which composes the two into one save) — crop used to be a document-wide
 // setting behind its own facet-rail button; it's a framing choice for one
 // piece of footage, so it belongs with the rest of this clip's edits.
 export function EditClipModal({
