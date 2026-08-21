@@ -215,14 +215,26 @@ describe("the sink announces each call exactly once, with the real verdict", () 
 });
 
 describe("wizard-enhance reproduces the two defects it was written for", () => {
-	it("D1 — a fabricated focus and a false negative about cursor data", async () => {
+	it("D1 — a fabricated focus, and the denial now waiting on a judge", async () => {
 		const result = await runRepetition({ scenario: getScenario("wizard-enhance") });
 		const byId = new Map(
 			[...result.scored.behaviour.results, ...result.scored.dsl.results].map((r) => [r.id, r]),
 		);
 		expect(byId.get("dsl.focus.not-fabricated")?.ok).toBe(false);
 		expect(byId.get("dsl.focus.not-fabricated")?.expected).toBe(true);
-		expect(byId.get("beh.no-false-negative")?.ok).toBe(false);
+		// ponytail: la moitié calculée de D1 est toujours notée ici, hors ligne.
+		// L'autre moitié était `beh.no-false-negative`, une regex ANGLAISE — et le
+		// `demoScript` rejoué ci-dessus nie la donnée EN ANGLAIS, ce qui est la
+		// seule raison pour laquelle elle échouait. Une reproduction de ce tour en
+		// français l'aurait laissée verte, sur un mensonge identique.
+		//
+		// La question est passée au juge, et L1 ne juge pas : le verdict sort
+		// `indéterminé`, JAMAIS en passage. C'est ce qui est asserté — un check
+		// jugé qui deviendrait vert hors ligne serait le faux vert que tout ce
+		// fichier existe pour attraper.
+		const jugé = byId.get("beh.attributes-the-limit");
+		expect(jugé?.indeterminate).toBe(true);
+		expect(jugé?.ok).toBe(false);
 	});
 
 	it("D2 — the stated multiplier is not the one the pill renders", async () => {

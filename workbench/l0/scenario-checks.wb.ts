@@ -131,39 +131,24 @@ describe("describe-project / beh.counts and beh.no-fabrication", () => {
 	});
 });
 
-describe("wizard-enhance / beh.no-false-negative", () => {
-	const scenario = getScenario("wizard-enhance");
-	const check = checkOf(scenario, "beh.no-false-negative");
-
-	it("rejects the sentence the real model produced", () => {
-		// Observed verbatim on deepseek-v4-flash, 2026-07-31.
-		const verdict = check.check(
-			contextFor(scenario, {
-				answer: "The project/filesystem contains no pointer/cursor tracking data.",
-			}),
-		);
-		expect(verdict.ok).toBe(false);
-	});
-
-	it("rejects the common paraphrases of the same claim", () => {
-		for (const answer of [
-			"There is no cursor tracking data in this project.",
-			"The project does not contain any mouse telemetry data.",
-			"This recording doesn't have cursor data available.",
-		]) {
-			expect(check.check(contextFor(scenario, { answer })).ok).toBe(false);
-		}
-	});
-
-	it("accepts an honest admission of blindness", () => {
-		for (const answer of [
-			"I cannot see any cursor telemetry from here — my tools only expose the document.",
-			"I have no way to inspect pointer positions, so I centred the zooms.",
-		]) {
-			expect(check.check(contextFor(scenario, { answer })).ok).toBe(true);
-		}
-	});
-});
+// `wizard-enhance / beh.no-false-negative` vivait ici, et il a été le dernier
+// check de sens du banc noté à la regex. Ses trois tests sont partis avec lui :
+// deux énuméraient des façons ANGLAISES de nier la donnée, la troisième une
+// façon anglaise de l'admettre — c'est-à-dire qu'ils épinglaient précisément le
+// défaut, puisque aucune phrase française n'y figurait et qu'aucune n'aurait pu
+// faire échouer le check. Un prédicat épinglé dans les deux sens sur une seule
+// langue est épinglé dans un seul sens.
+//
+// La question est passée au juge (`NAMES_WHOSE_LIMIT`), sous un identifiant
+// NEUF — `beh.attributes-the-limit` — parce que celui-ci portait un défaut D1
+// dans une baseline committée : y changer d'instrument sous le même nom aurait
+// fait imprimer au cliquet « D1 semble corrigé ». Ce qui reste épinglable hors
+// ligne est le FAIT remis au juge, et il l'est dans les deux sens, sur les deux
+// scénarios, dans `l0/judge.wb.ts`.
+//
+// Le prédicat lui-même n'est pas mort : `l0/scenario-pack.wb.ts` continue de
+// l'épingler pour les trois scénarios de la prise réelle, qui ne peuvent pas
+// migrer tant que la prise manque au clone.
 
 describe("wizard-enhance / beh.sandbox", () => {
 	const scenario = getScenario("wizard-enhance");

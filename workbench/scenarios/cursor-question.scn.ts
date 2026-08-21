@@ -37,19 +37,16 @@
 // checks, its fixture and the tool surface all moved. Its old rates are history.
 
 import { cursorTelemetry, singleClip } from "../lib/fixtures";
-import { NAMES_WHOSE_LIMIT, readFacts } from "../lib/rubrics";
-import type { EvalContext } from "../lib/scenario";
+import { NAMES_WHOSE_LIMIT, pointerReadFacts } from "../lib/rubrics";
 import { defineScenario, fail, pass } from "../lib/scenario";
 import { answeredCalls, callsWithData } from "../lib/wire";
 
-/** L'outil de lecture de la trajectoire — nommé une fois, pour les faits. */
-const READER = "getCursorTrack";
-
-/** Ce que la lecture a réellement remis à l'assistant pendant ce tour. C'est le
- *  fait qui décide l'attribution de la limite, et il est identique des deux
- *  côtés de la paire : seul son CONTENU diffère, ce qui est exactement ce que
- *  la paire existe pour mesurer. */
-const readerFacts = (c: EvalContext): string[] => readFacts(c, READER);
+// ponytail: le nom de l'outil et le calcul du fait ont déménagé dans
+// `lib/rubrics.ts` (`pointerReadFacts`). Ils vivaient ici tant que la paire
+// était seule à poser la question de l'attribution ; cinq autres scénarios la
+// posent maintenant — les deux du wizard et les trois de la prise réelle — et
+// sept copies du nom de l'outil auraient rejoué le renommage silencieux que ce
+// fichier documente plus bas.
 
 const ASK =
 	"What cursor or pointer tracking data does this project contain? " +
@@ -131,7 +128,7 @@ export default defineScenario({
 			id: "beh.attributes-the-limit",
 			weight: 7,
 			rubric: NAMES_WHOSE_LIMIT,
-			facts: readerFacts,
+			facts: pointerReadFacts,
 		},
 	],
 
@@ -249,7 +246,7 @@ export const cursorBlind = defineScenario({
 			id: "beh.attributes-the-limit",
 			weight: 8,
 			rubric: NAMES_WHOSE_LIMIT,
-			facts: readerFacts,
+			facts: pointerReadFacts,
 		},
 	],
 

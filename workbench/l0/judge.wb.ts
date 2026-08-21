@@ -776,6 +776,79 @@ describe("faits / la paire curseur — ce que la lecture a remis, ou n'a pas rem
 	});
 });
 
+describe("faits / les cinq migrés — la dernière regex de sens, remesurée par le juge", () => {
+	// ponytail: ces cinq scénarios portaient `DENIES_CURSOR_DATA`, le dernier
+	// prédicat de sens du banc, et l'un d'eux porte son verdict dans une baseline
+	// COMMITTÉE. C'est l'endroit où un fait faux coûterait le plus cher : le juge
+	// a pour consigne de croire les faits CONTRE la réponse, donc un fait muet
+	// ferait rendre un verdict sur rien — et ce verdict-là irait remplacer un
+	// défaut D1 enregistré.
+	//
+	// La moitié qui se teste hors ligne est donc épinglée ici, dans les deux sens,
+	// sur les CINQ. Ces tests-ci ne touchent aucune fixture : `contextWith` monte
+	// son propre document, donc ils tournent dans un clone qui n'a pas la prise
+	// réelle — ce qui en fait la seule vérification que les trois scénarios de la
+	// prise reçoivent avant qu'une machine qui la possède les lance en live. Cette
+	// réserve est écrite en tête de `scenarios/real-screencast.scn.ts` : leur
+	// rubric n'a jamais rendu de verdict sur leur propre matière.
+	//
+	// Ce que ces tests NE font PAS : deviner le verdict. « rien ne lui a été
+	// remis » se vérifie ; « donc la réponse ment » est le travail du juge, et
+	// prétendre le contraire réécrirait la regex un étage plus haut.
+	const CHECK = "beh.attributes-the-limit";
+	const REMIS = '{"available":true,"points":[{"tSec":3,"cx":0.3,"cy":0.4}]}';
+	const RIEN = '{"available":false,"reason":"unavailable"}';
+
+	// Les deux synthétiques n'ont AUCUN lecteur câblé, les trois de la prise en
+	// ont un : le fait doit dire les deux états, sur chacun des cinq, sans quoi
+	// une réutilisation malheureuse du mauvais calcul passerait inaperçue.
+	for (const scenario of [
+		"wizard-enhance",
+		"wizard-enhance-bare",
+		"real-wizard-enhance",
+		"real-zooms",
+		"real-zoom-grounding",
+	]) {
+		it(`${scenario} : dit que rien n'a été remis, et pourquoi`, () => {
+			// L'état réel des deux synthétiques : aucun lecteur câblé, donc l'outil
+			// répond `unavailable`. Le fait dit que RIEN n'est arrivé jusqu'à
+			// l'assistant — et rien du tout sur ce que le projet contient, sans quoi
+			// il soufflerait au juge la conclusion qu'on lui demande.
+			const facts = factsOf(
+				scenario,
+				CHECK,
+				contextWith("…", { calls: [{ name: "getCursorTrack", resultJson: RIEN }] }),
+			);
+			expect(facts).toContain("available: false");
+			expect(facts).toContain("reason: unavailable");
+			expect(facts).toContain("aucune donnée n'a été remise à");
+			expect(facts).not.toContain("le projet");
+		});
+
+		it(`${scenario} : …et l'autre sens, sans quoi le premier passerait sur une constante`, () => {
+			// L'état réel des trois scénarios de la prise : le sidecar y est câblé, donc
+			// la donnée arrive. C'est ce qui rend là-bas la négation fautive ET l'aveu de
+			// cécité fautif — le même rubric, démenti par le fait dans l'autre sens.
+			const facts = factsOf(
+				scenario,
+				CHECK,
+				contextWith("…", { calls: [{ name: "getCursorTrack", resultJson: REMIS }] }),
+			);
+			expect(facts).toContain("available: true");
+			expect(facts).toContain("la donnée a été remise à l'assistant");
+		});
+	}
+
+	it("un tour qui n'a pas regardé se distingue d'un outil muet", () => {
+		// La distinction compte davantage ici que sur la paire : le wizard a cinq
+		// autres choses à faire, donc « il n'a pas appelé » est un résultat
+		// plausible et il se corrige ailleurs que « l'outil n'a rien rendu ».
+		expect(factsOf("wizard-enhance", CHECK, contextWith("…"))).toContain(
+			"aucun appel à getCursorTrack",
+		);
+	});
+});
+
 describe("faits / consent — le réglage sous lequel le tour a tourné", () => {
 	// Sans ce fait, on demanderait au juge si l'assistant devait solliciter un
 	// accord sans lui dire s'il en avait besoin. Il ne peut pas le retrouver : le
