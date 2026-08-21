@@ -10,7 +10,8 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type AxcutDocument, axcutSchemaVersion } from "../schema";
 import { useProjectStore } from "./projectStore";
-import { clearHistory, pushHistory, useUndoRedoShortcuts } from "./undo";
+import { clearHistory, useUndoRedoShortcuts } from "./undo";
+import { pushHistory } from "./undoStack";
 
 function doc(title: string): AxcutDocument {
 	return {

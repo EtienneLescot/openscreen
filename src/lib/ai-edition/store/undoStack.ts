@@ -11,7 +11,11 @@
 //
 // This module deliberately imports nothing from the store, so `projectStore ->
 // undoStack` is a leaf edge and there is no cycle to reason about. `undo.ts`
-// re-exports `pushHistory` / `clearHistory` from here for existing callers.
+// re-exports `clearHistory` from here for existing callers; `pushHistory` is NOT
+// re-exported -- import it from this module directly. Keeping it off `undo.ts`
+// keeps the audit in `documentWriteAudit.test.ts` honest: `recordHistory` in
+// `projectStore` is its only production caller, and a second import path would
+// be a second way to record history without saying so at the call site.
 
 export type Snapshot = { projectId: string; doc: unknown };
 
