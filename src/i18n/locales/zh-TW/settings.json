@@ -41,7 +41,7 @@
 		"deleteRegion": "刪除剪輯區域"
 	},
 	"layout": {
-		"title": "版面配置",
+		"title": "攝影機版面",
 		"preset": "預設",
 		"selectPreset": "選擇預設",
 		"pictureInPicture": "子母畫面",
@@ -67,7 +67,7 @@
 		}
 	},
 	"effects": {
-		"title": "影片效果",
+		"title": "畫面合成",
 		"blurBg": "模糊背景",
 		"motionBlur": "動態模糊",
 		"off": "關",
@@ -75,6 +75,8 @@
 		"roundness": "圓角",
 		"padding": "內邊距",
 		"frame": "外框",
+		"format": "格式",
+		"formatOriginal": "原始",
 		"fitClip": "符合片段",
 		"fitAClip": "選擇要符合的片段",
 		"fitClipOne": "{{count}} 個片段",

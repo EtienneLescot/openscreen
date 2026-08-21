@@ -40,7 +40,7 @@
 		"deleteRegion": "トリム範囲を削除"
 	},
 	"layout": {
-		"title": "レイアウト",
+		"title": "カメラレイアウト",
 		"preset": "プリセット",
 		"selectPreset": "プリセットを選択",
 		"pictureInPicture": "ピクチャーインピクチャ",
@@ -66,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "動画効果",
+		"title": "コンポジション",
 		"blurBg": "背景をぼかす",
 		"motionBlur": "モーションブラー",
 		"off": "オフ",
@@ -74,6 +74,8 @@
 		"roundness": "丸み",
 		"padding": "余白",
 		"frame": "フレーム",
+		"format": "フォーマット",
+		"formatOriginal": "元のサイズ",
 		"fitClip": "クリップに合わせる",
 		"fitAClip": "クリップを選んで合わせる",
 		"fitClipOne": "{{count}} クリップ",

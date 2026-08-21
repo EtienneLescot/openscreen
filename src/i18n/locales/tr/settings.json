@@ -40,7 +40,7 @@
 		"deleteRegion": "Kırpma Bölgesini Sil"
 	},
 	"layout": {
-		"title": "Düzen",
+		"title": "Kamera düzeni",
 		"preset": "Ön Ayar",
 		"selectPreset": "Ön ayar seçin",
 		"pictureInPicture": "Resim İçinde Resim",
@@ -66,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "Video Efektleri",
+		"title": "Kompozisyon",
 		"blurBg": "Arka Planı Bulanıklaştır",
 		"motionBlur": "Hareket Bulanıklığı",
 		"off": "kapalı",
@@ -74,6 +74,8 @@
 		"roundness": "Yuvarlaklık",
 		"padding": "Dolgu",
 		"frame": "Çerçeve",
+		"format": "Biçim",
+		"formatOriginal": "Orijinal",
 		"fitClip": "Klibe sığdır",
 		"fitAClip": "Bir klibe sığdır",
 		"fitClipOne": "{{count}} klip",

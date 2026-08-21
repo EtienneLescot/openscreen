@@ -40,7 +40,7 @@
 		"deleteRegion": "删除剪辑区域"
 	},
 	"layout": {
-		"title": "布局",
+		"title": "摄像头布局",
 		"preset": "预设",
 		"selectPreset": "选择预设",
 		"pictureInPicture": "画中画",
@@ -66,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "视频效果",
+		"title": "画面合成",
 		"blurBg": "模糊背景",
 		"motionBlur": "运动模糊",
 		"off": "关",
@@ -74,6 +74,8 @@
 		"roundness": "圆角",
 		"padding": "内边距",
 		"frame": "画框",
+		"format": "格式",
+		"formatOriginal": "原始",
 		"fitClip": "适配片段",
 		"fitAClip": "选择要适配的片段",
 		"fitClipOne": "{{count}} 个片段",

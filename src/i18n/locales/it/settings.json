@@ -40,7 +40,7 @@
 		"deleteRegion": "Elimina regione taglio"
 	},
 	"layout": {
-		"title": "Layout",
+		"title": "Disposizione camera",
 		"preset": "Predefinito",
 		"selectPreset": "Seleziona predefinito",
 		"pictureInPicture": "Immagine nell'immagine",
@@ -66,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "Effetti video",
+		"title": "Composizione",
 		"blurBg": "Sfuma sfondo",
 		"motionBlur": "Sfocatura movimento",
 		"off": "spento",
@@ -75,6 +75,8 @@
 		"roundness": "Arrotondamento",
 		"padding": "Spaziatura",
 		"frame": "Cornice",
+		"format": "Formato",
+		"formatOriginal": "Originale",
 		"fitClip": "Adatta alla clip",
 		"fitAClip": "Adatta a una clip",
 		"fitClipOne": "{{count}} clip",

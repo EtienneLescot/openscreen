@@ -40,7 +40,7 @@
 		"deleteRegion": "트림 구간 삭제"
 	},
 	"layout": {
-		"title": "레이아웃",
+		"title": "카메라 레이아웃",
 		"preset": "프리셋",
 		"selectPreset": "프리셋 선택",
 		"pictureInPicture": "화면 속 화면",
@@ -66,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "비디오 효과",
+		"title": "컴포지션",
 		"blurBg": "배경 흐림",
 		"motionBlur": "모션 블러",
 		"off": "끄기",
@@ -75,6 +75,8 @@
 		"roundness": "모서리 둥글기",
 		"padding": "여백",
 		"frame": "프레임",
+		"format": "형식",
+		"formatOriginal": "원본",
 		"fitClip": "클립에 맞추기",
 		"fitAClip": "클립을 선택해 맞추기",
 		"fitClipOne": "{{count}}개 클립",

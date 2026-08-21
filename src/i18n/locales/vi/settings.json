@@ -40,7 +40,7 @@
 		"deleteRegion": "Xóa vùng cắt"
 	},
 	"layout": {
-		"title": "Bố cục",
+		"title": "Bố cục camera",
 		"preset": "Cài đặt sẵn",
 		"selectPreset": "Chọn cài đặt sẵn",
 		"pictureInPicture": "Hình trong hình",
@@ -66,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "Hiệu ứng video",
+		"title": "Bố cục hình ảnh",
 		"blurBg": "Làm mờ nền",
 		"motionBlur": "Làm mờ chuyển động",
 		"off": "tắt",
@@ -74,6 +74,8 @@
 		"roundness": "Độ bo tròn",
 		"padding": "Phần đệm",
 		"frame": "Khung",
+		"format": "Định dạng",
+		"formatOriginal": "Gốc",
 		"fitClip": "Vừa khít clip",
 		"fitAClip": "Vừa khít một clip",
 		"fitClipOne": "{{count}} clip",
