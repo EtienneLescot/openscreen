@@ -356,10 +356,12 @@ describe("WhisperServerManager", () => {
 		try {
 			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
 			await writeFile(modelPath, "dummy-ggml");
-			const fakeBinaryPath = path.join(
-				dir,
-				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
-			);
+			// ponytail: no `.exe` branch on Windows, because there is no name to get
+			// right: every test here hands `start()` an explicit `binaryPath`, which is
+			// the branch that skips `resolveBinaryPath()` entirely. A `process.platform`
+			// read that decides nothing is a platform gate CI cannot pin and cannot
+			// exercise — it only looks like coverage.
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			// mode 0o755: the manager refuses a helper it cannot execute, and the
 			// default write mode is not executable on POSIX.
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
@@ -511,10 +513,7 @@ describe("WhisperServerManager", () => {
 		const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
 		try {
 			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
-			const fakeBinaryPath = path.join(
-				dir,
-				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
-			);
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			await fs.writeFile(modelPath, "dummy-ggml");
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
 
@@ -563,10 +562,7 @@ describe("WhisperServerManager", () => {
 		const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
 		try {
 			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
-			const fakeBinaryPath = path.join(
-				dir,
-				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
-			);
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			await fs.writeFile(modelPath, "dummy-ggml");
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
 
@@ -618,10 +614,7 @@ describe("WhisperServerManager", () => {
 		let clock = realNow();
 		try {
 			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
-			const fakeBinaryPath = path.join(
-				dir,
-				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
-			);
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			await fs.writeFile(modelPath, "dummy-ggml");
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
 
@@ -666,10 +659,7 @@ describe("WhisperServerManager", () => {
 		const fs = await import("node:fs/promises");
 		const dir = await mkdtemp(path.join(tmpdir(), "whisper-no-model-"));
 		try {
-			const fakeBinaryPath = path.join(
-				dir,
-				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
-			);
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			// Executable on purpose: this test asserts the *model* check fires, so
 			// the binary must get past the executability check first.
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
