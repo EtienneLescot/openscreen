@@ -36,7 +36,7 @@ import { toast } from "sonner";
 import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import GradientEditor, { type GradientEditorState } from "@/components/ui/gradient-editor";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useScopedT } from "@/contexts/I18nContext";
+import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import type {
 	AxcutAsset,
@@ -47,7 +47,6 @@ import type {
 } from "@/lib/ai-edition/schema";
 import {
 	AUDIO_GAIN_DB_LIMIT,
-	DEFAULT_EDITOR_SETTINGS,
 	type EditorSettingsPatch,
 	type EditorSettingsSnapshot,
 } from "@/lib/ai-edition/store/editorSettings";
@@ -1497,25 +1496,29 @@ export function fillsFrame(
 }
 
 /**
- * The patch behind the toggle.
+ * The patch behind the action.
  *
- * Turning it OFF restores the shipped defaults rather than whatever the user had before:
- * "before" would have to be stored somewhere, and a hidden slot that only one control writes
- * is the kind of state that rots. Predictable beats clever here — and every value it restores
- * is one slider away.
- *
- * `aspectRatio` is deliberately absent from the OFF patch. Turning the background back on does
- * not mean the user wanted their output reframed; the three frame values alone bring it back.
+ * There is no inverse. It was a toggle once, and the OFF branch restored the shipped defaults
+ * — which was already a guess dressed as a memory, since nothing stored what the user had
+ * before. Undo does that job properly, and the three sliders it writes sit directly below the
+ * button, so "put it back" was never missing; it was being modelled twice.
  */
-export function fillFramePatch(on: boolean, nativeToken: AspectRatio): EditorSettingsPatch {
-	if (!on) {
-		return {
-			padding: DEFAULT_EDITOR_SETTINGS.padding,
-			borderRadius: DEFAULT_EDITOR_SETTINGS.borderRadius,
-			shadowIntensity: DEFAULT_EDITOR_SETTINGS.shadowIntensity,
-		};
-	}
+export function fitClipPatch(nativeToken: AspectRatio): EditorSettingsPatch {
 	return { padding: 0, borderRadius: 0, shadowIntensity: 0, aspectRatio: nativeToken };
+}
+
+/**
+ * "1 clip" / "2 clips", picked through Intl.PluralRules rather than `count === 1`.
+ *
+ * The catalog has no plural machinery — `translate` interpolates and nothing else — so the two
+ * forms are two keys. Choosing between them by CLDR category instead of by equality is what
+ * makes French say "0 clip" and not "0 clips", and it degrades honestly for the locales whose
+ * rules need more than two forms rather than pretending English's rules are universal.
+ */
+function pluralKey(locale: string, count: number): "effects.fitClipOne" | "effects.fitClipMany" {
+	return new Intl.PluralRules(locale).select(count) === "one"
+		? "effects.fitClipOne"
+		: "effects.fitClipMany";
 }
 
 // ─── Video Effects ─────────────────────────────────────────────────
@@ -1548,15 +1551,14 @@ export function VideoEffectsPane() {
 	// contain-fits (see compositeLayout.ts), so anything not in the chosen shape keeps its
 	// bars. The switch is honest about the SETTINGS; without this it would also be read as a
 	// claim about the picture, and be wrong on every mixed timeline.
-	const filledFormat = frameIsFilled
-		? nativeFormats.find((f) => f.token === settings.aspectRatio)
-		: undefined;
 	const clipsStillFramed = useMemo(() => {
 		const filled = nativeFormats.find((f) => f.token === settings.aspectRatio);
 		const total = nativeFormats.reduce((n, f) => n + f.clipCount, 0);
 		return total - (filled?.clipCount ?? 0);
 	}, [nativeFormats, settings.aspectRatio]);
-	const [fillMenuOpen, setFillMenuOpen] = useState(false);
+	const [fitMenuOpen, setFitMenuOpen] = useState(false);
+	const { locale } = useI18n();
+	const clipCountLabel = (count: number) => ts(pluralKey(locale, count), { count });
 
 	// Le rayon natif = rayon de base de la fixture (~24px @1920) × cette échelle. Diviser la
 	// valeur px de l'UI par ce même rayon de base fait que le coin natif ≈ les px affichés
@@ -1567,19 +1569,15 @@ export function VideoEffectsPane() {
 	// un effet de montage ici ne poussait rien tant que ce panneau precis n'avait pas
 	// ete ouvert. Les handlers par controle ci-dessous poussent toujours leurs diffs.
 
-	const pushFramePatch = (patch: EditorSettingsPatch) => {
+	const applyFitClip = (token: AspectRatio) => {
+		const patch = fitClipPatch(token);
 		void set(patch);
 		if (isNativeCompositorActive()) {
-			setNativeParam("padding", (patch.padding ?? 0) / 100);
-			setNativeParam("roundness", (patch.borderRadius ?? 0) / NATIVE_SCREEN_BASE_RADIUS_PX);
-			setNativeParam("shadow", patch.shadowIntensity ?? 0);
+			setNativeParam("padding", 0);
+			setNativeParam("roundness", 0);
+			setNativeParam("shadow", 0);
 		}
 	};
-	/** Fill to a shape the user named. */
-	const applyFillFrame = (token: AspectRatio) => pushFramePatch(fillFramePatch(true, token));
-	/** Fill to the majority shape, or restore — the no-decision-to-make path. */
-	const toggleFillFrame = (on: boolean) =>
-		pushFramePatch(fillFramePatch(on, nativeFormats[0]?.token ?? settings.aspectRatio));
 
 	return (
 		<Pane
@@ -1595,94 +1593,65 @@ export function VideoEffectsPane() {
 			{/* #84: "how do I turn the background off". The honest answer was four settings in
 			    three places, so nobody found it. This is that answer as one control.
 			
-			    An ACTION, not a switch. A switch has room for one outcome, and on a timeline
-			    with several shapes there are several — one per shape — with no way for a
-			    boolean to say which it took. It took the majority, silently. Worse, the shapes
-			    it was choosing between were shown as raw ratio tokens: `16:9` is readable,
-			    `683:384` and `64:27` are not, and ten of them do not fit a row of chips.
+			    An ACTION, not a state. It was a switch first, and a switch has room for one
+			    outcome while a timeline with several shapes has one per shape — so it took the
+			    majority silently. Making the choice explicit as a row of chips then failed on
+			    its own terms: the chips read `683:384` and `64:27`, and ten of them do not fit.
 			
-			    So the button says what is filling the frame right now, and opens a list when
-			    there is a choice to make — the same shape the "edit clip" rail button has.
-			    Rows lead with the RESOLUTION, which users recognise, and carry their clip
-			    count so the trade is visible. The list scrolls, so ten shapes cost no more
-			    than two. */}
-			<div className={styles.paneRow}>
-				<span className={styles.label}>{ts("effects.fillFrame")}</span>
-				<Popover open={fillMenuOpen} onOpenChange={setFillMenuOpen}>
-					<PopoverTrigger asChild>
-						<button
-							type="button"
-							className={styles.rowAction}
-							disabled={!hasDocument || nativeFormats.length === 0}
-							onClick={(e) => {
-								// One shape means no decision to delegate: act, do not ask.
-								if (nativeFormats.length <= 1) {
-									e.preventDefault();
-									toggleFillFrame(!frameIsFilled);
-								}
-							}}
-						>
-							{filledFormat
-								? `${filledFormat.width} × ${filledFormat.height}`
-								: ts("effects.fillFrameOff")}
-							{nativeFormats.length > 1 ? <ChevronDown size={11} /> : null}
-						</button>
-					</PopoverTrigger>
-					<PopoverContent
-						align="end"
-						sideOffset={6}
-						collisionPadding={12}
-						animated={false}
-						className="w-auto border-0 bg-transparent p-0 shadow-none"
+			    So: a button that does the thing, and a list to pick from when there is more
+			    than one thing it could do — the shape the "edit clip" rail button already has.
+			    Rows lead with the RESOLUTION, which is what a user recognises about their own
+			    footage. Nothing here reports state: what the action did is visible in the three
+			    sliders below it, which is where it lives. */}
+			<Popover open={fitMenuOpen} onOpenChange={setFitMenuOpen}>
+				<PopoverTrigger asChild>
+					<button
+						type="button"
+						className={styles.uploadBtn}
+						disabled={!hasDocument || nativeFormats.length === 0}
+						onClick={(e) => {
+							// One shape means no decision to delegate: act, do not ask.
+							if (nativeFormats.length <= 1) {
+								e.preventDefault();
+								applyFitClip(nativeFormats[0].token);
+							}
+						}}
 					>
-						<div
-							className={styles.actionMenu}
-							role="menu"
-							aria-label={ts("effects.fillFrameChoose")}
-						>
-							<p className={styles.actionMenuTitle}>{ts("effects.fillFrameChoose")}</p>
-							{nativeFormats.map((format) => (
-								<button
-									type="button"
-									role="menuitem"
-									key={format.token}
-									className={`${styles.actionMenuRow}${
-										frameIsFilled && format.token === settings.aspectRatio
-											? ` ${styles.isActive}`
-											: ""
-									}`}
-									onClick={() => {
-										setFillMenuOpen(false);
-										applyFillFrame(format.token);
-									}}
-								>
-									<span className={styles.actionMenuMain}>
-										{format.width} × {format.height}
-									</span>
-									<span className={styles.actionMenuMeta}>{format.token}</span>
-									<span className={styles.actionMenuCount}>{format.clipCount}</span>
-								</button>
-							))}
-							{frameIsFilled ? (
-								<button
-									type="button"
-									role="menuitem"
-									className={`${styles.actionMenuRow} ${styles.actionMenuReset}`}
-									onClick={() => {
-										setFillMenuOpen(false);
-										toggleFillFrame(false);
-									}}
-								>
-									<span className={styles.actionMenuMain}>{ts("effects.fillFrameRestore")}</span>
-								</button>
-							) : null}
-						</div>
-					</PopoverContent>
-				</Popover>
-			</div>
+						{nativeFormats.length > 1 ? ts("effects.fitAClip") : ts("effects.fitClip")}
+					</button>
+				</PopoverTrigger>
+				<PopoverContent
+					align="center"
+					sideOffset={6}
+					collisionPadding={12}
+					animated={false}
+					className="w-auto border-0 bg-transparent p-0 shadow-none"
+				>
+					<div className={styles.actionMenu} role="menu" aria-label={ts("effects.fitAClip")}>
+						{nativeFormats.map((format) => (
+							<button
+								type="button"
+								role="menuitem"
+								key={format.token}
+								className={styles.actionMenuRow}
+								onClick={() => {
+									setFitMenuOpen(false);
+									applyFitClip(format.token);
+								}}
+							>
+								<span className={styles.actionMenuMain}>
+									{format.width} × {format.height}
+								</span>
+								<span className={styles.actionMenuMeta}>{format.token}</span>
+								<span className={styles.actionMenuCount}>{clipCountLabel(format.clipCount)}</span>
+							</button>
+						))}
+					</div>
+				</PopoverContent>
+			</Popover>
 			{frameIsFilled && clipsStillFramed > 0 ? (
 				<div className={styles.paneHint} role="note">
-					{ts("effects.fillFrameMixed")}
+					{ts("effects.fitClipMixed")}
 				</div>
 			) : null}
 			<div className={styles.sliderGrid}>
