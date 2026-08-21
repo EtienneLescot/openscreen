@@ -11,7 +11,7 @@
 // all a repaint needs — the timeline, preview and shell all subscribe to
 // `s.document`.
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { isModalOpen } from "../modalGuard";
 import type { AxcutDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
@@ -58,13 +58,36 @@ export function redo(): boolean {
 	return true;
 }
 
-export function useUndoRedoShortcuts(onAfter: () => void) {
+/**
+ * Whether the document undo must keep its hands off: inside a text field the
+ * browser's own text undo is the one the user means. The keydown path checks the
+ * event target, the menu path checks `activeElement` — same rule, two entry
+ * points, so it lives in one function.
+ */
+function isTextEditingTarget(node: EventTarget | null): boolean {
+	if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) return true;
+	return node instanceof HTMLElement && node.isContentEditable;
+}
+
+export interface UndoRedoHandlers {
+	/**
+	 * Undo, applying the same text-field rule the keyboard path applies.
+	 *
+	 * Wired to the native Edit menu, which on macOS is the ONLY route Cmd+Z has:
+	 * AppKit matches the menu's key equivalent before the key event reaches the web
+	 * contents, so the keydown listener below never runs there. See
+	 * `electron/edit-menu.ts`.
+	 */
+	runUndo: () => void;
+	runRedo: () => void;
+}
+
+export function useUndoRedoShortcuts(onAfter: () => void): UndoRedoHandlers {
 	const onAfterRef = useRef(onAfter);
 	onAfterRef.current = onAfter;
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
-			if (e.target instanceof HTMLElement && e.target.isContentEditable) return;
+			if (isTextEditingTarget(e.target)) return;
 			// `NewEditorShell` hands Ctrl+Z / Ctrl+Y to this listener instead of handling them,
 			// so its modal guard never runs for them: without this one, undo kept rewriting the
 			// document under every open modal, including the ones the shell does suppress.
@@ -91,4 +114,26 @@ export function useUndoRedoShortcuts(onAfter: () => void) {
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, []);
+
+	// `execCommand` is the only handle the renderer has on the browser's text undo,
+	// and it is what the `undo` menu ROLE reached through `webContents.undo()`. It is
+	// deprecated and absent under jsdom, hence the optional call: losing text undo in
+	// a field is survivable, a TypeError from a menu click is not.
+	const runUndo = useCallback(() => {
+		if (isTextEditingTarget(window.document.activeElement)) {
+			window.document.execCommand?.("undo");
+			return;
+		}
+		if (undo()) onAfterRef.current();
+	}, []);
+
+	const runRedo = useCallback(() => {
+		if (isTextEditingTarget(window.document.activeElement)) {
+			window.document.execCommand?.("redo");
+			return;
+		}
+		if (redo()) onAfterRef.current();
+	}, []);
+
+	return { runUndo, runRedo };
 }

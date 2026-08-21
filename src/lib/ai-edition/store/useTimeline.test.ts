@@ -5,6 +5,8 @@ import { I18nProvider } from "@/contexts/I18nContext";
 import type { AxcutDocument } from "../schema";
 import { axcutSchemaVersion } from "../schema";
 import { useProjectStore } from "./projectStore";
+import { clearHistory, redo, undo } from "./undo";
+import { future, past } from "./undoStack";
 import { useTimeline } from "./useTimeline";
 
 /**
@@ -896,5 +898,197 @@ describe("useTimeline save failures", () => {
 
 		expect(added).toBe(0);
 		expect(useProjectStore.getState().document?.zoomRanges).toHaveLength(0);
+	});
+});
+
+describe("useTimeline undo history", () => {
+	// `addAsset` (electron/ai-edition/document-service.ts) never writes `durationSec`,
+	// so EVERY freshly imported asset lands at the 60s placeholder and fires the
+	// background probe. Anything the probe records is therefore on the undo stack of
+	// every single drop, which is what makes these two the common case and not an
+	// edge one.
+	const unprobed = {
+		id: "asset_3",
+		kind: "video" as const,
+		label: "fresh-import.mp4",
+		originalPath: "/tmp/fresh-import.mp4",
+		durationSec: undefined,
+		// No `video` either: that is what `addAsset` produces, and it is what makes
+		// `probeAndCorrectClip` save even once the clip it came for is gone.
+		cameraTrack: null,
+	};
+
+	const docWithZoom: AxcutDocument = {
+		...sampleDoc,
+		zoomRanges: [
+			{
+				id: "zoom_a",
+				startMs: 1000,
+				endMs: 3000,
+				depth: 3,
+				focus: { cx: 0.5, cy: 0.5 },
+				focusMode: "manual",
+				clipId: "clip_a",
+				sourceStartSec: 1,
+				sourceEndSec: 3,
+			},
+		],
+	};
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		clearHistory();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		probeVideoDurationMock.mockReset();
+		probeVideoDimensionsMock.mockResolvedValue({ width: 1920, height: 1080 });
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	function seed(document: AxcutDocument) {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	}
+
+	it("keeps the background duration probe off the undo stack", async () => {
+		// Without `{ history: false }` on `probeAndCorrectClip`'s save, dropping a clip
+		// left `past` = [beforeDrop, dropWithPlaceholderClip]: the first Ctrl+Z snapped
+		// the clip back to a 60s placeholder instead of removing it.
+		seed({ ...sampleDoc, assets: [...sampleDoc.assets, unprobed] });
+		probeVideoDurationMock.mockResolvedValue(5);
+		const { result } = renderTimeline();
+
+		await act(async () => {
+			await result.current.insertClipAt("asset_3", 1);
+		});
+		await waitFor(() => {
+			const inserted = useProjectStore
+				.getState()
+				.document?.timeline.clips.find((c) => c.assetId === "asset_3");
+			expect(inserted?.sourceEndSec).toBe(5);
+		});
+
+		// One step for the drop the user made, none for the probe that corrected it.
+		expect(past).toHaveLength(1);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(1);
+	});
+
+	it("does not let a probe landing after an undo destroy the redo", async () => {
+		// The probe is detached from the drop, so it can resolve at any point — including
+		// after the user has already pressed Ctrl+Z. A recording save there ran
+		// `pushHistory`, which clears `future` on its way past: redo was gone, wiped by a
+		// write the user never made and never saw.
+		seed({ ...sampleDoc, assets: [...sampleDoc.assets, unprobed] });
+		let landProbe!: (durationSec: number) => void;
+		probeVideoDurationMock.mockReturnValue(
+			new Promise<number>((resolvePromise) => {
+				landProbe = resolvePromise;
+			}),
+		);
+		const { result } = renderTimeline();
+
+		await act(async () => {
+			await result.current.insertClipAt("asset_3", 1);
+		});
+		expect(past).toHaveLength(1);
+
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(1);
+		expect(future).toHaveLength(1);
+
+		await act(async () => {
+			landProbe(5);
+			// The clip is gone, so only the dimensions half of the probe still has
+			// anything to write — and that is exactly the write that used to be recorded.
+			await new Promise((resolveTick) => setTimeout(resolveTick, 0));
+		});
+
+		expect(past).toHaveLength(0);
+		expect(future).toHaveLength(1);
+		act(() => {
+			expect(redo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(2);
+	});
+
+	it("leaves no undo step behind a focus drag whose commit failed", async () => {
+		// The drag used to push its pre-drag document from the FIRST `setDocument`. When
+		// the commit then failed, `commitZoomFocus` restored that same document through
+		// `setState` — which cannot pop the entry. `past` was left holding a snapshot
+		// identical to what was on screen (a Ctrl+Z that visibly does nothing) and
+		// `future` had already been wiped by the push.
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+
+		// An edit and an undo, so there is a redo entry to lose.
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 5);
+		});
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(past).toHaveLength(0);
+		expect(future).toHaveLength(1);
+
+		const beforeDrag = useProjectStore.getState().document;
+		bridgeMocks.save.mockResolvedValue({ success: false, error: "disk full" });
+		act(() => {
+			result.current.updateZoomFocusLive("zoom_a", { cx: 0.2, cy: 0.3 });
+			result.current.updateZoomFocusLive("zoom_a", { cx: 0.25, cy: 0.35 });
+		});
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(useProjectStore.getState().document).toBe(beforeDrag);
+		expect(past).toHaveLength(0);
+		expect(future).toHaveLength(1);
+		act(() => {
+			expect(redo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0].depth).toBe(5);
+	});
+
+	it("records one undo step for a whole focus drag once it commits", async () => {
+		// The other half of the same change: moving the record to the commit must not
+		// lose it. Sixty pointermoves, one Ctrl+Z, back to where the drag started.
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+
+		act(() => {
+			for (let i = 0; i < 60; i++) {
+				result.current.updateZoomFocusLive("zoom_a", { cx: 0.2 + i / 1000, cy: 0.3 });
+			}
+		});
+		expect(past).toHaveLength(0);
+
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(past).toHaveLength(1);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0].focus).toEqual({
+			cx: 0.5,
+			cy: 0.5,
+		});
 	});
 });

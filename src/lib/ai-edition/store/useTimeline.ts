@@ -241,7 +241,7 @@ export function useTimeline() {
 				...document,
 				zoomRanges: [...document.zoomRanges, ...anchored] as AxcutDocument["zoomRanges"],
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -273,7 +273,7 @@ export function useTimeline() {
 				...document,
 				zoomRanges: [...document.zoomRanges, ...anchored] as AxcutDocument["zoomRanges"],
 			};
-			if (!(await saveDocument(next))) return 0;
+			if (!(await saveDocument(next, { history: true }))) return 0;
 			return suggestions.length;
 		},
 		[document, saveDocument],
@@ -314,7 +314,7 @@ export function useTimeline() {
 					],
 				},
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -361,7 +361,7 @@ export function useTimeline() {
 					...created,
 				] as unknown as AxcutDocument["annotations"],
 			};
-			if (!(await saveDocument(next))) return;
+			if (!(await saveDocument(next, { history: true }))) return;
 			// Select the freshly added annotation so its inspector opens and it shows a
 			// selection box on the canvas, ready to be retyped over.
 			const newId = created[0]?.id ?? ann.id;
@@ -394,7 +394,7 @@ export function useTimeline() {
 					],
 				},
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -433,7 +433,7 @@ export function useTimeline() {
 					],
 				},
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -469,7 +469,7 @@ export function useTimeline() {
 					),
 				},
 			};
-			await saveDocument(nextDoc);
+			await saveDocument(nextDoc, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -512,10 +512,13 @@ export function useTimeline() {
 					origin: prev?.origin ?? ("user" as const),
 				};
 			});
-			await saveDocument({
-				...doc,
-				timeline: { ...doc.timeline, trimRanges: [...others, ...rebuilt] },
-			});
+			await saveDocument(
+				{
+					...doc,
+					timeline: { ...doc.timeline, trimRanges: [...others, ...rebuilt] },
+				},
+				{ history: true },
+			);
 		},
 		[saveDocument],
 	);
@@ -540,7 +543,7 @@ export function useTimeline() {
 					() => createId("zoom"),
 				) as AxcutDocument["zoomRanges"],
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -555,18 +558,20 @@ export function useTimeline() {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			// The first live write of a drag is the one editing a document this callback
-			// did not itself produce — so it is the pre-drag state, and the only one worth
-			// recording. Without the flag a pointermove-frequency drag pushed ~60 snapshots
-			// a second and evicted the real history behind it.
-			const dragStart = zoomFocusLiveRef.current !== doc;
-			if (dragStart) zoomFocusRollbackRef.current = doc;
+			// did not itself produce, so it is the pre-drag state — the one thing worth
+			// returning to. It is remembered, not recorded: `commitZoomFocus` hands it to
+			// `saveDocument` as `historyBase`, so the whole gesture becomes ONE undo step
+			// and only once the write landed. Recording it here instead left the entry
+			// behind when the commit failed and rolled the document back to that very
+			// document — a Ctrl+Z that visibly did nothing, with `future` already wiped.
+			if (zoomFocusLiveRef.current !== doc) zoomFocusRollbackRef.current = doc;
 			const next: AxcutDocument = {
 				...doc,
 				zoomRanges: patchPillById(doc.zoomRanges, id, {
 					focus: { cx: finiteFraction(focus.cx), cy: finiteFraction(focus.cy) },
 				}) as AxcutDocument["zoomRanges"],
 			};
-			setDocument(next, { history: dragStart });
+			setDocument(next, { history: false });
 			zoomFocusLiveRef.current = next;
 		},
 		[setDocument],
@@ -578,7 +583,10 @@ export function useTimeline() {
 		const rollback = zoomFocusRollbackRef.current;
 		zoomFocusRollbackRef.current = null;
 		zoomFocusLiveRef.current = null;
-		if (!(await saveDocument(doc)) && rollback) {
+		// `historyBase: rollback` — the pre-drag document, not the one the store holds
+		// (that is the dragged one, written live). `null` when no live write happened,
+		// which records nothing, which is right: nothing changed.
+		if (!(await saveDocument(doc, { history: true, historyBase: rollback })) && rollback) {
 			useProjectStore.setState((state) =>
 				// `dirty` is deliberately NOT cleared. The rollback target is the last document
 				// this drag started from, which is not the same as the last SAVED one: with two
@@ -602,7 +610,7 @@ export function useTimeline() {
 					depth,
 				}) as AxcutDocument["zoomRanges"],
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -621,7 +629,7 @@ export function useTimeline() {
 					rotationPreset,
 				}) as AxcutDocument["zoomRanges"],
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -643,7 +651,7 @@ export function useTimeline() {
 					focusMode,
 				}) as AxcutDocument["zoomRanges"],
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -664,7 +672,7 @@ export function useTimeline() {
 					() => createId("ann"),
 				),
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -676,15 +684,14 @@ export function useTimeline() {
 		(id: string, patch: Partial<AxcutDocument["annotations"][number]>) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
-			// One undo step per drag, not per pointermove — same reasoning as
-			// `updateZoomFocusLive` above.
-			const dragStart = annotationLiveRef.current !== doc;
-			if (dragStart) annotationRollbackRef.current = doc;
+			// One undo step per drag, recorded by the commit once it lands — same
+			// reasoning, and the same failed-commit hole, as `updateZoomFocusLive` above.
+			if (annotationLiveRef.current !== doc) annotationRollbackRef.current = doc;
 			const next: AxcutDocument = {
 				...doc,
 				annotations: patchPillById(doc.annotations, id, patch),
 			};
-			setDocument(next, { history: dragStart });
+			setDocument(next, { history: false });
 			annotationLiveRef.current = next;
 		},
 		[setDocument],
@@ -696,7 +703,9 @@ export function useTimeline() {
 		const rollback = annotationRollbackRef.current;
 		annotationRollbackRef.current = null;
 		annotationLiveRef.current = null;
-		if (!(await saveDocument(doc)) && rollback) {
+		// See `commitZoomFocus`: the pre-drag document is the undo target, and it is
+		// recorded only if this write succeeds.
+		if (!(await saveDocument(doc, { history: true, historyBase: rollback })) && rollback) {
 			useProjectStore.setState((state) =>
 				// `dirty` is deliberately NOT cleared. The rollback target is the last document
 				// this drag started from, which is not the same as the last SAVED one: with two
@@ -734,7 +743,7 @@ export function useTimeline() {
 					),
 				},
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -764,7 +773,7 @@ export function useTimeline() {
 					),
 				},
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -786,7 +795,7 @@ export function useTimeline() {
 					speedRegions: patchPillById(prev, id, { speed }),
 				},
 			};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -795,7 +804,8 @@ export function useTimeline() {
 		async (kind: RegionKind, id: string) => {
 			if (!document) return;
 			// One shared mutator with the agent's removeTrim / removeModifier tools.
-			if (!(await saveDocument(removeRegionInDocument(document, kind, id)))) return;
+			if (!(await saveDocument(removeRegionInDocument(document, kind, id), { history: true })))
+				return;
 			if (selection?.id === id) setSelection(null);
 			setMultiSelection((prev) => prev.filter((h) => h.id !== id));
 		},
@@ -846,7 +856,7 @@ export function useTimeline() {
 						? { ...legacy, speedRegions: prevSpeed, cameraFullscreenRegions: prevCameraFullscreen }
 						: document.legacyEditor,
 			};
-			if (!(await saveDocument(next))) return;
+			if (!(await saveDocument(next, { history: true }))) return;
 			setSelection(null);
 			setMultiSelection([]);
 		},
@@ -931,7 +941,7 @@ export function useTimeline() {
 								),
 							},
 						};
-			await saveDocument(next);
+			await saveDocument(next, { history: true });
 		},
 		[saveDocument],
 	);
@@ -996,11 +1006,20 @@ export function useTimeline() {
 					...(needsDims ? { video: { codec: "unknown", fps: 0, ...a.video, ...probedDims } } : {}),
 				};
 			});
-			await state.saveDocument({
-				...doc,
-				assets: nextAssets,
-				timeline: { ...doc.timeline, clips: nextClips },
-			});
+			// `history: false`. Nothing about this write is a user action: `addAsset` never
+			// populates `durationSec`, so EVERY freshly imported asset lands at the 60s
+			// placeholder and fires this probe. Recording it put a placeholder-length clip
+			// on the undo stack a beat after the drop, so the first Ctrl+Z snapped the clip
+			// back to 60s instead of removing it — and a probe resolving after the user
+			// had already undone wiped `future`, destroying redo from a background write.
+			await state.saveDocument(
+				{
+					...doc,
+					assets: nextAssets,
+					timeline: { ...doc.timeline, clips: nextClips },
+				},
+				{ history: false },
+			);
 		},
 		[],
 	);
@@ -1047,7 +1066,7 @@ export function useTimeline() {
 				timeline: { ...currentDoc.timeline, clips: newClips },
 			};
 			const finalDoc = rederiveRegionMs(next, newClips);
-			if (!(await saveDocument(finalDoc))) return;
+			if (!(await saveDocument(finalDoc, { history: true }))) return;
 			setClipSelection(newClip.id);
 
 			// If we used the placeholder, kick off the probe in the background.
@@ -1076,7 +1095,7 @@ export function useTimeline() {
 		async (clipId: string, toIndex: number) => {
 			if (!document) return;
 			if (!document.timeline.clips.some((c) => c.id === clipId)) return;
-			await saveDocument(moveClipInDocument(document, clipId, toIndex));
+			await saveDocument(moveClipInDocument(document, clipId, toIndex), { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -1092,7 +1111,7 @@ export function useTimeline() {
 			// original, so its index in the result is the original's index + 1.
 			const insertedIndex = document.timeline.clips.findIndex((c) => c.id === clipId) + 1;
 			const next = duplicateClipInDocument(document, clipId, "user", "Duplicated clip");
-			if (!(await saveDocument(next))) return;
+			if (!(await saveDocument(next, { history: true }))) return;
 			setClipSelection(next.timeline.clips[insertedIndex]?.id ?? null);
 		},
 		[document, saveDocument],
@@ -1102,7 +1121,7 @@ export function useTimeline() {
 		async (clipId: string) => {
 			if (!document) return;
 			// One shared mutator with the agent's removeClip tool: reflow survivors + rederive pills.
-			if (!(await saveDocument(removeClipInDocument(document, clipId)))) return;
+			if (!(await saveDocument(removeClipInDocument(document, clipId), { history: true }))) return;
 			if (clipSelection === clipId) setClipSelection(null);
 		},
 		[document, clipSelection, saveDocument],

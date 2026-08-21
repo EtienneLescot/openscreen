@@ -383,6 +383,10 @@ interface Window {
 		onMenuLoadProject: (callback: () => void) => () => void;
 		onMenuSaveProject: (callback: () => void) => () => void;
 		onMenuSaveProjectAs: (callback: () => void) => () => void;
+		/** Edit > Undo / Redo. On macOS the menu is the only route Cmd+Z has to the
+		 *  renderer at all — see `electron/edit-menu.ts`. */
+		onMenuUndo: (callback: () => void) => () => void;
+		onMenuRedo: (callback: () => void) => () => void;
 		quitApp: () => void;
 		setTitleBarOverlay: (color: string, symbolColor: string) => void;
 		getPlatform: () => string;

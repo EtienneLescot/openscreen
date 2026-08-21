@@ -30,7 +30,7 @@
 import { useCallback, useRef } from "react";
 import type { AxcutTimelineOperation } from "@/lib/ai-edition/document/operations";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
-import { useProjectStore } from "./projectStore";
+import { type DocumentWriteOptions, useProjectStore } from "./projectStore";
 
 export interface SequentialTimelineOps {
 	/**
@@ -63,8 +63,12 @@ export function useSequentialTimelineOps(options: {
 	/** Used only when the project store has no document yet. */
 	fallbackDocument: AxcutDocument | null;
 	/** Persist a document, resolving false if the write failed (already reported).
-	 *  The hook awaits this before unblocking the queue. */
-	saveDocument: (doc: AxcutDocument) => Promise<boolean>;
+	 *  The hook awaits this before unblocking the queue.
+	 *
+	 *  Typed with the store's own options parameter rather than a one-argument
+	 *  narrowing of it: every queued op here is a user edit, and the hook has to be
+	 *  able to say so. */
+	saveDocument: (doc: AxcutDocument, opts: DocumentWriteOptions) => Promise<boolean>;
 }): SequentialTimelineOps {
 	const { fallbackDocument, saveDocument } = options;
 	const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
@@ -94,7 +98,7 @@ export function useSequentialTimelineOps(options: {
 				const doc = useProjectStore.getState().document ?? fallbackDocument;
 				if (!doc) return null;
 				const applied = applyTimelineOperation(doc, op);
-				return (await saveDocument(applied.document)) ? applied.document : null;
+				return (await saveDocument(applied.document, { history: true })) ? applied.document : null;
 			}),
 		[enqueue, fallbackDocument, saveDocument],
 	);
