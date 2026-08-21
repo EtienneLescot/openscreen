@@ -987,6 +987,13 @@
 	color: var(--fg-2);
 	margin: 4px var(--sp-4) 8px;
 }
+/* Clip count riding along a shape chip — present, but never louder than the shape. */
+.tabCount {
+	margin-left: 5px;
+	opacity: 0.6;
+	font-variant-numeric: tabular-nums;
+}
+
 /* Caveat under a control, when the control is true but not the whole story. */
 .paneHint {
 	margin: -2px var(--sp-4) 8px;
