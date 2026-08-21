@@ -53,6 +53,11 @@
 		"reactiveWebcam": "缩放时缩小",
 		"reactiveWebcamDescription": "放大视频时摄像头会平滑缩小，以免遮挡内容。",
 		"help": "摄像头与屏幕的合成方式：画中画、垂直堆叠、双画面、遮罩形状、大小和镜像。",
+		"helpNoWebcam": "此项目没有摄像头，因此布局控件已禁用，预设显示为“无摄像头”。你保存的布局会保留，以便添加摄像头后使用。",
+		"webcamFraming": "摄像头构图",
+		"webcamCropZoom": "裁剪缩放",
+		"webcamCropX": "水平移动",
+		"webcamCropY": "垂直移动",
 		"shapes": {
 			"rectangle": "矩形",
 			"circle": "圆形",
@@ -292,10 +297,17 @@
 		"alignLeft": "左对齐",
 		"alignCenter": "居中",
 		"alignRight": "右对齐",
-		"verticalOffset": "偏移",
+		"verticalOffset": "垂直偏移",
+		"horizontalOffset": "水平偏移",
 		"width": "宽度",
 		"lineLength": "行长",
 		"minWords": "每行最少词数",
 		"maxWords": "每行最多词数"
+	},
+	"audio": {
+		"title": "音频",
+		"outputGain": "输出电平",
+		"reset": "重置音频",
+		"help": "调整音频输出电平。它在预览和导出中的效果完全一致。"
 	}
 }

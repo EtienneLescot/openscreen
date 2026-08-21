@@ -6,8 +6,6 @@
 		"cancelRecording": "Cancel recording",
 		"pauseRecording": "Pause recording",
 		"resumeRecording": "Resume recording",
-		"openVideoFile": "Open video file",
-		"openProject": "Open project",
 		"useVerticalTray": "Use vertical tray",
 		"useHorizontalTray": "Use horizontal tray",
 		"openStudio": "Open Studio",
@@ -93,6 +91,9 @@
 		"micHint": "Speak to check your microphone",
 		"noMicrophones": "No microphone found",
 		"preview": "Preview",
-		"previewUnavailable": "Preview unavailable"
+		"previewUnavailable": "Preview unavailable",
+		"about": "About",
+		"version": "Version {{version}}",
+		"checkingForUpdates": "Checking…"
 	}
 }

@@ -1,4 +1,7 @@
+import { toast } from "sonner";
 import { create } from "zustand";
+import { toFileUrl } from "@/components/video-editor/projectPersistence";
+import { toastText } from "@/i18n/toastText";
 import { nativeBridgeClient } from "@/native/client";
 import {
 	type Interval,
@@ -6,6 +9,7 @@ import {
 	restoreFullTimeline as restoreFullTimelineOp,
 } from "../document/timeline";
 import { type AxcutAsset, type AxcutDocument, documentSchema } from "../schema";
+import { probeVideoDimensions } from "../timeline/duration";
 
 // ponytail: thin Zustand wrapper over the native-bridge client. Keeps the
 // current project + revision counter in renderer memory; mutations round-trip
@@ -36,7 +40,17 @@ export interface ProjectState {
 	refresh: () => Promise<void>;
 	addAsset: (path: string, label?: string) => Promise<AxcutAsset | null>;
 	removeAsset: (assetId: string) => Promise<void>;
-	saveDocument: (document: AxcutDocument) => Promise<void>;
+	/**
+	 * Write the document to disk. Resolves `true` when it landed, `false` when it did
+	 * not -- and a `false` has ALREADY been reported to the user and logged, so a
+	 * caller that ignores it is choosing not to react, not choosing to stay silent.
+	 *
+	 * It never rejects, by design. Every save in the app funnels through here and
+	 * almost all of them are `void`-ed from a click handler, so a rejection here was
+	 * an unhandled rejection in the renderer with no toast, no log and no clue --
+	 * change a caption font on a read-only project and the edit was simply gone.
+	 */
+	saveDocument: (document: AxcutDocument) => Promise<boolean>;
 	setDocument: (document: AxcutDocument) => void;
 	replaceTimeline: (intervals: Interval[], reason: string) => Promise<void>;
 	restoreFullTimeline: () => Promise<void>;
@@ -145,6 +159,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			try {
 				const camera = await window.electronAPI.findRecordingCamera(addedAsset.originalPath);
 				if (camera.success && camera.webcamVideoPath) {
+					// Stamp the camera's real dimensions at link time so a new recording never
+					// needs the backfill in `useTimeline`. They decide the PiP's layout box, and
+					// without them it falls back to a hardcoded 4:3 — which is how a 16:9 camera
+					// used to be framed one way in the preview and another in an export.
+					//
+					// Deliberately outside the shape below and deliberately non-fatal: a probe
+					// that fails must leave the link intact and let the backfill try again later,
+					// never take the `catch` that drops the camera from the recording entirely.
+					const camDims = await probeVideoDimensions(toFileUrl(camera.webcamVideoPath)).catch(
+						() => null,
+					);
 					const linked = {
 						sourcePath: camera.webcamVideoPath,
 						startMs: 0,
@@ -162,6 +187,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 						// the way IN rather than only at the recorder.
 						offsetMs: Math.round(camera.offsetMs ?? 0),
 						visible: true,
+						...(camDims ?? {}),
 					};
 					const next: AxcutDocument = {
 						...document,
@@ -169,8 +195,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 							a.id === addedAsset.id ? { ...a, cameraTrack: linked } : a,
 						),
 					};
-					await get().saveDocument(next);
-					document = parseDocument(next);
+					// Only adopt the linked document if it actually reached disk -- otherwise
+					// the caller is handed a document claiming a camera link the file does not
+					// have. The store has already told the user the write failed.
+					if (await get().saveDocument(next)) document = parseDocument(next);
 				}
 				// success:false just means no camera was found for this asset —
 				// the normal case for a plain imported video. Nothing to surface.
@@ -212,17 +240,32 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	},
 
 	async saveDocument(document) {
-		const result = await nativeBridgeClient.aiEdition.save(document);
-		if (!result.success || !result.document) {
-			throw new Error(result.error ?? "Failed to save project");
+		try {
+			const result = await nativeBridgeClient.aiEdition.save(document);
+			if (!result.success || !result.document) {
+				throw new Error(result.error ?? "Failed to save project");
+			}
+			const parsed = parseDocument(result.document);
+			set({
+				document: parsed,
+				revision: get().revision + 1,
+				dirty: false,
+				lastSavedAt: new Date(),
+			});
+			return true;
+		} catch (error) {
+			// Logged as well as toasted: a toast is gone in five seconds, and "my edit
+			// disappeared" gets reported much later than that.
+			console.error("[project] failed to save document:", error);
+			toast.error(toastText("editor", "project.failedToSave"), {
+				description: error instanceof Error ? error.message : String(error),
+			});
+			// `dirty` is deliberately left alone. It is the only input to the
+			// `beforeunload` guard and to `setHasUnsavedChanges`, so clearing it here
+			// would let the window close without a prompt on the one path where there is
+			// definitely something unsaved.
+			return false;
 		}
-		const parsed = parseDocument(result.document);
-		set({
-			document: parsed,
-			revision: get().revision + 1,
-			dirty: false,
-			lastSavedAt: new Date(),
-		});
 	},
 
 	setDocument(document) {

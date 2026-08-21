@@ -570,7 +570,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 							</div>
 						</div>
 						<div className={styles.paneRow} style={{ margin: 0 }}>
-							<span className="label">{t("exportDialog.loopGif")}</span>
+							<span className={styles.label}>{t("exportDialog.loopGif")}</span>
 							<button
 								type="button"
 								className={`${styles.toggle} ${gifLoop ? styles.isOn : ""}`}

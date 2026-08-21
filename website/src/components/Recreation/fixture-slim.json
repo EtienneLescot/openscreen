@@ -1,0 +1,912 @@
+{
+	"schemaVersion": 7,
+	"project": {
+		"id": "proj_97e2ec4f-78a1-4198-9743-05511c204daa",
+		"title": "Bellrock — docs walkthrough",
+		"createdAt": "2026-08-05T12:00:00.000Z",
+		"updatedAt": "2026-08-16T08:12:08.607Z",
+		"primaryAssetId": "asset_98800b62-9429-4a8a-9c12-fef7af70b160"
+	},
+	"assets": [
+		{
+			"id": "asset_98800b62-9429-4a8a-9c12-fef7af70b160",
+			"kind": "video",
+			"label": "Bellrock — docs walkthrough",
+			"originalPath": "/Users/example/Library/Application Support/openscreen/recordings/recording-1786032000000.mp4",
+			"durationSec": 40.033,
+			"sizeBytes": 8194081,
+			"video": {
+				"codec": "unknown",
+				"width": 1920,
+				"height": 1080,
+				"fps": 0
+			},
+			"cameraTrack": {
+				"sourcePath": "/Users/example/Library/Application Support/openscreen/recordings/recording-1786032000000-webcam.mp4",
+				"startMs": 0,
+				"offsetMs": 0,
+				"visible": false
+			}
+		}
+	],
+	"transcript": {
+		"assetId": "asset_98800b62-9429-4a8a-9c12-fef7af70b160",
+		"language": "en",
+		"words": [
+			{
+				"id": "word_1",
+				"segmentId": "seg_1",
+				"startSec": 2.19,
+				"endSec": 2.63,
+				"text": "Hi,"
+			},
+			{
+				"id": "word_2",
+				"segmentId": "seg_2",
+				"startSec": 2.63,
+				"endSec": 3.02,
+				"text": "quick"
+			},
+			{
+				"id": "word_3",
+				"segmentId": "seg_3",
+				"startSec": 3.02,
+				"endSec": 3.08,
+				"text": "walk"
+			},
+			{
+				"id": "word_4",
+				"segmentId": "seg_4",
+				"startSec": 3.08,
+				"endSec": 3.29,
+				"text": "through"
+			},
+			{
+				"id": "word_5",
+				"segmentId": "seg_5",
+				"startSec": 3.29,
+				"endSec": 3.95,
+				"text": "the"
+			},
+			{
+				"id": "word_6",
+				"segmentId": "seg_6",
+				"startSec": 3.95,
+				"endSec": 4.62,
+				"text": "documentation"
+			},
+			{
+				"id": "word_7",
+				"segmentId": "seg_7",
+				"startSec": 4.62,
+				"endSec": 4.94,
+				"text": "site."
+			},
+			{
+				"id": "word_8",
+				"segmentId": "seg_8",
+				"startSec": 4.94,
+				"endSec": 5.2,
+				"text": "The"
+			},
+			{
+				"id": "word_9",
+				"segmentId": "seg_9",
+				"startSec": 5.2,
+				"endSec": 5.5200000000000005,
+				"text": "new"
+			},
+			{
+				"id": "word_10",
+				"segmentId": "seg_10",
+				"startSec": 5.5200000000000005,
+				"endSec": 5.62,
+				"text": "release"
+			},
+			{
+				"id": "word_11",
+				"segmentId": "seg_11",
+				"startSec": 5.62,
+				"endSec": 5.79,
+				"text": "went"
+			},
+			{
+				"id": "word_12",
+				"segmentId": "seg_12",
+				"startSec": 5.79,
+				"endSec": 6.01,
+				"text": "out"
+			},
+			{
+				"id": "word_13",
+				"segmentId": "seg_13",
+				"startSec": 6.01,
+				"endSec": 6.47,
+				"text": "this"
+			},
+			{
+				"id": "word_14",
+				"segmentId": "seg_14",
+				"startSec": 6.47,
+				"endSec": 6.82,
+				"text": "morning."
+			},
+			{
+				"id": "word_15",
+				"segmentId": "seg_15",
+				"startSec": 6.83,
+				"endSec": 7.2,
+				"text": "The"
+			},
+			{
+				"id": "word_16",
+				"segmentId": "seg_16",
+				"startSec": 7.2,
+				"endSec": 7.37,
+				"text": "hero"
+			},
+			{
+				"id": "word_17",
+				"segmentId": "seg_17",
+				"startSec": 7.37,
+				"endSec": 7.57,
+				"text": "does"
+			},
+			{
+				"id": "word_18",
+				"segmentId": "seg_18",
+				"startSec": 7.57,
+				"endSec": 7.88,
+				"text": "the"
+			},
+			{
+				"id": "word_19",
+				"segmentId": "seg_19",
+				"startSec": 7.88,
+				"endSec": 8.16,
+				"text": "work"
+			},
+			{
+				"id": "word_20",
+				"segmentId": "seg_20",
+				"startSec": 8.16,
+				"endSec": 8.58,
+				"text": "now."
+			},
+			{
+				"id": "word_21",
+				"segmentId": "seg_21",
+				"startSec": 8.58,
+				"endSec": 9.06,
+				"text": "One"
+			},
+			{
+				"id": "word_22",
+				"segmentId": "seg_22",
+				"startSec": 9.06,
+				"endSec": 9.5,
+				"text": "line,"
+			},
+			{
+				"id": "word_23",
+				"segmentId": "seg_23",
+				"startSec": 9.5,
+				"endSec": 10.040000000000001,
+				"text": "one"
+			},
+			{
+				"id": "word_24",
+				"segmentId": "seg_24",
+				"startSec": 10.040000000000001,
+				"endSec": 10.41,
+				"text": "promise,"
+			},
+			{
+				"id": "word_25",
+				"segmentId": "seg_25",
+				"startSec": 10.41,
+				"endSec": 10.6,
+				"text": "and"
+			},
+			{
+				"id": "word_26",
+				"segmentId": "seg_26",
+				"startSec": 10.6,
+				"endSec": 10.950000000000001,
+				"text": "the"
+			},
+			{
+				"id": "word_27",
+				"segmentId": "seg_27",
+				"startSec": 10.950000000000001,
+				"endSec": 11.21,
+				"text": "install"
+			},
+			{
+				"id": "word_28",
+				"segmentId": "seg_28",
+				"startSec": 11.21,
+				"endSec": 11.61,
+				"text": "command"
+			},
+			{
+				"id": "word_29",
+				"segmentId": "seg_29",
+				"startSec": 11.61,
+				"endSec": 11.97,
+				"text": "right"
+			},
+			{
+				"id": "word_30",
+				"segmentId": "seg_30",
+				"startSec": 11.97,
+				"endSec": 12.290000000000001,
+				"text": "under"
+			},
+			{
+				"id": "word_31",
+				"segmentId": "seg_31",
+				"startSec": 12.290000000000001,
+				"endSec": 12.68,
+				"text": "it."
+			},
+			{
+				"id": "word_32",
+				"segmentId": "seg_32",
+				"startSec": 12.68,
+				"endSec": 13.25,
+				"text": "Scrolling"
+			},
+			{
+				"id": "word_33",
+				"segmentId": "seg_33",
+				"startSec": 13.25,
+				"endSec": 13.63,
+				"text": "down,"
+			},
+			{
+				"id": "word_34",
+				"segmentId": "seg_34",
+				"startSec": 13.63,
+				"endSec": 14.02,
+				"text": "those"
+			},
+			{
+				"id": "word_35",
+				"segmentId": "seg_35",
+				"startSec": 14.02,
+				"endSec": 14.4,
+				"text": "six"
+			},
+			{
+				"id": "word_36",
+				"segmentId": "seg_36",
+				"startSec": 14.4,
+				"endSec": 14.450000000000001,
+				"text": "cards"
+			},
+			{
+				"id": "word_37",
+				"segmentId": "seg_37",
+				"startSec": 14.450000000000001,
+				"endSec": 14.620000000000001,
+				"text": "are"
+			},
+			{
+				"id": "word_38",
+				"segmentId": "seg_38",
+				"startSec": 14.620000000000001,
+				"endSec": 14.77,
+				"text": "the"
+			},
+			{
+				"id": "word_39",
+				"segmentId": "seg_39",
+				"startSec": 14.77,
+				"endSec": 15.21,
+				"text": "whole"
+			},
+			{
+				"id": "word_40",
+				"segmentId": "seg_40",
+				"startSec": 15.21,
+				"endSec": 15.530000000000001,
+				"text": "library"
+			},
+			{
+				"id": "word_41",
+				"segmentId": "seg_41",
+				"startSec": 15.530000000000001,
+				"endSec": 15.75,
+				"text": "on"
+			},
+			{
+				"id": "word_42",
+				"segmentId": "seg_42",
+				"startSec": 15.75,
+				"endSec": 16.13,
+				"text": "one"
+			},
+			{
+				"id": "word_43",
+				"segmentId": "seg_43",
+				"startSec": 16.13,
+				"endSec": 16.62,
+				"text": "screen."
+			},
+			{
+				"id": "word_44",
+				"segmentId": "seg_44",
+				"startSec": 16.82,
+				"endSec": 16.93,
+				"text": "No"
+			},
+			{
+				"id": "word_45",
+				"segmentId": "seg_45",
+				"startSec": 16.93,
+				"endSec": 17.37,
+				"text": "page"
+			},
+			{
+				"id": "word_46",
+				"segmentId": "seg_46",
+				"startSec": 17.37,
+				"endSec": 17.62,
+				"text": "gets"
+			},
+			{
+				"id": "word_47",
+				"segmentId": "seg_47",
+				"startSec": 17.62,
+				"endSec": 17.7,
+				"text": "more"
+			},
+			{
+				"id": "word_48",
+				"segmentId": "seg_48",
+				"startSec": 17.7,
+				"endSec": 17.96,
+				"text": "than"
+			},
+			{
+				"id": "word_49",
+				"segmentId": "seg_49",
+				"startSec": 17.96,
+				"endSec": 18.18,
+				"text": "a"
+			},
+			{
+				"id": "word_50",
+				"segmentId": "seg_50",
+				"startSec": 18.18,
+				"endSec": 18.93,
+				"text": "sentence."
+			},
+			{
+				"id": "word_51",
+				"segmentId": "seg_51",
+				"startSec": 18.93,
+				"endSec": 19.07,
+				"text": "Over"
+			},
+			{
+				"id": "word_52",
+				"segmentId": "seg_52",
+				"startSec": 19.07,
+				"endSec": 19.56,
+				"text": "on"
+			},
+			{
+				"id": "word_53",
+				"segmentId": "seg_53",
+				"startSec": 19.56,
+				"endSec": 20.17,
+				"text": "status,"
+			},
+			{
+				"id": "word_54",
+				"segmentId": "seg_54",
+				"startSec": 20.17,
+				"endSec": 20.650000000000002,
+				"text": "every"
+			},
+			{
+				"id": "word_55",
+				"segmentId": "seg_55",
+				"startSec": 20.650000000000002,
+				"endSec": 21.06,
+				"text": "component"
+			},
+			{
+				"id": "word_56",
+				"segmentId": "seg_56",
+				"startSec": 21.06,
+				"endSec": 21.31,
+				"text": "with"
+			},
+			{
+				"id": "word_57",
+				"segmentId": "seg_57",
+				"startSec": 21.31,
+				"endSec": 21.490000000000002,
+				"text": "30"
+			},
+			{
+				"id": "word_58",
+				"segmentId": "seg_58",
+				"startSec": 21.490000000000002,
+				"endSec": 21.82,
+				"text": "days"
+			},
+			{
+				"id": "word_59",
+				"segmentId": "seg_59",
+				"startSec": 21.82,
+				"endSec": 21.91,
+				"text": "of"
+			},
+			{
+				"id": "word_60",
+				"segmentId": "seg_60",
+				"startSec": 21.91,
+				"endSec": 22.36,
+				"text": "probes"
+			},
+			{
+				"id": "word_61",
+				"segmentId": "seg_61",
+				"startSec": 22.36,
+				"endSec": 22.740000000000002,
+				"text": "behind"
+			},
+			{
+				"id": "word_62",
+				"segmentId": "seg_62",
+				"startSec": 22.740000000000002,
+				"endSec": 23.05,
+				"text": "it."
+			},
+			{
+				"id": "word_63",
+				"segmentId": "seg_63",
+				"startSec": 23.19,
+				"endSec": 23.45,
+				"text": "One"
+			},
+			{
+				"id": "word_64",
+				"segmentId": "seg_64",
+				"startSec": 23.45,
+				"endSec": 23.63,
+				"text": "amber"
+			},
+			{
+				"id": "word_65",
+				"segmentId": "seg_65",
+				"startSec": 23.63,
+				"endSec": 23.830000000000002,
+				"text": "day"
+			},
+			{
+				"id": "word_66",
+				"segmentId": "seg_66",
+				"startSec": 23.830000000000002,
+				"endSec": 24.060000000000002,
+				"text": "on"
+			},
+			{
+				"id": "word_67",
+				"segmentId": "seg_67",
+				"startSec": 24.060000000000002,
+				"endSec": 24.27,
+				"text": "the"
+			},
+			{
+				"id": "word_68",
+				"segmentId": "seg_68",
+				"startSec": 24.27,
+				"endSec": 24.94,
+				"text": "validator,"
+			},
+			{
+				"id": "word_69",
+				"segmentId": "seg_69",
+				"startSec": 24.94,
+				"endSec": 25.19,
+				"text": "and"
+			},
+			{
+				"id": "word_70",
+				"segmentId": "seg_70",
+				"startSec": 25.19,
+				"endSec": 25.560000000000002,
+				"text": "it"
+			},
+			{
+				"id": "word_71",
+				"segmentId": "seg_71",
+				"startSec": 25.560000000000002,
+				"endSec": 25.990000000000002,
+				"text": "recovered,"
+			},
+			{
+				"id": "word_72",
+				"segmentId": "seg_72",
+				"startSec": 25.990000000000002,
+				"endSec": 26.54,
+				"text": "and"
+			},
+			{
+				"id": "word_73",
+				"segmentId": "seg_73",
+				"startSec": 26.54,
+				"endSec": 27.09,
+				"text": "releases."
+			},
+			{
+				"id": "word_74",
+				"segmentId": "seg_74",
+				"startSec": 27.32,
+				"endSec": 27.400000000000002,
+				"text": "Three"
+			},
+			{
+				"id": "word_75",
+				"segmentId": "seg_75",
+				"startSec": 27.400000000000002,
+				"endSec": 27.45,
+				"text": "of"
+			},
+			{
+				"id": "word_76",
+				"segmentId": "seg_76",
+				"startSec": 27.45,
+				"endSec": 28.060000000000002,
+				"text": "them,"
+			},
+			{
+				"id": "word_77",
+				"segmentId": "seg_77",
+				"startSec": 28.060000000000002,
+				"endSec": 28.54,
+				"text": "newest"
+			},
+			{
+				"id": "word_78",
+				"segmentId": "seg_78",
+				"startSec": 28.54,
+				"endSec": 28.95,
+				"text": "first,"
+			},
+			{
+				"id": "word_79",
+				"segmentId": "seg_79",
+				"startSec": 28.95,
+				"endSec": 29.240000000000002,
+				"text": "and"
+			},
+			{
+				"id": "word_80",
+				"segmentId": "seg_80",
+				"startSec": 29.240000000000002,
+				"endSec": 29.53,
+				"text": "every"
+			},
+			{
+				"id": "word_81",
+				"segmentId": "seg_81",
+				"startSec": 29.53,
+				"endSec": 29.88,
+				"text": "line"
+			},
+			{
+				"id": "word_82",
+				"segmentId": "seg_82",
+				"startSec": 29.88,
+				"endSec": 30.09,
+				"text": "links"
+			},
+			{
+				"id": "word_83",
+				"segmentId": "seg_83",
+				"startSec": 30.09,
+				"endSec": 30.32,
+				"text": "into"
+			},
+			{
+				"id": "word_84",
+				"segmentId": "seg_84",
+				"startSec": 30.32,
+				"endSec": 30.560000000000002,
+				"text": "the"
+			},
+			{
+				"id": "word_85",
+				"segmentId": "seg_85",
+				"startSec": 30.560000000000002,
+				"endSec": 30.62,
+				"text": "commit"
+			},
+			{
+				"id": "word_86",
+				"segmentId": "seg_86",
+				"startSec": 30.62,
+				"endSec": 30.810000000000002,
+				"text": "that"
+			},
+			{
+				"id": "word_87",
+				"segmentId": "seg_87",
+				"startSec": 30.810000000000002,
+				"endSec": 31.1,
+				"text": "did"
+			},
+			{
+				"id": "word_88",
+				"segmentId": "seg_88",
+				"startSec": 31.1,
+				"endSec": 31.560000000000002,
+				"text": "it."
+			},
+			{
+				"id": "word_89",
+				"segmentId": "seg_89",
+				"startSec": 31.39,
+				"endSec": 31.62,
+				"text": "Back"
+			},
+			{
+				"id": "word_90",
+				"segmentId": "seg_90",
+				"startSec": 31.62,
+				"endSec": 31.76,
+				"text": "to"
+			},
+			{
+				"id": "word_91",
+				"segmentId": "seg_91",
+				"startSec": 31.76,
+				"endSec": 32.160000000000004,
+				"text": "the"
+			},
+			{
+				"id": "word_92",
+				"segmentId": "seg_92",
+				"startSec": 32.160000000000004,
+				"endSec": 32.46,
+				"text": "top,"
+			},
+			{
+				"id": "word_93",
+				"segmentId": "seg_93",
+				"startSec": 32.46,
+				"endSec": 32.730000000000004,
+				"text": "and"
+			},
+			{
+				"id": "word_94",
+				"segmentId": "seg_94",
+				"startSec": 32.730000000000004,
+				"endSec": 32.86,
+				"text": "that"
+			},
+			{
+				"id": "word_95",
+				"segmentId": "seg_95",
+				"startSec": 32.86,
+				"endSec": 32.9,
+				"text": "is"
+			},
+			{
+				"id": "word_96",
+				"segmentId": "seg_96",
+				"startSec": 32.9,
+				"endSec": 33.07,
+				"text": "the"
+			},
+			{
+				"id": "word_97",
+				"segmentId": "seg_97",
+				"startSec": 33.07,
+				"endSec": 33.55,
+				"text": "whole"
+			},
+			{
+				"id": "word_98",
+				"segmentId": "seg_98",
+				"startSec": 33.55,
+				"endSec": 34.03,
+				"text": "flow."
+			},
+			{
+				"id": "word_99",
+				"segmentId": "seg_99",
+				"startSec": 33.99,
+				"endSec": 34.19,
+				"text": "Tell"
+			},
+			{
+				"id": "word_100",
+				"segmentId": "seg_100",
+				"startSec": 34.19,
+				"endSec": 34.5,
+				"text": "me"
+			},
+			{
+				"id": "word_101",
+				"segmentId": "seg_101",
+				"startSec": 34.5,
+				"endSec": 34.53,
+				"text": "what"
+			},
+			{
+				"id": "word_102",
+				"segmentId": "seg_102",
+				"startSec": 34.53,
+				"endSec": 35,
+				"text": "you"
+			},
+			{
+				"id": "word_103",
+				"segmentId": "seg_103",
+				"startSec": 35,
+				"endSec": 35.12,
+				"text": "think."
+			}
+		]
+	},
+	"timeline": {
+		"clips": [
+			{
+				"id": "clip_3aa049d2-cf6c-406e-99fa-4a9754fea5fe",
+				"assetId": "asset_98800b62-9429-4a8a-9c12-fef7af70b160",
+				"sourceStartSec": 0,
+				"sourceEndSec": 40.033,
+				"timelineStartSec": 0,
+				"timelineEndSec": 40.033,
+				"wordRefs": [],
+				"origin": "user",
+				"reason": "Auto-created full-duration clip"
+			}
+		],
+		"gaps": [],
+		"trimRanges": [
+			{
+				"id": "trim_f52989cf-489c-47f5-a6c7-b95a7d71b399",
+				"assetId": "asset_98800b62-9429-4a8a-9c12-fef7af70b160",
+				"clipId": "clip_3aa049d2-cf6c-406e-99fa-4a9754fea5fe",
+				"startSec": 0,
+				"endSec": 2.19,
+				"reason": "Lead-in silence before 'Hi' (2.19s, >1s)",
+				"origin": "agent"
+			},
+			{
+				"id": "trim_3bad6006-721a-4dd4-a218-091fa734a63e",
+				"assetId": "asset_98800b62-9429-4a8a-9c12-fef7af70b160",
+				"clipId": "clip_3aa049d2-cf6c-406e-99fa-4a9754fea5fe",
+				"startSec": 35.12,
+				"endSec": 40.033,
+				"reason": "Trailing dead air after 'think.' (~4.9s, >1s)",
+				"origin": "agent"
+			}
+		],
+		"muteRanges": [],
+		"speedRanges": [],
+		"captionRanges": []
+	},
+	"annotations": [],
+	"zoomRanges": [
+		{
+			"id": "zoom_403360f0-0784-4034-994a-a79eb4e5aa55",
+			"startMs": 4200,
+			"endMs": 12600,
+			"clipId": "clip_3aa049d2-cf6c-406e-99fa-4a9754fea5fe",
+			"sourceStartSec": 4.2,
+			"sourceEndSec": 12.6,
+			"depth": 3,
+			"focus": {
+				"cx": 0.5,
+				"cy": 0.45
+			},
+			"focusMode": "auto",
+			"source": "auto"
+		},
+		{
+			"id": "zoom_2d7bd6ce-02e1-4f7d-ad63-03ada76859e3",
+			"startMs": 17500,
+			"endMs": 24500,
+			"clipId": "clip_3aa049d2-cf6c-406e-99fa-4a9754fea5fe",
+			"sourceStartSec": 17.5,
+			"sourceEndSec": 24.5,
+			"depth": 4,
+			"focus": {
+				"cx": 0.5,
+				"cy": 0.5
+			},
+			"focusMode": "manual",
+			"source": "manual"
+		},
+		{
+			"id": "zoom_11caaa47-6be5-4afa-bf1d-f2e6650f2066",
+			"startMs": 33112,
+			"endMs": 35156,
+			"clipId": "clip_3aa049d2-cf6c-406e-99fa-4a9754fea5fe",
+			"sourceStartSec": 33.112,
+			"sourceEndSec": 35.156,
+			"depth": 3,
+			"focus": {
+				"cx": 0.5,
+				"cy": 0.5
+			},
+			"focusMode": "manual"
+		}
+	],
+	"legacyEditor": {
+		"aspectRatio": "16:9",
+		"wallpaper": "/wallpapers/wallpaper5.jpg",
+		"padding": 55,
+		"borderRadius": 40,
+		"shadowIntensity": 0.35,
+		"showBlur": true,
+		"motionBlurAmount": 0.3,
+		"cursorTheme": "default",
+		"cursorSize": 4.5,
+		"cursorSmoothing": 0.35,
+		"cursorMotionBlur": 0.25,
+		"autoFocusAll": true,
+		"webcamLayoutPreset": "no-webcam",
+		"cameraFullscreenRegions": [],
+		"captions": {
+			"enabled": false,
+			"language": null,
+			"fontSize": 92,
+			"fontFamily": "Inter",
+			"fontWeight": "bold",
+			"color": "#ffffff",
+			"backgroundEnabled": true,
+			"backgroundColor": "#000000",
+			"backgroundOpacity": 0.55,
+			"verticalPosition": "bottom",
+			"textAlign": "center",
+			"offsetY": 0,
+			"width": 80,
+			"minWordsPerLine": 2,
+			"maxWordsPerLine": 7
+		}
+	},
+	"vendoredWaveform": {
+		"note": "NOT schemaVersion 7. Decoded from the asset's audio track by scripts/gen-recreation.mjs --vendor; vendored because the recording is not in this repo.",
+		"source": "recording-1786032000000.mp4",
+		"sampleRateHz": 48000,
+		"blocks": 7996,
+		"barCount": 320,
+		"amps": [
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.3359, 0.4772, 0.3846, 0.0352, 0.0002,
+			0.3183, 0.3104, 0.4636, 0.3432, 0.3675, 0.3943, 0.4602, 0.4691, 0.3334, 0.3633, 0.3568,
+			0.4292, 0.3232, 0.3248, 0.3064, 0.4396, 0.2607, 0.0121, 0.0046, 0.3881, 0.3022, 0.363, 0.3382,
+			0.2618, 0.3437, 0.4135, 0.4093, 0.3779, 0.2869, 0.4464, 0.3854, 0.2956, 0.0535, 0.0002,
+			0.3364, 0.334, 0.378, 0.3637, 0.4191, 0.293, 0.3317, 0.3736, 0.322, 0.4531, 0.4049, 0.1985,
+			0.0002, 0.4395, 0.4077, 0.3881, 0.3956, 0.3776, 0.153, 0.0002, 0.2659, 0.444, 0.277, 0.4435,
+			0.3974, 0.3658, 0.1242, 0.012, 0.3088, 0.3603, 0.3318, 0.3428, 0.3203, 0.4435, 0.3733, 0.3258,
+			0.3444, 0.2858, 0.4398, 0.3514, 0.3963, 0.4068, 0.4094, 0.0359, 0.0002, 0.1393, 0.3036,
+			0.3957, 0.3233, 0.3509, 0.3922, 0.3092, 0.1093, 0.0002, 0.3638, 0.3151, 0.3183, 0.1957,
+			0.2973, 0.4466, 0.332, 0.4787, 0.377, 0.4199, 0.4155, 0.4372, 0.3765, 0.4151, 0.3954, 0.3995,
+			0.3614, 0.403, 0.3006, 0.3348, 0.4034, 0.3151, 0.1194, 0.0002, 0.3269, 0.3424, 0.3465, 0.335,
+			0.1969, 0.3703, 0.2767, 0.4121, 0.361, 0.3819, 0.3489, 0.3791, 0.3165, 0.3318, 0.1726, 0.0777,
+			0.0002, 0.4443, 0.4218, 0.4262, 0.3944, 0.2476, 0.3558, 0.3466, 0.2852, 0.1, 0.001, 0.3855,
+			0.3402, 0.316, 0.3213, 0.2141, 0.3775, 0.3565, 0.3483, 0.3604, 0.4128, 0.4153, 0.3147, 0.4081,
+			0.3227, 0.3721, 0.3959, 0.4224, 0.1345, 0.3506, 0.4227, 0.3481, 0.3703, 0.0094, 0.0002,
+			0.3997, 0.3777, 0.3575, 0.3516, 0.3641, 0.4105, 0.4037, 0.3991, 0.4018, 0.3985, 0.3655,
+			0.4257, 0.4349, 0.3224, 0.0179, 0.3201, 0.3565, 0.3255, 0.3662, 0.4131, 0.4463, 0.3778, 0.039,
+			0.0002, 0.3357, 0.361, 0.3435, 0.3279, 0.3159, 0.2934, 0.0813, 0.0002, 0.0471, 0.3638, 0.3751,
+			0.2922, 0.3542, 0.1252, 0.0002, 0.3232, 0.3486, 0.3382, 0.0384, 0.3779, 0.3611, 0.1513,
+			0.0127, 0.0037, 0.3684, 0.3736, 0.344, 0.4182, 0.3928, 0.2852, 0.3441, 0.1907, 0.3761, 0.3167,
+			0.3671, 0.3164, 0.3555, 0.3766, 0.3326, 0.3536, 0.3717, 0.0134, 0.0002, 0.3501, 0.3589,
+			0.3274, 0.3518, 0.2186, 0.4487, 0.391, 0.0034, 0.0013, 0.359, 0.3848, 0.3331, 0.3536, 0.38,
+			0.4243, 0.2919, 0.4025, 0.4279, 0.3104, 0.0197, 0.0002, 0.3919, 0.425, 0.335, 0.4427, 0.3229,
+			0.3462, 0.3811, 0.3775, 0.1691, 0.0062, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+		]
+	}
+}

@@ -32,7 +32,7 @@ import {
 	DENIES_CURSOR_DATA,
 	FLAGS_MISSING_CAMERA,
 	FLAGS_OUT_OF_RANGE,
-	REFUSES_HONESTLY,
+	statedDurations,
 	statedMultipliers,
 } from "../lib/language";
 import { buildEvalContext } from "../lib/oracles";
@@ -162,24 +162,26 @@ describe("language / DENIES_CURSOR_DATA vs ADMITS_BLINDNESS", () => {
 	});
 });
 
-describe("language / REFUSES_HONESTLY", () => {
-	it("accepts a plain statement that the tool does not exist", () => {
-		for (const answer of [
-			"I cannot change the background — my tools only reach the timeline.",
-			"There is no tool exposed to me for the subtitle font.",
-			"I don't have a tool to reorder clips.",
-		]) {
-			expect(REFUSES_HONESTLY.test(answer)).toBe(true);
-		}
+describe("language / statedDurations", () => {
+	// `REFUSES_HONESTLY` vivait ici. Il est parti chez le juge (`SAYS_IT_CANNOT`,
+	// `lib/rubrics.ts`), épinglé dans les deux sens par `l0/judge.wb.ts` — la
+	// même obligation, sur le prédicat qui l'a remplacé.
+	//
+	// `statedDurations`, lui, RESTE : il rend un nombre, pas une lecture. Ce qui
+	// suit est la moitié qui manquait, et elle manquait dans le sens silencieux —
+	// une durée écrite en français ne rendait rien du tout, donc « aucune durée
+	// citée », donc le check `describe-project` qui compare les durées annoncées
+	// au document ne voyait jamais rien à contredire.
+	it("reads the notation whatever the language wraps it in", () => {
+		expect(statedDurations("le clip dure 24,7 secondes")).toEqual([24.7]);
+		expect(statedDurations("une seule seconde")).toEqual([]);
+		expect(statedDurations("the clip is 24.7 seconds long")).toEqual([24.7]);
+		expect(statedDurations("la coupe va de 0:12 à 0:14")).toEqual([12, 14]);
+		expect(statedDurations("un trim de 1,8 s")).toEqual([1.8]);
 	});
 
-	it("rejects an answer that just does the thing", () => {
-		for (const answer of [
-			"I swapped the clips — the demo now plays first.",
-			"I changed the background to a dark gradient.",
-		]) {
-			expect(REFUSES_HONESTLY.test(answer)).toBe(false);
-		}
+	it("reports nothing when no duration was stated", () => {
+		expect(statedDurations("J'ai ajouté un zoom sur le second clip.")).toEqual([]);
 	});
 });
 
@@ -625,9 +627,13 @@ describe("les demoScripts ne peuvent nommer qu'un outil qui existe", () => {
 	// tours où rien n'avait jamais été lu. Un scénario dont le seul objet est
 	// « a-t-il regardé ? » certifiait un modèle aveugle.
 	//
-	// Les 8 fantômes restent autorisés : `cursor-question` et `wizard-enhance-bare`
+	// Les fantômes restent autorisés : `cursor-question` et `wizard-enhance-bare`
 	// rejouent des tours live de 2026-07-31 où le modèle appelait `ls`/`glob`, et
-	// c'est précisément ce que ces demos doivent continuer à exercer.
+	// c'est précisément ce que ces demos doivent continuer à exercer. Leur nombre
+	// n'est pas écrit ici : `PHANTOM_TOOL_NAMES` en compte un de plus que la liste
+	// que ce banc tenait à la main (`execute`, que seul un backend sandbox ferait
+	// réapparaître), et une exemption dont la taille est recopiée en prose dérive
+	// exactement comme le roster a dérivé.
 	const KNOWN = new Set<string>([...OPENSCREEN_TOOLS, ...PHANTOM_TOOLS]);
 
 	for (const scenario of allScenarios()) {

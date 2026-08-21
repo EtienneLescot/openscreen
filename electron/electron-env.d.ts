@@ -145,6 +145,11 @@ interface Window {
 			message?: string;
 			discarded?: boolean;
 			error?: string;
+			/**
+			 * A camera was recorded but produced nothing usable, so the session was
+			 * saved without it. Still a success — the screen video is intact.
+			 */
+			webcamDropped?: boolean;
 		}>;
 		pauseNativeWindowsRecording: () => Promise<{
 			success: boolean;
@@ -381,6 +386,10 @@ interface Window {
 		quitApp: () => void;
 		setTitleBarOverlay: (color: string, symbolColor: string) => void;
 		getPlatform: () => string;
+		getAppInfo: () => Promise<{ version: string; canCheckForUpdates: boolean }>;
+		checkForUpdates: () => Promise<void>;
+		showAbout: () => Promise<void>;
+		canCheckForUpdatesNow: () => Promise<boolean>;
 		revealInFolder: (
 			filePath: string,
 		) => Promise<{ success: boolean; error?: string; message?: string }>;
@@ -395,6 +404,9 @@ interface Window {
 		hudOverlayHide: () => void;
 		hudOverlayClose: () => void;
 		setHudOverlayIgnoreMouseEvents: (ignore: boolean) => void;
+		/** Window-relative cursor position, pushed while the HUD is click-through and
+		 *  therefore receiving no pointer events of its own. Returns an unsubscribe. */
+		onHudOverlayCursor: (callback: (x: number, y: number) => void) => () => void;
 		/** Pins the overlay's current position as the origin for `dragHudOverlayTo`. */
 		beginHudOverlayDrag: () => void;
 		/** Total pointer travel since `beginHudOverlayDrag`, not a per-frame delta. */

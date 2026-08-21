@@ -643,6 +643,74 @@
 	width: 12px;
 	height: 12px;
 }
+
+/* ─── preview media failure (PreviewErrorCard) ──────────────────── */
+/* Overlays the stage instead of replacing it: the native compositor is still
+   painting the last composed frame underneath, and leaving that frame visible is
+   what tells the user their project is fine (issue #395). Translucent, not
+   opaque, for the same reason. */
+.previewFailure {
+	position: absolute;
+	inset: 0;
+	z-index: 3;
+	display: grid;
+	place-items: center;
+	padding: var(--sp-4);
+	background: rgba(9, 9, 11, 0.72);
+	backdrop-filter: blur(2px);
+	/* The scrim is a fixed dark surface in BOTH themes, so the text on it must
+	   not follow the document theme. Light is the default (useTheme.ts), and
+	   there --fg-2 is #334155 — near-black on near-black. Pinned here rather
+	   than as a var() fallback per rule: --muted-foreground is always defined
+	   (design-tokens.css), so a fallback would never have fired. */
+	--fg-2: #f3f5f8;
+	--muted-foreground: rgba(255, 255, 255, 0.78);
+}
+.previewFailureCard {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--sp-3);
+	max-width: min(38ch, 100%);
+	text-align: center;
+}
+.previewFailureIconRing {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 40px;
+	height: 40px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.05);
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+.previewFailureIcon {
+	width: 20px;
+	height: 20px;
+	color: var(--muted-foreground);
+}
+.previewFailureTitle {
+	margin: 0;
+	font-size: 1.05rem;
+	font-weight: 600;
+	color: var(--fg-2);
+}
+.previewFailureDescription {
+	margin: 0;
+	font-size: 0.875rem;
+	line-height: 1.5;
+	color: var(--muted-foreground);
+}
+/* Selectable: it exists to be copied into a bug report, so it stays legible
+   rather than fading to decoration. */
+.previewFailureDetail {
+	margin: 0;
+	font-size: 0.6875rem;
+	font-family: var(--font-mono, ui-monospace, monospace);
+	color: rgba(255, 255, 255, 0.6);
+	user-select: text;
+	word-break: break-word;
+}
 .previewEmptyDialog {
 	max-width: 24rem;
 	padding: var(--sp-5);
@@ -2024,6 +2092,26 @@
 .dangerBtn:hover {
   background: color-mix(in srgb, var(--danger) 22%, transparent);
   color: var(--danger);
+}
+
+.secondaryBtn {
+  margin: 4px var(--sp-4) 12px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font: 500 12px/1 var(--font-body);
+  cursor: pointer;
+}
+.secondaryBtn:hover {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+.secondaryBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .authPanel {

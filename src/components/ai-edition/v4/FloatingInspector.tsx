@@ -1,4 +1,5 @@
 import {
+	AudioLines,
 	Captions as CaptionsIcon,
 	ChevronRight,
 	FileText,
@@ -42,6 +43,7 @@ import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
 import { CaptionsPane } from "../CaptionsPane";
 import { ColorField } from "../ColorField";
 import {
+	AudioPane,
 	BackgroundPane,
 	CursorPane,
 	LayoutPane,
@@ -54,12 +56,20 @@ import styles from "./EditorShellV4.module.css";
 
 type TimelineApi = ReturnType<typeof useTimeline>;
 
-export type Facet = "background" | "effects" | "layout" | "cursor" | "captions" | "transcript";
+export type Facet =
+	| "background"
+	| "effects"
+	| "layout"
+	| "audio"
+	| "cursor"
+	| "captions"
+	| "transcript";
 
 const FACETS: Array<{ id: Facet; labelKey: string; icon: typeof ImageIcon }> = [
 	{ id: "background", labelKey: "background.title", icon: ImageIcon },
 	{ id: "effects", labelKey: "effects.title", icon: SlidersHorizontal },
 	{ id: "layout", labelKey: "layout.title", icon: LayoutIcon },
+	{ id: "audio", labelKey: "audio.title", icon: AudioLines },
 	{ id: "cursor", labelKey: "cursor.title", icon: MousePointer2 },
 	{ id: "captions", labelKey: "facets.captions", icon: CaptionsIcon },
 	{ id: "transcript", labelKey: "facets.transcript", icon: FileText },
@@ -1055,6 +1065,7 @@ function FacetBody({
 	if (facet === "background") return wrap(collapse, <BackgroundPane />);
 	if (facet === "effects") return wrap(collapse, <VideoEffectsPane />);
 	if (facet === "layout") return wrap(collapse, <LayoutPane />);
+	if (facet === "audio") return wrap(collapse, <AudioPane />);
 	if (facet === "cursor") return wrap(collapse, <CursorPane />);
 	if (facet === "transcript") return wrap(collapse, <TranscriptPane {...transcriptProps} />);
 	return wrap(collapse, <CaptionsPane />);

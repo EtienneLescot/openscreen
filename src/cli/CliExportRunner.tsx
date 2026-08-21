@@ -211,6 +211,34 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 		axcutDocument = applyProbedDuration(axcutDocument, primaryAssetId, probed.durationMs / 1000);
 	}
 
+	// The camera's dimensions decide the PiP's layout box, and this is the one caller the
+	// document cannot answer for: there is no editor session here to have probed and saved
+	// them, so without this the CLI lays the box out from a hardcoded 4:3 and a 16:9 camera
+	// exports framed differently from the same project opened in the app.
+	//
+	// Failure-tolerant on purpose, unlike the screen probe above which is allowed to reject:
+	// a camera file that has gone missing should cost the export its camera, not the export.
+	if (media.webcamVideoPath) {
+		const camera = await probeVideoDimensions(toFileUrl(media.webcamVideoPath)).catch(() => null);
+		if (camera) {
+			axcutDocument = {
+				...axcutDocument,
+				assets: axcutDocument.assets.map((asset) =>
+					asset.cameraTrack
+						? {
+								...asset,
+								cameraTrack: {
+									...asset.cameraTrack,
+									width: camera.width,
+									height: camera.height,
+								},
+							}
+						: asset,
+				),
+			};
+		}
+	}
+
 	if (request.autoZoom) {
 		const added = appendAutoZoomRanges(axcutDocument, cursorTelemetry, probed.durationMs);
 		window.electronAPI.cliLog("info", `Auto-zoom: added ${added} region(s) from cursor telemetry`);

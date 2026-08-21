@@ -16,10 +16,14 @@ import { fakeCursorReader, runScenario } from "../lib/harness";
 import { EXPECTED_TOOL_COUNT, OPENSCREEN_TOOLS, PHANTOM_TOOLS } from "../lib/prompts";
 import { buildReport, fingerprintOf, renderMarkdown, summarizeScenario } from "../lib/report";
 import { runRepetition, runScenarioReps } from "../lib/runner";
+import type { Scenario } from "../lib/scenario";
 import { allScenarios, getScenario } from "../scenarios/registry";
 
 describe("the context the model actually receives", () => {
-	it("is our 19 tools and nothing else", async () => {
+	// The title used to say "19" while the agent shipped 21, and a title cannot
+	// fail. The count lives in the roster now, and the roster is pinned in CI by
+	// `deep-agent/service.test.ts` against what `buildTools` actually builds.
+	it("is our tool surface and nothing else", async () => {
 		const run = await runScenario({
 			label: "l1-surface",
 			prompt: "hello",
@@ -75,7 +79,12 @@ describe("scenarios end to end, offline", () => {
 			expect(result.run.ok).toBe(true);
 			// Every check produced a verdict, and none of them threw.
 			const all = [...result.scored.behaviour.results, ...result.scored.dsl.results];
-			expect(all.length).toBe(scenario.behaviour.length + scenario.dsl.length + 2 /* structural */);
+			expect(all.length).toBe(
+				scenario.behaviour.length +
+					(scenario.judged ?? []).length +
+					scenario.dsl.length +
+					2 /* structural */,
+			);
 			for (const check of all) {
 				expect(check.evidence ?? "").not.toContain("check threw");
 			}
@@ -84,6 +93,25 @@ describe("scenarios end to end, offline", () => {
 			);
 		});
 	}
+
+	it("un check jugé sort de L1 en indéterminé, jamais en passage", async () => {
+		// ponytail: le verrou de la contrainte « L1 reste sans LLM et sans réseau
+		// sortant ». Le juge n'est sur le chemin d'aucun tour — il relit les tours
+		// persistés, plus tard — donc un check jugé ne PEUT pas être tranché ici.
+		// Ce que ce test interdit est qu'il le devienne en silence, dans le sens
+		// commode : un `demoScript` qui « passerait » un check que personne n'a
+		// posé serait précisément le faux-vert que ce banc existe pour attraper.
+		const scenario = allScenarios().find((s) => (s.judged ?? []).length > 0);
+		expect(scenario, "aucun scénario jugé dans le pack — ce verrou ne teste rien").toBeDefined();
+		const result = await runRepetition({ scenario: scenario as Scenario });
+		for (const judged of (scenario as Scenario).judged ?? []) {
+			const verdict = result.scored.behaviour.results.find((r) => r.id === judged.id);
+			expect(verdict?.indeterminate).toBe(true);
+			expect(verdict?.ok).toBe(false);
+			expect(verdict?.evidence).toContain("wb:judge");
+		}
+		expect(result.scored.behaviour.undecidedWeight).toBeGreaterThan(0);
+	});
 
 	it("mints a fresh projectId per repetition", async () => {
 		// sessionsByProject and messageCheckpointsBySession are module Maps with
@@ -122,7 +150,7 @@ describe("no scoring without evidence", () => {
 });
 
 describe("a name the model was never given", () => {
-	it("comes back as a tool result naming the 19, and the turn survives", async () => {
+	it("comes back as a tool result naming the real ones, and the turn survives", async () => {
 		// The demoScripts of `cursor-question` and `wizard-enhance-bare` still
 		// replay the live turns of 2026-07-31, when the model had `ls`/`glob`/
 		// `grep` and used them. Now that the surface is gone those calls are
@@ -349,7 +377,11 @@ describe("report assembly", () => {
 
 		const report = buildReport({
 			label: "l1",
-			fingerprint: fingerprintOf({ results, model: "workbench-scripted", reps: 2 }),
+			fingerprint: fingerprintOf({
+				wire: results[0]?.run.wire,
+				model: "workbench-scripted",
+				reps: 2,
+			}),
 			scenarios: [summary],
 			notices: [],
 		});

@@ -2,6 +2,7 @@ import AVFoundation
 import CoreGraphics
 import CoreMedia
 import Foundation
+import OpenScreenCaptureCore
 import ScreenCaptureKit
 
 struct Rectangle: Decodable {
@@ -101,23 +102,6 @@ enum HelperError: Error, CustomStringConvertible {
 	}
 }
 
-func emit(_ fields: [String: Any]) {
-	if let data = try? JSONSerialization.data(withJSONObject: fields, options: []),
-		let line = String(data: data, encoding: .utf8)
-	{
-		print(line)
-		fflush(stdout)
-	}
-}
-
-func emitError(code: String, message: String) {
-	emit([
-		"event": "error",
-		"code": code,
-		"message": message,
-	])
-}
-
 @available(macOS 13.0, *)
 final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	private struct CaptureTarget {
@@ -139,8 +123,12 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	// audio track 0 and nothing else. See AudioTrackMixer.
 	private var audioInput: AVAssetWriterInput?
 	private var audioMixer: AudioTrackMixer?
+	/// Drives the mixer's cursor while nothing is arriving to drive it. Owned by the sample
+	/// queue: created when the writer session opens, cancelled on the same queue at teardown.
+	private var audioTicker: DispatchSourceTimer?
 	private var didStartWriting = false
 	private var didEmitRecordingStarted = false
+	private var didReportWriterFailure = false
 	private var isStopping = false
 	private var isPaused = false
 	private var pauseStartedAt: CMTime?
@@ -306,10 +294,12 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			writer.startSession(atSourceTime: presentationTime)
 			didStartWriting = true
 			audioMixer?.beginTimeline(at: presentationTime)
+			startAudioTicker()
 		}
 
 		if videoInput.isReadyForMoreMediaData {
-			if videoInput.append(sampleBuffer), !didEmitRecordingStarted {
+			let appended = videoInput.append(sampleBuffer)
+			if appended, !didEmitRecordingStarted {
 				didEmitRecordingStarted = true
 				emit([
 					"event": "recording-started",
@@ -318,8 +308,38 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 					"height": outputHeight,
 					"captureBounds": captureBoundsPayload(),
 				])
+			} else if !appended {
+				reportWriterFailure("video append")
 			}
 		}
+	}
+
+	/// A failed AVAssetWriter keeps accepting appends and keeps answering false, so
+	/// a recorder that discards that Bool records nothing while the HUD counts on.
+	/// That is how a two-minute take was already lost by its fourth second and only
+	/// said so at finishWriting(). The Windows helper checks every WriteSample
+	/// HRESULT and escalates; this is the macOS half of the same contract -- report
+	/// once, at the append that actually failed, carrying the live writer.error.
+	///
+	/// Deliberately not the code finishWriter() emits, and the difference is load
+	/// bearing. That one is the terminal result of stopping, and the Electron side
+	/// settles its stop on exactly one of `recording-stopped` or `writer-failed`.
+	/// Give both sites the same code behind this one-shot guard and a writer that
+	/// died mid-capture emits nothing at all at stop, so the stop promise never
+	/// settles and every failure becomes the "Saving..." hang instead of an error.
+	/// This event answers "when did the writer die"; that one answers "did stopping
+	/// work". Two questions, two codes.
+	private func reportWriterFailure(_ stage: String) {
+		guard !didReportWriterFailure, let writer else {
+			return
+		}
+		didReportWriterFailure = true
+		emitError(
+			code: "writer-failed-during-capture",
+			message: "\(stage): "
+				+ (writer.error.map { "\($0)" }
+					?? "AVAssetWriter status \(writer.status.rawValue)"),
+		)
 	}
 
 	private func ensureRequestedPermissions() throws {
@@ -367,12 +387,16 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			guard let display = content.displays.first(where: { $0.displayID == displayId }) else {
 				throw HelperError.sourceNotFound("No ScreenCaptureKit display found for id \(displayId).")
 			}
-			let width = Int(CGDisplayPixelsWide(display.displayID))
-			let height = Int(CGDisplayPixelsHigh(display.displayID))
+			let filter = SCContentFilter(display: display, excludingWindows: [])
+			let size = captureSize(
+				for: filter,
+				fallbackPointSize: display.frame.size,
+				fallbackDisplayId: display.displayID
+			)
 			return CaptureTarget(
-				filter: SCContentFilter(display: display, excludingWindows: []),
-				width: clampCaptureDimension(width, fallback: request.video.width),
-				height: clampCaptureDimension(height, fallback: request.video.height),
+				filter: filter,
+				width: size.width,
+				height: size.height,
 				captureFrame: display.frame
 			)
 		case "window":
@@ -385,13 +409,16 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			let candidateDisplay = content.displays.first {
 				$0.frame.intersects(window.frame) || $0.frame.contains(CGPoint(x: window.frame.midX, y: window.frame.midY))
 			}
-			let scaleFactor = Self.scaleFactor(for: candidateDisplay?.displayID ?? CGMainDisplayID())
-			let width = Int(window.frame.width) * scaleFactor
-			let height = Int(window.frame.height) * scaleFactor
+			let filter = SCContentFilter(desktopIndependentWindow: window)
+			let size = captureSize(
+				for: filter,
+				fallbackPointSize: window.frame.size,
+				fallbackDisplayId: candidateDisplay?.displayID ?? CGMainDisplayID()
+			)
 			return CaptureTarget(
-				filter: SCContentFilter(desktopIndependentWindow: window),
-				width: clampCaptureDimension(width, fallback: request.video.width),
-				height: clampCaptureDimension(height, fallback: request.video.height),
+				filter: filter,
+				width: size.width,
+				height: size.height,
 				captureFrame: window.frame
 			)
 		default:
@@ -403,6 +430,14 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		let configuration = SCStreamConfiguration()
 		configuration.width = outputWidth
 		configuration.height = outputHeight
+		// Belt and braces for the defect `captureOutputSize` exists to prevent. Left at its
+		// default of `false`, ScreenCaptureKit "only scales down" (SDK header), so any frame
+		// smaller than the buffer is drawn at native size in a corner and the rest stays
+		// background black — a whole recording letterboxed inside its own frame (issue #418).
+		// With the buffer now derived from the filter the two agree and this changes nothing;
+		// it is here so that a future source whose size we mispredict comes out scaled rather
+		// than cornered.
+		configuration.scalesToFit = true
 		configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, request.video.fps)))
 		configuration.queueDepth = 6
 		configuration.showsCursor = !request.video.hideSystemCursor
@@ -456,6 +491,33 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			AVVideoCompressionPropertiesKey: [
 				AVVideoAverageBitRateKey: request.video.bitrate ?? 18_000_000,
 				AVVideoExpectedSourceFrameRateKey: request.video.fps,
+				// Without this the encoder defaults to B-frames, and a reordered
+				// stream needs a composition offset per sample. AVAssetWriter emits
+				// those in a version 0 `trun`, where ISO/IEC 14496-12 8.8.8.2 defines
+				// the field as UNSIGNED -- so a negative offset goes out as
+				// 0xFFFFFFF6 and the fragment writer refuses the fragment it is
+				// about to emit. That refusal is -11800 / -16341, raised from the
+				// single site in MediaToolbox that writes moof/traf/trun, which is
+				// why it appears if and only if movieFragmentInterval is set and
+				// lands exactly on a fragment boundary.
+				//
+				// Turning reordering off makes every offset zero and PTS == DTS, so
+				// the fragment stays representable. A screen recorder gives up
+				// nothing for it: B-frames buy compression on lookahead-friendly
+				// content and cost encode latency, which is the wrong trade for
+				// real-time capture.
+				//
+				// Measured on macOS 26.5 / M1, 1080p with system audio. How reliably
+				// the bug bites scales with append rate, so quote the rate with the
+				// result: at ~57 fps, the rate the app actually drives, reordering
+				// on dies at 13.0s while reordering off stops clean at 31.6s; at
+				// 30 fps it is intermittent, dying at 1.0s and 2.0s but once
+				// surviving 22.2s. That intermittency is why the byte-level evidence
+				// leads here and the run counts only corroborate: the offsets are
+				// out of spec in every fragmented file whether or not that
+				// particular run happened to die. Reordering off is 3/3 clean across
+				// both rates, and a SIGKILL at 25s still leaves 27 readable `moof`.
+				AVVideoAllowFrameReorderingKey: false,
 			],
 		]
 		let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
@@ -478,9 +540,49 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 				input: input,
 				includesSystemAudio: request.audio.system.enabled,
 				includesMicrophone: nativeMicrophoneEnabled,
-				microphoneGain: request.audio.microphone.gain
+				microphoneGain: request.audio.microphone.gain,
+				clock: { [weak self] in self?.timelineNow() ?? .invalid }
 			)
 		}
+	}
+
+	/// The instant the writer's timeline has reached: the host clock, less the time spent
+	/// paused — the same transform `retimedSampleBuffer` applies to every sample, so this and
+	/// the presentation timestamps are answers in one domain.
+	///
+	/// Frozen while paused, because `pauseStartedAt` stops moving and `totalPausedDuration`
+	/// does not yet include the pause in progress. On resume the offset grows by exactly the
+	/// pause, so the position continues from where it froze: the pause interrupts the audio
+	/// clock without shifting anything recorded after it. That is the same property the
+	/// Windows mixer gets by re-deriving its anchor on resume, derived here instead of tracked.
+	private func timelineNow() -> CMTime {
+		let (paused, offset, pausedAt) = stateQueue.sync {
+			(isPaused, totalPausedDuration, pauseStartedAt)
+		}
+		let now = paused ? (pausedAt ?? CMClockGetTime(hostClock)) : CMClockGetTime(hostClock)
+		return CMTimeSubtract(now, offset)
+	}
+
+	/// A take that nothing is playing into is exactly the take whose audio timeline has to keep
+	/// moving, so the mixer cannot be driven by buffer arrival alone. 10 ms is the chunk size it
+	/// emits at; the leeway lets the system coalesce the wakeups, since being a few milliseconds
+	/// late only means the next tick emits two chunks instead of one.
+	private func startAudioTicker() {
+		guard audioMixer != nil, audioTicker == nil else {
+			return
+		}
+
+		let timer = DispatchSource.makeTimerSource(queue: sampleQueue)
+		timer.schedule(
+			deadline: .now() + .milliseconds(10),
+			repeating: .milliseconds(10),
+			leeway: .milliseconds(5)
+		)
+		timer.setEventHandler { [weak self] in
+			self?.audioMixer?.tick()
+		}
+		audioTicker = timer
+		timer.resume()
 	}
 
 	private func finishWriter() async {
@@ -489,9 +591,25 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		}
 
 		// Capture has stopped, so nothing is in flight on the sample queue any more; hopping
-		// onto it once is what makes the mixer's final flush safe without a lock.
+		// onto it once is what makes the mixer's final flush safe without a lock, and it is
+		// also where the ticker has to die, since that is the queue it fires on.
+		//
+		// `endSession` is the trailing half of the same bug the clock-driven cursor fixes at
+		// the front. Without it the file ended at the last sample anything happened to deliver,
+		// so a ten-second take that went quiet at six yielded a six-second recording; the
+		// helper had never called it at all. `end` comes from the same clock the mixer runs on
+		// and is read after `stopCapture()` returned, so it is at or past every sample already
+		// appended — which is what makes it safe to hand to `endSession`, since a source time
+		// before an appended sample would trim that sample back out.
 		sampleQueue.sync {
-			audioMixer?.finish()
+			audioTicker?.cancel()
+			audioTicker = nil
+
+			let end = timelineNow()
+			audioMixer?.finish(atSourceTime: end)
+			if didStartWriting, writer.status == .writing {
+				writer.endSession(atSourceTime: end)
+			}
 		}
 
 		videoInput?.markAsFinished()
@@ -613,11 +731,36 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		return status == .complete
 	}
 
-	private func clampCaptureDimension(_ value: Int, fallback: Int) -> Int {
-		let requested = max(2, fallback)
-		let candidate = value > 0 ? value : requested
-		let clamped = min(candidate, requested)
-		return max(2, clamped - (clamped % 2))
+	/// Output-buffer size for a filter, capped by the resolution the app asked for.
+	///
+	/// The filter is asked first, because `contentRect × pointPixelScale` is by definition the
+	/// pixel size ScreenCaptureKit is about to rasterise — see `captureOutputSize`, which also
+	/// explains what a buffer sized any other way does to the frame (issue #418).
+	///
+	/// Those two properties are macOS 14. On 13 the fallback is the region's own point size
+	/// times the display's scale factor, which is the same product one step further from the
+	/// source. It is NOT `CGDisplayPixelsWide`/`High`: those follow the display *mode* rather
+	/// than the filter, and the mismatch between them is the bug.
+	private func captureSize(
+		for filter: SCContentFilter,
+		fallbackPointSize: CGSize,
+		fallbackDisplayId: CGDirectDisplayID
+	) -> (width: Int, height: Int) {
+		let contentSize: CGSize
+		let pointPixelScale: CGFloat
+		if #available(macOS 14.0, *) {
+			contentSize = filter.contentRect.size
+			pointPixelScale = CGFloat(filter.pointPixelScale)
+		} else {
+			contentSize = fallbackPointSize
+			pointPixelScale = CGFloat(Self.scaleFactor(for: fallbackDisplayId))
+		}
+		return captureOutputSize(
+			contentSize: contentSize,
+			pointPixelScale: pointPixelScale,
+			maxWidth: request.video.width,
+			maxHeight: request.video.height
+		)
 	}
 
 	private static func scaleFactor(for displayId: CGDirectDisplayID) -> Int {

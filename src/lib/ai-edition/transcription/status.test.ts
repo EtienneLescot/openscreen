@@ -4,8 +4,10 @@ import {
 	type AssetTranscriptionView,
 	classifyTranscriptionError,
 	deriveAssetStatus,
+	isCpuBackend,
 	isPermanentFailure,
 	progressFraction,
+	realtimeSpeed,
 	resolveTranscriptGate,
 	transcriptHasSpeech,
 	transcriptRelevantAssetIds,
@@ -289,5 +291,62 @@ describe("transcriptRelevantAssetIds", () => {
 
 	it("has nothing to say about a missing document", () => {
 		expect(transcriptRelevantAssetIds(null)).toEqual([]);
+	});
+});
+
+describe("realtimeSpeed", () => {
+	// The engine reports RTF (wall-clock / audio, lower is faster); the UI shows
+	// its reciprocal, which is the figure the POC report headlines.
+	it("inverts the engine's RTF into x-real-time", () => {
+		expect(realtimeSpeed(0.5)).toBe(2);
+		expect(realtimeSpeed(0.19)).toBeCloseTo(5.26, 2);
+	});
+
+	// Null rather than 0: a helper binary older than the `timing` field reports
+	// nothing at all, and "0.0x" would read as a measurement rather than a gap.
+	it.each([
+		["undefined", undefined],
+		["zero", 0],
+		["negative", -1],
+		["NaN", Number.NaN],
+		["Infinity", Number.POSITIVE_INFINITY],
+	])("has no answer for %s", (_label, rtf) => {
+		expect(realtimeSpeed(rtf)).toBeNull();
+	});
+});
+
+describe("isCpuBackend", () => {
+	it("singles out the CPU path and nothing else", () => {
+		expect(isCpuBackend("whispercpp-cpu")).toBe(true);
+		expect(isCpuBackend("whispercpp-vulkan")).toBe(false);
+		expect(isCpuBackend("whispercpp-metal")).toBe(false);
+		expect(isCpuBackend("whispercpp-cuda")).toBe(false);
+		expect(isCpuBackend(undefined)).toBe(false);
+	});
+});
+
+describe("deriveAssetStatus carries the engine's own report", () => {
+	// Both facts come from the main process on the chunk status events, and the
+	// view is the only thing the three status surfaces read.
+	it("passes the running job's backend and rtf onto the view", () => {
+		const derived = deriveAssetStatus({
+			assetId: "a",
+			job: { status: "running", backend: "whispercpp-cpu", rtf: 1.1 },
+		});
+		expect(derived.backend).toBe("whispercpp-cpu");
+		expect(derived.rtf).toBe(1.1);
+	});
+
+	// A finished run's transcript says nothing about the device that produced it,
+	// so the view must not carry a stale badge over a "ready" asset.
+	it("drops them once a transcript exists", () => {
+		const derived = deriveAssetStatus({
+			assetId: "a",
+			job: { status: "failed", backend: "whispercpp-cpu", rtf: 1.1 },
+			transcript: transcript("a", ["hello"]),
+		});
+		expect(derived.status).toBe("ready");
+		expect(derived.backend).toBeUndefined();
+		expect(derived.rtf).toBeUndefined();
 	});
 });
