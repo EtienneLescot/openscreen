@@ -20,6 +20,7 @@ import {
 	setClipSourceRange,
 } from "../document/timeline";
 import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
+import { hasAnyClipWithCamera } from "../timeline/camera";
 import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
 	anchorRegionsWithDerivedMs,
@@ -394,9 +395,20 @@ export function useTimeline() {
 
 	// Full Camera: a plain time span (no value) during which the preview/export
 	// grows the webcam overlay to (almost) fill the canvas and eases it back.
+	//
+	// With no webcam anywhere on the timeline there is nothing to grow, so the region
+	// renders nothing in the preview (`PreviewCanvas.effectiveLayout` short-circuits on
+	// a missing `webcamRect`) and nothing in the export — it just sits in
+	// `legacyEditor.cameraFullscreenRegions` forever. The agent's `addCameraFullscreen`
+	// tool already refuses this and says why (electron/ai-edition/agent-tools.ts,
+	// `noCameraUnderSpan`); the gate lives HERE rather than at each button so both UI
+	// entry points — the toolbar and the `C` shortcut — and any future one are covered
+	// by construction. `hasAnyClipWithCamera` is the consolidated answer to "does this
+	// project have a camera at all", used the same way by the Layout pane.
 	const addCameraFullscreen = useCallback(
 		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
 			if (!document) return;
+			if (!hasAnyClipWithCamera(document.assets, document.timeline.clips)) return;
 			const timeMs = Math.round(playheadSec() * 1000);
 			const endMs = timeMs + Math.round(durationSec * 1000);
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
