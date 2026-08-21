@@ -304,7 +304,19 @@ export class WhisperServerManager {
 				}
 			});
 			child.once("error", (err) => {
-				this.recordError(`spawn error: ${err.message}`);
+				// ponytail: the same shape as the `exit` listener above, and for the same
+				// reason. A spawn error reaches the startup catch by the same route — the
+				// `exitedBeforeReady` race rejects on `error` too — so without clearing
+				// the startup state here, that catch cannot tell this failure has already
+				// been reported and logs it a second time in different words. Clearing is
+				// also just true: a child that never spawned is not a helper that is up,
+				// and `status` said it was.
+				if (this.process === child) {
+					this.recordError(`spawn error: ${err.message}`);
+					this.process = null;
+					this.port = null;
+					this.startedAtMs = null;
+				}
 			});
 
 			const exitedBeforeReady = new Promise<never>((_, reject) => {
