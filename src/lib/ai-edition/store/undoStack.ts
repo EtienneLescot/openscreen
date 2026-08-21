@@ -31,4 +31,34 @@ export function pushHistory(snapshot: Snapshot) {
 export function clearHistory() {
 	past.length = 0;
 	future.length = 0;
+	supersedeInFlightWrites();
+}
+
+// The write epoch. `saveDocument` reads it before its `await` and again after,
+// and throws its result away if it moved.
+//
+// Without it, a save that was ALREADY IN FLIGHT when the user pressed Ctrl+Z
+// landed on top of the undo: `saveDocument` records below the await, so it put
+// the pre-save document on `past` (which is FORWARD of where the user asked to
+// go) and cleared `future` on the way past, then installed its own document in
+// the store. The undo was visually reverted and redo was gone -- for a write the
+// user had superseded a moment earlier.
+//
+// Everything that replaces the document out from under an in-flight write bumps
+// it: `undo`, `redo` (both via `restore`), and `clearHistory`, which is a project
+// switch -- a save of the OLD project resolving after `loadProject` would
+// otherwise overwrite the new one.
+let writeEpoch = 0;
+
+/** The epoch a write should still belong to when it lands. */
+export function currentWriteEpoch(): number {
+	return writeEpoch;
+}
+
+/**
+ * Declare that the document on screen is no longer the one any in-flight write
+ * was building on, so those writes must not install their result.
+ */
+export function supersedeInFlightWrites() {
+	writeEpoch += 1;
 }

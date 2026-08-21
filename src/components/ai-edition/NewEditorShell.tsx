@@ -575,25 +575,31 @@ export function NewEditorShell() {
 		(target: TrimTarget, startSec: number, endSec: number, reason: string) => {
 			// `clipId` is what keeps the cut on the block the user typed in: with two clips
 			// over the same media, an asset-only trim showed up on both (see `trimAppliesToClip`).
-			void applyTimelineOp({
-				type: "add_trim_range",
-				assetId: target.assetId,
-				clipId: target.clipId,
-				startSec,
-				endSec,
-				reason,
-			});
+			void applyTimelineOp(
+				{
+					type: "add_trim_range",
+					assetId: target.assetId,
+					clipId: target.clipId,
+					startSec,
+					endSec,
+					reason,
+				},
+				{ history: true },
+			);
 		},
 		[applyTimelineOp],
 	);
 
 	const handleRemoveTrimRange = useCallback(
 		(trimId: string) => {
-			void applyTimelineOp({
-				type: "remove_trim_range",
-				trimId,
-				reason: "Restored from transcript pane.",
-			});
+			void applyTimelineOp(
+				{
+					type: "remove_trim_range",
+					trimId,
+					reason: "Restored from transcript pane.",
+				},
+				{ history: true },
+			);
 		},
 		[applyTimelineOp],
 	);

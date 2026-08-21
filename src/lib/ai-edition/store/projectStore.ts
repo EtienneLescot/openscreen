@@ -3,14 +3,10 @@ import { create } from "zustand";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { toastText } from "@/i18n/toastText";
 import { nativeBridgeClient } from "@/native/client";
-import {
-	type Interval,
-	replaceTimeline as replaceTimelineOp,
-	restoreFullTimeline as restoreFullTimelineOp,
-} from "../document/timeline";
+import { type Interval, replaceTimeline as replaceTimelineOp } from "../document/timeline";
 import { type AxcutAsset, type AxcutDocument, documentSchema } from "../schema";
 import { probeVideoDimensions } from "../timeline/duration";
-import { clearHistory, pushHistory } from "./undoStack";
+import { clearHistory, currentWriteEpoch, pushHistory } from "./undoStack";
 
 // ponytail: thin Zustand wrapper over the native-bridge client. Keeps the
 // current project + revision counter in renderer memory; mutations round-trip
@@ -78,9 +74,15 @@ export interface ProjectState {
 	addAsset: (path: string, label?: string) => Promise<AxcutAsset | null>;
 	removeAsset: (assetId: string) => Promise<void>;
 	/**
-	 * Write the document to disk. Resolves `true` when it landed, `false` when it did
-	 * not -- and a `false` has ALREADY been reported to the user and logged, so a
-	 * caller that ignores it is choosing not to react, not choosing to stay silent.
+	 * Write the document to disk. Resolves `true` when it took effect, `false` when it
+	 * did not.
+	 *
+	 * `false` means one of two things, and neither needs the caller to say anything:
+	 * the write FAILED, which has already been reported to the user and logged; or an
+	 * undo / redo / project switch happened while it was in flight, which the user did
+	 * on purpose and can see on screen. Either way the store does not hold what was
+	 * asked for, so a caller that reacts to `false` by undoing its own optimistic write
+	 * must check the store still holds that write first -- see `agentDocumentApply`.
 	 *
 	 * It never rejects, by design. Every save in the app funnels through here and
 	 * almost all of them are `void`-ed from a click handler, so a rejection here was
@@ -89,8 +91,22 @@ export interface ProjectState {
 	 */
 	saveDocument: (document: AxcutDocument, opts: DocumentWriteOptions) => Promise<boolean>;
 	setDocument: (document: AxcutDocument, opts: DocumentWriteOptions) => void;
-	replaceTimeline: (intervals: Interval[], reason: string) => Promise<void>;
-	restoreFullTimeline: () => Promise<void>;
+	/**
+	 * Rebuild the timeline from `intervals` and save it.
+	 *
+	 * `opts` is NOT optional and NOT defaulted, for the same reason `history` itself is
+	 * not: this used to hardcode `{ history: true }`, and because the option was invisible
+	 * in this signature, no compile error could reach the one caller. That caller is the
+	 * unattended recording import, which runs on editor mount -- so the user arrived in a
+	 * brand-new project with `past.length === 1`, and their first Ctrl+Z emptied the
+	 * timeline. A wrapper that writes has to let its caller decide, or it decides wrong on
+	 * that caller's behalf.
+	 */
+	replaceTimeline: (
+		intervals: Interval[],
+		reason: string,
+		opts: DocumentWriteOptions,
+	) => Promise<void>;
 	setSourceDuration: (sec: number) => void;
 	setCurrentTime: (sec: number) => void;
 	setPlaying: (playing: boolean) => void;
@@ -315,11 +331,26 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		// of live/optimistic paths. Recording only in `setDocument` left `past` empty
 		// for everything the user does, so Ctrl+Z was a no-op (#433).
 		const base = historyBaseFor(opts, get().document);
+		// Read alongside it, and for the same reason: both describe the world this write
+		// is building on, and the await is where that world can change underneath it.
+		const epoch = currentWriteEpoch();
 		try {
 			const result = await nativeBridgeClient.aiEdition.save(document);
 			if (!result.success || !result.document) {
 				throw new Error(result.error ?? "Failed to save project");
 			}
+			// The undo wins, and this write is dropped -- store and history both. It was
+			// in flight when the user pressed Ctrl+Z (or switched projects), so its document
+			// is the one they just asked to leave: installing it reverted the undo on screen,
+			// and recording it put a FORWARD state on `past` and cleared `future`, so the
+			// redo they had just earned was gone.
+			//
+			// Dropped rather than reverted, because reverting is not this write's to do: the
+			// bytes are already on disk, and it is the undo's own persist -- issued from
+			// `useUndoRedoShortcuts`'s `onAfter` the moment it ran, so ordered after this one
+			// on the same IPC channel -- that puts the restored document back over them.
+			// `dirty` is deliberately left set for exactly that reason.
+			if (currentWriteEpoch() !== epoch) return false;
 			const parsed = parseDocument(result.document);
 			set({
 				document: parsed,
@@ -362,18 +393,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		});
 	},
 
-	async replaceTimeline(intervals, reason) {
+	async replaceTimeline(intervals, reason, opts) {
 		const doc = get().document;
 		if (!doc) throw new Error("No project loaded");
 		const next = replaceTimelineOp(doc, intervals, reason);
-		await get().saveDocument(next, { history: true });
-	},
-
-	async restoreFullTimeline() {
-		const doc = get().document;
-		if (!doc) throw new Error("No project loaded");
-		const next = restoreFullTimelineOp(doc);
-		await get().saveDocument(next, { history: true });
+		await get().saveDocument(next, opts);
 	},
 
 	setSourceDuration(sec) {

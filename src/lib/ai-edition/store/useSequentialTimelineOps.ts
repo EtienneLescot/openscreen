@@ -41,11 +41,17 @@ export interface SequentialTimelineOps {
 	 *
 	 * Returns the saved document, or `null` for either of two different things:
 	 * no project document is loaded (store empty AND no fallback supplied), which
-	 * is a silent no-op, or the save failed, which the user has already been told
-	 * about. Both call sites `void` the result, so they are not distinguished; a
-	 * caller that needs to tell them apart has to widen this return type first.
+	 * is a silent no-op, or the write did not take effect -- see `saveDocument` for
+	 * the two ways that happens, neither of which needs anything said here. Both call
+	 * sites `void` the result, so they are not distinguished; a caller that needs to
+	 * tell them apart has to widen this return type first.
+	 *
+	 * `opts` is forwarded verbatim to `saveDocument`, and is required for the same
+	 * reason `history` itself is: a wrapper that picks the value on its caller's
+	 * behalf hides the decision from the compiler. Both of today's callers are user
+	 * gestures and pass `{ history: true }`; the next one might not be.
 	 */
-	apply: (op: AxcutTimelineOperation) => Promise<AxcutDocument | null>;
+	apply: (op: AxcutTimelineOperation, opts: DocumentWriteOptions) => Promise<AxcutDocument | null>;
 
 	/**
 	 * Queue a document mutation that isn't an `AxcutTimelineOperation` on
@@ -88,7 +94,7 @@ export function useSequentialTimelineOps(options: {
 	}, []);
 
 	const apply = useCallback(
-		(op: AxcutTimelineOperation): Promise<AxcutDocument | null> =>
+		(op: AxcutTimelineOperation, opts: DocumentWriteOptions): Promise<AxcutDocument | null> =>
 			enqueue(async () => {
 				const { applyTimelineOperation } = await import("@/lib/ai-edition/document/operations");
 				// Read the doc inside the chain. The store holds the
@@ -98,7 +104,7 @@ export function useSequentialTimelineOps(options: {
 				const doc = useProjectStore.getState().document ?? fallbackDocument;
 				if (!doc) return null;
 				const applied = applyTimelineOperation(doc, op);
-				return (await saveDocument(applied.document, { history: true })) ? applied.document : null;
+				return (await saveDocument(applied.document, opts)) ? applied.document : null;
 			}),
 		[enqueue, fallbackDocument, saveDocument],
 	);

@@ -15,14 +15,19 @@ import { useCallback, useEffect, useRef } from "react";
 import { isModalOpen } from "../modalGuard";
 import type { AxcutDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
-import { clearHistory, future, past } from "./undoStack";
+import { clearHistory, future, past, supersedeInFlightWrites } from "./undoStack";
 
-export { clearHistory, pushHistory } from "./undoStack";
+export { clearHistory } from "./undoStack";
 
 /** Put a snapshot back on screen without recording it as a new edit. `dirty` is
  *  set because the document on disk is no longer the one in memory — the caller
  *  of `useUndoRedoShortcuts` persists it. */
 function restore(doc: unknown) {
+	// Before the state write, so a save that resolves between here and the caller's
+	// persist cannot slip its result in. See `undoStack.ts`: a save already in flight
+	// when Ctrl+Z was pressed used to install its document over the restored one and
+	// push a FORWARD state onto `past`, wiping the redo the undo had just created.
+	supersedeInFlightWrites();
 	useProjectStore.setState((state) => ({
 		document: doc as AxcutDocument,
 		revision: state.revision + 1,
@@ -124,6 +129,13 @@ export function useUndoRedoShortcuts(onAfter: () => void): UndoRedoHandlers {
 			window.document.execCommand?.("undo");
 			return;
 		}
+		// AFTER the text-field check, so a rename dialog's input still gets the browser's
+		// own text undo. Before it, this route rewrote the DOCUMENT under an open modal:
+		// a modal's controls are buttons, so `isTextEditingTarget` waves them through, and
+		// on macOS the menu is the only path Cmd+Z has -- there is no keydown handler
+		// upstream of this one to stop it. See `../modalGuard`, and #434, which fixes the
+		// same hole on the keydown path.
+		if (isModalOpen()) return;
 		if (undo()) onAfterRef.current();
 	}, []);
 
@@ -132,6 +144,7 @@ export function useUndoRedoShortcuts(onAfter: () => void): UndoRedoHandlers {
 			window.document.execCommand?.("redo");
 			return;
 		}
+		if (isModalOpen()) return;
 		if (redo()) onAfterRef.current();
 	}, []);
 
