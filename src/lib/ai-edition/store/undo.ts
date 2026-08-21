@@ -1,31 +1,33 @@
-// Lightweight undo/redo for the project document. The store fires
-// `documentChanged` whenever `setDocument` is called; subscribers record
-// snapshots up to a bounded history. Cmd+Z / Cmd+Shift+Z use the snapshot
-// stack to roll back / roll forward. Designed to be small and side-effect
-// free so it works in any renderer.
+// Lightweight undo/redo for the project document. Every write that goes through
+// `projectStore`'s `saveDocument` / `setDocument` records the outgoing document
+// on the stack in `undoStack.ts` (callers opt out with `{ history: false }` for
+// background writes). Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y walk that stack.
+//
+// The restore writes `useProjectStore.setState` DIRECTLY rather than calling
+// back into `setDocument`, which is what makes redo work: routing it through a
+// recording write meant an undo re-recorded the document it had just replaced
+// and cleared `future` on the way past, so redo was gone before the user could
+// reach for it and Ctrl+Z degraded into an A/B toggle. Writing the state is also
+// all a repaint needs — the timeline, preview and shell all subscribe to
+// `s.document`.
 
 import { useEffect, useRef } from "react";
 import { isModalOpen } from "../modalGuard";
+import type { AxcutDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
+import { clearHistory, future, past } from "./undoStack";
 
-type Snapshot = { projectId: string; doc: unknown };
+export { clearHistory, pushHistory } from "./undoStack";
 
-const MAX_HISTORY = 50;
-const past: Snapshot[] = [];
-const future: Snapshot[] = [];
-
-let enabled = true;
-
-export function pushHistory(snapshot: Snapshot) {
-	if (!enabled) return;
-	past.push(snapshot);
-	if (past.length > MAX_HISTORY) past.shift();
-	future.length = 0;
-}
-
-export function clearHistory() {
-	past.length = 0;
-	future.length = 0;
+/** Put a snapshot back on screen without recording it as a new edit. `dirty` is
+ *  set because the document on disk is no longer the one in memory — the caller
+ *  of `useUndoRedoShortcuts` persists it. */
+function restore(doc: unknown) {
+	useProjectStore.setState((state) => ({
+		document: doc as AxcutDocument,
+		revision: state.revision + 1,
+		dirty: true,
+	}));
 }
 
 export function undo(): boolean {
@@ -38,9 +40,7 @@ export function undo(): boolean {
 	}
 	const doc = state.document;
 	if (doc) future.push({ projectId: prev.projectId, doc: structuredClone(doc) });
-	enabled = false;
-	state.setDocument(prev.doc as never);
-	enabled = true;
+	restore(prev.doc);
 	return true;
 }
 
@@ -54,9 +54,7 @@ export function redo(): boolean {
 	}
 	const doc = state.document;
 	if (doc) past.push({ projectId: doc.project.id, doc: structuredClone(doc) });
-	enabled = false;
-	state.setDocument(next.doc as never);
-	enabled = true;
+	restore(next.doc);
 	return true;
 }
 
@@ -82,7 +80,9 @@ export function useUndoRedoShortcuts(onAfter: () => void) {
 				if (redo()) onAfterRef.current();
 				return;
 			}
-			if (ctrl && e.key === "z") {
+			// `toLowerCase()`, like the two branches above: with Caps Lock on the browser
+			// reports "Z", and the bare `=== "z"` here fell through to nothing at all.
+			if (ctrl && e.key.toLowerCase() === "z") {
 				e.preventDefault();
 				if (undo()) onAfterRef.current();
 				return;

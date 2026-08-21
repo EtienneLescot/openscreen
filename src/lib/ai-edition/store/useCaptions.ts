@@ -4,7 +4,7 @@
 // writes only (for sliders), `commit` flushes. The document stays the single
 // source of truth — nothing is cached here.
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import {
 	type CaptionCue,
 	type CaptionSettings,
@@ -17,6 +17,7 @@ import {
 	putCaptionTranslation,
 	removeCaptionTranslation,
 } from "../captions";
+import type { AxcutDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
 
 export interface UseCaptionsResult {
@@ -70,11 +71,18 @@ export function useCaptions(): UseCaptionsResult {
 		[setDocument, saveDocument],
 	);
 
+	// See `useEditorSettings.setLive`: one undo step per slider drag, not one per
+	// pointer move. `liveDocRef` holds what this hook last wrote, so only a write
+	// landing on someone else's document opens a new history entry.
+	const liveDocRef = useRef<AxcutDocument | null>(null);
+
 	const setLive = useCallback(
 		(patch: CaptionSettingsPatch) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
-			setDocument(patchCaptionSettings(doc, patch));
+			const next = patchCaptionSettings(doc, patch);
+			setDocument(next, { history: liveDocRef.current !== doc });
+			liveDocRef.current = next;
 		},
 		[setDocument],
 	);

@@ -10,12 +10,26 @@ import {
 } from "../document/timeline";
 import { type AxcutAsset, type AxcutDocument, documentSchema } from "../schema";
 import { probeVideoDimensions } from "../timeline/duration";
+import { clearHistory, pushHistory } from "./undoStack";
 
 // ponytail: thin Zustand wrapper over the native-bridge client. Keeps the
 // current project + revision counter in renderer memory; mutations round-trip
 // through the main process via the bridge so disk state stays authoritative.
 
 export type ProjectStatus = "idle" | "loading" | "ready" | "error";
+
+export interface DocumentWriteOptions {
+	/**
+	 * Record the outgoing document on the undo stack. Defaults to `true`: a write
+	 * is a user edit unless the caller says otherwise.
+	 *
+	 * Pass `false` for writes the user never asked for -- probe backfills,
+	 * transcripts arriving from a background job, the restore an undo itself
+	 * persists. Those must not become Ctrl+Z steps, and a persist that re-recorded
+	 * the document it just restored would undo the undo.
+	 */
+	history?: boolean;
+}
 
 export interface ProjectState {
 	projectId: string | null;
@@ -50,8 +64,8 @@ export interface ProjectState {
 	 * an unhandled rejection in the renderer with no toast, no log and no clue --
 	 * change a caption font on a read-only project and the edit was simply gone.
 	 */
-	saveDocument: (document: AxcutDocument) => Promise<boolean>;
-	setDocument: (document: AxcutDocument) => void;
+	saveDocument: (document: AxcutDocument, opts?: DocumentWriteOptions) => Promise<boolean>;
+	setDocument: (document: AxcutDocument, opts?: DocumentWriteOptions) => void;
 	replaceTimeline: (intervals: Interval[], reason: string) => Promise<void>;
 	restoreFullTimeline: () => Promise<void>;
 	setSourceDuration: (sec: number) => void;
@@ -63,6 +77,25 @@ export interface ProjectState {
 
 function parseDocument(value: unknown): AxcutDocument {
 	return documentSchema.parse(value);
+}
+
+/**
+ * Record `prev` as the state Ctrl+Z returns to, unless the caller opted out or
+ * this write is not a change (`commit`-style re-saves hand back the very object
+ * the store already holds, and a live drag's `setLive` then `commit` pair would
+ * otherwise take two undos to reverse one gesture).
+ *
+ * Synchronous on purpose -- see the header of `undoStack.ts` for what the
+ * deferred `import("./undo")` this replaced did to redo.
+ */
+function recordHistory(
+	prev: AxcutDocument | null,
+	next: AxcutDocument,
+	opts?: DocumentWriteOptions,
+) {
+	if (opts?.history === false) return;
+	if (!prev || prev === next) return;
+	pushHistory({ projectId: prev.project.id, doc: structuredClone(prev) });
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -94,7 +127,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 				dirty: false,
 				lastSavedAt: new Date(),
 			});
-			void import("./undo").then(({ clearHistory }) => clearHistory());
+			clearHistory();
 		} catch (error) {
 			set({
 				status: "error",
@@ -120,7 +153,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 				dirty: false,
 				lastSavedAt: new Date(),
 			});
-			void import("./undo").then(({ clearHistory }) => clearHistory());
+			clearHistory();
 			return document;
 		} catch (error) {
 			set({
@@ -198,7 +231,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 					// Only adopt the linked document if it actually reached disk -- otherwise
 					// the caller is handed a document claiming a camera link the file does not
 					// have. The store has already told the user the write failed.
-					if (await get().saveDocument(next)) document = parseDocument(next);
+					// `history: false`: linking a camera is part of adding the asset, not an
+					// edit of its own -- and `get().document` here is still the pre-add document,
+					// so recording it would make Ctrl+Z jump back past the import.
+					if (await get().saveDocument(next, { history: false })) document = parseDocument(next);
 				}
 				// success:false just means no camera was found for this asset —
 				// the normal case for a plain imported video. Nothing to surface.
@@ -239,7 +275,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		});
 	},
 
-	async saveDocument(document) {
+	async saveDocument(document, opts) {
+		// Snapshot BEFORE the await, while `get().document` is still the pre-edit one.
+		// This is where undo history actually comes from: the editor writes through
+		// `saveDocument` for every user edit -- add a region, delete one, rename the
+		// project, every timeline op -- and `setDocument` is reserved for the handful
+		// of live/optimistic paths. Recording only in `setDocument` left `past` empty
+		// for everything the user does, so Ctrl+Z was a no-op (#433).
+		recordHistory(get().document, document, opts);
 		try {
 			const result = await nativeBridgeClient.aiEdition.save(document);
 			if (!result.success || !result.document) {
@@ -268,15 +311,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		}
 	},
 
-	setDocument(document) {
-		const prev = get().document;
-		if (prev && prev !== document) {
-			// ponytail: push snapshot to undo history. Defer import to avoid
-			// pulling the undo module into the store at module-load time.
-			void import("./undo").then(({ pushHistory }) => {
-				pushHistory({ projectId: prev.project.id, doc: structuredClone(prev) });
-			});
-		}
+	setDocument(document, opts) {
+		recordHistory(get().document, document, opts);
 		set({
 			document,
 			revision: get().revision + 1,

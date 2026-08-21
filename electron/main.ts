@@ -275,8 +275,22 @@ function setupApplicationMenu() {
 		{
 			label: mainT("common", "actions.edit") || "Edit",
 			submenu: [
-				{ role: "undo", label: mainT("common", "actions.undo") || "Undo" },
-				{ role: "redo", label: mainT("common", "actions.redo") || "Redo" },
+				// `registerAccelerator: false` on both: the roles run `webContents.undo()`,
+				// the WEB EDITING undo, which does nothing outside a focused text field —
+				// and registering their accelerators lets the native menu eat Ctrl+Z /
+				// Ctrl+Shift+Z before the renderer's document-level handler
+				// (`useUndoRedoShortcuts`) ever sees the keydown. The items stay, greyed
+				// shortcut text and all, so text fields keep their menu entries.
+				{
+					role: "undo",
+					label: mainT("common", "actions.undo") || "Undo",
+					registerAccelerator: false,
+				},
+				{
+					role: "redo",
+					label: mainT("common", "actions.redo") || "Redo",
+					registerAccelerator: false,
+				},
 				{ type: "separator" },
 				{ role: "cut", label: mainT("common", "actions.cut") || "Cut" },
 				{ role: "copy", label: mainT("common", "actions.copy") || "Copy" },

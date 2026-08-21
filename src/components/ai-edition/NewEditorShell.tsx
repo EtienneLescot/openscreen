@@ -160,8 +160,14 @@ export function NewEditorShell() {
 		[transcriptions],
 	);
 	const tl = useTimeline();
+	// An undo only puts the restored document back in the store and marks it dirty,
+	// so without this the reverted state never reached disk: close the window and the
+	// edit the user just undid came back. `history: false` is load-bearing — a
+	// recording save here would push the restored document straight back onto the
+	// stack and clear the redo the undo had just created.
 	useUndoRedoShortcuts(() => {
-		// ponytail: placeholder, wire when undo stack merges with history
+		const doc = useProjectStore.getState().document;
+		if (doc) void useProjectStore.getState().saveDocument(doc, { history: false });
 	});
 	const [copiedClipId, setCopiedClipId] = useState<string | null>(null);
 	const [projectSummaries, setProjectSummaries] = useState<AiEditionProjectSummary[]>([]);
@@ -368,7 +374,10 @@ export function NewEditorShell() {
 					[{ startSec: 0, endSec: known }],
 					"Auto-created full-duration clip",
 				);
-				void state.saveDocument(next);
+				// `history: false` for both writes in this callback: they are the probed
+				// duration being folded into the document on load, not something the user
+				// did — an undo landing on one of them would empty their timeline.
+				void state.saveDocument(next, { history: false });
 				return;
 			}
 			// Hand the probed duration to the pure document layer: it patches only the
@@ -379,7 +388,7 @@ export function NewEditorShell() {
 			// nothing is waiting, so there is nothing to guard here.
 			const next = applyProbedDuration(doc, assetId, known);
 			if (next !== doc) {
-				void state.saveDocument(next);
+				void state.saveDocument(next, { history: false });
 			}
 		},
 		[setSourceDuration],

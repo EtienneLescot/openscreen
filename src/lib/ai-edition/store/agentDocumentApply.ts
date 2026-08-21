@@ -24,10 +24,10 @@ export async function applyAgentDocumentIfCurrent(
 	const parsed = ensureDocument(document);
 	const previous = store.document;
 	const previousDirty = store.dirty;
-	// Both calls, not just the save. `setDocument` is the only thing that pushes the
-	// outgoing document onto the undo stack, so deleting it as "redundant next to
-	// saveDocument, which sets `document` too" silently breaks Ctrl+Z after an agent edit.
-	// `saveDocument` is what reaches the disk.
+	// Both calls, not just the save. `setDocument` puts the agent's document on screen
+	// NOW, without waiting on the disk round-trip `saveDocument` awaits. Both record the
+	// outgoing document on the undo stack, and recording it twice is not a risk: the
+	// second sees the document the first already installed and skips.
 	store.setDocument(parsed);
 	if (await store.saveDocument(parsed)) return "applied";
 
