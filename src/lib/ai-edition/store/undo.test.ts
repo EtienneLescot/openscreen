@@ -211,6 +211,84 @@ describe("undo/redo", () => {
 		});
 	});
 
+	describe("a save that was already in flight when Ctrl+Z was pressed", () => {
+		// `saveDocument` records BELOW its await, which is what makes a failed write
+		// record nothing -- and what let a save that started before the undo land on top
+		// of it. Its result installed the document the user had just asked to leave, and
+		// its record pushed a state FORWARD of the one they returned to while clearing
+		// `future`: the undo was visually reverted and the redo was gone.
+		//
+		// The undo wins. The write is dropped -- store and history both -- and the undo's
+		// own persist, issued right behind it, is what puts the restored document back
+		// over the bytes already on disk.
+
+		/** A save the test holds open, so an undo can happen underneath it. */
+		function heldSave() {
+			let release: (() => void) | undefined;
+			saveMock.mockImplementationOnce(async (document: unknown) => {
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				return { success: true, document };
+			});
+			return () => release?.();
+		}
+
+		it("does not put its document back on screen", async () => {
+			const release = heldSave();
+			const inFlight = useProjectStore.getState().saveDocument(titled("In flight"), {
+				history: true,
+			});
+
+			expect(undo()).toBe(false); // nothing recorded yet -- the save has not landed
+			await useProjectStore.getState().saveDocument(titled("Landed"), { history: true });
+			expect(undo()).toBe(true);
+			expect(currentTitle()).toBe("Original");
+
+			release();
+			expect(await inFlight).toBe(false);
+
+			expect(currentTitle()).toBe("Original");
+		});
+
+		it("does not record a step forward of the one the user returned to", async () => {
+			await useProjectStore.getState().saveDocument(titled("Second"), { history: true });
+
+			const release = heldSave();
+			const inFlight = useProjectStore.getState().saveDocument(titled("Third"), { history: true });
+			expect(undo()).toBe(true);
+			expect(currentTitle()).toBe("Original");
+			expect(past).toHaveLength(0);
+			expect(future).toHaveLength(1);
+
+			release();
+			await inFlight;
+
+			// `past` held "Second" here, which is FORWARD of "Original" -- Ctrl+Z would have
+			// walked the user the wrong way -- and `pushHistory` had wiped the redo.
+			expect(past).toHaveLength(0);
+			expect(future).toHaveLength(1);
+			expect(redo()).toBe(true);
+			expect(currentTitle()).toBe("Second");
+		});
+
+		it("leaves the document dirty, so the restore still reaches disk", async () => {
+			const release = heldSave();
+			const inFlight = useProjectStore.getState().saveDocument(titled("In flight"), {
+				history: true,
+			});
+			await useProjectStore.getState().saveDocument(titled("Landed"), { history: true });
+			expect(undo()).toBe(true);
+
+			release();
+			await inFlight;
+
+			// A dropped write must not claim the document is on disk: it is the undo's
+			// document that is in memory, and only `onAfter` puts that one on disk.
+			expect(useProjectStore.getState().dirty).toBe(true);
+		});
+	});
+
 	it("records the pre-drag document a commit names, not the one on screen", async () => {
 		// `historyBase`. A live drag writes every pointermove into the store with
 		// `history: false`, so by commit time the store's own "previous" document is the
@@ -259,6 +337,42 @@ describe("the Edit menu's undo/redo route", () => {
 			result.current.runRedo();
 		});
 		expect(currentTitle()).toBe("Renamed");
+	});
+
+	it("keeps its hands off the document while a modal is open", () => {
+		// #434's bug, on the route this branch added. A modal's controls are buttons, so
+		// the text-field check waves them straight through -- and on macOS this menu route
+		// is the ONLY path Cmd+Z has, with no keydown handler upstream to stop it, so
+		// undo rewrote the document under an open Export / Edit clip / unsaved-changes
+		// dialog. The `beforeEach` above empties `document.body`, which is exactly why the
+		// two tests either side of this one passed without a guard.
+		const persist = vi.fn();
+		const { result } = renderHook(() => useUndoRedoShortcuts(persist));
+		past.push({ projectId: PROJECT_ID, doc: titled("Older") });
+
+		const modal = window.document.createElement("div");
+		modal.setAttribute("aria-modal", "true");
+		window.document.body.appendChild(modal);
+
+		act(() => {
+			result.current.runUndo();
+		});
+		expect(currentTitle()).toBe("Original");
+		expect(past).toHaveLength(1);
+
+		act(() => {
+			result.current.runRedo();
+		});
+		expect(currentTitle()).toBe("Original");
+		expect(future).toHaveLength(0);
+		expect(persist).not.toHaveBeenCalled();
+
+		// And it comes back the moment the modal closes.
+		modal.remove();
+		act(() => {
+			result.current.runUndo();
+		});
+		expect(currentTitle()).toBe("Older");
 	});
 
 	it("leaves a focused text field to the browser's own text undo", () => {

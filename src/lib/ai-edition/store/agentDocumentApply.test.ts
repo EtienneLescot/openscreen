@@ -109,6 +109,43 @@ describe("applyAgentDocumentIfCurrent", () => {
 		expect(useProjectStore.getState().document?.project.title).toBe("User edit");
 	});
 
+	it("does not roll back over an undo that overtook its save", async () => {
+		// `saveDocument` resolves false for two different things now: the write failed,
+		// and the write was superseded by an undo while it was in flight. The rollback
+		// above is right for the first and catastrophic for the second -- it would put
+		// the agent's pre-edit document over the one the user just asked to return to,
+		// on the agent's behalf, seconds after they pressed Ctrl+Z.
+		const before = createEmptyDocument({ projectId: "project_1", title: "Before" });
+		useProjectStore.setState({ projectId: "project_1", document: before, revision: 4 });
+
+		// A user edit to have something to undo TO, then hold the agent's save open.
+		saveMock.mockImplementation(async (document: unknown) => ({ success: true, document }));
+		await useProjectStore
+			.getState()
+			.saveDocument(
+				{ ...before, project: { ...before.project, title: "User edit" } },
+				{ history: true },
+			);
+
+		let release: (() => void) | undefined;
+		saveMock.mockImplementationOnce(async (document: unknown) => {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			return { success: true, document };
+		});
+		const agentResult = { ...before, project: { ...before.project, title: "Agent edit" } };
+		const applying = applyAgentDocumentIfCurrent(agentResult);
+
+		expect(undo()).toBe(true);
+		expect(useProjectStore.getState().document?.project.title).toBe("Before");
+
+		release?.();
+		await expect(applying).resolves.toBe("save-failed");
+
+		expect(useProjectStore.getState().document?.project.title).toBe("Before");
+	});
+
 	it("records exactly one undo step for an agent edit that lands", async () => {
 		// Two writes, one step: the optimistic `setDocument` opts out and the save
 		// names the pre-agent document as its base. Losing the step altogether would

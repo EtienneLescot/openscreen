@@ -54,7 +54,14 @@ export async function applyAgentDocumentIfCurrent(
 	// `saveDocument` that threw -- the two landed within minutes of each other, and a
 	// dead `catch` type-checks, so the rollback stopped firing and this returned
 	// "applied" for a write that never happened.
-	if (previous) useProjectStore.setState({ document: previous, dirty: previousDirty });
+	//
+	// Guarded on the store still holding the agent's document, the same way the drag
+	// commits in `useTimeline` guard theirs. `false` also means "an undo overtook this
+	// write" now, and there the store holds the document the user asked to return to --
+	// restoring `previous` over it would revert their Ctrl+Z on the agent's behalf.
+	if (previous && useProjectStore.getState().document === parsed) {
+		useProjectStore.setState({ document: previous, dirty: previousDirty });
+	}
 	return "save-failed";
 }
 
