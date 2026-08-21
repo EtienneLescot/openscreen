@@ -988,6 +988,23 @@
 	margin: 4px var(--sp-4) 8px;
 }
 /* ─── action menu (a button's list of things it could do) ─────── */
+/* Sits where a Toggle would; reads as the current value, not as on/off. */
+.rowAction {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 5px 8px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg);
+	color: var(--fg-2);
+	font: 500 var(--fs-app-sm)/1 var(--font-body);
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+	transition: border-color 150ms ease, color 150ms ease;
+}
+.rowAction:hover:not(:disabled) { border-color: var(--brand); color: var(--fg); }
+.rowAction:disabled { cursor: default; opacity: 0.5; }
 .actionMenu {
 	min-width: 216px;
 	padding: 6px;
@@ -1015,6 +1032,15 @@
 	text-align: left;
 }
 .actionMenuRow:hover { background: var(--surface-2); }
+.actionMenuRow.isActive { background: color-mix(in oklab, var(--brand), transparent 82%); }
+/* Separates the fixed presets from the shapes this timeline actually holds. */
+.actionMenuGroup {
+	padding: 8px 8px 4px;
+	font: 600 10px/1 var(--font-body);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
 /* Resolution leads: it is the thing a user recognises about their own footage. */
 .actionMenuMain { font: 600 12.5px var(--font-display); font-variant-numeric: tabular-nums; }
 /* The ratio token second, for whoever does read them — `64:27` means nothing alone. */

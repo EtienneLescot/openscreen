@@ -76,7 +76,11 @@ import {
 	WALLPAPER_THUMB_PATHS,
 } from "@/lib/wallpaper";
 import { isNativeCompositorActive, setNativeParam } from "@/native";
-import type { AspectRatio } from "@/utils/aspectRatioUtils";
+import {
+	ASPECT_RATIO_PRESETS,
+	type AspectRatio,
+	getAspectRatioLabel,
+} from "@/utils/aspectRatioUtils";
 import styles from "./NewEditorShell.module.css";
 
 interface PaneProps {
@@ -1557,6 +1561,7 @@ export function VideoEffectsPane() {
 		return total - (filled?.clipCount ?? 0);
 	}, [nativeFormats, settings.aspectRatio]);
 	const [fitMenuOpen, setFitMenuOpen] = useState(false);
+	const [ratioMenuOpen, setRatioMenuOpen] = useState(false);
 	const { locale } = useI18n();
 	const clipCountLabel = (count: number) => ts(pluralKey(locale, count), { count });
 
@@ -1590,6 +1595,85 @@ export function VideoEffectsPane() {
 		>
 			<BackgroundSection />
 			<div className={styles.sectionLabel}>{ts("effects.frame")}</div>
+			{/* The output shape moved here from the timeline toolbar. It is the one setting the
+			    other three depend on — padding, roundness and shadow only mean anything against
+			    a known frame — and among Trim / Speed / Zoom / transport it read as a playback
+			    control rather than as the shape of what gets exported. Its old placement was
+			    incidental: it arrived inside 1f25410b, a commit about per-clip crop export and
+			    a HUD redesign, and no decision record ever argued for it. */}
+			<div className={styles.paneRow}>
+				<span className={styles.label}>{ts("effects.format")}</span>
+				<Popover open={ratioMenuOpen} onOpenChange={setRatioMenuOpen}>
+					<PopoverTrigger asChild>
+						<button
+							type="button"
+							className={styles.rowAction}
+							disabled={!hasDocument}
+							aria-label={ts("effects.format")}
+						>
+							{getAspectRatioLabel(settings.aspectRatio)}
+							<ChevronDown size={11} />
+						</button>
+					</PopoverTrigger>
+					<PopoverContent
+						align="end"
+						sideOffset={6}
+						collisionPadding={12}
+						animated={false}
+						className="w-auto border-0 bg-transparent p-0 shadow-none"
+					>
+						<div className={styles.actionMenu} role="menu" aria-label={ts("effects.format")}>
+							{ASPECT_RATIO_PRESETS.map((ratio) => (
+								<button
+									type="button"
+									role="menuitem"
+									key={ratio}
+									className={`${styles.actionMenuRow}${
+										ratio === settings.aspectRatio ? ` ${styles.isActive}` : ""
+									}`}
+									onClick={() => {
+										setRatioMenuOpen(false);
+										void set({ aspectRatio: ratio });
+									}}
+								>
+									<span className={styles.actionMenuMain}>{ratio}</span>
+								</button>
+							))}
+							{/* The timeline's own shapes stay listed here, and NOT only behind "fit a
+							    clip": that action also zeroes the frame styling, so without these rows
+							    there would be no way to export at the footage's native shape while
+							    keeping a padded, rounded look. */}
+							{nativeFormats.length > 0 ? (
+								<>
+									<div className={styles.actionMenuGroup}>{ts("effects.formatOriginal")}</div>
+									{nativeFormats.map((format) => (
+										<button
+											type="button"
+											role="menuitem"
+											key={`native-${format.token}`}
+											className={`${styles.actionMenuRow}${
+												format.token === settings.aspectRatio ? ` ${styles.isActive}` : ""
+											}`}
+											onClick={() => {
+												setRatioMenuOpen(false);
+												void set({ aspectRatio: format.token });
+											}}
+										>
+											<span className={styles.actionMenuMain}>
+												{format.width} × {format.height}
+											</span>
+											<span className={styles.actionMenuMeta}>{format.token}</span>
+											<span className={styles.actionMenuCount}>
+												{clipCountLabel(format.clipCount)}
+											</span>
+										</button>
+									))}
+								</>
+							) : null}
+						</div>
+					</PopoverContent>
+				</Popover>
+			</div>
 			{/* #84: "how do I turn the background off". The honest answer was four settings in
 			    three places, so nobody found it. This is that answer as one control.
 			
@@ -1838,7 +1922,7 @@ export function LayoutPane() {
 		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={helpText}>
 			<div className={styles.sectionLabel}>{ts("layout.preset")}</div>
 			<div className={styles.field}>
-				<label htmlFor="layout-preset">{ts("layout.title")}</label>
+				<label htmlFor="layout-preset">{ts("layout.preset")}</label>
 				<select
 					id="layout-preset"
 					value={effectiveLayoutPreset}

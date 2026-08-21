@@ -40,7 +40,7 @@
 		"deleteRegion": "Delete Trim Region"
 	},
 	"layout": {
-		"title": "Layout",
+		"title": "Camera layout",
 		"preset": "Preset",
 		"selectPreset": "Select preset",
 		"pictureInPicture": "Picture in Picture",
@@ -72,7 +72,7 @@
 		"reset": "Reset audio"
 	},
 	"effects": {
-		"title": "Video Effects",
+		"title": "Composition",
 		"blurBg": "Blur BG",
 		"motionBlur": "Motion Blur",
 		"off": "off",
@@ -81,6 +81,8 @@
 		"roundness": "Roundness",
 		"padding": "Padding",
 		"frame": "Frame",
+		"format": "Format",
+		"formatOriginal": "Original",
 		"fitClip": "Fit the clip",
 		"fitAClip": "Fit a clip",
 		"fitClipOne": "{{count}} clip",

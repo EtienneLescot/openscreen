@@ -85,7 +85,7 @@ describe("LayoutPane camera availability", () => {
 	it("shows No webcam without overwriting the saved camera preset", () => {
 		renderLayout(seedProject(false));
 
-		const preset = screen.getByRole("combobox", { name: "Layout" });
+		const preset = screen.getByRole("combobox", { name: "Preset" });
 		expect(preset).toBeDisabled();
 		expect(preset).toHaveValue("no-webcam");
 		expect(useProjectStore.getState().document?.legacyEditor).toMatchObject({
@@ -111,7 +111,7 @@ describe("LayoutPane camera availability", () => {
 		const user = userEvent.setup();
 		renderLayout(seedProject(true));
 
-		const preset = screen.getByRole("combobox", { name: "Layout" });
+		const preset = screen.getByRole("combobox", { name: "Preset" });
 		expect(preset).toBeEnabled();
 		expect(preset).toHaveValue("picture-in-picture");
 		expect(screen.getByText("Camera Shape")).toBeInTheDocument();
