@@ -75,6 +75,7 @@
 		"padding": "Marge",
 		"frame": "Cadre",
 		"fillFrame": "Plein cadre",
+		"fillFrameMixed": "Les clips d'une autre forme affichent encore le fond.",
 		"motion": "Mouvement",
 		"on": "activé",
 		"help": "Mise en forme du cadre de l'enregistrement : flou d'arrière-plan, ombre portée, flou de mouvement, arrondi des coins et marge autour de la vidéo."

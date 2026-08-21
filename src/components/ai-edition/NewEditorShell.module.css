@@ -987,6 +987,12 @@
 	color: var(--fg-2);
 	margin: 4px var(--sp-4) 8px;
 }
+/* Caveat under a control, when the control is true but not the whole story. */
+.paneHint {
+	margin: -2px var(--sp-4) 8px;
+	font: 400 var(--fs-app-sm)/1.4 var(--font-body);
+	color: var(--meta);
+}
 .uploadBtn {
 	display: flex;
 	align-items: center;

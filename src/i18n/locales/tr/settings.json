@@ -75,6 +75,7 @@
 		"padding": "Dolgu",
 		"frame": "Çerçeve",
 		"fillFrame": "Çerçeveyi doldur",
+		"fillFrameMixed": "Başka bir orandaki klipler arka planı göstermeye devam eder.",
 		"motion": "Hareket",
 		"on": "açık",
 		"help": "Kayıt çerçevesinin biçimi: arka plan bulanıklığı, gölge, hareket bulanıklığı, köşe yuvarlaklığı ve videonun çevresindeki boşluk."

@@ -75,6 +75,7 @@
 		"padding": "Phần đệm",
 		"frame": "Khung",
 		"fillFrame": "Lấp đầy khung",
+		"fillFrameMixed": "Các clip có tỉ lệ khác vẫn hiển thị nền.",
 		"motion": "Chuyển động",
 		"on": "bật",
 		"help": "Kiểu khung của bản ghi: làm mờ nền, đổ bóng, mờ chuyển động, bo góc và khoảng đệm quanh video."

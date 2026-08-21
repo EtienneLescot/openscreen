@@ -1544,6 +1544,15 @@ export function VideoEffectsPane() {
 	const nativeFormats = useMemo(() => (document ? collectNativeFormats(document) : []), [document]);
 	const nativeTokens = useMemo(() => new Set(nativeFormats.map((f) => f.token)), [nativeFormats]);
 	const frameIsFilled = fillsFrame(settings, nativeTokens);
+	// One output frame cannot be filled by clips of different shapes — the screen path
+	// contain-fits (see compositeLayout.ts), so anything not in the chosen shape keeps its
+	// bars. The switch is honest about the SETTINGS; without this it would also be read as a
+	// claim about the picture, and be wrong on every mixed timeline.
+	const clipsStillFramed = useMemo(() => {
+		const filled = nativeFormats.find((f) => f.token === settings.aspectRatio);
+		const total = nativeFormats.reduce((n, f) => n + f.clipCount, 0);
+		return total - (filled?.clipCount ?? 0);
+	}, [nativeFormats, settings.aspectRatio]);
 
 	// Le rayon natif = rayon de base de la fixture (~24px @1920) × cette échelle. Diviser la
 	// valeur px de l'UI par ce même rayon de base fait que le coin natif ≈ les px affichés
@@ -1589,6 +1598,11 @@ export function VideoEffectsPane() {
 					onChange={toggleFillFrame}
 				/>
 			</div>
+			{frameIsFilled && clipsStillFramed > 0 ? (
+				<div className={styles.paneHint} role="note">
+					{ts("effects.fillFrameMixed")}
+				</div>
+			) : null}
 			<div className={styles.sliderGrid}>
 				<SliderCell
 					label={ts("effects.shadow")}
