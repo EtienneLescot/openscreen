@@ -6,6 +6,7 @@
   ffmpeg-headless,
   compositor-view,
   pipewire-helper,
+  whisper-stt,
   makeWrapper,
   makeDesktopItem,
   copyDesktopItems,
@@ -118,7 +119,8 @@ buildNpmPackage {
       --set ELECTRON_IS_DEV 0 \
       --set OPENSCREEN_FFMPEG_PATH "${ffmpegLgpl}/bin/ffmpeg" \
       --set OPENSCREEN_COMPOSITOR_VIEW_NODE "${compositor-view}/lib/compositor_view.node" \
-      --set OPENSCREEN_LINUX_CURSOR_HELPER_EXE "${lib.getExe pipewire-helper}"
+      --set OPENSCREEN_LINUX_CURSOR_HELPER_EXE "${lib.getExe pipewire-helper}" \
+      --set OPENSCREEN_WHISPER_SERVER_EXE "${lib.getExe whisper-stt}"
 
     # Install icons to hicolor theme
     for size in 16 24 32 48 64 128 256 512 1024; do
