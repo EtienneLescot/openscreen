@@ -320,30 +320,10 @@ unsafe fn decode_clip_audio_inner(
     let mut frame = av_frame_alloc();
     let mut input_eof = false;
 
-    // Garde anti-boucle : un conteneur dont la piste audio est tronquée ou corrompue en fin
-    // de flux peut faire que `av_read_frame` ne renvoie jamais AVERROR_EOF, empêchant
-    // `decoder_eof` de se propager — la boucle tourne alors à 100 % CPU pour toujours.
-    // Un budget TEMPS plutôt qu'un compteur d'itérations : `av_read_frame` peut être lent
-    // sur un flux corrompu, un compteur serait soit trop grand soit trop petit. Le budget
-    // est dimensionné sur la durée demandée (facteur 8, plancher 60 s) : un long clip sur
-    // un stockage lent reste couvert, seule une vraie boucle infinie est coupée.
-    let loop_start = std::time::Instant::now();
-    let loop_budget_secs = (((source_end_sec - source_start_sec).max(0.0) * 8.0) as u64).max(60);
-    let loop_budget = std::time::Duration::from_secs(loop_budget_secs);
-
     // Une seule passe de démux alimente tous les décodeurs : chaque paquet est routé vers la
     // piste dont il porte l'index. On continue tant qu'AU MOINS une piste a encore quelque
     // chose à produire.
     while tracks.iter().any(|t| !t.reached_end && !t.decoder_eof) {
-        if loop_start.elapsed() > loop_budget {
-            eprintln!(
-                "[openscreen-compositor] decode_clip_audio: boucle plafonnée à {loop_budget_secs} s (source_end={source_end_sec} s), sortie forcée"
-            );
-            for track in tracks.iter_mut() {
-                track.decoder_eof = true;
-            }
-            break;
-        }
         if !input_eof {
             let read = av_read_frame(fmt, packet);
             if read == AVERROR_EOF {
@@ -1088,6 +1068,16 @@ unsafe fn avfilter_atempo_stretch(
         av_frame_unref(frame);
     }
     av_frame_free(&mut frame);
+
+    // OpenScreen#371 review (EtienneLescot): atempo needs a full analysis window
+    // before it emits anything — a span shorter than that (e.g. a 30 ms gap between
+    // two speed regions, or a single video frame) drains to ZERO samples. Padding
+    // that emptiness up to `target_samples` would export silence, while the contract
+    // of `stretch_pcm_to_length` promises a `None` -> WSOLA fallback on failure. Bail
+    // out so the WSOLA path runs and genuinely stretches these spans.
+    if stretched[0].len() < target_samples * 9 / 10 {
+        return None;
+    }
 
     // Recadrage exact : la longueur rendue par atempo diffère de `target_samples` de quelques
     // échantillons de flush ; on tronque ou on padde, comme le faisait le chemin WSOLA.
