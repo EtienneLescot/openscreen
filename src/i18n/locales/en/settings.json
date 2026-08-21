@@ -82,6 +82,9 @@
 		"padding": "Padding",
 		"frame": "Frame",
 		"fillFrame": "Fill frame",
+		"fillFrameOff": "Off",
+		"fillFrameChoose": "Choose what fills the frame",
+		"fillFrameRestore": "Restore the frame",
 		"fillFrameMixed": "Clips in another shape still show the background.",
 		"motion": "Motion",
 		"help": "Frame styling for the recording: background blur, drop shadow, motion blur, corner radius, and padding around the video."
