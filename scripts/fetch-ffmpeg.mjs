@@ -422,6 +422,7 @@ async function fetchSharedDlls(tag, binDir) {
 		"swscale",
 		"avfilter",
 	];
+	fs.mkdirSync(binDir, { recursive: true });
 	const vendoredFiles = new Set(
 		fs
 			.readdirSync(binDir, { withFileTypes: true })

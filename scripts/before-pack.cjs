@@ -95,13 +95,16 @@ const MAC_REQUIRED = [
 		breaks: "the preview and every export render nothing",
 		fix: FIX_MAC,
 	},
-	{
-		match: (name) => /^libav(codec|format|util|filter)\.\d+\.dylib$/.test(name),
-		what: "the LGPL ffmpeg dylibs the compositor links",
+	// One requirement per library, not `atLeast: N` over a combined regex — the
+	// same trap LINUX_REQUIRED documents above. Several versioned copies of one
+	// library would satisfy a combined count while another was missing entirely,
+	// and the addon would still fail to load.
+	...["avcodec", "avformat", "avutil", "swresample", "swscale", "avfilter"].map((library) => ({
+		match: (name) => new RegExp(`^lib${library}\\.\\d+\\.dylib$`).test(name),
+		what: `the LGPL lib${library} dylib the compositor links`,
 		breaks: "the compositor addon cannot be loaded at all (dyld error at require())",
 		fix: FIX_MAC,
-		atLeast: 4,
-	},
+	})),
 	{
 		match: (name) => name === "whisper-stt-server",
 		what: "the whisper.cpp STT helper",
@@ -276,7 +279,7 @@ const WIN_REQUIRED = [
 	// (avcodec-60/61/62.dll left by an earlier fetch) would satisfy a combined count
 	// while another library was missing entirely, and the addon would still fail to
 	// load.
-	...["avcodec", "avformat", "avutil", "avfilter"].map((library) => ({
+	...["avcodec", "avformat", "avutil", "swresample", "swscale", "avfilter"].map((library) => ({
 		match: (name) => new RegExp(`^${library}-\\d+\\.dll$`).test(name),
 		what: `the ${library} DLL the compositor links`,
 		breaks: "the addon cannot be loaded at all under MSIX, which ignores PATH",
