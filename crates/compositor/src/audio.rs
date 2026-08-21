@@ -267,6 +267,14 @@ unsafe fn decode_clip_audio_inner(
     // décalage inter-pistes est absorbé là, pas ici.
     let seek_tb_sec = tracks[0].tb_sec;
     let seek_stream_index = tracks[0].stream_index;
+    // Where decoding actually starts. The budget below scales with the amount
+    // of input the loop will consume, which is the requested window on the
+    // happy path — but when a failed seek forces a reset to t=0 the loop must
+    // decode the whole file from the start (mix_aligned_tracks then trims the
+    // samples before source_start_sec). Sizing the budget on the window alone
+    // would starve an unseekable-but-healthy long file: a 1 s window inside a
+    // 3 h recording would get the 60 s floor while having to decode 3 h.
+    let mut decode_start_sec = source_start_sec;
     if seek_tb_sec > 0.0 {
         let target = (source_start_sec / seek_tb_sec).floor() as i64;
         if av_seek_frame(fmt, seek_stream_index, target, AVSEEK_FLAG_BACKWARD) >= 0 {
@@ -289,6 +297,7 @@ unsafe fn decode_clip_audio_inner(
                     "decode_clip_audio: av_seek_frame a échoué (target={target}) puis le retour à t=0 a échoué — abandon"
                 );
             }
+            decode_start_sec = 0.0;
             for track in tracks.iter_mut() {
                 avcodec_flush_buffers(track.dctx);
             }
@@ -303,7 +312,7 @@ unsafe fn decode_clip_audio_inner(
     // clips short. The budget scales with the requested window (x8, floor 60 s,
     // hard ceiling so a WebM reporting duration = Infinity cannot disable it).
     let loop_start = std::time::Instant::now();
-    let span_sec = (source_end_sec - source_start_sec).max(0.0);
+    let span_sec = (source_end_sec - decode_start_sec).max(0.0);
     let loop_budget_secs = ((span_sec * 8.0) as u64).max(60).min(3600 * 8);
     let loop_budget = std::time::Duration::from_secs(loop_budget_secs);
 
