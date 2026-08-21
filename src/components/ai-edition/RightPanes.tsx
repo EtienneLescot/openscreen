@@ -323,9 +323,14 @@ function BackgroundSection() {
 					className="w-auto border-0 bg-transparent p-0 shadow-none"
 				>
 					<div className={styles.bgPopover}>
+						{/* role="tab" + aria-selected are what make the tablist above mean
+						    anything: without them a screen reader announces three plain
+						    buttons and never says which one is current. */}
 						<div className={styles.paneTabs} role="tablist">
 							<button
 								type="button"
+								role="tab"
+								aria-selected={tab === "image"}
 								className={tab === "image" ? styles.isActive : ""}
 								onClick={() => handleTabChange("image")}
 							>
@@ -333,6 +338,8 @@ function BackgroundSection() {
 							</button>
 							<button
 								type="button"
+								role="tab"
+								aria-selected={tab === "color"}
 								className={tab === "color" ? styles.isActive : ""}
 								onClick={() => handleTabChange("color")}
 							>
@@ -340,6 +347,8 @@ function BackgroundSection() {
 							</button>
 							<button
 								type="button"
+								role="tab"
+								aria-selected={tab === "gradient"}
 								className={tab === "gradient" ? styles.isActive : ""}
 								onClick={() => handleTabChange("gradient")}
 							>
@@ -456,10 +465,19 @@ function backgroundSwatchStyle(value: string): CSSProperties {
 	const classified = classifyWallpaper(value);
 	if (classified.kind !== "image") return { background: classified.value };
 	const bundled = WALLPAPER_PATHS.indexOf(classified.path);
-	const url = resolveImageWallpaperUrl(
-		bundled >= 0 ? WALLPAPER_THUMB_PATHS[bundled] : classified.path,
-	);
-	return { background: `center/cover no-repeat url(${url})` };
+	try {
+		const url = resolveImageWallpaperUrl(
+			bundled >= 0 ? WALLPAPER_THUMB_PATHS[bundled] : classified.path,
+		);
+		return { background: `center/cover no-repeat url(${url})` };
+	} catch {
+		// resolveImageWallpaperUrl THROWS for an image path outside /wallpapers/ — a guard
+		// that exists to stop the app loading arbitrary files. The swatch grid only ever
+		// feeds it constants, but this call site feeds it whatever the document holds, and a
+		// throw here happens during render: one project saved by an older build with a path
+		// we no longer allow would take the whole pane down instead of drawing a dull square.
+		return { background: "var(--surface-2)" };
+	}
 }
 
 // keep the user's last data: URL after they switch tabs so the Image
