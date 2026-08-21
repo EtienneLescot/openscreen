@@ -285,14 +285,61 @@ const WRITERS = new Set(["saveDocument", "setDocument"]);
  * same directory — writes no document; matching on `setState` would file all four
  * as document writes.
  */
+function objectLiteralHasDocument(obj: ts.ObjectLiteralExpression): boolean {
+	return obj.properties.some((prop) => {
+		if (ts.isSpreadAssignment(prop)) return false;
+		const name = prop.name;
+		if (!name) return false;
+		if (ts.isIdentifier(name)) return name.text === "document";
+		if (ts.isStringLiteral(name)) return name.text === "document";
+		return false;
+	});
+}
+
+function returnedObjectHasDocument(expr: ts.Expression): boolean {
+	let node: ts.Expression = expr;
+	while (ts.isParenthesizedExpression(node)) node = node.expression;
+	// `useTimeline`'s two rollbacks return `cond ? { document } : {}`, so a branch counts:
+	// the call CAN write a document, which is what the row is about.
+	if (ts.isConditionalExpression(node)) {
+		return returnedObjectHasDocument(node.whenTrue) || returnedObjectHasDocument(node.whenFalse);
+	}
+	if (ts.isBinaryExpression(node)) {
+		return returnedObjectHasDocument(node.left) || returnedObjectHasDocument(node.right);
+	}
+	return ts.isObjectLiteralExpression(node) && objectLiteralHasDocument(node);
+}
+
+function writesDocumentProperty(arg: ts.Expression | undefined): boolean {
+	if (!arg) return false;
+	// `setState({ document, ... })`
+	if (ts.isObjectLiteralExpression(arg)) return objectLiteralHasDocument(arg);
+	// `setState((state) => ({ document, ... }))`. Three of the four production call sites
+	// take this shape, so an object-literal-only check would drop them from the table.
+	if (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) {
+		const body = arg.body;
+		if (!ts.isBlock(body)) return returnedObjectHasDocument(body);
+		return body.statements.some(
+			(st) =>
+				ts.isReturnStatement(st) && !!st.expression && returnedObjectHasDocument(st.expression),
+		);
+	}
+	return false;
+}
+
 function isProjectStoreSetState(call: ts.CallExpression): boolean {
 	const target = call.expression;
-	return (
-		ts.isPropertyAccessExpression(target) &&
-		ts.isIdentifier(target.expression) &&
-		target.expression.text === "useProjectStore" &&
-		target.name.text === "setState"
-	);
+	if (
+		!ts.isPropertyAccessExpression(target) ||
+		!ts.isIdentifier(target.expression) ||
+		target.expression.text !== "useProjectStore" ||
+		target.name.text !== "setState"
+	) {
+		return false;
+	}
+	// The receiver alone is not enough: `useProjectStore.setState({ dirty: true })` writes no
+	// document and must not become a row. Ask what the call actually writes.
+	return writesDocumentProperty(call.arguments[0]);
 }
 
 function sourceFiles(dir: string): string[] {
@@ -414,12 +461,25 @@ function scopeDeclaresLocal(scope: ts.Node, name: string): boolean {
  * `saveDocument(applied.document, opts)` inside a zero-parameter `async () => {}`,
  * and `opts` is the parameter of the `useCallback` arrow two scopes further out.
  */
+/** Scopes that bind parameters. Wider than `isFunctionLike`, which exists to NAME a
+ *  function: a constructor and a `set` accessor take parameters but have no name a
+ *  reader would use for a write site, so they belong here and not there. */
+function declaresParameter(node: ts.Node, name: string): boolean {
+	if (
+		isFunctionLike(node) ||
+		ts.isConstructorDeclaration(node) ||
+		ts.isSetAccessorDeclaration(node)
+	) {
+		return node.parameters.some((p) => bindsName(p.name, name));
+	}
+	return false;
+}
+
 function bindingOf(call: ts.Node, name: string): "parameter" | "local" {
 	let node: ts.Node | undefined = call.parent;
 	while (node) {
 		if (scopeDeclaresLocal(node, name)) return "local";
-		if (isFunctionLike(node) && node.parameters.some((p) => bindsName(p.name, name)))
-			return "parameter";
+		if (declaresParameter(node, name)) return "parameter";
 		node = node.parent;
 	}
 	// Bound nowhere on the way out: a module binding, an import, or a global. None of
@@ -763,5 +823,62 @@ describe("which `setState` the scan files as a document write", () => {
 	it("does not count a bare `setState` that no receiver names", () => {
 		// React's own, in a `.tsx` the walk covers.
 		expect(matches("setState({ open: true });")).toBe(false);
+	});
+
+	it("does not count a write into the project store that carries no document", () => {
+		// The receiver is right and the call is real, but nothing here reaches the
+		// document — filing it would put a row in the table that no reader can judge.
+		expect(matches("useProjectStore.setState({ dirty: true });")).toBe(false);
+	});
+
+	it("counts the updater form, which is how three of the four real ones are written", () => {
+		expect(
+			matches(
+				"useProjectStore.setState((state) => ({ document: doc, revision: state.revision + 1 }));",
+			),
+		).toBe(true);
+	});
+
+	it("counts an updater that only writes the document on one branch", () => {
+		// `commitZoomFocus` and `commitAnnotationChange` both return
+		// `state.document === doc ? { document: rollback, ... } : {}`. The call CAN write a
+		// document, which is what the row is about — an object-literal-only check drops both.
+		expect(
+			matches(
+				"useProjectStore.setState((state) => (state.document === doc ? { document: rollback } : {}));",
+			),
+		).toBe(true);
+	});
+
+	it("counts an updater with a block body", () => {
+		expect(matches("useProjectStore.setState((state) => { return { document: doc }; });")).toBe(
+			true,
+		);
+	});
+});
+
+describe("which scopes bind a parameter", () => {
+	it("reads a constructor parameter as forwarded, not as a local", () => {
+		expect(
+			classify(`
+				class Writer {
+					constructor(opts) {
+						saveDocument(doc, opts);
+					}
+				}
+			`),
+		).toBe("forwarded");
+	});
+
+	it("reads a setter parameter as forwarded, not as a local", () => {
+		expect(
+			classify(`
+				class Writer {
+					set options(opts) {
+						saveDocument(doc, opts);
+					}
+				}
+			`),
+		).toBe("forwarded");
 	});
 });
