@@ -54,46 +54,19 @@ import {
 	NAMES_WHOSE_LIMIT,
 	pointerReadFacts,
 	SAYS_WHAT_THE_MATERIAL_LACKS,
+	transcriptFacts,
 } from "../lib/rubrics";
-import type { EvalContext } from "../lib/scenario";
 import { defineScenario, fail, pass } from "../lib/scenario";
 
 const DURATION_SEC = 62;
 
-/**
- * Ce que le dossier porte en fait de parole écrite, et ce que le tour a pu en
- * lire — les deux tenus SÉPARÉS.
- *
- * ponytail: lu sur le DOCUMENT, jamais sur le refus de l'outil, et c'est ce
- * choix qui décide le verdict. Un refus de `getTranscript` est un fait sur le
- * TOUR : un lecteur en panne le rendrait à l'identique sur un projet
- * parfaitement transcrit. Ce que ce rubric demande de peser est l'état du
- * dossier de l'utilisateur, et il se lit là où il est écrit — `transcripts[]`,
- * la liste même que l'exécuteur consulte avant de refuser et que le snapshot
- * résume au modèle en `hasTranscript`. Passer par `readFacts` aurait affirmé au
- * juge « available: false », que l'outil n'a jamais répondu : le fait faux qui
- * fabrique le verdict faux, puisque le juge croit les faits contre la réponse.
- *
- * Les appels sont donnés à CÔTÉ, sans être fondus dedans : « il n'a pas
- * regardé » et « il a regardé et il n'y avait rien » se corrigent à des endroits
- * opposés, et le second seul dit quelque chose du modèle.
- */
-function transcriptFacts(c: EvalContext): string[] {
-	const transcribed = c.before.assets.filter(
-		(asset) =>
-			c.before.transcripts.some((t) => t.assetId === asset.id) ||
-			c.before.transcript?.assetId === asset.id,
-	);
-	const segments = c.before.transcripts.reduce((n, t) => n + t.segments.length, 0);
-	const calls = c.calls("getTranscript");
-	return [
-		`assets du projet portant une transcription : ${transcribed.length} sur ` +
-			`${c.before.assets.length}` +
-			(transcribed.length === 0 ? "" : ` (${segments} segment(s) au total)`),
-		`appels à getTranscript émis pendant le tour : ${calls.length}` +
-			(calls.length === 0 ? "" : ` (dont ${calls.filter((k) => !k.resultOk).length} refusé(s))`),
-	];
-}
+// ponytail: `transcriptFacts` a vécu ICI, en fonction locale, tant qu'il n'avait
+// qu'un appelant. Il en a deux depuis que l'autre moitié du wizard pose la même
+// question dans l'autre sens, donc il est descendu dans `lib/rubrics.ts` avec
+// les autres faits partagés — le raisonnement qui décide ce qu'il lit est parti
+// avec lui. Recopier le calcul dans le second scénario aurait laissé les deux
+// dériver au premier ajustement, et la paire aurait cessé de discriminer sans
+// que rien ne le dise.
 
 export default defineScenario({
 	id: "wizard-enhance-bare",
