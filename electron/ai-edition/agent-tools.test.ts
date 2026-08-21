@@ -1761,9 +1761,16 @@ describe("addZoom answers for the focus it was given", () => {
 		// that can read telemetry and one written by a runtime that cannot must be
 		// the same zoom, in the same place, described to the user the same way.
 		const args = JSON.stringify({ startSec: 2, endSec: 6, focus: { cx: 0.2, cy: 0.1 } });
-		const blind = executeAgentTool(fixtureDocument(), "addZoom", args);
+		// ponytail: ONE base for both runs. Two `fixtureDocument()` calls are two
+		// different inputs — `createEmptyDocument` stamps `createdAt`/`updatedAt`
+		// with the wall clock, so the pair differs whenever the calls straddle a
+		// millisecond, and this assertion was a coin flip on a loaded runner. The
+		// invariant is about the same document written by two runtimes; handing them
+		// the same document is what states it.
+		const base = fixtureDocument();
+		const blind = executeAgentTool(base, "addZoom", args);
 		const seeing = executeAgentTool(
-			fixtureDocument(),
+			base,
 			"addZoom",
 			args,
 			withTrack(parkedSamples(2, 6, 0.8, 0.7)),
