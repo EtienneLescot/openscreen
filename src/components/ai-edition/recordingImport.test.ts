@@ -4,7 +4,7 @@ import { replaceTimeline as replaceTimelineOp } from "@/lib/ai-edition/document/
 import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { undo } from "@/lib/ai-edition/store/undo";
-import { past } from "@/lib/ai-edition/store/undoStack";
+import { clearHistory, past } from "@/lib/ai-edition/store/undoStack";
 import { importPendingRecording } from "./recordingImport";
 
 // The first describe stubs the store actions, so the bridge is never reached
@@ -146,7 +146,7 @@ describe("what the recording import leaves on the undo stack", () => {
 		vi.clearAllMocks();
 		useProjectStore.getState().clear();
 		useProjectStore.setState(realActions);
-		past.length = 0;
+		clearHistory();
 		bridge.create.mockImplementation(async () => ({
 			success: true,
 			document: createEmptyDocument({ projectId: PROJECT_ID, title: "Recording" }),

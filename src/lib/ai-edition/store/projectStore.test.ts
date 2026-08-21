@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProjectStore } from "./projectStore";
+import { clearHistory, past, pushHistory } from "./undoStack";
 
 const bridgeMocks = vi.hoisted(() => ({
 	get: vi.fn(),
@@ -377,5 +378,48 @@ describe("useProjectStore", () => {
 			status: "idle",
 			error: null,
 		});
+	});
+
+	it("clear drops the undo history with the project", () => {
+		// Explicit rather than leaning on the `beforeEach`, which reaches this same code.
+		clearHistory();
+		useProjectStore.setState({ projectId: "proj_test", document: sampleDoc });
+		pushHistory({ projectId: "proj_test", doc: sampleDoc });
+		expect(past).toHaveLength(1);
+
+		useProjectStore.getState().clear();
+
+		// Hygiene rather than a restore hazard -- `undo` refuses a snapshot whose
+		// projectId does not match, and there is no projectId left to match. What the
+		// stack was actually holding is up to fifty cloned documents, kept alive until
+		// the next project load.
+		expect(past).toHaveLength(0);
+	});
+
+	it("clear supersedes a save that was already in flight", async () => {
+		// `clear()`'s one production caller deletes the open project. A background save
+		// issued a moment earlier -- a transcript, a duration probe -- used to resolve
+		// after it and reinstall the deleted project's document over the empty state,
+		// with `dirty: false` and a fresh `lastSavedAt` claiming it was on disk.
+		const renamed = { ...sampleDoc, project: { ...sampleDoc.project, title: "Renamed" } };
+		clearHistory();
+		useProjectStore.setState({ projectId: "proj_test", document: sampleDoc, dirty: true });
+		let release: (() => void) | undefined;
+		bridgeMocks.save.mockReturnValue(
+			new Promise((resolve) => {
+				release = () => resolve({ success: true, document: renamed });
+			}),
+		);
+
+		const inFlight = useProjectStore.getState().saveDocument(renamed, { history: true });
+		useProjectStore.getState().clear();
+		release?.();
+
+		await expect(inFlight).resolves.toBe(false);
+		expect(useProjectStore.getState().document).toBeNull();
+		expect(useProjectStore.getState().dirty).toBe(false);
+		// And nothing recorded either: the write that would have pushed the pre-rename
+		// document is the one being dropped.
+		expect(past).toHaveLength(0);
 	});
 });

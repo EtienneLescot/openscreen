@@ -33,7 +33,7 @@ import {
 import { parseCliArgs } from "./cli/args";
 import { runCli } from "./cli/cliMain";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "./diagnostics/main-log-buffer";
-import { buildEditMenuSubmenu, type EditorUndoRedoChannel } from "./edit-menu";
+import { buildEditMenuSubmenu, type EditorUndoRedoChannel, routeEditorUndoRedo } from "./edit-menu";
 import {
 	loadAndRegisterGlobalShortcut,
 	registerOpenAppShortcut,
@@ -191,22 +191,12 @@ function sendEditorMenuAction(
 }
 
 /**
- * Route the Edit menu's Undo/Redo to whoever should service it.
- *
- * Unlike `sendEditorMenuAction` this never CREATES an editor window: Cmd+Z is not
- * a request to open the editor. And when the focused window is not the editor --
- * the launch window, the notes window -- the web-editing undo the `undo` role used
- * to provide is the right one after all, so fall through to it.
+ * Resolve which window the Edit menu's Undo/Redo is aimed at. The routing itself
+ * is `routeEditorUndoRedo`, in `edit-menu.ts`, where a test can reach it.
  */
 function sendEditorUndoRedo(channel: EditorUndoRedoChannel) {
 	const targetWindow = BrowserWindow.getFocusedWindow() ?? mainWindow;
-	if (!targetWindow || targetWindow.isDestroyed()) return;
-	if (!isEditorWindow(targetWindow)) {
-		if (channel === "menu-undo") targetWindow.webContents.undo();
-		else targetWindow.webContents.redo();
-		return;
-	}
-	targetWindow.webContents.send(channel);
+	routeEditorUndoRedo(channel, targetWindow, () => !!targetWindow && isEditorWindow(targetWindow));
 }
 
 function setupApplicationMenu() {

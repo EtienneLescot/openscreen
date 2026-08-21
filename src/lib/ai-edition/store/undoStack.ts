@@ -16,25 +16,63 @@
 // keeps the audit in `documentWriteAudit.test.ts` honest: `recordHistory` in
 // `projectStore` is its only production caller, and a second import path would
 // be a second way to record history without saying so at the call site.
+//
+// The arrays themselves are module-private for the same reason. They used to be
+// exported as `Snapshot[]`, and `const` binds the reference, not the contents --
+// so `past.push(...)` from any importer was a second way to record history that
+// the audit could not see at all: it keys on the callee NAME, and the name there
+// is `push`. The exported `past` / `future` are `readonly` views, and every
+// mutation is a named function the audit can count call sites of.
 
 export type Snapshot = { projectId: string; doc: unknown };
 
 const MAX_HISTORY = 50;
 
-export const past: Snapshot[] = [];
-export const future: Snapshot[] = [];
+const pastStack: Snapshot[] = [];
+const futureStack: Snapshot[] = [];
+
+/** The undo stack, read-only. Mutate it through the functions below, which is
+ *  what makes `documentWriteAudit.test.ts` able to enumerate the writers. */
+export const past: readonly Snapshot[] = pastStack;
+/** The redo stack, on the same terms as `past`. */
+export const future: readonly Snapshot[] = futureStack;
 
 /** Record a document as the state to return to. Drops the redo stack: history
  *  branched the moment a new edit landed on top of an undone one. */
 export function pushHistory(snapshot: Snapshot) {
-	past.push(snapshot);
-	if (past.length > MAX_HISTORY) past.shift();
-	future.length = 0;
+	pastStack.push(snapshot);
+	if (pastStack.length > MAX_HISTORY) pastStack.shift();
+	futureStack.length = 0;
+}
+
+/**
+ * Put the document a REDO is replacing back on `past`, so the redo is itself
+ * undoable.
+ *
+ * Not `pushHistory`: that one clears `future`, which is right for a new edit
+ * (history branched) and wrong here, where the remaining redo steps are still
+ * ahead of the user and the entry being pushed is one they just walked past.
+ */
+export function pushPast(snapshot: Snapshot) {
+	pastStack.push(snapshot);
+}
+
+/** Put the document an UNDO is leaving on `future`, so redo can get back to it. */
+export function pushFuture(snapshot: Snapshot) {
+	futureStack.push(snapshot);
+}
+
+export function popPast(): Snapshot | undefined {
+	return pastStack.pop();
+}
+
+export function popFuture(): Snapshot | undefined {
+	return futureStack.pop();
 }
 
 export function clearHistory() {
-	past.length = 0;
-	future.length = 0;
+	pastStack.length = 0;
+	futureStack.length = 0;
 	supersedeInFlightWrites();
 }
 
