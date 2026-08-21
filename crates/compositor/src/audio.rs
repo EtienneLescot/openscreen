@@ -275,8 +275,23 @@ unsafe fn decode_clip_audio_inner(
             }
         } else {
             eprintln!(
-                "[openscreen-compositor] decode_clip_audio: av_seek_frame a échoué (target={target}), démux repart de t=0"
+                "[openscreen-compositor] decode_clip_audio: av_seek_frame a échoué (target={target}), tentative de retour à t=0"
             );
+            // A failed seek can flush the demuxer's packet queue and leave it
+            // mid-way through its fallback scan, so the next `av_read_frame` is
+            // not guaranteed to resume at t=0 — leading audio could be silently
+            // omitted. Reset to the start and flush every decoder; if even that
+            // reset fails, abort rather than risk an export that starts
+            // mid-stream.
+            if av_seek_frame(fmt, seek_stream_index, 0, AVSEEK_FLAG_BACKWARD) < 0 {
+                avformat_close_input(&mut fmt);
+                bail!(
+                    "decode_clip_audio: av_seek_frame a échoué (target={target}) puis le retour à t=0 a échoué — abandon"
+                );
+            }
+            for track in tracks.iter_mut() {
+                avcodec_flush_buffers(track.dctx);
+            }
         }
     }
 
