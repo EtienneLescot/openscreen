@@ -1086,9 +1086,13 @@
 	border-radius: 12px;
 	background: var(--surface-1);
 	box-shadow: var(--elev-pop);
-	/* Tall content (18 swatches, or the gradient editor) scrolls itself instead of running
-	   off-screen on a short window. */
-	max-height: min(70vh, 460px);
+	/* Radix measures the room actually left below the trigger and publishes it here, so the
+	   picker uses the screen it has instead of a number guessed at authoring time. The second
+	   term is the tallest it ever needs: the gradient tab is ~640px (tabs + preset grid + the
+	   240px-wide editor, whose wheel is square). A fixed 460px cap cut that editor in half and
+	   read as "the gradient panel is gone" — the content was there, below the fold, behind a
+	   scroll nobody could see. Beyond 680px there is nothing left to reveal. */
+	max-height: min(var(--radix-popover-content-available-height, 80vh), 680px);
 	overflow-y: auto;
 	scrollbar-width: thin;
 	scrollbar-color: var(--border) transparent;

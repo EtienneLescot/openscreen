@@ -316,6 +316,9 @@ function BackgroundSection() {
 				<PopoverContent
 					align="start"
 					sideOffset={6}
+					// Keeps the picker off the window edge, and the same padding is what Radix
+					// subtracts from `--radix-popover-content-available-height`, which sizes it.
+					collisionPadding={12}
 					animated={false}
 					className="w-auto border-0 bg-transparent p-0 shadow-none"
 				>
