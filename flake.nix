@@ -28,11 +28,12 @@
           ffmpeg-lgpl = pkgs.callPackage ./nix/ffmpeg-lgpl.nix { };
           compositor-view = pkgs.callPackage ./nix/compositor-view.nix { inherit ffmpeg-lgpl; };
           pipewire-helper = pkgs.callPackage ./nix/pipewire-helper.nix { inherit ffmpeg-lgpl; };
+          whisper-stt = pkgs.callPackage ./nix/whisper-stt.nix { };
         in
         {
-          inherit compositor-view pipewire-helper;
+          inherit compositor-view pipewire-helper whisper-stt;
           openscreen = pkgs.callPackage ./nix/package.nix {
-            inherit compositor-view pipewire-helper;
+            inherit compositor-view pipewire-helper whisper-stt;
           };
           default = self.packages.${pkgs.stdenv.hostPlatform.system}.openscreen;
         }
