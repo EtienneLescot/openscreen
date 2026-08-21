@@ -580,7 +580,16 @@ export function useTimeline() {
 	const commitZoomFocus = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		const rollback = zoomFocusRollbackRef.current;
+		// The snapshot counts only while the document on screen is still the one this
+		// hook's last live write produced -- `updateZoomFocusLive`'s own identity test,
+		// read the other way round. Without it a commit that arrives with no live write
+		// in front of it picks up whatever an abandoned drag left behind, and every
+		// recording write since has already put the states in between on the stack: as a
+		// `historyBase` that makes one Ctrl+Z step over the lot, and on the failure path
+		// below it puts that buried document back on screen, silently dropping them.
+		// `handlePointerDown` sets `draggingRef` BEFORE its live write and that write
+		// returns early on a zero-size overlay rect, so `endDrag` can reach here bare.
+		const rollback = zoomFocusLiveRef.current === doc ? zoomFocusRollbackRef.current : null;
 		zoomFocusRollbackRef.current = null;
 		zoomFocusLiveRef.current = null;
 		// `historyBase: rollback` — the pre-drag document, not the one the store holds
@@ -700,11 +709,19 @@ export function useTimeline() {
 	const commitAnnotationChange = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		const rollback = annotationRollbackRef.current;
+		// See `commitZoomFocus`: the snapshot counts only while the document on screen is
+		// still the one this hook's live writes produced. This is the reachable half.
+		// The inspector's annotation `<textarea>` calls `updateAnnotationLive` on every
+		// keystroke and commits `onBlur`, and closing the panel or deleting the region
+		// removes the focused node without firing blur; `SliderCell` then wires mouseup
+		// straight to `onCommit`, so a bare click on a stroke-width thumb lands here
+		// carrying the typing's base. `NewEditorShell` builds one `useTimeline()` for
+		// both, so it is one instance's ref.
+		const rollback = annotationLiveRef.current === doc ? annotationRollbackRef.current : null;
 		annotationRollbackRef.current = null;
 		annotationLiveRef.current = null;
-		// See `commitZoomFocus`: the pre-drag document is the undo target, and it is
-		// recorded only if this write succeeds.
+		// The pre-drag document is the undo target, and it is recorded only if this write
+		// succeeds.
 		if (!(await saveDocument(doc, { history: true, historyBase: rollback })) && rollback) {
 			useProjectStore.setState((state) =>
 				// `dirty` is deliberately NOT cleared. The rollback target is the last document
