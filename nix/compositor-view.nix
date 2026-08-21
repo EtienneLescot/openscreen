@@ -8,7 +8,7 @@
 {
   lib,
   rustPlatform,
-  ffmpeg,
+  ffmpeg-lgpl,
   symlinkJoin,
   pkg-config,
   rustfmt,
@@ -18,21 +18,9 @@
 }:
 
 let
-  # nixpkgs' default ffmpeg has no H.264 encoder this project can use, which the
-  # app reports precisely:
-  #
-  #   aucun encodeur video utilisable : libopenh264: absent de ce build ffmpeg
-  #
-  # withOpenh264 defaults to withFullDeps, so only ffmpeg-full carries it, while
-  # withX264 is on by default and is GPL. Both halves of this override matter.
-  # scripts/fetch-ffmpeg.mjs vendors BtbN's *lgpl* build and asserts the licence
-  # before using it, so linking GPL x264 into an MIT application is the exact
-  # thing upstream takes care to avoid -- a nix package that quietly did it would
-  # be a licensing fault, not a packaging shortcut.
-  ffmpegLgpl = ffmpeg.override {
-    withOpenh264 = true;
-    withGPL = false;
-  };
+  # Was an inline `ffmpeg.override` here; moved to nix/ffmpeg-lgpl.nix once the
+  # PipeWire helper became a third consumer of the same subtle pair of flags.
+  ffmpegLgpl = ffmpeg-lgpl;
 
   # crates/compositor/build.rs wants a single tree holding both include/ and
   # lib/, the shape of the vendored ffmpeg the Windows and Linux scripts

@@ -147,6 +147,48 @@ jobs:
           echo "closure: $(nix path-info --closure-size --human-readable ./result | tail -1)"
           ls -la result/bin/
 
+      # The native components are resolved at runtime behind existence checks, so
+      # a wrapper pointing at a path that is not there degrades the app instead of
+      # failing it -- silently, which is the failure mode this whole workflow was
+      # written for. The smoke test below covers the compositor addon by
+      # exercising export; nothing exercises the PipeWire helper, because that
+      # needs a Wayland portal this runner does not have. Asserting the file
+      # exists and is executable is the part that can be checked here, and it is
+      # the part that actually broke when a --set pointed somewhere wrong.
+      - name: Check the wrapper's native components
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in OPENSCREEN_FFMPEG_PATH OPENSCREEN_COMPOSITOR_VIEW_NODE OPENSCREEN_LINUX_CURSOR_HELPER_EXE; do
+            # The wrapper is a shell script; read the value it exports rather than
+            # re-deriving it here, so this checks the artefact and not the recipe.
+            path=$(sed -nE "s/^export $var='(.*)'\$/\1/p" result/bin/openscreen | tail -1)
+            if [ -z "$path" ]; then
+              echo "::error::$var is not set by the wrapper"
+              missing=$((missing + 1))
+              continue
+            fi
+            if [ ! -e "$path" ]; then
+              echo "::error::$var points at $path, which does not exist"
+              missing=$((missing + 1))
+              continue
+            fi
+            echo "$var -> $path"
+          done
+          # The helper dlopens libpipewire by soname, which no linker records, so
+          # the derivation adds it to the RPATH by hand. ldd is what tells us the
+          # hand-added entry actually resolves on this host.
+          HELPER=$(sed -nE "s/^export OPENSCREEN_LINUX_CURSOR_HELPER_EXE='(.*)'\$/\1/p" result/bin/openscreen | tail -1)
+          if [ -n "$HELPER" ]; then
+            echo "--- helper linkage ---"
+            ldd "$HELPER" || true
+            if ldd "$HELPER" | grep -q "not found"; then
+              echo "::error::the PipeWire helper has unresolved shared libraries"
+              missing=$((missing + 1))
+            fi
+          fi
+          [ "$missing" -eq 0 ]
+
       # Electron initialises Chromium even for the headless CLI, so it needs a
       # display server present. xvfb ships on ubuntu-latest.
       #
