@@ -12,7 +12,8 @@
 // the patch through `patchEditorSettings`, and persists via the store. No
 // extra state, no caches — the document is the single source of truth.
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
+import type { AxcutDocument } from "../schema";
 import {
 	type EditorSettingsPatch,
 	type EditorSettingsSnapshot,
@@ -53,11 +54,19 @@ export function useEditorSettings(): UseEditorSettingsResult {
 		[setDocument, saveDocument],
 	);
 
+	// The document this hook's own last `setLive` produced. A slider drag fires one
+	// `setLive` per pointer move, and recording each of them buried the real history
+	// under sixty one-pixel steps; only the first write of a drag — the one editing a
+	// document this callback did not produce — is a state worth returning to.
+	const liveDocRef = useRef<AxcutDocument | null>(null);
+
 	const setLive = useCallback(
 		(patch: EditorSettingsPatch) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
-			setDocument(patchEditorSettings(doc, patch));
+			const next = patchEditorSettings(doc, patch);
+			setDocument(next, { history: liveDocRef.current !== doc });
+			liveDocRef.current = next;
 		},
 		[setDocument],
 	);

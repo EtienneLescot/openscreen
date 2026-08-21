@@ -137,10 +137,11 @@ export function useTimeline() {
 	// (collectNativeFormats), the output resolution (referenceClipDims) and the export badges all
 	// read it, so an unpopulated one silently drops that clip from ALL of them — which is why a
 	// cropped clip could show under ORIGINAL while an un-probed 16:9 sibling was missing entirely.
-	// Probe once on load and persist via saveDocument (which doesn't touch undo/dirty), so the fix
-	// sticks and every consumer agrees without each re-probing on its own (what the export dialog
-	// used to do). Attempt each asset at most once per session, even on failure, so a file that
-	// can't be probed doesn't spin the effect on every document change.
+	// Probe once on load and persist via saveDocument with `history: false` (a write the user
+	// never made must not be what the next Ctrl+Z reverses), so the fix sticks and every consumer
+	// agrees without each re-probing on its own (what the export dialog used to do). Attempt each
+	// asset at most once per session, even on failure, so a file that can't be probed doesn't
+	// spin the effect on every document change.
 	const probedAssetIdsRef = useRef<Set<string>>(new Set());
 	useEffect(() => {
 		if (!document) return;
@@ -185,22 +186,27 @@ export function useTimeline() {
 			// Re-read fresh state so a concurrent edit made while probing isn't stomped.
 			const current = useProjectStore.getState().document;
 			if (!current) return;
-			await useProjectStore.getState().saveDocument({
-				...current,
-				assets: current.assets.map((a) => {
-					const found = probed[a.id];
-					if (!found) return a;
-					return {
-						...a,
-						...(found.video
-							? { video: { codec: "unknown", fps: 0, ...a.video, ...found.video } }
-							: {}),
-						...(found.camera && a.cameraTrack
-							? { cameraTrack: { ...a.cameraTrack, ...found.camera } }
-							: {}),
-					};
-				}),
-			});
+			// `history: false` — see the comment above: a backfill nobody asked for must
+			// not become the thing the next Ctrl+Z reverses.
+			await useProjectStore.getState().saveDocument(
+				{
+					...current,
+					assets: current.assets.map((a) => {
+						const found = probed[a.id];
+						if (!found) return a;
+						return {
+							...a,
+							...(found.video
+								? { video: { codec: "unknown", fps: 0, ...a.video, ...found.video } }
+								: {}),
+							...(found.camera && a.cameraTrack
+								? { cameraTrack: { ...a.cameraTrack, ...found.camera } }
+								: {}),
+						};
+					}),
+				},
+				{ history: false },
+			);
 		})();
 		return () => {
 			cancelled = true;
@@ -548,14 +554,19 @@ export function useTimeline() {
 		(id: string, focus: { cx: number; cy: number }) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
-			if (zoomFocusLiveRef.current !== doc) zoomFocusRollbackRef.current = doc;
+			// The first live write of a drag is the one editing a document this callback
+			// did not itself produce — so it is the pre-drag state, and the only one worth
+			// recording. Without the flag a pointermove-frequency drag pushed ~60 snapshots
+			// a second and evicted the real history behind it.
+			const dragStart = zoomFocusLiveRef.current !== doc;
+			if (dragStart) zoomFocusRollbackRef.current = doc;
 			const next: AxcutDocument = {
 				...doc,
 				zoomRanges: patchPillById(doc.zoomRanges, id, {
 					focus: { cx: finiteFraction(focus.cx), cy: finiteFraction(focus.cy) },
 				}) as AxcutDocument["zoomRanges"],
 			};
-			setDocument(next);
+			setDocument(next, { history: dragStart });
 			zoomFocusLiveRef.current = next;
 		},
 		[setDocument],
@@ -665,12 +676,15 @@ export function useTimeline() {
 		(id: string, patch: Partial<AxcutDocument["annotations"][number]>) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
-			if (annotationLiveRef.current !== doc) annotationRollbackRef.current = doc;
+			// One undo step per drag, not per pointermove — same reasoning as
+			// `updateZoomFocusLive` above.
+			const dragStart = annotationLiveRef.current !== doc;
+			if (dragStart) annotationRollbackRef.current = doc;
 			const next: AxcutDocument = {
 				...doc,
 				annotations: patchPillById(doc.annotations, id, patch),
 			};
-			setDocument(next);
+			setDocument(next, { history: dragStart });
 			annotationLiveRef.current = next;
 		},
 		[setDocument],
