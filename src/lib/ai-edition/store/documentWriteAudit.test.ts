@@ -33,6 +33,17 @@
 // through -- `recordHistory`, called only by those two writers, then `pushHistory`,
 // plus undo/redo's own two pushes for the entries they step over.
 //
+// And the third writer, which neither of those names covers:
+// `useProjectStore.setState({ document })` puts a document in the store around both
+// of them. Four shipped sites do it -- undo's own restore, and the three rollbacks
+// that put a document back when a save failed -- and every one of them means to,
+// because none of them is an edit. But a `history` option that cannot be omitted is
+// no guard at all against a writer that never takes one, so those sites are rows
+// too, carrying `unrecorded`: out of scope for the stack, in scope for the
+// guarantee, and a new one has to come here and say who asked. The match is keyed on
+// the RECEIVER as well as the name, because `useTranscriptionStore.setState` is a
+// different store and writes no document.
+//
 // What it does not see, so nobody reads more into that than is in it:
 //   - INDIRECTION, both ways round. The callee name is whatever the source says,
 //     so a write reached through an alias or a callback is not a row at all. And
@@ -44,9 +55,10 @@
 //     parameter, and so is a callback parameter the same expression supplies from
 //     a literal. Both read as forwarded; the last describe in this file pins them
 //     saying so.
-// None of that is in the tree today, and finding it is a reading job, not this
+// Neither shape is in the tree today, and finding either is a reading job, not this
 // file's. What this file guarantees is the part a reading job keeps missing: that
-// nobody added a write in plain sight without saying who asked for it.
+// nobody added a write in plain sight -- through either recording writer or straight
+// into the store -- without saying who asked for it.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
@@ -70,15 +82,28 @@ type Trigger =
 	 *  identifier passed on must resolve to a PARAMETER, in the first enclosing
 	 *  scope that binds that name — a local `const` of the same name is not a
 	 *  forward, however many outer functions have a parameter called that. */
-	| "forwarded";
+	| "forwarded"
+	/** Not a recording writer at all. `useProjectStore.setState` writes the document
+	 *  into the store directly, so nothing can reach the stacks from here and there is
+	 *  no `history` option to decide — which is exactly why these are rows. Every one
+	 *  of today's four is a restore, and a restore must not record: the entry it would
+	 *  reverse is the one it is undoing. */
+	| "unrecorded";
 
 interface WritePath {
 	file: string;
 	/** Nearest named function around the call. */
 	fn: string;
-	writer: "saveDocument" | "setDocument";
+	writer: "saveDocument" | "setDocument" | "useProjectStore.setState";
 	trigger: Trigger;
 }
+
+/** Short keys for the table below, spelled out here so a row stays one line. */
+const WRITER_NAMES = {
+	save: "saveDocument",
+	set: "setDocument",
+	state: "useProjectStore.setState",
+} as const;
 
 // ---------------------------------------------------------------------------
 // The table. Sorted by file, then function, then writer — same order the scan
@@ -130,6 +155,15 @@ const DECLARED: WritePath[] = [
 		"set",
 		"automatic",
 	),
+	// Putting the pre-agent document back when the save the user's edit depended on
+	// failed. Straight into the store, so it cannot record — and must not: the entry
+	// it would reverse was never pushed, because the save records only on success.
+	w(
+		"src/lib/ai-edition/store/agentDocumentApply.ts",
+		"applyAgentDocumentIfCurrent",
+		"state",
+		"unrecorded",
+	),
 
 	// Linking the camera track found next to a newly added asset. Part of the
 	// import, not an edit of its own.
@@ -147,6 +181,12 @@ const DECLARED: WritePath[] = [
 		"automatic",
 	),
 	w("src/lib/ai-edition/store/transcriptionStore.ts", "runJob", "save", "automatic"),
+
+	// Ctrl+Z / Ctrl+Shift+Z putting a snapshot back on screen. The one write in the
+	// tree that MUST go around both recording writers: routing it through one meant an
+	// undo re-recorded the document it had just replaced and cleared `future` on the
+	// way past, so redo was gone before the user could reach for it.
+	w("src/lib/ai-edition/store/undo.ts", "restore", "state", "unrecorded"),
 
 	// Caption settings. Every pair is one optimistic `setDocument` (automatic) plus
 	// the save that is the actual edit and names the pre-edit document.
@@ -182,7 +222,12 @@ const DECLARED: WritePath[] = [
 	// The two drag commits. One undo step per gesture, recorded on release and only
 	// if the write lands — `historyBase` carries the pre-drag document.
 	w("src/lib/ai-edition/store/useTimeline.ts", "commitAnnotationChange", "save", "gesture"),
+	// And the rollback each of them runs when that write does not land: the pre-drag
+	// document back into the store, around the writers, so it records nothing. There is
+	// nothing to take off either — the commit records only on success.
+	w("src/lib/ai-edition/store/useTimeline.ts", "commitAnnotationChange", "state", "unrecorded"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "commitZoomFocus", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "commitZoomFocus", "state", "unrecorded"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "duplicateClip", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "insertClipAt", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "moveClip", "save", "gesture"),
@@ -212,15 +257,43 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "useTimeline", "save", "automatic"),
 ];
 
-function w(file: string, fn: string, writer: "save" | "set", trigger: Trigger): WritePath {
-	return { file, fn, writer: writer === "save" ? "saveDocument" : "setDocument", trigger };
+function w(
+	file: string,
+	fn: string,
+	writer: keyof typeof WRITER_NAMES,
+	trigger: Trigger,
+): WritePath {
+	return { file, fn, writer: WRITER_NAMES[writer], trigger };
 }
 
 // ---------------------------------------------------------------------------
 // The scan
 // ---------------------------------------------------------------------------
 
+/** The two writers that take a `history` option, so the compiler can force their
+ *  call sites to decide. `useProjectStore.setState` is the third writer and matches
+ *  separately — see `isProjectStoreSetState`. */
 const WRITERS = new Set(["saveDocument", "setDocument"]);
+
+/**
+ * `useProjectStore.setState(...)` written as such: a document into the store around
+ * both recording writers, and the shape neither `WRITERS` nor the `history` option
+ * can see.
+ *
+ * Keyed on the RECEIVER as well as the method name. `calleeName` returns the
+ * property name alone, and `useTranscriptionStore.setState` — four calls in this
+ * same directory — writes no document; matching on `setState` would file all four
+ * as document writes.
+ */
+function isProjectStoreSetState(call: ts.CallExpression): boolean {
+	const target = call.expression;
+	return (
+		ts.isPropertyAccessExpression(target) &&
+		ts.isIdentifier(target.expression) &&
+		target.expression.text === "useProjectStore" &&
+		target.name.text === "setState"
+	);
+}
 
 function sourceFiles(dir: string): string[] {
 	return readdirSync(dir).flatMap((entry) => {
@@ -419,6 +492,15 @@ function scan(): Scan {
 						fn: name,
 						writer: callee as WritePath["writer"],
 						trigger: triggerOf(node) as Trigger,
+					});
+				} else if (isProjectStoreSetState(node)) {
+					// No options argument to read a trigger off — that is the whole reason this
+					// shape needs a row rather than a compile error.
+					writes.push({
+						file,
+						fn: enclosingFunctionName(node),
+						writer: "useProjectStore.setState",
+						trigger: "unrecorded",
 					});
 				}
 			}
@@ -637,5 +719,49 @@ describe("what reading the call site cannot tell you", () => {
 				}
 			`),
 		).toBe("forwarded");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The third writer's match. It is the one row-producing rule in this file that is
+// NOT keyed on the callee name alone, and the reason is a name collision that is
+// already in the tree.
+// ---------------------------------------------------------------------------
+
+describe("which `setState` the scan files as a document write", () => {
+	/** Whether the first `setState(...)` in a snippet would produce a row. */
+	function matches(fixture: string): boolean {
+		const source = ts.createSourceFile(
+			"fixture.ts",
+			fixture,
+			ts.ScriptTarget.Latest,
+			true,
+			ts.ScriptKind.TS,
+		);
+		const calls: ts.CallExpression[] = [];
+		const visit = (node: ts.Node) => {
+			if (ts.isCallExpression(node) && calleeName(node) === "setState") calls.push(node);
+			ts.forEachChild(node, visit);
+		};
+		visit(source);
+		const [call] = calls;
+		if (!call) throw new Error("fixture has no `setState` call");
+		return isProjectStoreSetState(call);
+	}
+
+	it("counts a write straight into the project store", () => {
+		expect(matches("useProjectStore.setState({ document: next });")).toBe(true);
+	});
+
+	it("does not count another store of the same shape", () => {
+		// `useTranscriptionStore.setState` is four calls in this same directory and writes
+		// no document. Keyed on the method name alone, all four would have been rows —
+		// and a table padded with writes it cannot judge is a table nobody reads.
+		expect(matches("useTranscriptionStore.setState((state) => state);")).toBe(false);
+	});
+
+	it("does not count a bare `setState` that no receiver names", () => {
+		// React's own, in a `.tsx` the walk covers.
+		expect(matches("setState({ open: true });")).toBe(false);
 	});
 });
