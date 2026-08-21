@@ -96,11 +96,11 @@ const MAC_REQUIRED = [
 		fix: FIX_MAC,
 	},
 	{
-		match: (name) => /^libav(codec|format|util)\.\d+\.dylib$/.test(name),
+		match: (name) => /^libav(codec|format|util|filter)\.\d+\.dylib$/.test(name),
 		what: "the LGPL ffmpeg dylibs the compositor links",
 		breaks: "the compositor addon cannot be loaded at all (dyld error at require())",
 		fix: FIX_MAC,
-		atLeast: 3,
+		atLeast: 4,
 	},
 	{
 		match: (name) => name === "whisper-stt-server",
@@ -162,7 +162,7 @@ const LINUX_REQUIRED = [
 	// pendant qu'une autre manquait. Le paquet passait alors la garde et le
 	// compositeur ne chargeait pas : exactement le mode de panne que cette garde
 	// existe pour attraper.
-	...["avcodec", "avformat", "avutil", "swresample", "swscale"].map((library) => ({
+	...["avcodec", "avformat", "avutil", "swresample", "swscale", "avfilter"].map((library) => ({
 		match: (name) => new RegExp(`^lib${library}\\.so\\.\\d+$`).test(name),
 		what: `the symbol-renamed lib${library} shared object the compositor links`,
 		breaks: "the compositor addon cannot be loaded at all (ld.so error at require())",
@@ -276,7 +276,7 @@ const WIN_REQUIRED = [
 	// (avcodec-60/61/62.dll left by an earlier fetch) would satisfy a combined count
 	// while another library was missing entirely, and the addon would still fail to
 	// load.
-	...["avcodec", "avformat", "avutil"].map((library) => ({
+	...["avcodec", "avformat", "avutil", "avfilter"].map((library) => ({
 		match: (name) => new RegExp(`^${library}-\\d+\\.dll$`).test(name),
 		what: `the ${library} DLL the compositor links`,
 		breaks: "the addon cannot be loaded at all under MSIX, which ignores PATH",
