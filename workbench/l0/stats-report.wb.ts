@@ -91,11 +91,13 @@ const SCENARIO_REPORT = {
 			weight: 3,
 			passed: 0,
 			total: 3,
+			indeterminate: 0,
 			wilson: wilson95(0, 3),
 			expected: true,
 			evidence: ["négation universelle : …"],
 		},
 	],
+	unmeasuredAxes: [],
 	msMean: 42,
 };
 

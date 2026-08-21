@@ -258,6 +258,9 @@ describe("baseline ratchet", () => {
 		expect(baseline).toEqual({
 			scenario: "ratchet",
 			expectedFailures: ["beh.known"],
+			// Écrit même vide : « tout a été tranché » est une affirmation, et son
+			// absence se lirait comme « la question ne se posait pas ».
+			undecided: [],
 			behaviour: 0.5,
 			dsl: 1,
 			recordedAt: "2026-07-31",

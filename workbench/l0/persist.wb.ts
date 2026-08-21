@@ -145,7 +145,10 @@ describe("persistRepetition", () => {
 		expect(written.file).toBe(`${root}/baseline/describe-project/rep-0.json`);
 
 		const turn = readTurn(written.file);
-		expect(turn.schema).toBe(1);
+		// 2 depuis l'arrivée du troisième verdict : `scores.checks[].indeterminate`
+		// et `mutated`. Un fichier de schéma 1 reste lisible et n'en porte aucun,
+		// ce qui est exact — à l'époque un check ne pouvait que passer ou échouer.
+		expect(turn.schema).toBe(2);
 		expect(turn.prompt).toBe(scenario.prompt);
 		expect(turn.answer).toBe("Two clips, one trim.");
 		// The arguments verbatim — the thing a report never keeps.
