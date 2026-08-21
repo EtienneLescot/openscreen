@@ -43,7 +43,15 @@ concurrency:
   # Keying on the event as well keeps a merge train collapsing to its latest push
   # without letting it cancel the schedule.
   group: nix-build-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  # false, where a PR-branch check would want true. This job takes half an hour
+  # and main takes merges minutes apart, so cancel-in-progress meant each merge
+  # evicted the previous run before it finished: the first four runs on main were
+  # cancelled at 21m38s, 25s, 7m05s and then one that only survived because the
+  # merges happened to stop. A cancelled run is not a failure either, so the
+  # branch showed nothing while the workflow reported nothing. Queueing instead
+  # costs at most one pending run -- GitHub keeps a single pending entry per group
+  # and replaces it -- and every merge eventually gets an answer.
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -294,6 +302,13 @@ jobs:
           # capture failures are a separate problem, already reported above.
           echo "--- record then export ---"
           EXPORTED=""
+          # Tracked apart from EXPORTED so the verdict can name the stage that
+          # actually failed. Every run so far has died in record without export
+          # ever executing, while the annotation said "the export path does not
+          # work" -- an accusation aimed at the one component the run never
+          # reached, and the compositor addon is precisely what this step exists
+          # to vouch for.
+          RECORDED=0
           for i in 1 2 3; do
             echo "=== export attempt $i/3 ==="
             rm -f /tmp/demo.openscreen /tmp/demo.mp4
@@ -302,8 +317,12 @@ jobs:
             if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.openscreen ]; then
               echo "record failed (rc=$RC); last lines:"
               tail -5 "/tmp/rec.$i.out" || true
+              # The bound inside get-sources names its own failure; surface it
+              # rather than leaving the reason five lines up in a scratch file.
+              grep -a "get-sources\]" "/tmp/rec.$i.out" | tail -3 || true
               continue
             fi
+            RECORDED=1
             echo "recorded. project:"
             head -c 200 /tmp/demo.openscreen; echo
 
@@ -319,8 +338,10 @@ jobs:
           done
 
           EXPORT_OK=0
-          if [ -z "$EXPORTED" ]; then
-            echo "::error::No attempt produced an MP4. The compositor addon is packaged but the export path does not work."
+          if [ -z "$EXPORTED" ] && [ "$RECORDED" -eq 0 ]; then
+            echo "::error::No attempt got past record, so export never ran and the compositor addon is unproven. This is a capture failure on this host, not an export failure."
+          elif [ -z "$EXPORTED" ]; then
+            echo "::error::record produced a project but no attempt produced an MP4. The compositor addon is packaged and the export path does not work."
           else
             SIZE=$(wc -c < "$EXPORTED")
             # An MP4 opens with a 4-byte length then 'ftyp'. A zero-length or
@@ -350,7 +371,7 @@ jobs:
           # per-attempt warnings above keep that flakiness visible without letting
           # it decide the build; tighten this to $ATTEMPTS once the capture failure
           # is understood and fixed.
-          echo "=== verdict: enumeration $OK/$ATTEMPTS ok, export $EXPORT_OK ==="
+          echo "=== verdict: enumeration $OK/$ATTEMPTS ok, record $RECORDED, export $EXPORT_OK ==="
           if [ "$EXPORT_OK" -ne 1 ] || [ "$OK" -eq 0 ]; then
             exit 1
           fi
