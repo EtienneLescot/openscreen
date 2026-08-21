@@ -114,6 +114,7 @@ export async function runRepetition(options: RunRepetitionOptions): Promise<Repe
 		before,
 		after: run.document ?? before,
 		mutated,
+		allowAgentEdits: scenario.allowAgentEdits !== false,
 		run: { ok: run.ok, error: run.error, ms: run.ms },
 	});
 	return {

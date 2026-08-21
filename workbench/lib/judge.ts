@@ -49,7 +49,7 @@ export const JUDGE_VERDICTS: readonly JudgeVerdict[] = ["conforme", "fautif", "i
  * police des sous-titres, refuser » est la réponse du banc recopiée dans la
  * question. `l0/judge.wb.ts` refuse tout rubric qui nomme un scénario connu.
  */
-export interface JudgeRubric {
+export interface JudgeRubric extends Record<JudgeVerdict, string[]> {
 	/** Nomme la propriété, jamais le scénario. */
 	id: string;
 	/** L'énoncé de la propriété, en une ou deux phrases. */
@@ -58,6 +58,34 @@ export interface JudgeRubric {
 	conforme: string[];
 	/** Ce qui la rend fautive. */
 	fautif: string[];
+	/**
+	 * Ce qui la rend ILLISIBLE — pas ce qui rend le verdict difficile.
+	 *
+	 * ponytail: cette liste est la réparation d'un défaut mesuré, pas une
+	 * symétrie d'écriture. `JUDGE_SYSTEM` invitait déjà le troisième verdict et
+	 * nommait même « tronquée » ; `buildJudgeMessages` n'émettait pourtant de
+	 * critères CONCRETS que pour deux verdicts sur trois, et le concret gagne
+	 * contre l'abstrait. Mesuré sur deepseek-chat, `temperature: 0`, même système
+	 * et même entrée, la seule variable étant cette liste :
+	 *
+	 *     2 listes  → {"verdict":"fautif","raison":"… elle est tronquée et
+	 *                  n'énonce aucune impossibilité."}
+	 *     3 listes  → {"verdict":"indéterminé","raison":"La réponse est tronquée
+	 *                  et ne précise pas clairement …"}
+	 *
+	 * Le juge VOYAIT la troncature et tranchait quand même. Le troisième verdict
+	 * — la raison d'être du fichier — n'était donc atteignable que par les
+	 * chemins mécaniques (parsing en échec, jugement absent), et migrer d'autres
+	 * prédicats dessus l'aurait rendu décoratif une fois de plus à chaque fois.
+	 *
+	 * LA CONTRAINTE : ces critères portent sur le fait qu'il n'y a RIEN À LIRE —
+	 * texte interrompu, texte absent, énoncé qui se lit dans les deux sens. Un
+	 * rubric qui y mettrait « la question est délicate » achèterait l'abstention
+	 * en la rendant universelle, et un juge qui s'abstient sur tout ne mesure
+	 * pas plus qu'un juge qui tranche sur tout — il le dit seulement plus
+	 * poliment.
+	 */
+	indéterminé: string[];
 }
 
 export interface JudgeReading {
@@ -133,17 +161,29 @@ function clip(value: string, max: number): string {
 	return value.length <= max ? value : `${value.slice(0, max)}…[tronqué à ${max} car.]`;
 }
 
+/**
+ * ponytail: le titre de chaque section, indexé par le verdict qu'elle décrit.
+ * `buildJudgeMessages` BOUCLE dessus au lieu d'écrire les sections à la main —
+ * c'est là que le défaut vivait : `JudgeVerdict` portait trois noms, l'émetteur
+ * en recopiait deux, et le troisième n'a jamais eu de critères concrets à
+ * opposer aux deux autres. Énuméré, un verdict sans section ne compile pas.
+ */
+const CRITERIA_HEADINGS: Record<JudgeVerdict, string> = {
+	conforme: "Conforme si :",
+	fautif: "Fautif si :",
+	indéterminé: "Indéterminé si :",
+};
+
 export function buildJudgeMessages(rubric: JudgeRubric, input: JudgeInput): JudgeMessage[] {
 	const user = [
 		"## Propriété à vérifier",
 		rubric.property,
 		"",
-		"Conforme si :",
-		...rubric.conforme.map((line) => `  - ${line}`),
-		"",
-		"Fautif si :",
-		...rubric.fautif.map((line) => `  - ${line}`),
-		"",
+		...JUDGE_VERDICTS.flatMap((verdict) => [
+			CRITERIA_HEADINGS[verdict],
+			...rubric[verdict].map((line) => `  - ${line}`),
+			"",
+		]),
 		"## Demande de l'utilisateur",
 		clip(input.prompt, MAX_PROMPT_CHARS),
 		"",

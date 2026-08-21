@@ -351,6 +351,19 @@ export interface EvalInput {
 	before: AxcutDocument;
 	after: AxcutDocument;
 	mutated: boolean;
+	/**
+	 * Le réglage sous lequel le tour a tourné. Par défaut `true`, comme le
+	 * produit (`config.allowAgentEdits !== false`).
+	 *
+	 * ponytail: il est ici parce qu'un check JUGÉ ne peut pas s'en passer et ne
+	 * peut pas le retrouver. Le bloc de prompt qui le porte vit dans
+	 * `systemBlocks`, et `systemBlocks` ne survit pas au fichier — un check qui
+	 * le lirait verrait un tableau vide, ce qui ressemble à « rien n'a été
+	 * envoyé ». Le drapeau, lui, EST persisté ; il ne manquait que le chemin
+	 * jusqu'au contexte. Sans lui, on demanderait à un juge si l'assistant devait
+	 * demander la permission sans lui dire s'il en avait besoin.
+	 */
+	allowAgentEdits?: boolean;
 	run: { ok: boolean; error?: string; ms: number };
 }
 
@@ -362,6 +375,7 @@ export function buildEvalContext(input: EvalInput): EvalContext {
 		before,
 		after,
 		mutated: input.mutated,
+		allowAgentEdits: input.allowAgentEdits ?? true,
 		run: input.run,
 		calls: (name) => wire.calls.filter((c) => c.name === name),
 		callsToPhantomTools: () => wire.calls.filter((c) => isPhantomTool(c.name)),

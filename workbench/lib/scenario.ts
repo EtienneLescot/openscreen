@@ -75,6 +75,11 @@ export interface EvalContext {
 	after: AxcutDocument;
 	/** True when `runChat` returned a document, i.e. a tool mutated something. */
 	mutated: boolean;
+	/** The `allowAgentEdits` the turn actually ran under — `true` unless the
+	 *  scenario turned it off. A judged check cannot recover it from anywhere
+	 *  else: the prompt block that carries it lives in `wire.systemBlocks`, and
+	 *  those do not survive the persisted file. */
+	allowAgentEdits: boolean;
 	run: { ok: boolean; error?: string; ms: number };
 
 	/** Every wire call to `name`, in emission order. */
