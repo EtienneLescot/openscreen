@@ -13,6 +13,7 @@ import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
+import { isModalOpen } from "@/lib/ai-edition/modalGuard";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
@@ -130,12 +131,12 @@ export function NewEditorShell() {
 		action: "close" | "new" | "open" | "record";
 		resolve: (choice: UnsavedChoice) => void;
 	} | null>(null);
-	const { shortcuts, isMac, isConfigOpen, openConfig: openShortcutsConfig } = useShortcuts();
+	const { shortcuts, isMac, openConfig: openShortcutsConfig } = useShortcuts();
 	// The actions half of the dialog context, not the section: this component only ever *opens*
 	// one, and subscribing it to the open state would re-render the whole editor — timeline,
-	// preview, transport — twice per dialog interaction. `isDialogOpen` answers the keyboard
-	// handler below from a ref, which is why it can live in a value that never changes.
-	const { openDialog, isDialogOpen } = useEditorDialogActions();
+	// preview, transport — twice per dialog interaction. Whether a dialog is open is a question
+	// for `isModalOpen`, which answers for every modal rather than for this context's one.
+	const { openDialog } = useEditorDialogActions();
 	// Transcription is local and every transcript-driven feature (Smart cuts,
 	// captions, the transcript pane) needs one, so the editor produces them by
 	// itself instead of waiting for the user to find the button. This hook is
@@ -861,9 +862,10 @@ export function NewEditorShell() {
 			// A modal owns the screen. Its own controls are buttons, not text fields, so the two
 			// guards above let every editor shortcut through underneath it: Delete destroyed the
 			// selected region behind the backdrop, Ctrl+O stacked a second `aria-modal` dialog on
-			// top, and `?` stacked the shortcuts dialog. Both flags are reachable now that the
-			// open state is lifted out of the components that used to own it (#420).
-			if (isDialogOpen() || isConfigOpen) return;
+			// top, and `?` stacked the shortcuts dialog. One question about the screen, not one
+			// flag per dialog — the flag version knew only about the two dialogs whose open state
+			// happened to live in a context, so Z/T/C kept adding regions under Export (#434).
+			if (isModalOpen()) return;
 			const ctrl = e.ctrlKey || e.metaKey;
 			if (ctrl && e.key === "s") {
 				e.preventDefault();
@@ -1049,8 +1051,6 @@ export function NewEditorShell() {
 		saveDocument,
 		copiedClipId,
 		openShortcutsConfig,
-		isConfigOpen,
-		isDialogOpen,
 		shortcuts,
 		isMac,
 		togglePlay,
