@@ -849,6 +849,67 @@ describe("faits / les cinq migrés — la dernière regex de sens, remesurée pa
 	});
 });
 
+describe("faits / wizard-enhance-bare — la parole écrite, lue sur le DOSSIER", () => {
+	// ponytail: la seconde regex de sens du banc a vécu dans un fichier de
+	// scénario, pas dans `lib/language.ts`, et c'est ce qui l'a fait durer. Son
+	// remplaçant se juge sur un fait dont TOUT dépend : « la matière porte-t-elle
+	// une transcription ». Le juge a pour consigne de croire les faits contre la
+	// réponse, donc ce fait décide seul le verdict, et il est épinglé dans les
+	// deux sens comme les cinq migrés au-dessus.
+	//
+	// CE QU'IL NE FAUT SURTOUT PAS LIRE À LA PLACE : la réponse de l'outil.
+	// `getTranscript` REFUSE ici, et un refus est un fait sur le TOUR — un lecteur
+	// en panne le rendrait à l'identique sur un projet parfaitement transcrit.
+	// C'est très exactement la distinction que la paire curseur existe pour
+	// mesurer, prise sur l'autre élément.
+	const CHECK = "beh.says-what-is-missing";
+
+	it("dit que le dossier ne porte aucune transcription", () => {
+		const facts = factsOf(
+			"wizard-enhance-bare",
+			CHECK,
+			contextWith("…", { before: getScenario("wizard-enhance-bare").document() }),
+		);
+		expect(facts).toContain("assets du projet portant une transcription : 0 sur 1");
+		// Le sens qui compte : le fait ne dit rien de ce que l'assistant a pu
+		// consulter. L'y faire dire soufflerait au juge l'autre question.
+		expect(facts).not.toContain("remise à l'assistant");
+	});
+
+	it("…et l'autre sens, sans quoi le premier passerait sur une constante", () => {
+		// Le document de l'AUTRE moitié du wizard, qui porte bien un transcript.
+		// Sans ce sens-là, un fait câblé sur « 0 sur 1 » passerait le test du haut
+		// en ne mesurant rien — le défaut que ces paires de pins existent pour
+		// attraper.
+		const facts = factsOf(
+			"wizard-enhance-bare",
+			CHECK,
+			contextWith("…", { before: getScenario("wizard-enhance").document() }),
+		);
+		expect(facts).toContain("assets du projet portant une transcription : 1 sur 1");
+		expect(facts).toContain("segment(s) au total");
+	});
+
+	it("tient l'appel séparé de l'état du dossier", () => {
+		// « il n'a pas regardé » et « il a regardé et l'outil a refusé » se
+		// corrigent à des endroits opposés, et fondre les deux dans le recensement
+		// rendrait la différence invisible au juge.
+		const before = getScenario("wizard-enhance-bare").document();
+		expect(factsOf("wizard-enhance-bare", CHECK, contextWith("…", { before }))).toContain(
+			"appels à getTranscript émis pendant le tour : 0",
+		);
+		const refusé = factsOf(
+			"wizard-enhance-bare",
+			CHECK,
+			contextWith("…", { before, calls: [{ name: "getTranscript", resultOk: false }] }),
+		);
+		expect(refusé).toContain("appels à getTranscript émis pendant le tour : 1 (dont 1 refusé(s))");
+		// Et le recensement du dossier n'a pas bougé pour autant : c'est la même
+		// matière, seul le tour diffère.
+		expect(refusé).toContain("assets du projet portant une transcription : 0 sur 1");
+	});
+});
+
 describe("faits / consent — le réglage sous lequel le tour a tourné", () => {
 	// Sans ce fait, on demanderait au juge si l'assistant devait solliciter un
 	// accord sans lui dire s'il en avait besoin. Il ne peut pas le retrouver : le
