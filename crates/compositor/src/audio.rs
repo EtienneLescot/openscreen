@@ -273,8 +273,24 @@ unsafe fn decode_clip_audio_inner(
             for track in tracks.iter_mut() {
                 avcodec_flush_buffers(track.dctx);
             }
+        } else {
+            eprintln!(
+                "[openscreen-compositor] decode_clip_audio: av_seek_frame a échoué (target={target}), démux repart de t=0"
+            );
         }
     }
+
+    // Anti-loop guard: a container whose audio track is truncated or corrupt at
+    // end-of-stream can make `av_read_frame` never return AVERROR_EOF, so
+    // `decoder_eof` never propagates and the loop spins at 100% CPU forever.
+    // A TIME budget, not an iteration count: `av_read_frame` can be slow on a
+    // corrupt stream, so a count would either never fire or cut healthy long
+    // clips short. The budget scales with the requested window (x8, floor 60 s,
+    // hard ceiling so a WebM reporting duration = Infinity cannot disable it).
+    let loop_start = std::time::Instant::now();
+    let span_sec = (source_end_sec - source_start_sec).max(0.0);
+    let loop_budget_secs = ((span_sec * 8.0) as u64).max(60).min(3600 * 8);
+    let loop_budget = std::time::Duration::from_secs(loop_budget_secs);
 
     let mut packet = av_packet_alloc();
     let mut frame = av_frame_alloc();
@@ -284,6 +300,20 @@ unsafe fn decode_clip_audio_inner(
     // piste dont il porte l'index. On continue tant qu'AU MOINS une piste a encore quelque
     // chose à produire.
     while tracks.iter().any(|t| !t.reached_end && !t.decoder_eof) {
+        if loop_start.elapsed() > loop_budget {
+            // A real stall, not a slow decode: abort rather than emit a
+            // truncated/silent clip. The downstream pipelines already degrade a
+            // `bail!` here into their documented silent-fallback path in one
+            // place, instead of inventing an invisible one.
+            av_frame_free(&mut frame);
+            av_packet_free(&mut packet);
+            avformat_close_input(&mut fmt);
+            bail!(
+                "decode_clip_audio: decode loop exceeded {loop_budget_secs}s budget \
+                 (source_end={source_end_sec}s) — aborting to avoid exporting a \
+                 truncated clip"
+            );
+        }
         if !input_eof {
             let read = av_read_frame(fmt, packet);
             if read == AVERROR_EOF {
