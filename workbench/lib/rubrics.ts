@@ -189,6 +189,32 @@ export function readFacts(c: EvalContext, tool: string): string[] {
 }
 
 /**
+ * L'outil qui rend la trajectoire du pointeur — nommé ICI, une fois.
+ *
+ * ponytail: SEPT scénarios posent désormais la question de l'attribution de la
+ * limite, et le nom de l'outil est le seul paramètre de leurs faits. Sept copies
+ * d'une chaîne de caractères, ce sont six occasions de n'en corriger que six —
+ * et le prix est déjà mesuré dans ce dépôt : un scénario a nommé cet
+ * outil de son côté APRÈS son renommage, le tour n'a plus rien lu, et le
+ * scénario a marqué 1,0 sur un fait qui n'existait plus. Un fait faux fabrique
+ * un verdict faux plus sûrement qu'un rubric flou, puisque le juge a pour
+ * consigne de croire les faits contre la réponse.
+ */
+const POINTER_READER = "getCursorTrack";
+
+/**
+ * Ce que la lecture de la trajectoire a réellement remis à l'assistant pendant
+ * le tour — ou ce qu'elle n'a pas remis, et pourquoi.
+ *
+ * ponytail: partagé pour la raison qui fait vivre chaque rubric à un seul
+ * endroit. C'est le fait qui décide l'attribution de la limite, et il doit être
+ * IDENTIQUE partout où la question est posée : sur la paire, seul son CONTENU
+ * doit différer — c'est très exactement ce que la paire existe pour mesurer, et
+ * deux calculs voisins la rendraient muette sans que rien ne le dise.
+ */
+export const pointerReadFacts = (c: EvalContext): string[] => readFacts(c, POINTER_READER);
+
+/**
  * Remplace `REFUSES_HONESTLY`, la regex.
  *
  * Ce qu'elle faisait : chercher « i cannot / there is no tool / out of scope »

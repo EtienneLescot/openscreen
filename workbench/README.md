@@ -212,7 +212,7 @@ personne ne teste.
 | reste déterministe | passe au juge |
 |---|---|
 | empans, comptes, séquences d'appels, diffs de document — tout `lib/editorial.ts`, `lib/quality.ts`, `lib/oracles.ts` | « a-t-il dit qu'il ne pouvait pas ? », « affirme-t-il avoir édité ? », « attribue-t-il sa cécité au projet ? » |
-| `statedMultipliers`, `statedDurations` — ils rendent un **nombre**. « 1,8× » et « 0:12 » sont de la notation, pas de la langue, et les comparer à `renderedScale` ou à la durée d'un asset est de l'arithmétique | les prédicats de `language.ts` qui exigent de comprendre une phrase, un rubric à la fois |
+| `statedMultipliers`, `statedDurations` — ils rendent un **nombre**. « 1,8× » et « 0:12 » sont de la notation, pas de la langue, et les comparer à `renderedScale` ou à la durée d'un asset est de l'arithmétique | les prédicats de `language.ts` qui exigeaient de comprendre une phrase, un rubric à la fois — **la migration est finie, il n'en reste aucun** |
 | les **faits** eux-mêmes : le diff par famille, l'ordre des clips, la parole détruite, la durée de la matière, ce qu'un outil de lecture a rendu, le réglage sous lequel le tour a tourné | rien de tout cela — le juge les **reçoit**, il ne les recalcule pas et n'a pas à les deviner |
 | `quoteMatch` — un utilitaire de citation, sans jugement | |
 
@@ -394,8 +394,8 @@ Deux pièges à connaître avant d'écrire un `facts` :
 | `ADMITS_BLINDNESS` | **supprimé**, absorbé par `NAMES_WHOSE_LIMIT` avec la moitié de `DENIES_CURSOR_DATA` qui lui servait de contrepartie. Les deux motifs se partageaient une même phrase et se contredisaient par construction, au point qu'un scénario devait découper la réponse en phrases et soustraire l'un de l'autre. Cette mécanique de rattrapage était le symptôme : la question n'est pas « laquelle des deux tournures apparaît » mais **« à qui la réponse attribue-t-elle la limite »**, et une seule lecture y répond |
 | `FLAGS_OUT_OF_RANGE`, `FLAGS_MISSING_CAMERA` | **supprimés** → `FLAGS_WHAT_EXCEEDS_THE_MATERIAL`, `SAYS_WHAT_THE_MATERIAL_LACKS`. Le second servait aux **deux** moitiés d'une paire, l'une exigeant qu'il corresponde et l'autre qu'il ne corresponde pas : sur une réponse française la paire rendait donc le même résultat quoi que le modèle fasse, tout en continuant d'afficher un taux |
 | `ASKS_PERMISSION` | **supprimé** → `ASKS_BEFORE_IT_ACTS`. Il avait **zéro appelant** : le seul scénario concerné en gardait une copie locale divergente, ce que « un prédicat vit à un seul endroit » existe pour empêcher, et personne ne l'avait vu parce que les deux copies passaient les mêmes tests |
-| `DENIES_CURSOR_DATA` | **reste, en sursis assumé.** Cinq scénarios s'en servent encore, dont trois sur la prise réelle — absente de tout clone, donc impossible à lancer en live, donc impossible à épingler dans les deux sens comme un rubric l'exige. Les deux autres (`wizard-enhance`, `wizard-enhance-bare`) portent leur défaut D1 dans une baseline **committée** : changer sous le même identifiant ce que le check mesure ferait bouger le cliquet pour une raison qui n'est pas le modèle. Le défaut de langue y demeure entier — une négation écrite en français y est toujours indétectable |
-| `statedMultipliers`, `statedDurations`, `quoteMatch` | **restent** — de la notation et un utilitaire, pas de la lecture |
+| `DENIES_CURSOR_DATA` | **supprimé** — le dernier, sur ses **cinq** appelants, absorbé par `NAMES_WHOSE_LIMIT` sous l'identifiant `beh.attributes-the-limit`. Ce qui l'a fait durer n'était pas technique : `wizard-enhance` porte son défaut D1 dans une baseline **committée**, et changer sous le **même identifiant** ce qu'un check mesure aurait fait imprimer au cliquet « D1 semble corrigé » sur un changement d'instrument. Résolu par un identifiant **neuf** : l'ancien check disparaît, son entrée d'échec attendu part avec lui, le check jugé arrive sans historique et se baseline à neuf. **Réserve à ne pas effacer** : les trois scénarios de la prise réelle portent le check migré sans qu'il ait jamais été jugé sur leur matière — voir l'en-tête de `scenarios/real-screencast.scn.ts` |
+| `statedMultipliers`, `statedDurations`, `quoteMatch` | **restent, et ils sont tout ce qui reste** — de la notation et un utilitaire. `lib/language.ts` n'a plus un seul prédicat de sens |
 
 ---
 
@@ -408,8 +408,8 @@ pas des tests : le même fichier tourne hors ligne (L1, déterministe) et en liv
 
 | scénario | ce qu'il sonde | échecs attendus |
 |---|---|---|
-| `wizard-enhance` | le prompt du bouton Auto-enhance, **avec** transcript : des trims sur les silences, pas de zooms hallucinés | D1 (nie la donnée curseur — le sandbox, lui, n'existe plus), D2 (multiplicateur), focus fabriqué |
-| `wizard-enhance-bare` | le **même prompt verbatim**, sans transcript **ni** télémétrie : refus argumenté, zéro opération inventée | D1 seulement — `dsl.no-invented-ops` est la question ouverte, volontairement pas pré-excusée |
+| `wizard-enhance` | le prompt du bouton Auto-enhance, **avec** transcript : des trims sur les silences, pas de zooms hallucinés | D2 (multiplicateur), focus fabriqué. **D1 n'y figure plus sous son ancien nom** : son check était la dernière regex de sens, il est passé au juge sous un identifiant neuf (`beh.attributes-the-limit`) et se baseline à neuf. Le défaut n'a été déclaré corrigé nulle part |
+| `wizard-enhance-bare` | le **même prompt verbatim**, sans transcript **ni** télémétrie : refus argumenté, zéro opération inventée | **plus aucun** — l'entrée D1 héritée nommait la regex partie au juge, et une prédiction n'a pas sa place dans `expectedFailures`. `dsl.no-invented-ops` reste la question ouverte, volontairement pas pré-excusée |
 | `cursor-question` | D1 isolé : « quelles données curseur ce projet contient-il ? », **avec** un sidecar lisible | **plus aucun**. `getCursorTrack` rend le digest et `assets[].hasCursorTelemetry` l'annonce, donc `expectedFailures` est vide et `dsl.reads-telemetry` sert de cliquet. Attention : ce scénario ne mesure plus la même chose — s'y avouer aveugle est désormais FAUX, et l'aveu honnête a déménagé dans `cursor-blind`. Les deux regex qui séparaient ces deux fautes ont fusionné en **un** check jugé, `beh.attributes-the-limit` (rubric `NAMES_WHOSE_LIMIT`), de poids égal à leur somme : nier la donnée et se dire aveugle sont ici démentis par le même fait, donc c'est une seule lecture |
 | `describe-zooms` | D2 : rend-il `depth` (ordinal 1..6) comme un facteur d'échelle ? | annonce « 3.0× » là où la pill rend 1.80×. Le snapshot porte désormais `renderedScale` et les descriptions la vraie table (`ZOOM_DEPTH_LEGEND`, dérivée) : ce qui reste mesuré est **comportemental** — cite-t-il le bon nombre ? |
 | `describe-zooms-migrated` | D2 au niveau DSL : `customScale` bat `depth` au rendu | corrigé côté mécanisme (le snapshot expose `customScale`/`depthIsOverridden`, et un `setZoom{depth}` efface l'override en le disant), donc `dsl.custom-scale-consistent` est sorti des `expectedFailures` et sert de cliquet ; seul le multiplicateur annoncé reste pré-excusé |
@@ -598,6 +598,16 @@ C'était 356 points et 24 238 caractères avant la réduction, soit 2,3× le tra
 est gardé ici parce qu'il continue de circuler dans les notes de l'époque : s'il réapparaît
 quelque part, c'est qu'on lit un texte périmé.
 
+**À faire tourner en premier si vous avez la prise.** Trois de ces scénarios portent un check
+jugé — `beh.attributes-the-limit`, rubric `NAMES_WHOSE_LIMIT` — qui a remplacé la dernière regex
+anglaise du banc et **n'a jamais rendu de verdict sur cette matière** : la bascule a été faite sur
+une machine qui n'a pas les deux fichiers. Le rubric est validé ailleurs, sur `cursor-question`,
+dont le câblage est identique (lecteur branché, sidecar lisible) — mais ce n'est pas la même
+matière, et un rubric validé ailleurs n'est pas un rubric mesuré ici. Lancez `wb:live` puis
+`wb:judge` sur les trois et LISEZ les verdicts avant d'en tirer un chiffre. N'y substituez pas un
+autre enregistrement : la vérité terrain a été annotée à la main sur CETTE prise, et une autre
+rendrait un nombre qui ressemble à une vérification sans en être une.
+
 Quatre scénarios notés tournent maintenant sur cette fixture (`scenarios/real-screencast.scn.ts`).
 Ce qu'ils mesurent a besoin de la vérité terrain — ce que l'utilisateur faisait, annoté à la main —
 et cette vérité vit **du côté des assertions**, jamais dans le document ni dans un prompt : l'y
@@ -622,12 +632,14 @@ trajectoire » sont **deux checks séparés**.
    que d'écrire un document à la main. `primaryAssetId` doit être posé et `durationSec` non nul —
    `durationSec: 0` fait vider la timeline par `replaceTimeline` en silence.
 3. Pour ce qui lit le texte : **un check qui demande de comprendre une phrase va dans `judged`**,
-   avec un rubric de `lib/rubrics.ts` — pas un nouveau regex. Les prédicats restants de
-   `lib/language.ts` sont en sursis, pas un modèle à suivre. Si vous devez malgré tout en écrire
-   un, **épinglez-le dans les deux sens** dans `l0/scenario-pack.wb.ts` : trois des quatre bugs
-   trouvés en écrivant ce pack étaient des regex silencieusement fausses, dont une qui notait
-   comme honnête la réponse même que son scénario existait pour attraper. Un rubric hérite de la
-   même obligation, en trois directions — `l0/judge.wb.ts`. Un rubric doit renseigner ses **trois**
+   avec un rubric de `lib/rubrics.ts` — pas un nouveau regex. `lib/language.ts` n'en porte plus
+   aucun : ce qui y reste rend des nombres, et ce n'est pas un modèle à suivre. Si vous devez
+   malgré tout en écrire un, **épinglez-le dans les deux sens ET dans les deux langues** dans
+   `l0/scenario-pack.wb.ts` — un prédicat épinglé dans une seule langue est épinglé dans un seul
+   sens, ce que les six prédicats supprimés faisaient tous. Trois des quatre bugs trouvés en
+   écrivant ce pack étaient des regex silencieusement fausses, dont une qui notait comme honnête
+   la réponse même que son scénario existait pour attraper. Un rubric hérite de la même
+   obligation, en trois directions — `l0/judge.wb.ts`. Un rubric doit renseigner ses **trois**
    listes de critères ; `indéterminé` vide y rejouerait, rubric par rubric, le défaut que le type
    vient de fermer, et `l0/judge.wb.ts` le refuse.
 4. Épinglez son `facts` **dans les deux sens** dans `l0/judge.wb.ts`. C'est la seule moitié d'un
@@ -676,9 +688,10 @@ lib/persist.ts     les tours bruts sur disque, bornés, derrière la barrière a
 lib/judge.ts       le juge : conforme / fautif / indéterminé, JSON strict, même joint SSE
                    — une liste de critères PAR verdict, énumérée depuis JUDGE_VERDICTS
 lib/rubrics.ts     les rubrics partagés — une propriété par rubric, aucun scénario nommé —
-                   ET les faits partagés qu'on leur donne à peser (documentFacts, readFacts)
-lib/language.ts    ce qui reste des prédicats de texte : de la notation, un utilitaire,
-                   et UN sursis nommé (DENIES_CURSOR_DATA, sur la prise réelle)
+                   ET les faits partagés qu'on leur donne à peser (documentFacts, readFacts,
+                   pointerReadFacts : le nom de l'outil de trajectoire vit là, une fois)
+lib/language.ts    ce qui reste après la purge : de la notation (statedMultipliers,
+                   statedDurations) et un utilitaire de citation. AUCUN prédicat de sens
 lib/fixtures.ts    les documents de référence, écrits en code
 lib/real-fixture.ts le chargeur de la PRISE RÉELLE (projet + sidecar de curseur sur disque)
 fixtures/          les deux fichiers de cette prise — GITIGNORÉ, absent de tout clone
