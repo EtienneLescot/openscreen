@@ -39,6 +39,7 @@ import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionS
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
 	newRegionDurationSec,
@@ -396,6 +397,9 @@ export function V4Timeline({
 	onEditClip: (clip: AxcutClip) => void;
 }) {
 	const t = useScopedT("timeline");
+	// The camera lane borrows the Layout pane's "No Webcam" wording when there is no
+	// camera to grow, so the two surfaces say the same thing about the same project.
+	const ts = useScopedT("settings");
 	const tracksRef = useRef<HTMLDivElement | null>(null);
 	// The transformed canvas is the true timeline coordinate frame — clips, pills
 	// and the playhead are all positioned inside it. Time↔x math must measure THIS
@@ -465,6 +469,12 @@ export function V4Timeline({
 							: t("toolbar.smartCutsNeedsTranscript");
 
 	const clips = tl.clips;
+	// A camera-fullscreen region grows the webcam overlay, so on a project with no webcam
+	// it renders nothing in the preview and nothing in the export. `addCameraFullscreen`
+	// refuses to write one (see useTimeline) — this makes the control say so before it is
+	// clicked instead of looking like it worked. Same question, same helper as the Layout
+	// pane: is a camera attached anywhere on this timeline?
+	const hasAnyCamera = useMemo(() => hasAnyClipWithCamera(tl.assets, clips), [tl.assets, clips]);
 	const total = useMemo(
 		() =>
 			Math.max(
@@ -1394,6 +1404,8 @@ export function V4Timeline({
 							className={styles.tlToolBtn}
 							title={t("buttons.addCameraFullscreen")}
 							aria-label={t("buttons.addCameraFullscreen")}
+							disabled={!hasAnyCamera}
+							style={!hasAnyCamera ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
 							onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}
 						>
 							<Maximize2 size={15} />
@@ -1555,7 +1567,13 @@ export function V4Timeline({
 								<div className={styles.tlLane}>{renderPills(trimPills, t("hints.pressTrim"))}</div>
 								<div className={styles.tlLane}>{renderPills(zoomPills, t("hints.pressZoom"))}</div>
 								<div className={styles.tlLane}>
-									{renderPills(cameraFullscreenPills, t("hints.pressCameraFullscreen"))}
+									{/* Advertising "Press C" on a project with no webcam invites a keystroke
+									    that `addCameraFullscreen` now refuses (#353). The toolbar button is
+									    already disabled; this keeps the lane from contradicting it. */}
+									{renderPills(
+										cameraFullscreenPills,
+										hasAnyCamera ? t("hints.pressCameraFullscreen") : ts("layout.noWebcam"),
+									)}
 								</div>
 							</>
 						) : null}

@@ -479,6 +479,72 @@ describe("useTimeline.applyClipEdit (Edit-clip modal)", () => {
 	});
 });
 
+// #353. The toolbar button and the `C` shortcut both used to write a region on a
+// project with no webcam: it persists into `legacyEditor.cameraFullscreenRegions`,
+// renders nothing in the preview (PreviewCanvas short-circuits on a missing
+// `webcamRect`) and nothing in the export, forever, with no feedback. The gate lives
+// in the shared mutation so both entry points — and any future one — are covered.
+describe("useTimeline.addCameraFullscreen (camera gate)", () => {
+	const cameraAsset = {
+		...sampleDoc.assets[0],
+		cameraTrack: {
+			sourcePath: "/tmp/camera.webm",
+			startMs: 0,
+			offsetMs: 0,
+			visible: true,
+			// Dimensions filled in so the hook's backfill probe has nothing to do — an
+			// unprobed camera would fire its own `saveDocument` alongside this test's.
+			width: 1280,
+			height: 720,
+		},
+	};
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			currentTimeSec: 1,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("writes nothing when no clip on the timeline has a camera", async () => {
+		// sampleDoc's only asset carries `cameraTrack: null`.
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addCameraFullscreen();
+		});
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+		expect(useProjectStore.getState().document?.legacyEditor).toBeNull();
+		expect(result.current.cameraFullscreenRegions).toEqual([]);
+	});
+
+	it("still writes a region when a clip's asset carries a camera", async () => {
+		useProjectStore.setState({ document: { ...sampleDoc, assets: [cameraAsset] } });
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addCameraFullscreen();
+		});
+		const legacy = useProjectStore.getState().document?.legacyEditor as Record<string, unknown>;
+		const regions = legacy.cameraFullscreenRegions as Array<{ startMs: number; endMs: number }>;
+		expect(regions).toHaveLength(1);
+		// 2s at the playhead (currentTimeSec = 1), the shared default.
+		expect(regions[0]).toMatchObject({ startMs: 1000, endMs: 3000 });
+	});
+});
+
 describe("useTimeline.addAnnotation", () => {
 	beforeEach(() => {
 		useProjectStore.getState().clear();
