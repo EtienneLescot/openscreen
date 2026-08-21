@@ -159,31 +159,76 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          for var in OPENSCREEN_FFMPEG_PATH OPENSCREEN_COMPOSITOR_VIEW_NODE OPENSCREEN_LINUX_CURSOR_HELPER_EXE; do
-            # The wrapper is a shell script; read the value it exports rather than
-            # re-deriving it here, so this checks the artefact and not the recipe.
-            path=$(sed -nE "s/^export $var='(.*)'\$/\1/p" result/bin/openscreen | tail -1)
+
+          wrapper_value() {
+            sed -nE "s/^export $1='(.*)'\$/\1/p" result/bin/openscreen | tail -1
+          }
+
+          # -x, not -e, for the ones that get spawned. The app agrees: the helper
+          # lookup in pipeWireCursorRecordingSession.ts requires X_OK before it
+          # accepts a candidate, so a present-but-not-executable file would pass a
+          # mere existence check here and be rejected at runtime. The compositor
+          # addon is require()'d rather than spawned, so readable is its bar.
+          for entry in \
+            "OPENSCREEN_FFMPEG_PATH:-x" \
+            "OPENSCREEN_COMPOSITOR_VIEW_NODE:-r" \
+            "OPENSCREEN_LINUX_CURSOR_HELPER_EXE:-x"; do
+            var=${entry%:*}
+            test=${entry##*:}
+            # Read the value the wrapper exports rather than re-deriving it here,
+            # so this checks the artefact and not the recipe.
+            path=$(wrapper_value "$var")
             if [ -z "$path" ]; then
               echo "::error::$var is not set by the wrapper"
               missing=$((missing + 1))
               continue
             fi
-            if [ ! -e "$path" ]; then
-              echo "::error::$var points at $path, which does not exist"
+            if [ ! "$test" "$path" ]; then
+              echo "::error::$var points at $path, which fails $test"
               missing=$((missing + 1))
               continue
             fi
-            echo "$var -> $path"
+            echo "$var -> $path ($test)"
           done
-          # The helper dlopens libpipewire by soname, which no linker records, so
-          # the derivation adds it to the RPATH by hand. ldd is what tells us the
-          # hand-added entry actually resolves on this host.
-          HELPER=$(sed -nE "s/^export OPENSCREEN_LINUX_CURSOR_HELPER_EXE='(.*)'\$/\1/p" result/bin/openscreen | tail -1)
+
+          # ldd was the wrong instrument here, and it passed for the wrong reason:
+          # it resolves DT_NEEDED entries, and libpipewire is reached by dlopen, so
+          # it is never a DT_NEEDED and never appears. The check would have gone
+          # green with the hand-added RPATH missing entirely -- validating
+          # everything except the one thing this packaging adds.
+          #
+          # Read the RPATH out of the binary instead, and require that one of its
+          # directories actually holds the soname the shim hands to dlopen.
+          HELPER=$(wrapper_value OPENSCREEN_LINUX_CURSOR_HELPER_EXE)
           if [ -n "$HELPER" ]; then
-            echo "--- helper linkage ---"
-            ldd "$HELPER" || true
+            echo "--- helper dlopen contract ---"
+            # DT_RPATH or DT_RUNPATH: the derivation asks for the former, but read
+            # whichever is there rather than asserting which, so a silent
+            # conversion is reported instead of looking like an absent RPATH.
+            RPATH=$(readelf -d "$HELPER" | sed -nE 's/.*\((RPATH|RUNPATH)\).*\[(.*)\]/\2/p' | tail -1)
+            echo "rpath: ${RPATH:-<none>}"
+            found=""
+            origin=$(dirname "$HELPER")
+            IFS=: read -ra dirs <<<"$RPATH"
+            for dir in ${dirs[@]+"${dirs[@]}"}; do
+              # $ORIGIN is relative to the binary; the ffmpeg entries use it.
+              dir=${dir//\$ORIGIN/$origin}
+              if [ -e "$dir/libpipewire-0.3.so.0" ]; then
+                found="$dir"
+                break
+              fi
+            done
+            if [ -z "$found" ]; then
+              echo "::error::no RPATH entry of the helper holds libpipewire-0.3.so.0; its dlopen will fail on any host without an ld.so.cache"
+              missing=$((missing + 1))
+            else
+              echo "libpipewire-0.3.so.0 resolves from $found"
+            fi
+            # Unresolved DT_NEEDED entries are a different fault, and this is
+            # where they would show.
             if ldd "$HELPER" | grep -q "not found"; then
-              echo "::error::the PipeWire helper has unresolved shared libraries"
+              echo "::error::the helper has unresolved DT_NEEDED libraries"
+              ldd "$HELPER" | grep "not found"
               missing=$((missing + 1))
             fi
           fi
