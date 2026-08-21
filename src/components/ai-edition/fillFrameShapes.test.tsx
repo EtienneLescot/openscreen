@@ -67,17 +67,16 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe("a mixed timeline gets a shape to choose, not a shape imposed", () => {
-	it("names the current fill by RESOLUTION, not by ratio token", () => {
-		// `16:9` is readable; `683:384` and `64:27` are not. What a user recognises about
-		// their own footage is its resolution, so that is what the control says.
+describe("fitting a clip is an action, and a choice only when there is one", () => {
+	it("labels the button for the single-shape case and acts without asking", () => {
 		mount(documentWithShapes([[1920, 1080]]));
-		expect(screen.getByRole("button", { name: /1920 × 1080/ })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Fit the clip" }));
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 	});
 
-	it("offers every distinct shape, with the clip count behind each", () => {
+	it("asks which clip when the timeline holds more than one shape", () => {
 		// Five landscape clips and two portrait inserts: picking the majority silently would
-		// mean the portrait ones can never be made to fill.
+		// mean the portrait ones can never be fitted.
 		mount(
 			documentWithShapes([
 				[1920, 1080],
@@ -89,23 +88,33 @@ describe("a mixed timeline gets a shape to choose, not a shape imposed", () => {
 				[1080, 1920],
 			]),
 		);
-		fireEvent.click(screen.getByRole("button", { name: /1920 × 1080/ }));
+		fireEvent.click(screen.getByRole("button", { name: "Fit a clip" }));
 
 		const menu = screen.getByRole("menu");
-		expect(within(menu).getByRole("menuitem", { name: /1920 × 1080.*5/ })).toBeInTheDocument();
-		expect(within(menu).getByRole("menuitem", { name: /1080 × 1920.*2/ })).toBeInTheDocument();
+		// Resolution leads — `683:384` and `64:27` mean nothing to a user, `1920 × 1080` does.
+		expect(
+			within(menu).getByRole("menuitem", { name: /1920 × 1080.*5 clips/ }),
+		).toBeInTheDocument();
+		expect(
+			within(menu).getByRole("menuitem", { name: /1080 × 1920.*2 clips/ }),
+		).toBeInTheDocument();
 	});
 
-	it("offers a way back out of the menu it opened", () => {
+	it('counts one clip as "1 clip"', () => {
 		mount(
 			documentWithShapes([
+				[1920, 1080],
 				[1920, 1080],
 				[1080, 1920],
 			]),
 		);
-		fireEvent.click(screen.getByRole("button", { name: /1920 × 1080/ }));
+		fireEvent.click(screen.getByRole("button", { name: "Fit a clip" }));
+		const menu = screen.getByRole("menu");
 		expect(
-			within(screen.getByRole("menu")).getByRole("menuitem", { name: "Restore the frame" }),
+			within(menu).getByRole("menuitem", { name: /1080 × 1920.*1 clip$/ }),
+		).toBeInTheDocument();
+		expect(
+			within(menu).getByRole("menuitem", { name: /1920 × 1080.*2 clips/ }),
 		).toBeInTheDocument();
 	});
 
@@ -121,18 +130,16 @@ describe("a mixed timeline gets a shape to choose, not a shape imposed", () => {
 		);
 	});
 
-	it("asks nothing when every clip is the same shape — the button just acts", () => {
+	it("collapses same-shape clips to one entry, labelled with the biggest", () => {
 		mount(
 			documentWithShapes([
 				[1920, 1080],
 				[3840, 2160],
 			]),
 		);
-		// 1920x1080 and 3840x2160 are both 16:9, so they collapse to ONE shape — labelled with
-		// the biggest representative, the same rule the ratio menu uses so the label shows the
-		// best resolution available. One shape means no menu and no caveat.
-		fireEvent.click(screen.getByRole("button", { name: /3840 × 2160/ }));
-		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+		// Both are 16:9, so there is one shape and nothing to arbitrate — and the ratio menu's
+		// rule applies: the label shows the best resolution available.
+		expect(screen.getByRole("button", { name: "Fit the clip" })).toBeInTheDocument();
 		expect(screen.queryByRole("note")).not.toBeInTheDocument();
 	});
 });

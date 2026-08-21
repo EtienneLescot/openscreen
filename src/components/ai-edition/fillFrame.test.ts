@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
-import { fillFramePatch, fillsFrame } from "./RightPanes";
+import { fillsFrame, fitClipPatch } from "./RightPanes";
 
 const FILLED = {
 	padding: 0,
@@ -57,9 +57,9 @@ describe("fillsFrame reads the four settings, not a stored flag", () => {
 	});
 });
 
-describe("fillFramePatch", () => {
+describe("fitClipPatch", () => {
 	it("zeroes the three frame values and adopts the footage's shape", () => {
-		expect(fillFramePatch(true, "16:10")).toEqual({
+		expect(fitClipPatch("16:10")).toEqual({
 			padding: 0,
 			borderRadius: 0,
 			shadowIntensity: 0,
@@ -67,21 +67,19 @@ describe("fillFramePatch", () => {
 		});
 	});
 
-	it("round-trips: what it turns on, fillsFrame reads as on", () => {
-		const patched = { ...FILLED, ...fillFramePatch(true, "16:10") };
-		expect(fillsFrame(patched, NATIVE)).toBe(true);
+	it("round-trips: what it applies, fillsFrame reads as filled", () => {
+		expect(fillsFrame({ ...FILLED, ...fitClipPatch("16:10") }, NATIVE)).toBe(true);
 	});
 
-	it("restores the shipped defaults when switched off", () => {
-		const off = fillFramePatch(false, "16:10");
-		expect(off.padding).toBeGreaterThan(0);
-		expect(off.borderRadius).toBeGreaterThan(0);
-		expect(off.shadowIntensity).toBeGreaterThan(0);
-	});
-
-	it("leaves the aspect ratio alone when switched off", () => {
-		// Wanting the background back is not asking for the output to be reframed, and the
-		// three frame values alone bring it back.
-		expect(fillFramePatch(false, "16:10")).not.toHaveProperty("aspectRatio");
+	it("has no inverse, deliberately", () => {
+		// It was a toggle, and its OFF branch restored the shipped defaults — a guess dressed
+		// as a memory, since nothing stored what the user actually had. Undo does that job,
+		// and the three sliders it writes sit right below the button.
+		expect(Object.keys(fitClipPatch("16:10")).sort()).toEqual([
+			"aspectRatio",
+			"borderRadius",
+			"padding",
+			"shadowIntensity",
+		]);
 	});
 });
