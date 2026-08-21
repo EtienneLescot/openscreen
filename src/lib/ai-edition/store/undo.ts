@@ -5,6 +5,7 @@
 // free so it works in any renderer.
 
 import { useEffect, useRef } from "react";
+import { isModalOpen } from "../modalGuard";
 import { useProjectStore } from "./projectStore";
 
 type Snapshot = { projectId: string; doc: unknown };
@@ -66,6 +67,10 @@ export function useUndoRedoShortcuts(onAfter: () => void) {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
 			if (e.target instanceof HTMLElement && e.target.isContentEditable) return;
+			// `NewEditorShell` hands Ctrl+Z / Ctrl+Y to this listener instead of handling them,
+			// so its modal guard never runs for them: without this one, undo kept rewriting the
+			// document under every open modal, including the ones the shell does suppress.
+			if (isModalOpen()) return;
 			const ctrl = e.ctrlKey || e.metaKey;
 			if (ctrl && e.shiftKey && e.key.toLowerCase() === "z") {
 				e.preventDefault();

@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useMemo, useRef, useState } from "react";
+import { createContext, type ReactNode, useContext, useMemo, useState } from "react";
 
 // Which of the editor chrome's own dialogs is open, lifted out of the component that used to
 // own it.
@@ -16,16 +16,17 @@ import { createContext, type ReactNode, useContext, useMemo, useRef, useState } 
 // Split in two on purpose. The section changes on every open and close, the actions never do.
 // `NewEditorShell` owns the timeline, the preview and the transport, and only ever needs to
 // *open* a dialog — subscribing it to the section would re-render the whole editor twice per
-// dialog interaction, so it takes the actions alone. `isDialogOpen` serves the readers that
-// are event handlers rather than renders: it answers from a ref, which is what lets it sit in
-// a value whose identity never changes.
+// dialog interaction, so it takes the actions alone.
+//
+// Nothing asks this context whether a dialog is open. It briefly answered that for the editor's
+// global shortcuts, which was only ever half an answer — this context knows about its own
+// dialogs and about no others (#434). `isModalOpen` (lib/ai-edition/modalGuard) is where that
+// question is asked now.
 export type EditorDialogSection = "providers";
 
 interface EditorDialogsActions {
 	openDialog: (section: EditorDialogSection) => void;
 	closeDialog: () => void;
-	/** A live answer without a subscription — for event handlers, never for rendering. */
-	isDialogOpen: () => boolean;
 }
 
 // `undefined` is the "no provider above me" marker, so that `null` stays free to mean the real
@@ -49,24 +50,11 @@ export function useEditorDialogActions(): EditorDialogsActions {
 
 export function EditorDialogsProvider({ children }: { children: ReactNode }) {
 	const [section, setSection] = useState<EditorDialogSection | null>(null);
-	// Mirrored so `isDialogOpen` can read the current section without the actions value having
-	// to depend on it. Written by the two openers, not during render and not from an effect:
-	// during render a discarded one would leave the ref claiming a dialog that never committed,
-	// and from an effect a keystroke landing between the click and the commit would still get
-	// the previous answer. `setSection` is called from nowhere else, so the two cannot drift.
-	const sectionRef = useRef<EditorDialogSection | null>(null);
 
 	const actions = useMemo<EditorDialogsActions>(
 		() => ({
-			openDialog: (next) => {
-				sectionRef.current = next;
-				setSection(next);
-			},
-			closeDialog: () => {
-				sectionRef.current = null;
-				setSection(null);
-			},
-			isDialogOpen: () => sectionRef.current !== null,
+			openDialog: (next) => setSection(next),
+			closeDialog: () => setSection(null),
 		}),
 		[],
 	);
