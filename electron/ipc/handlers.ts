@@ -52,7 +52,7 @@ import {
 import type { CursorTelemetryReader } from "../ai-edition/deep-agent/service";
 import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
-import { mainLogBuffer } from "../diagnostics/main-log-buffer";
+import { isDiagnosticModeEnabled, mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { getInstallChannel } from "../install-channel";
 import { RECORDINGS_DIR } from "../main";
@@ -1716,12 +1716,35 @@ export function registerIpcHandlers(
 		// await it, and a renderer-side race would only stop *waiting* while this
 		// keeps running and its reply goes to nobody. Rejecting is what turns an
 		// indefinite spinner into the pickers' existing error branch.
-		const sources = await withDeadline(
-			desktopCapturer.getSources(opts),
-			GET_SOURCES_TIMEOUT_MS,
-			`Desktop source enumeration did not return within ${GET_SOURCES_TIMEOUT_MS}ms. ` +
-				"This usually means the display or GPU stack cannot be reached — check that a display server is available.",
-		);
+		// How long it actually took, under the existing diagnostic flag. The bound
+		// above turned an indefinite hang into a named failure, which is where the
+		// open question starts rather than ends: on a headless runner `openscreen
+		// sources` gets an answer within 20s four times in five while `record` --
+		// the same call with the same options -- exceeds 30s every time. A duration
+		// on both paths is what tells those apart; a threshold alone cannot.
+		const startedAt = Date.now();
+		const diagnostic = isDiagnosticModeEnabled();
+		let sources: Awaited<ReturnType<typeof desktopCapturer.getSources>>;
+		try {
+			sources = await withDeadline(
+				desktopCapturer.getSources(opts),
+				GET_SOURCES_TIMEOUT_MS,
+				`Desktop source enumeration did not return within ${GET_SOURCES_TIMEOUT_MS}ms. ` +
+					"This usually means the display or GPU stack cannot be reached — check that a display server is available.",
+			);
+		} catch (error) {
+			if (diagnostic) {
+				console.info(
+					`[get-sources] gave up after ${Date.now() - startedAt}ms (types=${(opts?.types ?? []).join(",")})`,
+				);
+			}
+			throw error;
+		}
+		if (diagnostic) {
+			console.info(
+				`[get-sources] returned ${sources.length} source(s) in ${Date.now() - startedAt}ms (types=${(opts?.types ?? []).join(",")})`,
+			);
+		}
 		lastEnumeratedSources = new Map(sources.map((source) => [source.id, source]));
 		return sources.map((source) => ({
 			id: source.id,
