@@ -12,7 +12,7 @@
 // the patch through `patchEditorSettings`, and persists via the store. No
 // extra state, no caches — the document is the single source of truth.
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { AxcutDocument } from "../schema";
 import {
 	type EditorSettingsPatch,
@@ -36,6 +36,7 @@ export interface UseEditorSettingsResult {
 
 export function useEditorSettings(): UseEditorSettingsResult {
 	const document = useProjectStore((s) => s.document);
+	const projectId = useProjectStore((s) => s.projectId);
 	const setDocument = useProjectStore((s) => s.setDocument);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
 
@@ -66,6 +67,21 @@ export function useEditorSettings(): UseEditorSettingsResult {
 	const liveDocRef = useRef<AxcutDocument | null>(null);
 	const liveBaseRef = useRef<AxcutDocument | null>(null);
 
+	// A drag does not always end in a commit -- the gradient editor's is a 400ms timer
+	// its own unmount cleanup cancels -- and nothing else empties these, so left alone
+	// they pin two whole documents for the lifetime of the hook instance. The editor
+	// mounts six `useEditorSettings()` at once and annotations can carry base64 image
+	// data URLs, so that is not a small pin. Release them when the project changes,
+	// which is the guard `useTimeline` carries, keyed on the same thing, for the same
+	// reason. What it is NOT is the reason a snapshot of the project the user left
+	// cannot reach the undo stack: `commit` below decides that, and decides it for a
+	// project that never changed too.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: projectId is the trigger, not a read — the body only clears refs.
+	useEffect(() => {
+		liveDocRef.current = null;
+		liveBaseRef.current = null;
+	}, [projectId]);
+
 	const setLive = useCallback(
 		(patch: EditorSettingsPatch) => {
 			const doc = useProjectStore.getState().document;
@@ -81,7 +97,16 @@ export function useEditorSettings(): UseEditorSettingsResult {
 	const commit = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		const base = liveBaseRef.current;
+		// The base counts only while the document on screen is still the one this hook's
+		// last `setLive` produced -- `setLive`'s own identity test, read the other way
+		// round. `SliderCell` fires `commit` from a bare mouseup with no `onChange` in
+		// front of it, so a click on a thumb arrives here carrying whatever base a drag
+		// that never committed left behind, and every recording write since has already
+		// put the states in between on the stack: handing that base on made one Ctrl+Z
+		// step over the lot of them. Across a project switch it is worse than a wrong
+		// step -- the snapshot names the OLD project, and `undo` answers a projectId
+		// that is not the store's by throwing the whole stack away.
+		const base = liveDocRef.current === doc ? liveBaseRef.current : null;
 		liveBaseRef.current = null;
 		liveDocRef.current = null;
 		await saveDocument(doc, { history: true, historyBase: base });

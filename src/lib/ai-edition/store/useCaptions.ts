@@ -4,7 +4,7 @@
 // writes only (for sliders), `commit` flushes. The document stays the single
 // source of truth — nothing is cached here.
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
 	type CaptionCue,
 	type CaptionSettings,
@@ -44,6 +44,7 @@ export interface UseCaptionsResult {
 
 export function useCaptions(): UseCaptionsResult {
 	const document = useProjectStore((s) => s.document);
+	const projectId = useProjectStore((s) => s.projectId);
 	const setDocument = useProjectStore((s) => s.setDocument);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
 
@@ -81,6 +82,15 @@ export function useCaptions(): UseCaptionsResult {
 	const liveDocRef = useRef<AxcutDocument | null>(null);
 	const liveBaseRef = useRef<AxcutDocument | null>(null);
 
+	// The same release `useEditorSettings` does, for the same reason: a drag that never
+	// commits leaves these holding two whole documents for the lifetime of the hook
+	// instance. `commit` below is what keeps a stale one off the undo stack.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: projectId is the trigger, not a read — the body only clears refs.
+	useEffect(() => {
+		liveDocRef.current = null;
+		liveBaseRef.current = null;
+	}, [projectId]);
+
 	const setLive = useCallback(
 		(patch: CaptionSettingsPatch) => {
 			const doc = useProjectStore.getState().document;
@@ -96,7 +106,9 @@ export function useCaptions(): UseCaptionsResult {
 	const commit = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		const base = liveBaseRef.current;
+		// See `useEditorSettings.commit`: a base is only worth recording while the
+		// document on screen is still the one this hook's live writes produced.
+		const base = liveDocRef.current === doc ? liveBaseRef.current : null;
 		liveBaseRef.current = null;
 		liveDocRef.current = null;
 		await saveDocument(doc, { history: true, historyBase: base });
