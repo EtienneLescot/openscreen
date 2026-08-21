@@ -96,7 +96,21 @@ rustPlatform.buildRustPackage {
   # wants DT_RPATH rather than DT_RUNPATH, so that the entries apply to the
   # transitive ffmpeg libraries too. patchelf defaults to writing DT_RUNPATH,
   # which would silently undo that choice.
-  postInstall = ''
+  #
+  # postFixup AND NOT postInstall, which is where this was and where it did not
+  # survive. stdenv's fixupPhase runs `patchelf --shrink-rpath`, which drops every
+  # RPATH entry no DT_NEEDED library needs -- and an entry that exists solely for a
+  # dlopen is, by construction, exactly what that describes. Added in postInstall
+  # it was stripped minutes later and the binary shipped with:
+  #
+  #   $ORIGIN/helper-ffmpeg:/nix/store/...-ffmpeg-tree.../lib:
+  #   /nix/store/...-glibc.../lib:/nix/store/...-gcc-lib/lib
+  #
+  # i.e. precisely the entries the linker could justify, and not the one that
+  # matters. postFixup runs at the end of fixupPhase, after the shrink, so the
+  # entry survives. dontPatchELF would also work and is worse: it disables the
+  # shrink for every output, to fix one entry.
+  postFixup = ''
     patchelf --force-rpath --add-rpath "${lib.makeLibraryPath [ pipewire ]}" \
       "$out/bin/openscreen-pipewire-helper"
   '';
