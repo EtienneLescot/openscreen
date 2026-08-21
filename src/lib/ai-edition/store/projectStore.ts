@@ -111,6 +111,11 @@ export interface ProjectState {
 	setCurrentTime: (sec: number) => void;
 	setPlaying: (playing: boolean) => void;
 	markClean: () => void;
+	/**
+	 * Drop the open project. Clears the undo history and supersedes every in-flight
+	 * write, the same as `loadProject` and `createProject` — this is a project
+	 * switch too, just one with nothing on the other side of it.
+	 */
 	clear: () => void;
 }
 
@@ -413,6 +418,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	},
 
 	clear() {
+		// The epoch bump inside `clearHistory` is the load-bearing half, not the stack
+		// drop. `clear()`'s one production caller deletes the project that is open
+		// (`NewEditorShell`), and a background save issued a moment earlier -- a
+		// transcript, a duration probe, a dimension backfill -- was still in flight. On
+		// resolving it installed its document and set `dirty: false, lastSavedAt: now`,
+		// so the editor that had just shown the empty state and toasted "Project
+		// deleted" put the deleted project's document back on screen with
+		// `projectId: null`, claiming it was freshly saved. Superseding those writes is
+		// exactly what this moment means.
+		//
+		// Dropping the stacks is hygiene by comparison: `undo` already refuses a
+		// snapshot whose `projectId` does not match the store's, and after this `set`
+		// there is no `projectId` at all -- so a stale stack could only leak up to
+		// MAX_HISTORY cloned documents until the next project load, never restore one.
+		clearHistory();
 		set({
 			projectId: null,
 			document: null,

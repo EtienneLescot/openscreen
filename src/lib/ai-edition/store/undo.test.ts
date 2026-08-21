@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
 import { clearHistory, redo, undo, useUndoRedoShortcuts } from "./undo";
-import { future, past } from "./undoStack";
+import { future, past, pushHistory } from "./undoStack";
 
 const saveMock = vi.hoisted(() => vi.fn());
 
@@ -348,7 +348,7 @@ describe("the Edit menu's undo/redo route", () => {
 		// two tests either side of this one passed without a guard.
 		const persist = vi.fn();
 		const { result } = renderHook(() => useUndoRedoShortcuts(persist));
-		past.push({ projectId: PROJECT_ID, doc: titled("Older") });
+		pushHistory({ projectId: PROJECT_ID, doc: titled("Older") });
 
 		const modal = window.document.createElement("div");
 		modal.setAttribute("aria-modal", "true");
@@ -380,7 +380,7 @@ describe("the Edit menu's undo/redo route", () => {
 		// still good for.
 		const persist = vi.fn();
 		const { result } = renderHook(() => useUndoRedoShortcuts(persist));
-		past.push({ projectId: PROJECT_ID, doc: titled("Older") });
+		pushHistory({ projectId: PROJECT_ID, doc: titled("Older") });
 
 		const input = window.document.createElement("input");
 		window.document.body.appendChild(input);

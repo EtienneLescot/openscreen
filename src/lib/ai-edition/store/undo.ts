@@ -15,7 +15,14 @@ import { useCallback, useEffect, useRef } from "react";
 import { isModalOpen } from "../modalGuard";
 import type { AxcutDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
-import { clearHistory, future, past, supersedeInFlightWrites } from "./undoStack";
+import {
+	clearHistory,
+	popFuture,
+	popPast,
+	pushFuture,
+	pushPast,
+	supersedeInFlightWrites,
+} from "./undoStack";
 
 export { clearHistory } from "./undoStack";
 
@@ -36,7 +43,7 @@ function restore(doc: unknown) {
 }
 
 export function undo(): boolean {
-	const prev = past.pop();
+	const prev = popPast();
 	if (!prev) return false;
 	const state = useProjectStore.getState();
 	if (!state.projectId || state.projectId !== prev.projectId) {
@@ -44,13 +51,13 @@ export function undo(): boolean {
 		return false;
 	}
 	const doc = state.document;
-	if (doc) future.push({ projectId: prev.projectId, doc: structuredClone(doc) });
+	if (doc) pushFuture({ projectId: prev.projectId, doc: structuredClone(doc) });
 	restore(prev.doc);
 	return true;
 }
 
 export function redo(): boolean {
-	const next = future.pop();
+	const next = popFuture();
 	if (!next) return false;
 	const state = useProjectStore.getState();
 	if (!state.projectId || state.projectId !== next.projectId) {
@@ -58,7 +65,7 @@ export function redo(): boolean {
 		return false;
 	}
 	const doc = state.document;
-	if (doc) past.push({ projectId: doc.project.id, doc: structuredClone(doc) });
+	if (doc) pushPast({ projectId: doc.project.id, doc: structuredClone(doc) });
 	restore(next.doc);
 	return true;
 }
