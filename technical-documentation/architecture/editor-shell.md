@@ -38,7 +38,7 @@ flowchart TD
     Stage -- "mode === 'media'" --> Media
     Stage -- "mode === 'rec'" --> Rec
 
-    Inspector -- "FacetBody" --> RightPanes["BackgroundPane / VideoEffectsPane /<br/>LayoutPane / CursorPane /<br/>TranscriptPane / CaptionsPane<br/>(RightPanes.tsx · CaptionsPane.tsx)"]
+    Inspector -- "FacetBody" --> RightPanes["VideoEffectsPane / LayoutPane /<br/>AudioPane / CursorPane /<br/>TranscriptPane / CaptionsPane<br/>(RightPanes.tsx · CaptionsPane.tsx)"]
 ```
 
 The shell is the single owner of mode, transport (`playing`/`currentTimeSec` come
@@ -84,17 +84,17 @@ export type EditorMode = "media" | "edit" | "rec";
 ### Facet (`v4/FloatingInspector.tsx:57`)
 
 ```ts
-export type Facet = "background" | "effects" | "layout" | "cursor" | "captions" | "transcript";
+export type Facet = "effects" | "layout" | "audio" | "cursor" | "captions" | "transcript";
 ```
 
 | Facet | Body component | Purpose |
 |---|---|---|
-| `"background"` | `BackgroundPane` (`src/components/ai-edition/RightPanes.tsx:178`) | Wallpaper, shadow intensity, blur, motion blur, corner radius, padding — all read out of `document.legacyEditor`. |
-| `"effects"` | `VideoEffectsPane` (`RightPanes.tsx:1218`) | Per-clip / per-document video effects that aren't zoom / speed / annotation (cursor zoom, etc.). |
-| `"layout"` | `LayoutPane` (`RightPanes.tsx:1376`) | Webcam layout (PiP / side / full / off), mask shape, mirroring — all also from `legacyEditor`. |
-| `"cursor"` | `CursorPane` (`RightPanes.tsx:1544`) | Cursor smoothing, theme, click ring, halo. |
+| `"effects"` | `VideoEffectsPane` (`src/components/ai-edition/RightPanes.tsx`) | Everything that shapes the composition, in three sections: **Background** (a swatch trigger opening the wallpaper / colour / gradient picker in a popover, plus the background blur), **Frame** (shadow, roundness, padding) and **Motion** (motion blur). All read out of `document.legacyEditor`. The picker floats so the frame sliders stay above the fold — inline, its 18-swatch grid alone was two thirds of the pane's height. |
+| `"layout"` | `LayoutPane` (`RightPanes.tsx`) | Webcam layout (PiP / side / full / off), mask shape, mirroring — all also from `legacyEditor`. |
+| `"audio"` | `AudioPane` (`RightPanes.tsx`) | Output gain. |
+| `"cursor"` | `CursorPane` (`RightPanes.tsx`) | Cursor smoothing, theme, click ring, halo. |
 | `"captions"` | `CaptionsPane` (`CaptionsPane.tsx`) | Caption appearance (font, size, background, animation) and translations. The pane owns the `transcribe` action — it's the only place that runs it from the shell. |
-| `"transcript"` | `TranscriptPane` (`RightPanes.tsx:475`) | Editable view of the transcript words / segments. Writes back to the document. |
+| `"transcript"` | `TranscriptPane` (`RightPanes.tsx`) | Editable view of the transcript words / segments. Writes back to the document. |
 
 Selecting a region on the timeline supersedes the current facet body: the
 inspector opens (if it was closed) and renders the `SelectionPane` for that

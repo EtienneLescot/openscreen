@@ -74,6 +74,8 @@
 		"shadow": "Ombra",
 		"roundness": "Arrotondamento",
 		"padding": "Spaziatura",
+		"frame": "Cornice",
+		"motion": "Movimento",
 		"help": "Stile della cornice della registrazione: sfocatura dello sfondo, ombra, sfocatura di movimento, raggio degli angoli e margine attorno al video."
 	},
 	"background": {

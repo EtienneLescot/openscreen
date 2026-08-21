@@ -73,6 +73,8 @@
 		"shadow": "Ombre",
 		"roundness": "Arrondi",
 		"padding": "Marge",
+		"frame": "Cadre",
+		"motion": "Mouvement",
 		"on": "activé",
 		"help": "Mise en forme du cadre de l'enregistrement : flou d'arrière-plan, ombre portée, flou de mouvement, arrondi des coins et marge autour de la vidéo."
 	},

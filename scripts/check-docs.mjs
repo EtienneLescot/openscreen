@@ -26,6 +26,7 @@ const LEGACY = [
 	"Bottombar",
 	"Titlebar",
 	"TranscriptEditor",
+	"BackgroundPane",
 	"ai-edition-roadmap",
 	"ai-edition-collision-analysis",
 	"openscreen-inventory",

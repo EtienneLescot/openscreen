@@ -73,6 +73,8 @@
 		"shadow": "Sombra",
 		"roundness": "Redondez",
 		"padding": "Relleno",
+		"frame": "Marco",
+		"motion": "Movimiento",
 		"on": "activado",
 		"help": "Estilo del marco de la grabación: desenfoque de fondo, sombra, desenfoque de movimiento, radio de esquinas y margen alrededor del vídeo."
 	},
