@@ -1518,3 +1518,82 @@ describe("removeClip — delete a clip, close the gap, drop its pills", () => {
 		expect(next).toBe(before);
 	});
 });
+
+// #356: `legacyEditorSchema` is `z.object({}).passthrough()`, so a project file whose
+// envelope holds a non-array where a region collection belongs is schema-valid and loads
+// without a word. Every clip edit — delete / move / duplicate / source-range — walks those
+// collections through `mapAllRegionCollections`, which used to call `.filter()` on whatever
+// it found and take the whole editor down with `regions.filter is not a function`. The
+// malformed value is left exactly as it was found (the same call `upgradeV4DocumentToV5`
+// makes): the rest of the document still edits, and nothing the user had is discarded.
+describe("a malformed legacyEditor envelope", () => {
+	const doc = (legacyEditor: AxcutDocument["legacyEditor"]) =>
+		makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					makeClip({ id: "clip_a", sourceStartSec: 0, sourceEndSec: 10, timelineEndSec: 10 }),
+					makeClip({
+						id: "clip_b",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 10,
+						timelineEndSec: 20,
+					}),
+				],
+			},
+			legacyEditor,
+		});
+
+	it("deletes a clip instead of throwing, and keeps the sibling collection working", () => {
+		const before = doc({
+			speedRegions: "oops",
+			cameraFullscreenRegions: [
+				{
+					id: "cam_b",
+					clipId: "clip_b",
+					sourceStartSec: 2,
+					sourceEndSec: 4,
+					startMs: 12000,
+					endMs: 14000,
+				},
+			],
+		});
+
+		const next = removeClip(before, "clip_a");
+
+		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_b"]);
+		const legacy = next.legacyEditor as {
+			speedRegions: unknown;
+			cameraFullscreenRegions: Array<{ id: string; startMs: number; endMs: number }>;
+		};
+		// Untouched, not dropped — we cannot walk it, which is not a reason to delete it.
+		expect(legacy.speedRegions).toBe("oops");
+		// The well-formed neighbour is still rederived: clip_b slid 10s to the front.
+		expect(legacy.cameraFullscreenRegions).toEqual([
+			expect.objectContaining({ id: "cam_b", startMs: 2000, endMs: 4000 }),
+		]);
+	});
+
+	it("passes the envelope through by reference when no collection is walkable", () => {
+		const before = doc({ speedRegions: "oops", cameraFullscreenRegions: { id: "not_a_list" } });
+
+		const next = removeClip(before, "clip_a");
+
+		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_b"]);
+		expect(next.legacyEditor).toBe(before.legacyEditor);
+		expect(next.legacyEditor).toEqual({
+			speedRegions: "oops",
+			cameraFullscreenRegions: { id: "not_a_list" },
+		});
+	});
+
+	it("edits a clip's source range instead of throwing", () => {
+		const before = doc({ speedRegions: null, cameraFullscreenRegions: 42 });
+
+		const next = setClipSourceRange(before, "clip_a", 2, 5);
+
+		expect(next.timeline.clips[0]).toMatchObject({ sourceStartSec: 2, sourceEndSec: 5 });
+		expect(next.legacyEditor).toEqual({ speedRegions: null, cameraFullscreenRegions: 42 });
+	});
+});
