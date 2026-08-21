@@ -282,6 +282,16 @@ export function persistRepetition(options: PersistRepetitionOptions): {
 // que ce fichier a écrit, autant de fois qu'on veut — c'est la raison d'être de
 // `runs/`, enfin utilisée pour autre chose que la lecture humaine.
 
+/**
+ * `cut()` inscrit ses coupes sous la forme `<champ> (<n> → <max> car.)`. La
+ * comparaison porte donc sur `<champ> ` et pas sur un préfixe : `argsJson` et
+ * `argsJsonBrut` commenceraient pareil, et `wire.calls[1]` serait un préfixe de
+ * `wire.calls[12]`.
+ */
+function wasTruncated(turn: PersistedTurn, field: string): boolean {
+	return turn.truncated.some((entry) => entry.startsWith(`${field} (`));
+}
+
 export function readPersistedTurn(file: string): PersistedTurn {
 	const turn = JSON.parse(readFileSync(file, "utf8")) as PersistedTurn;
 	if (turn.schema !== 1 && turn.schema !== 2) {
@@ -336,11 +346,29 @@ export function contextFromPersistedTurn(turn: PersistedTurn): EvalContext {
 		toolNames: turn.wire.toolNames,
 		toolsSha256: turn.wire.toolsSha256,
 		rounds: turn.wire.rounds,
-		calls: turn.wire.calls.map((call) => {
+		calls: turn.wire.calls.map((call, index) => {
 			let args: unknown;
 			try {
 				args = JSON.parse(call.argsJson);
 			} catch {
+				// ponytail: `args: undefined` a un sens PRÉCIS dans `WireCall` — le
+				// modèle a émis du JSON invalide, ce qu'un scénario peut provoquer
+				// exprès. Mais `cut()` coupe `argsJson` à MAX_FIELD_CHARS, et un JSON
+				// tronqué ne parse pas non plus : sans cette branche, notre propre
+				// troncature se relisait comme « le modèle n'a pas passé d'arguments ».
+				// C'est l'absence traitée comme un non-événement, la faute que ce
+				// fichier passe son temps à refuser ailleurs.
+				//
+				// Il refuse donc plutôt que de rendre un tour amputé. Le champ exact,
+				// jamais le préfixe `wire.calls[` : `resultJson` est coupé sous le même
+				// préfixe et sa troncature, elle, est sans conséquence ici.
+				if (wasTruncated(turn, `wire.calls[${index}].argsJson`)) {
+					throw new Error(
+						`tour illisible : les arguments de ${call.name} (appel ${call.id}) ont été ` +
+							"tronqués à l'écriture, on ne peut pas les relire. Rejugez un run dont " +
+							"`truncated[]` est vide, ou remontez MAX_FIELD_CHARS avant de le rejouer.",
+					);
+				}
 				args = undefined;
 			}
 			return {
