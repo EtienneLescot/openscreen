@@ -284,7 +284,7 @@ export function LaunchWindow() {
 	}, []);
 
 	// One dismiss handler for both floating surfaces — they're mutually exclusive,
-	// so a single pointerdown/Escape listener covers the pair instead of two.
+	// so a single pointerdown/Escape/blur listener covers the pair instead of two.
 	const closePopovers = useCallback(() => {
 		setIsDeviceSettingsOpen(false);
 		setIsLanguageMenuOpen(false);
@@ -311,10 +311,21 @@ export function LaunchWindow() {
 
 		window.addEventListener("pointerdown", handlePointerDown);
 		window.addEventListener("keydown", handleEscape);
+		// The third dismiss path, and the one that made issue #435: the HUD's native
+		// window is only 904x698, so a click anywhere else on screen reaches this
+		// renderer as nothing at all — no pointerdown to hit-test — while still taking
+		// keyboard focus away. Escape is then undeliverable here, and the popover was
+		// stuck open until the trigger was found again. `blur` is the one signal that
+		// crosses, so it closes the pair; after this the "popover open in a window
+		// that has no focus" state simply doesn't exist. Bubble phase on purpose:
+		// element blur doesn't bubble, so this only ever fires for the window itself
+		// and never when focus moves between the menu's own buttons.
+		window.addEventListener("blur", closePopovers);
 
 		return () => {
 			window.removeEventListener("pointerdown", handlePointerDown);
 			window.removeEventListener("keydown", handleEscape);
+			window.removeEventListener("blur", closePopovers);
 		};
 	}, [closePopovers, isPopoverOpen]);
 
