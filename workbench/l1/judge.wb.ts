@@ -152,7 +152,16 @@ describe("le juge tourne sur un tour relu du disque", () => {
 		const result = scored.behaviour.results.find((r) => r.id === judged.id);
 		expect(result?.ok).toBe(true);
 		expect(result?.indeterminate).toBe(false);
-		expect(scored.behaviour.undecidedWeight).toBe(0);
+		// ponytail: le poids indéterminé restant est celui des AUTRES checks jugés
+		// du scénario, qu'on n'a pas fait trancher ici. Écrit en soustraction
+		// plutôt qu'en constante : un `toBe(2)` recopié devrait être retouché à
+		// chaque check jugé ajouté, et la retouche la plus probable serait de
+		// recopier le nombre observé — ce qui ferait passer le test quoi qu'il
+		// mesure.
+		const autres = (SCENARIO.judged ?? [])
+			.filter((other) => other.id !== judged.id)
+			.reduce((total, other) => total + other.weight, 0);
+		expect(scored.behaviour.undecidedWeight).toBe(autres);
 	});
 
 	it("the same turn judged fautif fails the check and names the judge", async () => {
@@ -196,7 +205,11 @@ describe("le juge tourne sur un tour relu du disque", () => {
 		const scored = scoreRun(SCENARIO, context, new Map([[judged.id, reading]]));
 		expect(scored.behaviour.results.find((r) => r.id === judged.id)?.indeterminate).toBe(true);
 		// Et il ne compte NI pour NI contre : l'axe garde le score des tranchés.
-		expect(scored.behaviour.undecidedWeight).toBe(judged.weight);
+		// Le poids attendu est celui de TOUS les checks jugés du scénario, puisque
+		// aucun n'a tranché — celui-ci parce que le juge a répondu de la prose, les
+		// autres parce qu'on ne les a pas posés.
+		const jugés = (SCENARIO.judged ?? []).reduce((total, other) => total + other.weight, 0);
+		expect(scored.behaviour.undecidedWeight).toBe(jugés);
 	});
 
 	it("lists the persisted turns the way `wb:judge` walks them", () => {

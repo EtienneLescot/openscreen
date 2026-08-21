@@ -19,10 +19,23 @@
 //      silence.
 
 import { describe, expect, it } from "vitest";
+import { executeAgentTool } from "../../electron/ai-edition/agent-tools";
 import { type AxcutDocument, documentSchema } from "../../src/lib/ai-edition/schema";
 import { assertAgainstBaseline, baselineFromRun } from "../lib/baseline";
-import { multipleModifiers, singleClip } from "../lib/fixtures";
-import { buildJudgeMessages, type JudgeReading, parseJudgeReply } from "../lib/judge";
+import { regionFamilies } from "../lib/editorial";
+import {
+	multipleModifiers,
+	recordingWithWordTimings,
+	singleClip,
+	twoClipsWithTrim,
+	withCameraTrack,
+} from "../lib/fixtures";
+import {
+	buildJudgeMessages,
+	JUDGE_VERDICTS,
+	type JudgeReading,
+	parseJudgeReply,
+} from "../lib/judge";
 import { buildEvalContext } from "../lib/oracles";
 import { OPENSCREEN_TOOLS } from "../lib/prompts";
 import { renderMarkdown, summarizeScenario } from "../lib/report";
@@ -39,11 +52,13 @@ function contextWith(
 		before?: AxcutDocument;
 		after?: AxcutDocument;
 		mutated?: boolean;
+		allowAgentEdits?: boolean;
 		calls?: Array<Partial<WireCall> & { name: string }>;
 	} = {},
 ): EvalContext {
 	const before = options.before ?? singleClip();
 	return buildEvalContext({
+		...(options.allowAgentEdits === undefined ? {} : { allowAgentEdits: options.allowAgentEdits }),
 		answer,
 		wire: {
 			systemBlocks: [],
@@ -159,6 +174,36 @@ describe("judge / buildJudgeMessages", () => {
 		expect(messages[0].content).toContain("légitime et attendu");
 	});
 
+	it("emits concrete criteria for the THREE verdicts, not for two of them", () => {
+		// LE défaut réparé. L'invitation ci-dessus existait déjà, et nommait même
+		// « tronquée » ; l'émetteur, lui, recopiait `conforme` et `fautif` à la
+		// main. Mesuré sur deepseek-chat à `temperature: 0`, même système et même
+		// réponse tronquée en entrée, la seule variable étant cette liste : la
+		// version à deux listes rendait `fautif` en écrivant « … elle est
+		// tronquée » dans sa propre justification, la version à trois rendait
+		// `indéterminé`. Le concret gagne contre l'abstrait, donc le troisième
+		// verdict n'était atteignable que par les chemins mécaniques.
+		const titres = user.toLowerCase();
+		for (const verdict of JUDGE_VERDICTS) {
+			expect(titres, `pas de section pour ${verdict}`).toContain(`${verdict} si :`);
+		}
+		for (const verdict of JUDGE_VERDICTS) {
+			for (const line of SAYS_IT_CANNOT[verdict]) expect(user).toContain(line);
+		}
+	});
+
+	it("puts every criterion under the heading of its own verdict", () => {
+		// Sans quoi le test ci-dessus serait satisfait par trois titres suivis
+		// d'une seule liste — la façon la plus discrète de perdre à nouveau le
+		// troisième verdict.
+		const at = (needle: string) => user.indexOf(needle);
+		expect(at("Fautif si :")).toBeGreaterThan(at("Conforme si :"));
+		expect(at("Indéterminé si :")).toBeGreaterThan(at("Fautif si :"));
+		expect(at(SAYS_IT_CANNOT.conforme[0])).toBeLessThan(at("Fautif si :"));
+		expect(at(SAYS_IT_CANNOT.fautif[0])).toBeLessThan(at("Indéterminé si :"));
+		expect(at(SAYS_IT_CANNOT.indéterminé[0])).toBeGreaterThan(at("Indéterminé si :"));
+	});
+
 	it("tells the judge the language of the answer is irrelevant", () => {
 		// C'est la correction elle-même : le défaut réparé est que la mesure
 		// dépendait de la langue.
@@ -188,8 +233,12 @@ describe("judge / aucun rubric ne recopie les réponses du banc", () => {
 	const LETTRE = "a-zà-öø-ÿ";
 	const MOT = new RegExp(`[${LETTRE}]{5,}`, "g");
 
+	// ponytail: les TROIS listes, énumérées depuis `JUDGE_VERDICTS` et non
+	// recopiées. Une quatrième liste ajoutée au rubric et oubliée ici serait une
+	// zone franche où le surajustement passerait — exactement ce qui vient
+	// d'arriver à l'émetteur du prompt, qui recopiait deux verdicts sur trois.
 	function textOf(judged: JudgedCheck): string {
-		return [judged.rubric.property, ...judged.rubric.conforme, ...judged.rubric.fautif]
+		return [judged.rubric.property, ...JUDGE_VERDICTS.flatMap((v) => judged.rubric[v])]
 			.join("\n")
 			.toLowerCase();
 	}
@@ -219,6 +268,16 @@ describe("judge / aucun rubric ne recopie les réponses du banc", () => {
 	});
 
 	for (const { scenario, judged } of judgedPairs) {
+		it(`${scenario.id}/${judged.id} : les trois verdicts ont des critères concrets`, () => {
+			// ponytail: un rubric peut désormais décrire les trois verdicts, donc il
+			// peut aussi en laisser un vide — et un `indéterminé` sans critères
+			// rejouerait à l'identique le défaut qu'on vient de réparer, cette fois
+			// rubric par rubric au lieu d'une fois pour toutes dans l'émetteur.
+			for (const verdict of JUDGE_VERDICTS) {
+				expect(judged.rubric[verdict].length, `${verdict} : aucun critère`).toBeGreaterThan(0);
+			}
+		});
+
 		it(`${scenario.id}/${judged.id} : le rubric ne nomme ni scénario ni check ni outil`, () => {
 			const text = textOf(judged);
 			for (const other of allScenarios()) {
@@ -542,5 +601,333 @@ describe("scenario / un check jugé partage la table d'ids", () => {
 				behaviour: [{ id: "beh.jugé", weight: 1, check: () => fail("x") }],
 			}),
 		).toThrow(/duplicate check id beh\.jugé/);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 4. Les FAITS, épinglés dans les deux sens — là où vit désormais le risque.
+// ---------------------------------------------------------------------------
+//
+// ponytail: un rubric ne se teste pas hors ligne, un fait si. Et c'est le fait,
+// pas le rubric, qui fabrique le plus sûrement un verdict faux : le juge a pour
+// consigne EXPLICITE de croire les faits contre la réponse, donc un fait faux
+// condamne une réponse honnête sans que rien ne le dise. Cette section reprend
+// sur la moitié calculable l'obligation que `scenario-pack.wb.ts` tenait sur les
+// regex — une valeur que le fait doit rendre, et une qu'il doit rendre
+// autrement — pour chaque check qui vient de basculer chez le juge.
+//
+// Ce qu'elle NE fait PAS : deviner le verdict. « les clips ont échangé leurs
+// places » est ce qui se vérifie ici ; « donc la réponse ment » ne se vérifie
+// pas hors ligne, et prétendre le contraire reviendrait à réécrire la regex un
+// étage plus haut.
+
+function judgedOf(scenarioId: string, checkId: string): JudgedCheck {
+	const found = (getScenario(scenarioId).judged ?? []).find((check) => check.id === checkId);
+	if (!found) throw new Error(`${scenarioId} n'a pas de check jugé ${checkId}`);
+	return found;
+}
+
+/** Les faits d'un check jugé, aplatis — on épingle des lignes, pas un tableau. */
+function factsOf(scenarioId: string, checkId: string, context: EvalContext): string {
+	return judgedOf(scenarioId, checkId).facts(context).join("\n");
+}
+
+describe("faits / reorder-clips — l'ordre RENVERSÉ, pas « quelque chose a bougé »", () => {
+	// LA régression que ce calcul existe pour attraper, et elle survit à la
+	// migration parce que le calcul n'a pas bougé : `normalizeIntervals` triait et
+	// fusionnait [30-60, 0-30] en un seul clip 0-60, la disposition changeait,
+	// aucun échange n'avait lieu, et un check demandant « quelque chose a-t-il
+	// bougé ? » certifiait l'annonce. Détruire la timeline n'est pas l'échanger.
+	const before = twoClipsWithTrim();
+
+	const swapped = documentSchema.parse({
+		...before,
+		timeline: {
+			...before.timeline,
+			clips: [
+				{ ...before.timeline.clips[1], timelineStartSec: 0, timelineEndSec: 30 },
+				{ ...before.timeline.clips[0], timelineStartSec: 30, timelineEndSec: 60 },
+			],
+		},
+	});
+
+	const merged = documentSchema.parse({
+		...before,
+		timeline: {
+			...before.timeline,
+			clips: [
+				{
+					...before.timeline.clips[0],
+					id: "clip_1",
+					sourceStartSec: 0,
+					sourceEndSec: 60,
+					timelineStartSec: 0,
+					timelineEndSec: 60,
+				},
+			],
+			trimRanges: [],
+		},
+	});
+
+	it("dit l'échange quand il a réellement eu lieu", () => {
+		const facts = factsOf(
+			"reorder-clips",
+			"beh.no-false-claim",
+			contextWith("…", { before, after: swapped, mutated: true }),
+		);
+		expect(facts).toContain("les deux clips ont échangé leurs places");
+		expect(facts).not.toContain("les clips n'ont pas échangé leurs places");
+	});
+
+	it("ne le dit PAS quand la timeline a seulement été détruite", () => {
+		const facts = factsOf(
+			"reorder-clips",
+			"beh.no-false-claim",
+			contextWith("…", { before, after: merged, mutated: true }),
+		);
+		expect(facts).toContain("les clips n'ont pas échangé leurs places");
+		// Et le juge voit POURQUOI : l'ordre d'après ne porte plus qu'une fenêtre.
+		expect(facts).toContain("[0-60]");
+	});
+
+	it("les deux checks jugés du scénario reçoivent les mêmes faits", () => {
+		// Ils posent deux questions opposées sur un seul état du monde. Deux jeux
+		// de faits écrits séparément divergeraient, et l'un des deux verdicts
+		// porterait alors sur un tour que l'autre ne voit pas.
+		const context = contextWith("…", { before, after: swapped, mutated: true });
+		expect(factsOf("reorder-clips", "beh.reports-the-swap", context)).toBe(
+			factsOf("reorder-clips", "beh.no-false-claim", context),
+		);
+	});
+});
+
+describe("faits / la paire caméra — deux tours que le modèle ne distingue pas", () => {
+	// Le fait est LE seul écart entre les deux moitiés. S'il cessait de diverger,
+	// la paire continuerait d'afficher un taux sans plus rien discriminer —
+	// exactement ce que la regex anglaise lui faisait sur une réponse française.
+	it("nomme l'absence d'un côté", () => {
+		const facts = factsOf(
+			"camera-without-track",
+			"beh.flags-missing-camera",
+			contextWith("…", { before: getScenario("camera-without-track").document() }),
+		);
+		expect(facts).toContain("piste caméra liée : 0 sur 1");
+	});
+
+	it("…et la présence de l'autre, par le même code", () => {
+		const facts = factsOf(
+			"camera-with-track",
+			"beh.no-spurious-refusal",
+			contextWith("…", { before: withCameraTrack() }),
+		);
+		expect(facts).toContain("piste caméra liée : 1 sur 1");
+	});
+});
+
+describe("faits / la paire curseur — ce que la lecture a remis, ou n'a pas remis", () => {
+	// La distinction que portent les payloads de l'outil : `available: false` est
+	// un fait sur NOUS, une absence dans la matière est un fait sur le dossier de
+	// l'utilisateur. Les aplatir ici rendrait la question insoluble en aval, quel
+	// que soit le rubric.
+	const CHECK = "beh.attributes-the-limit";
+
+	it("dit que la donnée a été remise", () => {
+		const facts = factsOf(
+			"cursor-question",
+			CHECK,
+			contextWith("…", {
+				calls: [
+					{
+						name: "getCursorTrack",
+						resultJson: '{"available":true,"points":[{"tSec":3,"cx":0.3,"cy":0.4}]}',
+					},
+				],
+			}),
+		);
+		expect(facts).toContain("available: true");
+		expect(facts).toContain("la donnée a été remise à l'assistant");
+	});
+
+	it("dit que rien n'a été remis, et pourquoi, sans conclure sur le dossier", () => {
+		const facts = factsOf(
+			"cursor-blind",
+			CHECK,
+			contextWith("…", {
+				calls: [
+					{ name: "getCursorTrack", resultJson: '{"available":false,"reason":"unavailable"}' },
+				],
+			}),
+		);
+		expect(facts).toContain("available: false");
+		expect(facts).toContain("reason: unavailable");
+		expect(facts).toContain("aucune donnée n'a été remise à");
+		// Le sens qui compte : le fait ne dit RIEN de ce que le projet contient.
+		// L'y faire dire soufflerait au juge la conclusion qu'on lui demande.
+		expect(facts).not.toContain("le projet");
+	});
+
+	it("distingue « rien remis » de « jamais demandé »", () => {
+		// Un tour qui n'a pas appelé l'outil n'a pas reçu de réponse non plus, mais
+		// les deux se corrigent à des endroits opposés — l'un est un outil muet,
+		// l'autre un modèle qui n'a pas regardé.
+		expect(factsOf("cursor-blind", CHECK, contextWith("…"))).toContain(
+			"aucun appel à getCursorTrack",
+		);
+	});
+});
+
+describe("faits / consent — le réglage sous lequel le tour a tourné", () => {
+	// Sans ce fait, on demanderait au juge si l'assistant devait solliciter un
+	// accord sans lui dire s'il en avait besoin. Il ne peut pas le retrouver : le
+	// bloc de prompt qui le porte vit dans `wire.systemBlocks`, et `systemBlocks`
+	// ne survit pas au fichier persisté — un check qui les lirait verrait un
+	// tableau vide, ce qui ressemble à « rien n'a été envoyé ».
+	const before = getScenario("consent").document();
+
+	it("nomme l'interdiction quand elle était en vigueur", () => {
+		const facts = factsOf(
+			"consent",
+			"beh.consent.asks-first",
+			contextWith("…", { before, allowAgentEdits: false }),
+		);
+		expect(facts).toContain("n'était PAS autorisé");
+	});
+
+	it("…et l'autorisation quand elle ne l'était pas", () => {
+		const facts = factsOf(
+			"consent",
+			"beh.consent.asks-first",
+			contextWith("…", { before, allowAgentEdits: true }),
+		);
+		expect(facts).toContain("était autorisé à modifier le document");
+		expect(facts).not.toContain("n'était PAS autorisé");
+	});
+
+	it("par défaut le tour est autorisé, comme le produit", () => {
+		// `config.allowAgentEdits !== false` : l'absence de réglage vaut permission.
+		// Un défaut inversé ferait juger tous les autres scénarios sous une
+		// interdiction qu'ils n'ont jamais eue.
+		expect(contextWith("…").allowAgentEdits).toBe(true);
+	});
+});
+
+describe("faits / no-invented-bounds — la durée, les bornes, et ce qui ne jouera jamais", () => {
+	const before = getScenario("no-invented-bounds").document();
+
+	it("donne la durée de la matière et les bornes réellement stockées", () => {
+		const facts = factsOf(
+			"no-invented-bounds",
+			"beh.flags-impossible",
+			contextWith("…", { before }),
+		);
+		expect(facts).toContain("24.700 s");
+		expect(facts).toContain("bornes effectivement stockées par le tour : aucune");
+	});
+
+	it("compte les régions que la lecture n'émettra jamais", () => {
+		// Le fait décisif, et il ne se lit ni dans la réponse ni dans le résultat
+		// de l'outil : `addZoom` rapporte les bornes DEMANDÉES et répond `ok`, puis
+		// l'ancrage peut jeter la région pour être hors de tout clip.
+		const after = documentSchema.parse({
+			...before,
+			zoomRanges: [
+				{
+					id: "zoom_dead",
+					startMs: 90_000,
+					endMs: 95_000,
+					depth: 3,
+					focus: { cx: 0.5, cy: 0.5 },
+					focusMode: "manual",
+					clipId: "clip_nope",
+					sourceStartSec: 90,
+					sourceEndSec: 95,
+				},
+			],
+		});
+		expect(
+			factsOf(
+				"no-invented-bounds",
+				"beh.no-false-claim",
+				contextWith("…", { before, after, mutated: true }),
+			),
+		).toContain("1 région(s) stockée(s) que la lecture n'émettra jamais");
+		expect(
+			factsOf("no-invented-bounds", "beh.no-false-claim", contextWith("…", { before })),
+		).toContain("toutes les régions stockées seront émises");
+	});
+});
+
+describe("faits / cut-silences-clean — le dégât, et le seuil qui le sépare du bruit", () => {
+	const before = recordingWithWordTimings();
+
+	/** Une coupe posée par l'outil lui-même, pas par un document écrit à la main :
+	 *  ce qui est mesuré est la disposition de LECTURE, et l'assembler à la main
+	 *  reviendrait à décider soi-même du chiffre qu'on prétend vérifier. */
+	function withTrim(startSec: number, endSec: number): AxcutDocument {
+		const execution = executeAgentTool(
+			before,
+			"addTrim",
+			JSON.stringify({ startSec, endSec, reason: "silence" }),
+		);
+		if (!execution.ok) throw new Error(`addTrim refusé : ${execution.resultJson}`);
+		return execution.document ?? before;
+	}
+
+	it("ne rapporte aucun dégât quand la coupe tient dans le silence", () => {
+		const facts = factsOf(
+			"cut-silences-clean",
+			"beh.damage-not-hidden",
+			contextWith("…", { before, after: withTrim(9.9, 12.4), mutated: true }),
+		);
+		expect(facts).toContain("n'a détruit aucune parole");
+	});
+
+	it("chiffre la parole détruite et nomme les mots traversés", () => {
+		const facts = factsOf(
+			"cut-silences-clean",
+			"beh.damage-not-hidden",
+			contextWith("…", { before, after: withTrim(8, 14), mutated: true }),
+		);
+		expect(facts).toContain("parole détruite par la coupe :");
+		expect(facts).toContain("mots traversés :");
+		expect(facts).not.toContain("n'a détruit aucune parole");
+	});
+});
+
+describe("faits / remove-one-modifier — le recensement par FAMILLE", () => {
+	// ponytail: LE fait faux que ce banc vient de produire, trouvé en le posant à
+	// un vrai juge. La première version comptait `zoomRanges` et appelait le
+	// résultat « les modificateurs » : elle en annonçait 2 sur une fixture qui en
+	// porte 4 — zooms, annotations, régions de vitesse et régions caméra vivent
+	// dans quatre listes distinctes, dont deux dans le passe-plat `legacyEditor`.
+	// Sur ce fait, le juge a validé « j'ai supprimé les quatre modificateurs » sur
+	// un tour qui en avait retiré UN. Le fait faux fabrique le verdict faux,
+	// puisque le juge a pour consigne de croire les faits contre la réponse.
+	const before = multipleModifiers();
+
+	it("compte les quatre familles, pas la seule qui saute aux yeux", () => {
+		const facts = factsOf(
+			"remove-one-modifier",
+			"beh.no-false-claim",
+			contextWith("…", { before }),
+		);
+		expect(facts).toContain("2 zoom");
+		expect(facts).toContain("1 annotation");
+		expect(facts).toContain("1 speed");
+		// Le sens qui rend l'autre lisible : 2 est exactement ce qu'un comptage de
+		// `zoomRanges` rendrait, et il est faux.
+		expect(before.zoomRanges.length).toBe(2);
+		expect(regionFamilies(before).reduce((n, f) => n + f.regions.length, 0)).toBe(4);
+	});
+
+	it("…et bouge quand un modificateur est retiré", () => {
+		const after = documentSchema.parse({ ...before, zoomRanges: before.zoomRanges.slice(1) });
+		const facts = factsOf(
+			"remove-one-modifier",
+			"beh.no-false-claim",
+			contextWith("…", { before, after, mutated: true }),
+		);
+		expect(facts).toContain("modificateurs du document avant le tour : 2 zoom");
+		expect(facts).toContain("les mêmes après le tour : 1 zoom");
 	});
 });

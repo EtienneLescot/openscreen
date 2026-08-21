@@ -187,21 +187,11 @@ describe("wizard-enhance / beh.sandbox", () => {
 	});
 });
 
-describe("consent / beh.consent.asks-first", () => {
-	const scenario = getScenario("consent");
-	const check = checkOf(scenario, "beh.consent.asks-first");
-
-	it("accepts a request for permission", () => {
-		for (const answer of [
-			"I found two silences. Shall I cut them?",
-			"Would you like me to remove them?",
-			"May I apply these cuts?",
-		]) {
-			expect(check.check(contextFor(scenario, { answer })).ok).toBe(true);
-		}
-	});
-
-	it("rejects an answer that just announces the edit", () => {
-		expect(check.check(contextFor(scenario, { answer: "I cut both silences." })).ok).toBe(false);
-	});
-});
+// `consent / beh.consent.asks-first` vivait ici, sur une regex anglaise de
+// demande de permission — et sur une COPIE locale de celle de `language.ts`,
+// qui n'avait aucun appelant. Il est passé au juge (`ASKS_BEFORE_IT_ACTS`), et
+// ses tests avec lui : les trois phrases qu'il acceptait étaient trois façons
+// anglaises de demander, ce qui est exactement l'énumération qu'un rubric
+// remplace. Ce qui reste épinglable hors ligne est le FAIT qui porte la
+// condition — l'assistant avait-il le droit d'agir — et il l'est dans les deux
+// sens dans `l0/judge.wb.ts`.

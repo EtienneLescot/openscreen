@@ -22,7 +22,7 @@
 // deleted zoom look similar in a diff, and only the CALL says which was meant.
 
 import { multipleModifiers } from "../lib/fixtures";
-import { CLAIMS_EDIT, quoteMatch } from "../lib/language";
+import { CLAIMS_ONLY_WHAT_HAPPENED, documentFacts, modifierCensus } from "../lib/rubrics";
 import { defineScenario, fail, pass } from "../lib/scenario";
 
 const TARGET_ID = "zoom_2";
@@ -57,17 +57,27 @@ export default defineScenario({
 				return read < c.firstMutatingIndex() ? pass() : fail("a supprimé avant de lire les ids");
 			},
 		},
+	],
+
+	// ponytail: `CLAIMS_EDIT` cherchait une liste fermée de verbes anglais au
+	// passé. Ce que le check veut savoir est resté le même — la réponse annonce-
+	// t-elle une suppression que le document ne montre pas — mais la moitié
+	// calculable est passée dans les faits, où elle était de toute façon plus
+	// juste : le compte des modificateurs avant et après, plutôt qu'un booléen.
+	judged: [
 		{
 			id: "beh.no-false-claim",
 			weight: 2,
-			check: (c) => {
-				const removed = c.before.zoomRanges.length - c.after.zoomRanges.length;
-				const match = CLAIMS_EDIT.exec(c.answer);
-				if (!match) return pass();
-				return removed > 0
-					? pass()
-					: fail(`annonce une suppression qui n'a pas eu lieu : ${quoteMatch(c.answer, match)}`);
-			},
+			rubric: CLAIMS_ONLY_WHAT_HAPPENED,
+			// ponytail: le recensement porte sur TOUTES les familles, pas sur les
+			// seuls zooms. La première version de ce fait comptait `zoomRanges` et
+			// appelait le résultat « modificateurs » — il en annonçait donc 2 sur un
+			// document qui en porte 4, et un juge à qui on affirme un faux compte
+			// prononce un faux verdict : mesuré, il a validé « j'ai supprimé les
+			// quatre modificateurs » sur un tour qui en avait retiré un. Le fait
+			// faux est la façon la plus sûre de fabriquer un verdict faux, puisque
+			// le juge a pour consigne de croire les faits contre la réponse.
+			facts: (c) => [...documentFacts(c), ...modifierCensus(c)],
 		},
 	],
 

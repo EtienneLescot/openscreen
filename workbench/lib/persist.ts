@@ -393,6 +393,11 @@ export function contextFromPersistedTurn(turn: PersistedTurn): EvalContext {
 		// `setZoom` idempotent mute sans rien changer, et comparer les deux
 		// documents effacerait la distinction que `consent` mesure.
 		mutated: turn.mutated ?? turn.wire.calls.some((call) => call.mutating),
+		// ponytail: relu du fichier, jamais redérivé — c'est le réglage sous lequel
+		// CE tour-là a tourné. Le déduire de la définition du scénario
+		// d'aujourd'hui rejugerait un tour d'hier sous un réglage qu'il n'avait
+		// pas, ce qui est la même faute que recalculer `mutating`.
+		allowAgentEdits: turn.allowAgentEdits,
 		run: {
 			ok: turn.run.ok,
 			...(turn.run.error === undefined ? {} : { error: turn.run.error }),
