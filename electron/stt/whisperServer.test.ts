@@ -551,6 +551,54 @@ describe("WhisperServerManager", () => {
 		}
 	});
 
+	it("logs a spawn error once, the same as a death by exit", async () => {
+		// ponytail: the `error` listener is the OTHER way a helper never reaches
+		// readiness, and it reaches the startup catch by the same route — the
+		// `exitedBeforeReady` race rejects on `error` as well as on `exit`. Whatever
+		// keeps one voice on an exit has to keep one voice here too, or the fix has
+		// simply moved the duplicate into the branch nobody looked at.
+		const fs = await import("node:fs/promises");
+		const { spawn } = await import("node:child_process");
+		const dir = await mkdtemp(path.join(tmpdir(), "whisper-spawn-error-"));
+		const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		try {
+			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
+			const fakeBinaryPath = path.join(
+				dir,
+				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
+			);
+			await fs.writeFile(modelPath, "dummy-ggml");
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
+
+			const child = Object.assign(new EventEmitter(), {
+				stdout: new EventEmitter(),
+				stderr: new EventEmitter(),
+				pid: undefined,
+				kill: vi.fn(() => true),
+			});
+			vi.mocked(spawn).mockImplementationOnce(() => {
+				// No "exit" at all: the process never came up, so only "error" fires.
+				queueMicrotask(() => child.emit("error", new Error("spawn EACCES")));
+				return child as never;
+			});
+
+			const mgr = new WhisperServerManager();
+			await expect(
+				mgr.start({ modelPath, binaryPath: fakeBinaryPath, backend: "whispercpp-cpu" }),
+			).rejects.toThrow(/spawn EACCES/);
+
+			const stt = errors.mock.calls.map(String).filter((line) => line.startsWith("[stt] "));
+			expect(stt, `lignes [stt] émises : ${JSON.stringify(stt)}`).toHaveLength(1);
+			expect(stt[0]).toMatch(/spawn error: spawn EACCES/);
+			// The listener cleared the startup state, so nothing is left claiming a
+			// helper is up — `status` must agree with the log.
+			expect(mgr.status.running).toBe(false);
+		} finally {
+			errors.mockRestore();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("logs a readiness timeout, which no exit listener would ever see", async () => {
 		// The other direction: nothing exits, so the startup catch is the ONLY voice
 		// on this failure and must not be silenced by the de-duplication above.
