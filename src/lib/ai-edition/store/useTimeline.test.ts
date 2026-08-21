@@ -1092,3 +1092,195 @@ describe("useTimeline undo history", () => {
 		});
 	});
 });
+
+// What a drag's snapshot is allowed to still be holding once the drag is over.
+//
+// `zoomFocusRollbackRef` / `annotationRollbackRef` hold the document a drag started
+// from, kept until the commit that records it. A drag does not always reach a commit,
+// and both commits are reachable without one: the inspector's annotation `<textarea>`
+// writes live on every keystroke and commits `onBlur`, so closing the panel or deleting
+// the region removes the focused node without ever firing blur -- and `SliderCell` wires
+// mouseup/touchend/keyup straight to `onCommit` with no `onChange` in front, so a bare
+// click on a stroke-width thumb reaches `commitAnnotationChange()` carrying that
+// leftover. `NewEditorShell` builds ONE `useTimeline()` and hands it to the inspector,
+// so the abandonable live write and the bare commit share an instance.
+describe("useTimeline drag snapshots", () => {
+	const docWithRegions: AxcutDocument = {
+		...sampleDoc,
+		zoomRanges: [
+			{
+				id: "zoom_a",
+				startMs: 1000,
+				endMs: 3000,
+				depth: 3,
+				focus: { cx: 0.5, cy: 0.5 },
+				focusMode: "manual",
+				clipId: "clip_a",
+				sourceStartSec: 1,
+				sourceEndSec: 3,
+			},
+		],
+		annotations: [
+			{
+				id: "ann_a",
+				startMs: 1000,
+				endMs: 3000,
+				clipId: "clip_a",
+				sourceStartSec: 1,
+				sourceEndSec: 3,
+				type: "text",
+				content: "before",
+				textContent: "",
+				position: { x: 50, y: 50 },
+				size: { width: 30, height: 20 },
+				style: {
+					color: "#ffffff",
+					backgroundColor: "transparent",
+					fontSize: 32,
+					fontFamily: "Inter",
+					fontWeight: "bold",
+					fontStyle: "normal",
+					textDecoration: "none",
+					textAlign: "center",
+					textAnimation: "none",
+				},
+				zIndex: 1,
+			},
+		],
+	};
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		clearHistory();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		probeVideoDimensionsMock.mockResolvedValue({ width: 1920, height: 1080 });
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: docWithRegions,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		clearHistory();
+		vi.clearAllMocks();
+	});
+
+	/** Two recording edits between the abandoned live write and the bare commit, so the
+	 *  stale snapshot is one the stack has already buried. */
+	async function twoZoomDepthEdits(result: { current: ReturnType<typeof useTimeline> }) {
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 4);
+		});
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 5);
+		});
+	}
+
+	it("does not hand a bare annotation commit a base the edits since have buried", async () => {
+		const { result } = renderTimeline();
+
+		// The keystrokes that never reach their `onBlur`.
+		act(() => result.current.updateAnnotationLive("ann_a", { content: "typed" }));
+		await twoZoomDepthEdits(result);
+		expect(past).toHaveLength(2);
+
+		// The bare click on a slider thumb.
+		await act(async () => {
+			await result.current.commitAnnotationChange();
+		});
+
+		// Same project, so nothing is cleared -- the cost is that one Ctrl+Z jumps over
+		// BOTH zoom edits and lands on the document the abandoned typing started from.
+		expect(past).toHaveLength(2);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		const doc = useProjectStore.getState().document;
+		expect(doc?.zoomRanges[0].depth).toBe(4);
+		expect(doc?.annotations[0].content).toBe("typed");
+	});
+
+	it("does not restore a buried document when a bare annotation commit fails", async () => {
+		// The worse half: `rollback` is used as a DOCUMENT here, not only as a
+		// `historyBase`, so a failed bare commit wrote the stale snapshot back into the
+		// store and both zoom edits were silently gone.
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateAnnotationLive("ann_a", { content: "typed" }));
+		await twoZoomDepthEdits(result);
+
+		const onScreen = useProjectStore.getState().document;
+		bridgeMocks.save.mockResolvedValueOnce({ success: false, error: "disk full" });
+		await act(async () => {
+			await result.current.commitAnnotationChange();
+		});
+
+		expect(useProjectStore.getState().document).toBe(onScreen);
+		expect(onScreen?.zoomRanges[0].depth).toBe(5);
+		expect(onScreen?.annotations[0].content).toBe("typed");
+	});
+
+	it("does not hand a bare focus commit a base the edits since have buried", async () => {
+		// `ZoomFocusOverlay.handlePointerDown` sets `draggingRef` BEFORE its live write,
+		// and that write returns early on a zero-size overlay rect -- so `endDrag` fires
+		// `commitZoomFocus()` with nothing in front of it.
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+		await twoZoomDepthEdits(result);
+		expect(past).toHaveLength(2);
+
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(past).toHaveLength(2);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		const doc = useProjectStore.getState().document;
+		expect(doc?.zoomRanges[0].depth).toBe(4);
+		expect(doc?.zoomRanges[0].focus).toEqual({ cx: 0.8, cy: 0.2 });
+	});
+
+	it("does not restore a buried document when a bare focus commit fails", async () => {
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+		await twoZoomDepthEdits(result);
+
+		const onScreen = useProjectStore.getState().document;
+		bridgeMocks.save.mockResolvedValueOnce({ success: false, error: "disk full" });
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(useProjectStore.getState().document).toBe(onScreen);
+		expect(onScreen?.zoomRanges[0].depth).toBe(5);
+	});
+
+	it("still records the pre-drag document when an annotation drag reaches its commit", async () => {
+		// The guard must not cost the feature it guards: a drag that ends the way a drag
+		// normally ends is still ONE undo step, back to before it.
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateAnnotationLive("ann_a", { content: "ty" }));
+		act(() => result.current.updateAnnotationLive("ann_a", { content: "typed" }));
+		await act(async () => {
+			await result.current.commitAnnotationChange();
+		});
+
+		expect(past).toHaveLength(1);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.annotations[0].content).toBe("before");
+	});
+});
