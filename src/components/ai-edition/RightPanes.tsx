@@ -1598,10 +1598,32 @@ export function VideoEffectsPane() {
 					onChange={toggleFillFrame}
 				/>
 			</div>
-			{frameIsFilled && clipsStillFramed > 0 ? (
-				<div className={styles.paneHint} role="note">
-					{ts("effects.fillFrameMixed")}
-				</div>
+			{/* WHICH shape to fill is only a question when the timeline has more than one, and
+			    then it is the user's to answer, not ours: picking the majority silently means a
+			    project that is mostly landscape with two portrait inserts can never be made to
+			    fill on the portrait ones. Each shape carries its clip count, so the trade is
+			    visible — same information the ratio menu's ORIGINAL section shows. */}
+			{frameIsFilled && nativeFormats.length > 1 ? (
+				<>
+					<div className={styles.paneTabs} role="group" aria-label={ts("effects.fillFrame")}>
+						{nativeFormats.map((format) => (
+							<button
+								type="button"
+								key={format.token}
+								className={format.token === settings.aspectRatio ? styles.isActive : ""}
+								onClick={() => void set({ aspectRatio: format.token })}
+							>
+								{format.token}
+								<span className={styles.tabCount}>{format.clipCount}</span>
+							</button>
+						))}
+					</div>
+					{clipsStillFramed > 0 ? (
+						<div className={styles.paneHint} role="note">
+							{ts("effects.fillFrameMixed")}
+						</div>
+					) : null}
+				</>
 			) : null}
 			<div className={styles.sliderGrid}>
 				<SliderCell
