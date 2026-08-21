@@ -1734,8 +1734,13 @@ export function registerIpcHandlers(
 			);
 		} catch (error) {
 			if (diagnostic) {
+				// The reason, not an assumption about it: this catch also sees a
+				// getSources that rejected on its own, well inside the deadline, and
+				// calling that a timeout would point the next reader at the wrong thing.
+				// The deadline error carries its own wording.
+				const reason = error instanceof Error ? error.message : String(error);
 				console.info(
-					`[get-sources] gave up after ${Date.now() - startedAt}ms (types=${(opts?.types ?? []).join(",")})`,
+					`[get-sources] failed after ${Date.now() - startedAt}ms (types=${(opts?.types ?? []).join(",")}): ${reason}`,
 				);
 			}
 			throw error;
