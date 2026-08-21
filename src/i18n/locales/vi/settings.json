@@ -74,6 +74,7 @@
 		"roundness": "Độ bo tròn",
 		"padding": "Phần đệm",
 		"frame": "Khung",
+		"fillFrame": "Lấp đầy khung",
 		"motion": "Chuyển động",
 		"on": "bật",
 		"help": "Kiểu khung của bản ghi: làm mờ nền, đổ bóng, mờ chuyển động, bo góc và khoảng đệm quanh video."

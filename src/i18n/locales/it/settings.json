@@ -75,6 +75,7 @@
 		"roundness": "Arrotondamento",
 		"padding": "Spaziatura",
 		"frame": "Cornice",
+		"fillFrame": "Riempi la cornice",
 		"motion": "Movimento",
 		"help": "Stile della cornice della registrazione: sfocatura dello sfondo, ombra, sfocatura di movimento, raggio degli angoli e margine attorno al video."
 	},

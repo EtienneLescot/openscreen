@@ -37,6 +37,7 @@ import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import GradientEditor, { type GradientEditorState } from "@/components/ui/gradient-editor";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useScopedT } from "@/contexts/I18nContext";
+import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import type {
 	AxcutAsset,
 	AxcutClip,
@@ -44,7 +45,12 @@ import type {
 	AxcutTrimRange,
 	AxcutWord,
 } from "@/lib/ai-edition/schema";
-import { AUDIO_GAIN_DB_LIMIT } from "@/lib/ai-edition/store/editorSettings";
+import {
+	AUDIO_GAIN_DB_LIMIT,
+	DEFAULT_EDITOR_SETTINGS,
+	type EditorSettingsPatch,
+	type EditorSettingsSnapshot,
+} from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import {
@@ -71,6 +77,7 @@ import {
 	WALLPAPER_THUMB_PATHS,
 } from "@/lib/wallpaper";
 import { isNativeCompositorActive, setNativeParam } from "@/native";
+import type { AspectRatio } from "@/utils/aspectRatioUtils";
 import styles from "./NewEditorShell.module.css";
 
 interface PaneProps {
@@ -1439,6 +1446,57 @@ function restoreCaretBeforeWord(editor: HTMLElement | null, wordId: string): voi
 // pulling the schema into the helpers block.
 export type { AxcutWord };
 
+// ─── Fill frame ────────────────────────────────────────────────────
+
+/**
+ * Does the recording cover the whole output frame — i.e. is no background visible?
+ *
+ * DERIVED, never stored. "No background" is a fact about four settings, not a fifth setting
+ * alongside them, and storing it would immediately be able to disagree with them: nudge the
+ * padding slider and a stored flag still claims the background is off. Reading it back keeps
+ * the toggle honest for free, needs no schema change, and survives a reload.
+ *
+ * The aspect ratio is part of the test and not an afterthought — padding 0 only fills the
+ * WIDTH. A 16:10 capture in a 16:9 project still shows wallpaper bars top and bottom at zero
+ * padding, which is exactly why #84 reads as unfixable to someone who found the slider.
+ */
+export function fillsFrame(
+	settings: Pick<
+		EditorSettingsSnapshot,
+		"padding" | "borderRadius" | "shadowIntensity" | "aspectRatio"
+	>,
+	nativeTokens: ReadonlySet<AspectRatio>,
+): boolean {
+	return (
+		settings.padding === 0 &&
+		settings.borderRadius === 0 &&
+		settings.shadowIntensity === 0 &&
+		nativeTokens.has(settings.aspectRatio)
+	);
+}
+
+/**
+ * The patch behind the toggle.
+ *
+ * Turning it OFF restores the shipped defaults rather than whatever the user had before:
+ * "before" would have to be stored somewhere, and a hidden slot that only one control writes
+ * is the kind of state that rots. Predictable beats clever here — and every value it restores
+ * is one slider away.
+ *
+ * `aspectRatio` is deliberately absent from the OFF patch. Turning the background back on does
+ * not mean the user wanted their output reframed; the three frame values alone bring it back.
+ */
+export function fillFramePatch(on: boolean, nativeToken: AspectRatio): EditorSettingsPatch {
+	if (!on) {
+		return {
+			padding: DEFAULT_EDITOR_SETTINGS.padding,
+			borderRadius: DEFAULT_EDITOR_SETTINGS.borderRadius,
+			shadowIntensity: DEFAULT_EDITOR_SETTINGS.shadowIntensity,
+		};
+	}
+	return { padding: 0, borderRadius: 0, shadowIntensity: 0, aspectRatio: nativeToken };
+}
+
 // ─── Video Effects ─────────────────────────────────────────────────
 
 /**
@@ -1456,7 +1514,15 @@ export type { AxcutWord };
  */
 export function VideoEffectsPane() {
 	const ts = useScopedT("settings");
-	const { settings, setLive, commit, hasDocument } = useEditorSettings();
+	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+	const document = useProjectStore((s) => s.document);
+
+	// Same source the ratio picker reads, so "fill frame" and the ORIGINAL section of that menu
+	// can never disagree about what shape the footage is. Already sorted by clip count then by
+	// pixel area, so [0] is "the shape most of this timeline is in" with no heuristic of ours.
+	const nativeFormats = useMemo(() => (document ? collectNativeFormats(document) : []), [document]);
+	const nativeTokens = useMemo(() => new Set(nativeFormats.map((f) => f.token)), [nativeFormats]);
+	const frameIsFilled = fillsFrame(settings, nativeTokens);
 
 	// Le rayon natif = rayon de base de la fixture (~24px @1920) × cette échelle. Diviser la
 	// valeur px de l'UI par ce même rayon de base fait que le coin natif ≈ les px affichés
@@ -1466,6 +1532,16 @@ export function VideoEffectsPane() {
 	// (`pushAllNativeParams`) : l'inspecteur n'affiche qu'un panneau a la fois, donc
 	// un effet de montage ici ne poussait rien tant que ce panneau precis n'avait pas
 	// ete ouvert. Les handlers par controle ci-dessous poussent toujours leurs diffs.
+
+	const toggleFillFrame = (on: boolean) => {
+		const patch = fillFramePatch(on, nativeFormats[0]?.token ?? settings.aspectRatio);
+		void set(patch);
+		if (isNativeCompositorActive()) {
+			setNativeParam("padding", (patch.padding ?? 0) / 100);
+			setNativeParam("roundness", (patch.borderRadius ?? 0) / NATIVE_SCREEN_BASE_RADIUS_PX);
+			setNativeParam("shadow", patch.shadowIntensity ?? 0);
+		}
+	};
 
 	return (
 		<Pane
@@ -1478,6 +1554,20 @@ export function VideoEffectsPane() {
 		>
 			<BackgroundSection />
 			<div className={styles.sectionLabel}>{ts("effects.frame")}</div>
+			{/* #84: "how do I turn the background off". The honest answer was four settings in
+			    three places, so nobody found it. This is that answer as one control — and it
+			    stays a derived view of those settings, so moving any slider below simply turns
+			    it back off rather than leaving a lying switch behind. Disabled without a
+			    timeline: there is no footage whose shape we could fill to. */}
+			<div className={styles.paneRow}>
+				<span className={styles.label}>{ts("effects.fillFrame")}</span>
+				<Toggle
+					checked={frameIsFilled}
+					disabled={!hasDocument || nativeFormats.length === 0}
+					ariaLabel={ts("effects.fillFrame")}
+					onChange={toggleFillFrame}
+				/>
+			</div>
 			<div className={styles.sliderGrid}>
 				<SliderCell
 					label={ts("effects.shadow")}
@@ -2040,10 +2130,14 @@ export function CursorPane() {
 export function Toggle({
 	checked,
 	disabled,
+	ariaLabel,
 	onChange,
 }: {
 	checked: boolean;
 	disabled?: boolean;
+	/** The switch renders no text of its own, so a screen reader has nothing to announce
+	 *  unless a caller names it. Optional only because the existing call sites predate it. */
+	ariaLabel?: string;
 	onChange: (next: boolean) => void;
 }) {
 	return (
@@ -2051,6 +2145,7 @@ export function Toggle({
 			type="button"
 			className={`${styles.toggle} ${checked ? styles.isOn : ""}`}
 			aria-pressed={checked}
+			aria-label={ariaLabel}
 			disabled={disabled}
 			onClick={() => onChange(!checked)}
 		/>

@@ -74,6 +74,7 @@
 		"roundness": "Yuvarlaklık",
 		"padding": "Dolgu",
 		"frame": "Çerçeve",
+		"fillFrame": "Çerçeveyi doldur",
 		"motion": "Hareket",
 		"on": "açık",
 		"help": "Kayıt çerçevesinin biçimi: arka plan bulanıklığı, gölge, hareket bulanıklığı, köşe yuvarlaklığı ve videonun çevresindeki boşluk."

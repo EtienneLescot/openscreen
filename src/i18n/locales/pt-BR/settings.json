@@ -75,6 +75,7 @@
 		"roundness": "Arredondamento",
 		"padding": "Espaçamento",
 		"frame": "Moldura",
+		"fillFrame": "Preencher a moldura",
 		"motion": "Movimento",
 		"help": "Estilo do quadro da gravação: desfoque de fundo, sombra, desfoque de movimento, raio dos cantos e margem em volta do vídeo."
 	},
