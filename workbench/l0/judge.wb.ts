@@ -19,8 +19,9 @@
 //      silence.
 
 import { describe, expect, it } from "vitest";
+import { type AxcutDocument, documentSchema } from "../../src/lib/ai-edition/schema";
 import { assertAgainstBaseline, baselineFromRun } from "../lib/baseline";
-import { singleClip } from "../lib/fixtures";
+import { multipleModifiers, singleClip } from "../lib/fixtures";
 import { buildJudgeMessages, type JudgeReading, parseJudgeReply } from "../lib/judge";
 import { buildEvalContext } from "../lib/oracles";
 import { OPENSCREEN_TOOLS } from "../lib/prompts";
@@ -29,10 +30,19 @@ import { SAYS_IT_CANNOT } from "../lib/rubrics";
 import type { EvalContext, JudgedCheck, Scenario } from "../lib/scenario";
 import { defineScenario, fail, pass } from "../lib/scenario";
 import { allResults, runChecks, scoreRun } from "../lib/score";
-import { allScenarios } from "../scenarios/registry";
+import type { WireCall } from "../lib/wire";
+import { allScenarios, getScenario } from "../scenarios/registry";
 
-function contextWith(answer: string): EvalContext {
-	const document = singleClip();
+function contextWith(
+	answer: string,
+	options: {
+		before?: AxcutDocument;
+		after?: AxcutDocument;
+		mutated?: boolean;
+		calls?: Array<Partial<WireCall> & { name: string }>;
+	} = {},
+): EvalContext {
+	const before = options.before ?? singleClip();
 	return buildEvalContext({
 		answer,
 		wire: {
@@ -43,11 +53,19 @@ function contextWith(answer: string): EvalContext {
 			toolNames: [],
 			toolsSha256: "",
 			rounds: 1,
-			calls: [],
+			calls: (options.calls ?? []).map((call, index) => ({
+				round: 0,
+				id: `c${index}`,
+				argsJson: "{}",
+				args: {},
+				mutating: false,
+				resultOk: true,
+				...call,
+			})),
 		},
-		before: document,
-		after: document,
-		mutated: false,
+		before,
+		after: options.after ?? before,
+		mutated: options.mutated ?? false,
 		run: { ok: true, ms: 1 },
 	});
 }
@@ -160,12 +178,36 @@ describe("judge / aucun rubric ne recopie les réponses du banc", () => {
 	// preuve : rien ici n'empêche d'écrire une propriété subtilement taillée pour
 	// un scénario. Ce qu'il attrape est la version grossière, qui est aussi celle
 	// qu'on écrit sans y penser en réparant un échec un vendredi soir.
-	const MOT = /[a-zà-öø-ÿ]{5,}/g;
+	// ponytail: UNE seule définition de « lettre », et les deux côtés de la
+	// comparaison en dérivent. La version précédente extrayait les mots avec cette
+	// classe puis les cherchait avec `\b`, dont la classe est `[A-Za-z0-9_]` : la
+	// frontière était donc aveugle exactement là où vivent les mots français.
+	// `éléments` et `écran` pouvaient être recopiés verbatim de la demande dans le
+	// rubric sans que rien ne le dise — le plancher anti-surajustement manquant
+	// dans la langue même dont ce banc a fait son défaut fondateur.
+	const LETTRE = "a-zà-öø-ÿ";
+	const MOT = new RegExp(`[${LETTRE}]{5,}`, "g");
 
 	function textOf(judged: JudgedCheck): string {
 		return [judged.rubric.property, ...judged.rubric.conforme, ...judged.rubric.fautif]
 			.join("\n")
 			.toLowerCase();
+	}
+
+	/**
+	 * Les mots de la demande qui reparaissent, en tant que MOTS, dans le rubric.
+	 *
+	 * ponytail: le mot est échappé avant interpolation alors que `MOT` ne peut
+	 * rendre que des lettres. C'est la même leçon qu'au-dessus : ce qui a cassé
+	 * est que la classe et la frontière pouvaient diverger sans que personne le
+	 * voie, et une classe élargie un jour à `-` ou `'` rejouerait la scène.
+	 */
+	function motsRepris(prompt: string, rubric: string): string[] {
+		const mots = new Set(prompt.toLowerCase().match(MOT) ?? []);
+		return [...mots].filter((word) => {
+			const échappé = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+			return new RegExp(`(?<![${LETTRE}])${échappé}(?![${LETTRE}])`).test(rubric);
+		});
 	}
 
 	const judgedPairs: Array<{ scenario: Scenario; judged: JudgedCheck }> = allScenarios().flatMap(
@@ -195,13 +237,80 @@ describe("judge / aucun rubric ne recopie les réponses du banc", () => {
 			// « fond », de « sous-titres » ou de « curseur » a cessé d'énoncer une
 			// propriété du comportement honnête pour décrire UN tour. La sortie de
 			// secours n'est pas une exemption : c'est de reformuler la propriété.
-			const text = textOf(judged);
-			const borrowed = [...new Set(scenario.prompt.toLowerCase().match(MOT) ?? [])].filter((word) =>
-				new RegExp(`\\b${word}\\b`).test(text),
-			);
+			const borrowed = motsRepris(scenario.prompt, textOf(judged));
 			expect(borrowed, `mots repris à la demande du scénario : ${borrowed.join(", ")}`).toEqual([]);
 		});
 	}
+
+	it("attrape un mot accentué, là où `\\b` était aveugle", () => {
+		// LA régression. `\b` est défini sur `[A-Za-z0-9_]`, donc `\béléments\b`
+		// exige une lettre ASCII avant le `é` et n'en trouve jamais : le filtre
+		// rendait `[]` sur ce cas précis et le garde-fou se déclarait content.
+		expect(
+			motsRepris("Change les éléments à l'écran", "la réponse nomme les éléments visés"),
+		).toEqual(["éléments"]);
+		expect(motsRepris("Rends l'écran plus net", "un écran est décrit")).toEqual(["écran"]);
+	});
+
+	it("aucun fait remis au juge n'affirme un changement que le diff ne montre pas", () => {
+		// ponytail: `c.mutated` veut dire « `runChat` a rendu un document », donc
+		// « un outil mutant a répondu » — jamais « le document a changé ». Un
+		// `setZoom` idempotent lève le drapeau sur un document identique. Le fait
+		// disait pourtant « le document du projet a été modifié », et un juge à qui
+		// on affirme un changement inexistant tranche `fautif` sur une réponse
+		// honnête : le verdict faux fabriqué par le fait faux, dans le fichier
+		// écrit pour empêcher les verdicts faux.
+		const document = singleClip({ projectId: "wb_scope" });
+		const judged = (getScenario("out-of-scope-styling").judged ?? [])[0];
+		const idempotent = judged.facts(
+			contextWith("J'ai arrondi les coins.", {
+				before: document,
+				after: document,
+				mutated: true,
+				calls: [{ name: "setZoom", mutating: true }],
+			}),
+		);
+		expect(idempotent.join("\n")).toContain("un outil a rapporté une mutation");
+		expect(idempotent.join("\n")).toContain("le document est identique avant et après le tour");
+		expect(idempotent.join("\n")).not.toContain("le document diffère");
+	});
+
+	it("…et nomme le changement quand il a réellement eu lieu", () => {
+		// L'autre sens : un fait qui ne dirait jamais « ça a changé » serait aussi
+		// inutile qu'un fait qui le dirait toujours.
+		// Une suppression prise sur une fixture existante, pour que le document
+		// d'après reste valide au schéma sans qu'on écrive une région à la main.
+		const before = multipleModifiers();
+		const after = documentSchema.parse({
+			...before,
+			zoomRanges: before.zoomRanges.slice(1),
+		});
+		const judged = (getScenario("out-of-scope-styling").judged ?? [])[0];
+		const facts = judged
+			.facts(
+				contextWith("J'ai retiré un zoom.", {
+					before,
+					after,
+					mutated: true,
+					calls: [{ name: "removeZoom", mutating: true }],
+				}),
+			)
+			.join("\n");
+		expect(facts).toContain("le document diffère avant/après sur : zoom");
+		expect(facts).not.toContain("le document est identique");
+	});
+
+	it("et ne crie pas sur un mot que le rubric n'a pas emprunté", () => {
+		// L'autre sens, sans lequel le premier serait satisfait par `() => tout`.
+		expect(
+			motsRepris("Change les éléments à l'écran", "la réponse énonce qu'elle ne peut pas"),
+		).toEqual([]);
+		// La frontière tient toujours : un mot noyé dans un plus long n'est pas un
+		// emprunt, sinon « écran » interdirait « écrasement » et le garde-fou
+		// deviendrait un obstacle qu'on désactive.
+		expect(motsRepris("Change la légende", "des légendes ailleurs")).toEqual([]);
+		expect(motsRepris("Décris l'écran", "un écrasement de la pile")).toEqual([]);
+	});
 });
 
 // ---------------------------------------------------------------------------

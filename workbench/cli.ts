@@ -325,7 +325,17 @@ async function commandJudge(options: Options): Promise<number> {
 	let failed = false;
 
 	for (const group of groups) {
-		const scenario = getScenario(group.scenarioId);
+		// ponytail: `runs/` est un répertoire, pas un registre. Un scénario renommé
+		// y laisse son ancien dossier, et `getScenario` lève dessus — ce qui, non
+		// rattrapé, faisait perdre les verdicts de tous les scénarios suivants pour
+		// un dossier périmé que personne ne relisait.
+		let scenario: ReturnType<typeof getScenario>;
+		try {
+			scenario = getScenario(group.scenarioId);
+		} catch {
+			log(`  dossier sans scénario connu : ${group.scenarioId} — ignoré.`);
+			continue;
+		}
 		if ((scenario.judged ?? []).length === 0) continue;
 		log(`\n▸ ${scenario.id} — ${(scenario.judged ?? []).length} check(s) jugé(s)`);
 
@@ -338,22 +348,40 @@ async function commandJudge(options: Options): Promise<number> {
 		}
 		let replayHandle: ReplayHandle | null = null;
 		let endpoint: ModelServerHandle;
-		if (env === null) {
-			replayHandle = await startReplay({ file: cassetteFile });
-			endpoint = replayHandle;
-		} else {
-			endpoint = await startRecorder({
-				// Le proxy, pas le provider en direct — même règle que `runner.ts` :
-				// c'est le seul endroit d'où une cassette peut sortir, et le seul qui
-				// transmette l'en-tête d'autorisation sans le lire.
-				upstream: env.baseUrl,
-				file: options.record ? cassetteFile : undefined,
-				scenario: `judge-${scenario.id}`,
-				provider: "openai-compatible",
-				model: env.model,
-			});
+		try {
+			if (env === null) {
+				replayHandle = await startReplay({ file: cassetteFile });
+				endpoint = replayHandle;
+			} else {
+				endpoint = await startRecorder({
+					// Le proxy, pas le provider en direct — même règle que `runner.ts` :
+					// c'est le seul endroit d'où une cassette peut sortir, et le seul
+					// qui transmette l'en-tête d'autorisation sans le lire.
+					upstream: env.baseUrl,
+					file: options.record ? cassetteFile : undefined,
+					scenario: `judge-${scenario.id}`,
+					provider: "openai-compatible",
+					model: env.model,
+				});
+			}
+		} catch (error) {
+			// Même portée que la boucle ci-dessous : une cassette illisible ou un
+			// port qui ne s'ouvre pas ne concernent qu'un scénario, et remonter
+			// jetterait les verdicts des précédents.
+			const message = `JUGE INTERROMPU ${scenario.id} : ${error instanceof Error ? error.message : String(error)}`;
+			notices.push(message);
+			log(`  ! ${message}`);
+			failed = true;
+			continue;
 		}
 		const scored: Array<{ scored: ReturnType<typeof scoreRun> }> = [];
+		// ponytail: une panne reste une ERREUR — `askJudge` lève toujours sur un
+		// transport mort, et c'est voulu : « le juge n'a pas répondu » n'est pas
+		// « la réponse ne tranche pas ». Ce qui change est sa PORTÉE. Non bornée,
+		// elle quittait `commandJudge` : aucun rapport écrit, `process.exitCode`
+		// jamais posé, et tous les verdicts déjà obtenus — déjà facturés, sur une
+		// passe live — perdus parce que le dernier tour a pris un 429.
+		let interrompu: string | null = null;
 		try {
 			for (const file of group.files) {
 				const turn = readPersistedTurn(file);
@@ -376,13 +404,26 @@ async function commandJudge(options: Options): Promise<number> {
 				}
 				scored.push({ scored: scoreRun(scenario, context, readings) });
 			}
+		} catch (error) {
+			interrompu = error instanceof Error ? error.message : String(error);
 		} finally {
 			endpoint.close();
 		}
-		// Une cassette périmée répond à une question qu'on ne pose plus : un rubric
-		// retouché change le hash de la requête, et rejouer l'ancien verdict serait
-		// bien pire qu'un `indéterminé`, puisqu'il tranche.
-		replayHandle?.assertFresh();
+		try {
+			// Une cassette périmée répond à une question qu'on ne pose plus : un
+			// rubric retouché change le hash de la requête, et rejouer l'ancien
+			// verdict serait bien pire qu'un `indéterminé`, puisqu'il tranche.
+			replayHandle?.assertFresh();
+		} catch (error) {
+			interrompu ??= error instanceof Error ? error.message : String(error);
+		}
+		if (interrompu !== null) {
+			const message = `JUGE INTERROMPU ${scenario.id} : ${interrompu}`;
+			notices.push(message);
+			log(`  ! ${message}`);
+			failed = true;
+		}
+		if (scored.length === 0) continue;
 
 		const summary = summarizeScenario({
 			scenarioId: scenario.id,
@@ -392,6 +433,18 @@ async function commandJudge(options: Options): Promise<number> {
 			results: scored,
 		});
 		summaries.push(summary);
+
+		// ponytail: une passe interrompue est LUE mais pas RATCHETÉE. Le résumé
+		// entre au rapport — c'est tout l'intérêt de ne plus tout jeter — mais le
+		// cliquet, lui, tirerait ses conclusions d'un `n` amputé sans le savoir :
+		// « D2 semble corrigé » sur la seule répétition qui a eu le temps de
+		// passer, et `--update-baseline` graverait cette moitié de mesure. Le
+		// README dit déjà de ne pas retirer une entrée sur un run vert isolé ; un
+		// run tronqué est pire, parce qu'il ne se voit pas.
+		if (interrompu !== null) {
+			log("  cliquet et baseline ignorés : la passe est incomplète sur ce scénario.");
+			continue;
+		}
 
 		// Même fusion que `commandRun` : un check qui a échoué au moins une fois
 		// est un échec pour le cliquet. Un indéterminé ne « gagne » sur rien — il
@@ -433,8 +486,16 @@ async function commandJudge(options: Options): Promise<number> {
 	}
 
 	if (summaries.length === 0) {
-		log("aucun scénario jugé dans cette sélection — rien à faire.");
-		return 0;
+		// ponytail: `failed`, pas `0`. Depuis que les pannes sont bornées au
+		// scénario, on atteint cette ligne avec des scénarios TOUS interrompus —
+		// et rendre 0 là-dessus annoncerait « rien à faire » sur une passe qui n'a
+		// fait que tomber. C'est le vert silencieux, dans l'outil écrit contre lui.
+		log(
+			failed
+				? "aucun scénario n'a pu être jugé : toutes les tentatives ont échoué ci-dessus."
+				: "aucun scénario jugé dans cette sélection — rien à faire.",
+		);
+		return failed ? 1 : 0;
 	}
 	const report = buildReport({
 		label: `${options.label}-judge`,

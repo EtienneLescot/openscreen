@@ -269,6 +269,14 @@ Trois raisons, dans l'ordre où elles pèsent :
 3. La même passe rejouée deux fois sur les mêmes tours est comparable ; deux runs live ne le sont
    pas.
 
+**Une panne est bornée au scénario.** `askJudge` lève toujours sur un transport mort — « le juge n'a
+pas répondu » n'est pas « la réponse ne tranche pas » — mais l'erreur ne quitte plus la passe : elle
+devient un avis `JUGE INTERROMPU`, le run finit rouge, et les verdicts déjà obtenus des autres
+scénarios sont écrits au rapport au lieu d'être jetés. Un 429 sur le dernier tour de la dernière
+répétition coûtait sinon la passe entière, déjà facturée. Le scénario interrompu est **lu mais pas
+ratcheté** : son résumé entre au rapport, mais ni le cliquet ni `--update-baseline` ne tirent de
+conclusion d'un *n* amputé sans le savoir.
+
 Ce que ça coûte, et c'est réel : un `wb:live` seul laisse tous les checks jugés en `indéterminé`.
 C'est exact — ils n'ont pas été mesurés — et le rapport le dit plutôt que de l'arrondir en vert.
 

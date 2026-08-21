@@ -13,11 +13,13 @@
 // sortent, et le verdict entre dans `scoreRun`. C'est le chemin de `wb:judge`,
 // à l'endpoint près.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { startRecorder, startReplay } from "../lib/cassette";
+import { readCassette, startRecorder, startReplay } from "../lib/cassette";
 import { ENV_KEYS } from "../lib/env";
 import { singleClip } from "../lib/fixtures";
 import { askJudge, type JudgeReading, JudgeTransportError } from "../lib/judge";
@@ -208,9 +210,9 @@ describe("le juge s'enregistre et se rejoue comme le reste du banc", () => {
 	const CASSETTE = join(DIRECTORY, "judge-out-of-scope-styling.json");
 	const REPLY = '{"verdict":"conforme","raison":"refus explicite"}';
 
-	async function ask(endpointUrl: string): Promise<JudgeReading> {
+	async function ask(endpointUrl: string, apiKey?: string): Promise<JudgeReading> {
 		return askJudge({
-			endpoint: { baseUrl: endpointUrl, model: "scripted" },
+			endpoint: { baseUrl: endpointUrl, model: "scripted", ...(apiKey ? { apiKey } : {}) },
 			rubric: SAYS_IT_CANNOT,
 			input: { prompt: SCENARIO.prompt, answer: ANSWER, facts: ["aucun appel mutant"] },
 		});
@@ -265,9 +267,67 @@ describe("le juge s'enregistre et se rejoue comme le reste du banc", () => {
 		expect(() => replay.assertFresh()).toThrow(/périmée aux rounds/);
 	});
 
-	it("never writes an authorization header into the judge cassette", () => {
-		const blob = JSON.stringify(readPersistedTurn(persistOneTurn(ANSWER)));
-		expect(blob).not.toContain("Bearer");
+	it("carries the key to the provider and leaves no trace of it on disk", async () => {
+		// ponytail: la version précédente de ce test sérialisait un TOUR PERSISTÉ,
+		// pas la cassette que son nom annonçait — et `ask()` ne passait aucune clé,
+		// donc aucun en-tête d'autorisation n'existait sur ce chemin. Il serait
+		// passé au vert si l'enregistreur avait écrit tous ses en-têtes en clair :
+		// l'oracle qu'on peut remplacer par `() => true`, celui que l'en-tête de ce
+		// fichier désigne comme un piège.
+		//
+		// Il tient donc les DEUX bouts. Le faux amont note l'en-tête qu'il a
+		// réellement reçu, ce qui prouve que la clé était en vol ; le fichier est
+		// ensuite relu sur disque, ce qui prouve qu'elle n'y est pas.
+		const CLÉ = "wb-judge-header-probe-0123456789";
+		const fichier = join(DIRECTORY, "judge-fuite.json");
+		let vuParLAmont: string | undefined;
+
+		const upstream = createServer((req, res) => {
+			vuParLAmont = req.headers.authorization;
+			req.on("data", () => {
+				// Le corps ne nous intéresse pas, mais il faut le consommer : sans
+				// lecteur, `end` ne se déclenche jamais et la requête reste pendue.
+			});
+			req.on("end", () => {
+				res.writeHead(200, { "content-type": "text/event-stream" });
+				res.end(
+					`data: ${JSON.stringify({
+						id: "probe",
+						object: "chat.completion.chunk",
+						created: 0,
+						model: "scripted",
+						choices: [{ index: 0, delta: { content: REPLY }, finish_reason: "stop" }],
+					})}\n\ndata: [DONE]\n\n`,
+				);
+			});
+		});
+		await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+		const port = (upstream.address() as AddressInfo).port;
+
+		const recorder = await startRecorder({
+			upstream: `http://127.0.0.1:${port}/v1`,
+			file: fichier,
+			scenario: "judge-fuite",
+			provider: "openai-compatible",
+			model: "scripted",
+		});
+		try {
+			expect((await ask(recorder.url, CLÉ)).verdict).toBe("conforme");
+		} finally {
+			recorder.close();
+			upstream.close();
+		}
+
+		// Le sens qui rend l'autre lisible : la clé a bien traversé le proxy.
+		expect(vuParLAmont).toBe(`Bearer ${CLÉ}`);
+
+		const surDisque = readFileSync(fichier, "utf8");
+		expect(surDisque).not.toContain(CLÉ);
+		expect(surDisque).not.toContain("Bearer");
+		expect(surDisque.toLowerCase()).not.toContain("authorization");
+		// Et la cassette est bien celle du tour, pas un fichier vide qui aurait
+		// satisfait les trois lignes précédentes sans rien prouver.
+		expect(readCassette(fichier).rounds).toHaveLength(1);
 	});
 });
 
