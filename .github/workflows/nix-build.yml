@@ -239,7 +239,16 @@ jobs:
             # path), and 60 left barely 25s for a cold Electron start under Xvfb
             # from a 1.7G closure -- so the outer kill could fire while every
             # internal bound was working.
-            CLI_TIMEOUT=$SOURCES_TIMEOUT OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>"/tmp/sources.$i.err" || RC=$?
+            # 2>&1, like record and export: the probe above established that this
+            # host's xvfb-run folds stderr into stdout anyway, so the separate .err
+            # capture was a file nothing could ever read.
+            CLI_TIMEOUT=$SOURCES_TIMEOUT OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>&1 || RC=$?
+            # Before the branching, so a success reports its duration too. The
+            # measurement was added to compare this path against record's, and the
+            # first run to carry it printed only record's -- the grep lived in a
+            # failure branch, so the successful side, which is the interesting one,
+            # went into a scratch file and stayed there.
+            grep -a "get-sources\]" "/tmp/sources.$i.out" || true
             # Every non-zero outcome is a failure. The kill is tracked on top of
             # that rather than instead of it, because it says something different:
             # the run never got far enough to report a reason at all.
@@ -319,12 +328,13 @@ jobs:
             rm -f /tmp/demo.openscreen /tmp/demo.mp4
             RC=0
             CLI_TIMEOUT=120 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS record --duration 2 --project /tmp/demo.openscreen >"/tmp/rec.$i.out" 2>&1 || RC=$?
+            # Outside the failure branch for the same reason as above: a record that
+            # works is exactly the measurement missing from the comparison, since
+            # this path has never yet produced one.
+            grep -a "get-sources\]" "/tmp/rec.$i.out" || true
             if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.openscreen ]; then
               echo "record failed (rc=$RC); last lines:"
               tail -5 "/tmp/rec.$i.out" || true
-              # The bound inside get-sources names its own failure; surface it
-              # rather than leaving the reason five lines up in a scratch file.
-              grep -a "get-sources\]" "/tmp/rec.$i.out" | tail -3 || true
               continue
             fi
             RECORDED=1
