@@ -1050,6 +1050,50 @@
 	box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand), transparent 70%);
 }
 
+/* ─── background picker (collapsed trigger + floating panel) ───── */
+/* The trigger paints the CURRENT background as its own surface, so the pane shows what is
+   selected without spending the ~300px the inline swatch grid used to cost. */
+.bgTrigger {
+	display: flex;
+	align-items: flex-end;
+	justify-content: flex-end;
+	height: 52px;
+	margin: 0 var(--sp-4) 12px;
+	padding: 6px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-2);
+	cursor: pointer;
+	overflow: hidden;
+	transition: border-color 150ms ease;
+}
+.bgTrigger:hover { border-color: var(--brand); }
+/* Sits ON an arbitrary photo, so it carries its own ground rather than trusting contrast. */
+.bgTriggerChip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 3px 7px;
+	border-radius: 999px;
+	background: color-mix(in oklab, var(--bg), transparent 10%);
+	color: var(--fg);
+	font: 500 var(--fs-app-sm)/1 var(--font-body);
+}
+.bgPopover {
+	width: 300px;
+	padding-top: 4px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface-1);
+	box-shadow: var(--elev-pop);
+	/* Tall content (18 swatches, or the gradient editor) scrolls itself instead of running
+	   off-screen on a short window. */
+	max-height: min(70vh, 460px);
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+
 /* ─── toggle (switch) ──────────────────────────────────────────── */
 .toggle {
 	width: 36px;

@@ -54,5 +54,6 @@ behaviour lives now.
 | `Titlebar.tsx`, `Bottombar.tsx` | `src/components/ai-edition/v4/EditorTopBar.tsx` |
 | `RightPanelStack.tsx` | `src/components/ai-edition/v4/FloatingInspector.tsx` |
 | `TranscriptEditor.tsx` | `src/components/ai-edition/CaptionsPane.tsx` + `src/lib/ai-edition/captions/` |
+| `BackgroundPane`, and the `"background"` inspector facet | the **Background** section of `VideoEffectsPane` (`src/components/ai-edition/RightPanes.tsx`). Four of the five "effects" controls were background controls — the blur blurs it, the shadow falls on it, roundness and padding exist to let it show through — so the split put the answer to "how do I remove the background" in the tab that doesn't say background ([#84](https://github.com/getopenscreen/openscreen/issues/84)). |
 | The browser-based exporter | the native compositor export path — see [export-pipeline.md](export-pipeline.md) |
 | CTranslate2 speech-to-text | whisper.cpp — see [transcription-and-captions.md](transcription-and-captions.md) |

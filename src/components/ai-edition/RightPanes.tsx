@@ -7,17 +7,18 @@
 
 import {
 	AudioLines,
+	ChevronDown,
 	FileText,
 	HelpCircle,
 	Layout as LayoutIcon,
 	Loader2,
 	MousePointerClick,
-	Palette,
 	Sliders,
 	Trash2,
 } from "lucide-react";
 import {
 	type ChangeEvent,
+	type CSSProperties,
 	type FormEvent,
 	memo,
 	type ClipboardEvent as ReactClipboardEvent,
@@ -34,6 +35,7 @@ import {
 import { toast } from "sonner";
 import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import GradientEditor, { type GradientEditorState } from "@/components/ui/gradient-editor";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useScopedT } from "@/contexts/I18nContext";
 import type {
 	AxcutAsset,
@@ -62,7 +64,12 @@ import { resolveWebcamLayoutPreset, supportsWebcamReactiveZoom } from "@/lib/com
 import { supportsCursorClickEffects } from "@/lib/cursor/cursorCapabilities";
 import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
-import { resolveImageWallpaperUrl, WALLPAPER_PATHS, WALLPAPER_THUMB_PATHS } from "@/lib/wallpaper";
+import {
+	classifyWallpaper,
+	resolveImageWallpaperUrl,
+	WALLPAPER_PATHS,
+	WALLPAPER_THUMB_PATHS,
+} from "@/lib/wallpaper";
 import { isNativeCompositorActive, setNativeParam } from "@/native";
 import styles from "./NewEditorShell.module.css";
 
@@ -123,7 +130,7 @@ function Pane({ title, icon, helpText, children }: PaneProps) {
 	);
 }
 
-// ─── Background ────────────────────────────────────────────────────
+// ─── Background (section of the Effects pane) ──────────────────────
 
 // keep the gradient palette small and curated — every block renders
 // in the picker and gets serialized to legacyEditor on save.
@@ -201,10 +208,15 @@ export function isSupportedBackgroundImage(type: string, fileName: string): bool
 // in the v2 editor: gradient strings stay as-is, colors as `#hex`, and image
 // paths are restricted to `/wallpapers/...` or the user's own data: URLs from
 // the upload custom flow.
-export function BackgroundPane() {
+function BackgroundSection() {
 	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
-	const [tab, setTab] = useState<"image" | "color" | "gradient">("image");
+	const [pickerOpen, setPickerOpen] = useState(false);
+	// Seeded from what the project is actually using, so the picker opens on the tab the
+	// user is already in rather than always on Image.
+	const [tab, setTab] = useState<"image" | "color" | "gradient">(
+		() => classifyWallpaper(settings.wallpaper).kind,
+	);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const customUrls = useMemoCustomWallpapers(settings.wallpaper);
 
@@ -267,109 +279,177 @@ export function BackgroundPane() {
 	};
 
 	return (
-		<Pane
-			title={ts("background.title")}
-			icon={<Palette size={14} />}
-			helpText={ts("background.help")}
-		>
-			<div className={styles.paneTabs} role="tablist">
-				<button
-					type="button"
-					className={tab === "image" ? styles.isActive : ""}
-					onClick={() => handleTabChange("image")}
-				>
-					{ts("background.image")}
-				</button>
-				<button
-					type="button"
-					className={tab === "color" ? styles.isActive : ""}
-					onClick={() => handleTabChange("color")}
-				>
-					{ts("background.color")}
-				</button>
-				<button
-					type="button"
-					className={tab === "gradient" ? styles.isActive : ""}
-					onClick={() => handleTabChange("gradient")}
-				>
-					{ts("background.gradient")}
-				</button>
-			</div>
-			{tab === "image" ? (
-				<>
+		<>
+			<div className={styles.sectionLabel}>{ts("background.title")}</div>
+			{/* The picker FLOATS instead of sitting inline. Inline, the 18-swatch grid was
+			    ~300px of the pane on its own and pushed padding/roundness/shadow — the
+			    controls #84 is actually about — below the fold on a laptop window. A user
+			    who opened the one appearance tab saw wallpapers and nothing else, which is
+			    the same failure the facet merge set out to fix, one level down. Same
+			    trade the aspect-ratio menu makes in the timeline toolbar: big choice,
+			    small trigger. */}
+			<Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+				<PopoverTrigger asChild>
 					<button
 						type="button"
-						className={styles.uploadBtn}
-						disabled={!hasDocument}
-						onClick={handlePickFile}
+						className={styles.bgTrigger}
+						style={backgroundSwatchStyle(settings.wallpaper)}
+						// Deliberately NOT gated on hasDocument: opening the picker mutates
+						// nothing, and the swatches inside carry their own gate. The inline grid
+						// was browsable with no project open; collapsing it should not take that
+						// away, only the space it used.
+						aria-label={ts("background.title")}
 					>
-						{ts("background.uploadCustom")}
+						<span className={styles.bgTriggerChip}>
+							{ts(`background.${classifyWallpaper(settings.wallpaper).kind}`)}
+							<ChevronDown size={11} />
+						</span>
 					</button>
-					<input
-						ref={fileInputRef}
-						type="file"
-						accept={IMAGE_ACCEPT}
-						style={{ display: "none" }}
-						onChange={handleFileSelected}
-					/>
-					<div className={styles.bgGrid}>
-						{customUrls.map((url) => (
+				</PopoverTrigger>
+				<PopoverContent
+					align="start"
+					sideOffset={6}
+					animated={false}
+					className="w-auto border-0 bg-transparent p-0 shadow-none"
+				>
+					<div className={styles.bgPopover}>
+						<div className={styles.paneTabs} role="tablist">
 							<button
 								type="button"
-								key={`custom-${url.slice(-32)}`}
-								className={`${styles.bgThumb} ${isSelected(url) ? styles.isActive : ""}`}
-								style={{ background: `center/cover no-repeat url(${url})` }}
-								aria-label={ts("background.customWallpaper")}
-								disabled={!hasDocument}
-								onClick={() => void set({ wallpaper: url })}
-							/>
-						))}
-						{WALLPAPER_PATHS.map((path, i) => {
-							// Grid swatch paints the small pre-generated thumbnail (see
-							// WALLPAPER_THUMB_PATHS) — selecting it still stores/applies `path`,
-							// the full-res original, unchanged.
-							const previewUrl = resolveImageWallpaperUrl(WALLPAPER_THUMB_PATHS[i]);
-							return (
+								className={tab === "image" ? styles.isActive : ""}
+								onClick={() => handleTabChange("image")}
+							>
+								{ts("background.image")}
+							</button>
+							<button
+								type="button"
+								className={tab === "color" ? styles.isActive : ""}
+								onClick={() => handleTabChange("color")}
+							>
+								{ts("background.color")}
+							</button>
+							<button
+								type="button"
+								className={tab === "gradient" ? styles.isActive : ""}
+								onClick={() => handleTabChange("gradient")}
+							>
+								{ts("background.gradient")}
+							</button>
+						</div>
+						{tab === "image" ? (
+							<>
 								<button
 									type="button"
-									key={path}
-									className={`${styles.bgThumb} ${isSelected(path) ? styles.isActive : ""}`}
-									style={{ background: `center/cover no-repeat url(${previewUrl})` }}
-									aria-label={ts("background.imageLabel", { index: i + 1 })}
+									className={styles.uploadBtn}
 									disabled={!hasDocument}
-									onClick={() => void set({ wallpaper: path })}
-								/>
-							);
-						})}
-					</div>
-				</>
-			) : tab === "color" ? (
-				<BackgroundColorTab
-					value={settings.wallpaper}
-					hasDocument={hasDocument}
-					isSelected={isSelected}
-					onPick={(color) => void set({ wallpaper: color })}
-				/>
-			) : (
-				<>
-					<div className={styles.bgGrid}>
-						{GRAD_PRESETS.map((bg, i) => (
-							<button
-								type="button"
-								key={bg}
-								className={`${styles.bgThumb} ${isSelected(bg) ? styles.isActive : ""}`}
-								style={{ background: bg }}
-								aria-label={ts("background.gradientLabel", { index: i + 1 })}
-								disabled={!hasDocument}
-								onClick={() => void set({ wallpaper: bg })}
+									onClick={handlePickFile}
+								>
+									{ts("background.uploadCustom")}
+								</button>
+								<div className={styles.bgGrid}>
+									{customUrls.map((url) => (
+										<button
+											type="button"
+											key={`custom-${url.slice(-32)}`}
+											className={`${styles.bgThumb} ${isSelected(url) ? styles.isActive : ""}`}
+											style={{ background: `center/cover no-repeat url(${url})` }}
+											aria-label={ts("background.customWallpaper")}
+											disabled={!hasDocument}
+											onClick={() => void set({ wallpaper: url })}
+										/>
+									))}
+									{WALLPAPER_PATHS.map((path, i) => {
+										// Grid swatch paints the small pre-generated thumbnail (see
+										// WALLPAPER_THUMB_PATHS) — selecting it still stores/applies `path`,
+										// the full-res original, unchanged.
+										const previewUrl = resolveImageWallpaperUrl(WALLPAPER_THUMB_PATHS[i]);
+										return (
+											<button
+												type="button"
+												key={path}
+												className={`${styles.bgThumb} ${isSelected(path) ? styles.isActive : ""}`}
+												style={{ background: `center/cover no-repeat url(${previewUrl})` }}
+												aria-label={ts("background.imageLabel", { index: i + 1 })}
+												disabled={!hasDocument}
+												onClick={() => void set({ wallpaper: path })}
+											/>
+										);
+									})}
+								</div>
+							</>
+						) : tab === "color" ? (
+							<BackgroundColorTab
+								value={settings.wallpaper}
+								hasDocument={hasDocument}
+								isSelected={isSelected}
+								onPick={(color) => void set({ wallpaper: color })}
 							/>
-						))}
+						) : (
+							<>
+								<div className={styles.bgGrid}>
+									{GRAD_PRESETS.map((bg, i) => (
+										<button
+											type="button"
+											key={bg}
+											className={`${styles.bgThumb} ${isSelected(bg) ? styles.isActive : ""}`}
+											style={{ background: bg }}
+											aria-label={ts("background.gradientLabel", { index: i + 1 })}
+											disabled={!hasDocument}
+											onClick={() => void set({ wallpaper: bg })}
+										/>
+									))}
+								</div>
+								{hasDocument ? <GradientEditor onChange={handleGradientChange} /> : null}
+							</>
+						)}
 					</div>
-					{hasDocument ? <GradientEditor onChange={handleGradientChange} /> : null}
-				</>
-			)}
-		</Pane>
+				</PopoverContent>
+			</Popover>
+			{/* Stays mounted OUTSIDE the popover: opening the OS file dialog takes focus,
+			    which closes the popover and would unmount the input mid-pick, dropping the
+			    file. It has no layout to cost us here. */}
+			<input
+				ref={fileInputRef}
+				type="file"
+				accept={IMAGE_ACCEPT}
+				style={{ display: "none" }}
+				onChange={handleFileSelected}
+			/>
+			{/* Reads in the order it acts: pick a background, then blur it. Lived under
+			    "Effects" while that was a separate facet, which is how a control named
+			    "Blur BG" ended up in the tab that doesn't say background. */}
+			<div className={styles.paneRow}>
+				<span className={styles.label}>{ts("effects.blurBg")}</span>
+				<Toggle
+					checked={settings.showBlur}
+					disabled={!hasDocument}
+					onChange={(v) => {
+						void set({ showBlur: v });
+						if (isNativeCompositorActive()) {
+							setNativeParam("backgroundBlur", v);
+						}
+					}}
+				/>
+			</div>
+		</>
 	);
+}
+
+/**
+ * The CSS `background` shorthand that paints a wallpaper value as a swatch — the same
+ * painting the grid thumbs do, hoisted out so the collapsed trigger shows exactly what the
+ * grid would show as selected. Bundled wallpapers resolve to their small pre-generated
+ * thumbnail; colours and gradients are their own literal; a custom `data:` URL passes
+ * through `resolveImageWallpaperUrl` untouched.
+ */
+function backgroundSwatchStyle(value: string): CSSProperties {
+	const classified = classifyWallpaper(value);
+	if (classified.kind !== "image") return { background: classified.value };
+	const bundled = WALLPAPER_PATHS.indexOf(classified.path);
+	const url = resolveImageWallpaperUrl(
+		bundled >= 0 ? WALLPAPER_THUMB_PATHS[bundled] : classified.path,
+	);
+	return { background: `center/cover no-repeat url(${url})` };
 }
 
 // keep the user's last data: URL after they switch tabs so the Image
@@ -1361,55 +1441,44 @@ export type { AxcutWord };
 
 // ─── Video Effects ─────────────────────────────────────────────────
 
+/**
+ * One pane for everything that shapes the composition.
+ *
+ * Background and Effects used to be two facets, and four of Effects' five controls were
+ * background controls in disguise: the blur blurs the background, the shadow falls ON the
+ * background, and roundness and padding exist only to let it show through. So a user who
+ * wanted no background at all opened "Background", found nothing but wallpapers, and filed
+ * #84. The split had no seam to sit on — it just hid the answer in the tab that doesn't say
+ * "background".
+ *
+ * Merged, the sections read as what they are: pick a background, decide how the recording
+ * sits on it, then the one control that is about neither.
+ */
 export function VideoEffectsPane() {
 	const ts = useScopedT("settings");
-	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+	const { settings, setLive, commit, hasDocument } = useEditorSettings();
 
-	// Push the current frame-styling settings into the native D3D compositor
-	// view whenever it becomes active (or the settings change while it's up).
-	// The onChange handlers above already push per-control diffs; this effect
-	// also covers the "user tweaked a setting before the native view was
-	// mounted" case so the view doesn't render with stale defaults.
 	// Le rayon natif = rayon de base de la fixture (~24px @1920) × cette échelle. Diviser la
 	// valeur px de l'UI par ce même rayon de base fait que le coin natif ≈ les px affichés
 	// (au lieu de plafonner à ~24px comme avec /64).
 	const NATIVE_SCREEN_BASE_RADIUS_PX = 24;
-	// La synchro initiale de ces params vit desormais dans NativeCompositorOverlay
+	// La synchro initiale de ces params vit dans NativeCompositorOverlay
 	// (`pushAllNativeParams`) : l'inspecteur n'affiche qu'un panneau a la fois, donc
 	// un effet de montage ici ne poussait rien tant que ce panneau precis n'avait pas
 	// ete ouvert. Les handlers par controle ci-dessous poussent toujours leurs diffs.
 
 	return (
-		<Pane title={ts("effects.title")} icon={<Sliders size={14} />} helpText={ts("effects.help")}>
-			<div className={styles.paneRow}>
-				<span className={styles.label}>{ts("effects.blurBg")}</span>
-				<Toggle
-					checked={settings.showBlur}
-					disabled={!hasDocument}
-					onChange={(v) => {
-						void set({ showBlur: v });
-						if (isNativeCompositorActive()) {
-							setNativeParam("backgroundBlur", v);
-						}
-					}}
-				/>
-			</div>
+		<Pane
+			title={ts("effects.title")}
+			icon={<Sliders size={14} />}
+			// Two complete sentences, one per merged half, rather than a third string to
+			// translate 13 times — both already exist in every locale and neither is a
+			// fragment of the other, so joining them survives translation and RTL alike.
+			helpText={`${ts("background.help")} ${ts("effects.help")}`}
+		>
+			<BackgroundSection />
+			<div className={styles.sectionLabel}>{ts("effects.frame")}</div>
 			<div className={styles.sliderGrid}>
-				<SliderCell
-					label={ts("effects.motionBlur")}
-					value={settings.motionBlurAmount * 100}
-					min={0}
-					max={100}
-					suffix="%"
-					disabled={!hasDocument}
-					onChange={(v) => {
-						setLive({ motionBlurAmount: v / 100 });
-						if (isNativeCompositorActive()) {
-							setNativeParam("motionBlur", v / 100);
-						}
-					}}
-					onCommit={() => void commit()}
-				/>
 				<SliderCell
 					label={ts("effects.shadow")}
 					value={settings.shadowIntensity * 100}
@@ -1452,6 +1521,28 @@ export function VideoEffectsPane() {
 						setLive({ padding: v });
 						if (isNativeCompositorActive()) {
 							setNativeParam("padding", v / 100);
+						}
+					}}
+					onCommit={() => void commit()}
+				/>
+			</div>
+			{/* Alone in its section, and correctly so: this blurs the RECORDING as it moves
+			    (zooms, layout changes) — see `effects.motion_blur` driving the tap count in
+			    frame_geometry.rs. It is the one control here that never touches the
+			    background, so it does not belong under "Frame" either. */}
+			<div className={styles.sectionLabel}>{ts("effects.motion")}</div>
+			<div className={styles.sliderGrid}>
+				<SliderCell
+					label={ts("effects.motionBlur")}
+					value={settings.motionBlurAmount * 100}
+					min={0}
+					max={100}
+					suffix="%"
+					disabled={!hasDocument}
+					onChange={(v) => {
+						setLive({ motionBlurAmount: v / 100 });
+						if (isNativeCompositorActive()) {
+							setNativeParam("motionBlur", v / 100);
 						}
 					}}
 					onCommit={() => void commit()}

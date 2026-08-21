@@ -6,7 +6,7 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
-import { BackgroundPane, isSupportedBackgroundImage } from "./RightPanes";
+import { isSupportedBackgroundImage, VideoEffectsPane } from "./RightPanes";
 
 const toastError = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn(), info: vi.fn() } }));
@@ -55,7 +55,7 @@ describe("a rejected upload tells the user", () => {
 	function pick(file: File) {
 		const { container } = render(
 			<I18nProvider>
-				<BackgroundPane />
+				<VideoEffectsPane />
 			</I18nProvider>,
 		);
 		const input = container.querySelector('input[type="file"]');
