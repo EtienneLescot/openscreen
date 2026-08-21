@@ -78,8 +78,20 @@ const ARGS: Record<string, unknown> = {
 	removeClip: { clipId: "clip_1" },
 };
 
+/** ponytail: the fixture starts from a FIXED instant. `createEmptyDocument` reads
+ *  the wall clock when a caller hands it no `createdAt`, so two documents built by
+ *  two calls carry different `createdAt`/`updatedAt` whenever the calls straddle a
+ *  millisecond — which is what made an assertion over in `agent-tools.test.ts` fail
+ *  a PR that touched none of it. Nothing here compares two documents yet; pinning is
+ *  what keeps the one that does from being a coin flip on a loaded runner. */
+const FIXTURE_CREATED_AT = "2026-01-01T00:00:00.000Z";
+
 function fixtureDocument(): AxcutDocument {
-	const base = createEmptyDocument({ title: "Test", projectId: "proj_1" });
+	const base = createEmptyDocument({
+		title: "Test",
+		projectId: "proj_1",
+		createdAt: FIXTURE_CREATED_AT,
+	});
 	return documentSchema.parse({
 		...base,
 		project: { ...base.project, primaryAssetId: "asset_1" },
