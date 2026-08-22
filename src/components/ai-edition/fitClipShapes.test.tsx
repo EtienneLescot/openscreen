@@ -8,6 +8,7 @@ import "@testing-library/jest-dom";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
+import { LOCALE_STORAGE_KEY } from "@/i18n/config";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { createEmptyDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -56,7 +57,8 @@ function documentWithShapes(shapes: Array<[number, number]>): AxcutDocument {
 	} as unknown as AxcutDocument;
 }
 
-function mount(doc: AxcutDocument) {
+function mount(doc: AxcutDocument, locale?: string) {
+	if (locale) localStorage.setItem(LOCALE_STORAGE_KEY, locale);
 	useProjectStore.setState({ document: doc });
 	return render(
 		<I18nProvider>
@@ -79,9 +81,13 @@ function frameSettings() {
 }
 
 beforeEach(() => {
+	localStorage.clear();
 	useProjectStore.setState({ document: null });
 });
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	localStorage.clear();
+});
 
 describe("fitting a clip is an action, and a choice only when there is one", () => {
 	it("acts without asking when the timeline holds one shape", async () => {
@@ -171,6 +177,29 @@ describe("fitting a clip is an action, and a choice only when there is one", () 
 		).toBeInTheDocument();
 		expect(
 			within(menu).getByRole("menuitem", { name: /1920 × 1080.*2 clips/ }),
+		).toBeInTheDocument();
+	});
+
+	it("counts in Russian with the form the count actually needs", () => {
+		// Russian has four plural categories, and 2-4 takes "клипа". Mapping everything that
+		// is not `one` onto a single plural rendered "2 клипов", which is wrong rather than
+		// merely coarse — the reason the count goes through Intl.PluralRules and not
+		// `count === 1`.
+		mount(
+			documentWithShapes([
+				[1920, 1080],
+				[1920, 1080],
+				[1080, 1920],
+			]),
+			"ru",
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Подогнать" }));
+		const menu = screen.getByRole("menu");
+		expect(
+			within(menu).getByRole("menuitem", { name: /1920 × 1080.*2 клипа/ }),
+		).toBeInTheDocument();
+		expect(
+			within(menu).getByRole("menuitem", { name: /1080 × 1920.*1 клип$/ }),
 		).toBeInTheDocument();
 	});
 

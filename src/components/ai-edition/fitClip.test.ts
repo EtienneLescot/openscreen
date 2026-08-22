@@ -4,7 +4,6 @@
 // unfixable to someone who already found the padding slider — so it gets pinned here.
 
 import { describe, expect, it } from "vitest";
-import type { AspectRatio } from "@/utils/aspectRatioUtils";
 import { fitClipPatch } from "./RightPanes";
 
 describe("fitClipPatch", () => {

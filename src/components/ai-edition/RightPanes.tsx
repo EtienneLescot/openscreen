@@ -1484,17 +1484,24 @@ export function fitClipPatch(nativeToken: AspectRatio): EditorSettingsPatch {
 }
 
 /**
- * "1 clip" / "2 clips", picked through Intl.PluralRules rather than `count === 1`.
+ * The catalog key for a count, by CLDR plural category.
  *
- * The catalog has no plural machinery — `translate` interpolates and nothing else — so the two
- * forms are two keys. Choosing between them by CLDR category instead of by equality is what
- * makes French say "0 clip" and not "0 clips", and it degrades honestly for the locales whose
- * rules need more than two forms rather than pretending English's rules are universal.
+ * `translate` interpolates and nothing else, so each form is its own key. Selecting by
+ * category rather than by `count === 1` is what makes French say "0 clip" — and, more to the
+ * point, what lets a locale carry more than two forms at all: Russian needs "клипа" for 2–4
+ * and "клипов" for 5+, so mapping everything that is not `one` onto a single plural produced
+ * "2 клипов", which is simply wrong rather than merely coarse.
+ *
+ * Falls back to `fitClipMany` for any category a locale has not authored, so adding a form is
+ * a catalog change and never a code change. Arabic still needs its `two`, `few` and `many`
+ * forms — it has six categories and I could not verify the grammar, so it is deliberately
+ * left on the fallback rather than filled in with a guess.
  */
-function pluralKey(locale: string, count: number): "effects.fitClipOne" | "effects.fitClipMany" {
-	return new Intl.PluralRules(locale).select(count) === "one"
+function pluralKey(locale: string, count: number): string {
+	const category = new Intl.PluralRules(locale).select(count);
+	return category === "one"
 		? "effects.fitClipOne"
-		: "effects.fitClipMany";
+		: `effects.fitClip${category === "few" ? "Few" : "Many"}`;
 }
 
 // ─── Video Effects ─────────────────────────────────────────────────

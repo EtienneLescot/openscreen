@@ -78,6 +78,7 @@
 		"formatOriginal": "Gốc",
 		"fitClip": "Vừa khít",
 		"fitClipOne": "{{count}} clip",
+		"fitClipFew": "{{count}} clip",
 		"fitClipMany": "{{count}} clip",
 		"motion": "Chuyển động",
 		"on": "bật",

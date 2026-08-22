@@ -78,6 +78,7 @@
 		"formatOriginal": "Original",
 		"fitClip": "Ajuster",
 		"fitClipOne": "{{count}} clip",
+		"fitClipFew": "{{count}} clips",
 		"fitClipMany": "{{count}} clips",
 		"motion": "Mouvement",
 		"on": "activé",
