@@ -1635,7 +1635,14 @@ export function VideoEffectsPane() {
 							disabled={!hasDocument}
 							aria-label={ts("effects.format")}
 						>
-							{getAspectRatioLabel(settings.aspectRatio)}
+							{/* `getAspectRatioLabel` hardcodes English "Original" for the legacy
+							    `"native"` value, which is still reachable: the v5→v6 migration only
+							    bakes it into a concrete token once clip dimensions are known, and
+							    leaves it alone until then. The group header below is localized, so
+							    without this the two would disagree in twelve locales. */}
+							{settings.aspectRatio === "native"
+								? ts("effects.formatOriginal")
+								: getAspectRatioLabel(settings.aspectRatio)}
 							<ChevronDown size={11} />
 						</button>
 					</PopoverTrigger>
