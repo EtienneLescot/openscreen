@@ -318,6 +318,9 @@ fn block_layout(
     text_h: CGFloat,
     align: u8,
     valign: &str,
+    /// Une plaque de fond est-elle dessinée ? Elle décide de la marge à réserver du
+    /// côté ancré — voir `anchor_pad` plus bas.
+    has_plate: bool,
     font_px: CGFloat,
 ) -> (CGRect, CGRect) {
     let (pad_x, pad_y) = plate_padding(font_px);
@@ -332,12 +335,19 @@ fn block_layout(
     // épinglent une arête : un bloc centré voit ses DEUX arêtes bouger quand il
     // gagne une ligne, ce qui déplaçait le sous-titre. `top` est ici une distance
     // depuis le HAUT de la boîte, en coordonnées descendantes.
+    // `anchor_pad` réserve la marge de la plaque DU CÔTÉ ANCRÉ. Sans elle, coller le
+    // bloc de texte au bord laisse la plaque poser toute sa marge du côté opposé et
+    // zéro du côté ancré : le fond épouse le bas des lettres au pixel près tout en
+    // respirant deux fois trop au-dessus. Ce qui doit toucher le bord de la boîte est
+    // la PLAQUE, pas les glyphes. Sans plaque, il n'y a rien à réserver.
+    let anchor_pad = if has_plate { pad_y } else { 0.0 };
     let slack_y = (box_h - text_h).max(0.0);
     let top = match valign {
-        "top" | "start" => 0.0,
-        "bottom" | "end" => slack_y,
+        "top" | "start" => anchor_pad,
+        "bottom" | "end" => slack_y - anchor_pad,
         _ => slack_y * 0.5,
-    };
+    }
+    .clamp(0.0, slack_y);
     let frame_x = (box_w - avail_w) * 0.5;
     let frame = CGRect {
         origin: CGPoint {
@@ -613,7 +623,16 @@ impl TextRasterizer {
         let text_h = measured.height.ceil().max(0.0);
 
         let (frame_rect, plate_rect) =
-            block_layout(box_w, box_h, text_w, text_h, alignment, &spec.valign, font_px);
+            block_layout(
+                box_w,
+                box_h,
+                text_w,
+                text_h,
+                alignment,
+                &spec.valign,
+                spec.background[3] > 0.0,
+                font_px,
+            );
 
         // --- plaque de fond, sous le texte ---
         if spec.background[3] > 0.0 && plate_rect.size.width > 0.0 && plate_rect.size.height > 0.0
@@ -849,7 +868,7 @@ mod tests {
     /// Géométrie pure — pas de GPU, pas de CoreText.
     #[test]
     fn block_layout_centres_the_frame_and_sizes_the_plate() {
-        let (frame, plate) = block_layout(1536.0, 238.0, 500.0, 56.0, 2, "center", 48.0);
+        let (frame, plate) = block_layout(1536.0, 238.0, 500.0, 56.0, 2, "center", true, 48.0);
         // Cadre centré : autant de vide au-dessus qu'en dessous (repère CG, y vers le haut).
         let above = 238.0 - (frame.origin.y + frame.size.height);
         let below = frame.origin.y;
@@ -864,7 +883,7 @@ mod tests {
     fn block_layout_never_lets_the_plate_leave_the_box() {
         for align in [0u8, 1, 2] {
             // Bloc plus large et plus haut que la boîte : la plaque doit se contenter d'elle.
-            let (_, plate) = block_layout(200.0, 60.0, 400.0, 200.0, align, "center", 48.0);
+            let (_, plate) = block_layout(200.0, 60.0, 400.0, 200.0, align, "center", true, 48.0);
             assert!(plate.origin.x >= 0.0, "align={align} : x={}", plate.origin.x);
             assert!(plate.origin.y >= 0.0, "align={align} : y={}", plate.origin.y);
             assert!(plate.origin.x + plate.size.width <= 200.0 + 0.01, "align={align}");
@@ -879,7 +898,7 @@ mod tests {
     fn block_layout_pins_the_anchored_edge_whatever_the_block_height() {
         let (box_w, box_h) = (1536.0, 238.0);
         let edges = |valign: &str, text_h: f64| {
-            let (frame, _) = block_layout(box_w, box_h, 500.0, text_h, 2, valign, 48.0);
+            let (frame, _) = block_layout(box_w, box_h, 500.0, text_h, 2, valign, true, 48.0);
             // (bas, haut) en distance depuis le bas de la boîte.
             (frame.origin.y, frame.origin.y + frame.size.height)
         };

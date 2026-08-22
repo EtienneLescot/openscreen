@@ -274,6 +274,19 @@ describe("migrating a pre-anchor document", () => {
 		expect(legacy({ width: 40, offsetX: 30, textAlign: "right" }).anchorH).toBe("right");
 	});
 
+	it("reproduces the horizontal distance too, instead of snapping to the frame edge", () => {
+		// The old band's own left edge, not 0: `width: 40` centres its anchor at 30, so
+		// an offset of −25 put the band at 5% — and that is where the caption must stay.
+		const left = legacy({ width: 40, offsetX: -25, textAlign: "left" });
+		expect(left.anchorH).toBe("left");
+		expect(left.insetX).toBeCloseTo(5, 6);
+
+		// Mirrored: the band ends at 95%, so the distance from the right edge is 5%.
+		const right = legacy({ width: 40, offsetX: 25, textAlign: "right" });
+		expect(right.anchorH).toBe("right");
+		expect(right.insetX).toBeCloseTo(5, 6);
+	});
+
 	it("lets a stored anchor win, so the migration runs once and then stays out of the way", () => {
 		const s = legacy({ verticalPosition: "top", offsetY: 0, anchorV: "bottom", insetY: 9 });
 		expect(s.anchorV).toBe("bottom");
