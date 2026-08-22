@@ -6,6 +6,7 @@ import {
 	activeHorizontalPositionPreset,
 	activeVerticalPositionPreset,
 	CAPTION_BAND_HEIGHT_PCT,
+	CAPTION_POSITION_PRESET_EPSILON,
 	captionBackgroundCss,
 	captionBandRect,
 	captionHorizontalPositionOffset,
@@ -275,6 +276,18 @@ describe("caption position presets", () => {
 
 	it("collapses to center when the band is full-width, since left/right have nowhere to go", () => {
 		expect(activeHorizontalPositionPreset({ ...ON, width: 100, offsetX: 0 })).toBe("center");
+	});
+
+	it("still picks left/right over center when a near-full-width band squeezes them inside the epsilon", () => {
+		// At width this close to 100, range.x.min/max themselves fall inside
+		// CAPTION_POSITION_PRESET_EPSILON of 0 — checking "is this near center?"
+		// first would wrongly claim an offset that is exactly at the true edge.
+		const squeezed = { ...ON, width: 100 - 1e-7 };
+		const range = captionOffsetRange(squeezed);
+		expect(Math.abs(range.x.min)).toBeLessThan(CAPTION_POSITION_PRESET_EPSILON);
+		expect(activeHorizontalPositionPreset({ ...squeezed, offsetX: range.x.min })).toBe("left");
+		expect(activeHorizontalPositionPreset({ ...squeezed, offsetX: range.x.max })).toBe("right");
+		expect(activeHorizontalPositionPreset({ ...squeezed, offsetX: 0 })).toBe("center");
 	});
 
 	it("sets offsetX to the true frame edge for left/right, matching the reachable range", () => {

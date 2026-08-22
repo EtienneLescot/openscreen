@@ -211,18 +211,33 @@ export function activeVerticalPositionPreset(
  * There is no stored `horizontalPosition` field — `offsetX` is already an
  * absolute-feeling value centred on 0 with a range that reaches both frame
  * edges (see `captionOffsetRange`), so "left"/"center"/"right" are just names
- * for three points on that existing range, checked in this order because all
- * three coincide at `offsetX === 0` when the band is full-width (no travel).
+ * for three points on that existing range. All three coincide at `offsetX===0`
+ * when the band is full-width (no travel) — and can also *nearly* coincide
+ * for a band merely close to full-width, where `range.x.min`/`max` shrink
+ * toward 0 as well. Picking the CLOSEST candidate (not the first one within
+ * epsilon) is what keeps that near-degenerate case from reporting "center"
+ * for an offset that is actually sitting exactly on `range.x.min`/`max`.
  */
 export function activeHorizontalPositionPreset(
 	settings: CaptionSettings,
 ): CaptionHorizontalPosition | null {
 	const range = captionOffsetRange(settings);
 	const { offsetX } = settings;
-	if (Math.abs(offsetX) < CAPTION_POSITION_PRESET_EPSILON) return "center";
-	if (Math.abs(offsetX - range.x.min) < CAPTION_POSITION_PRESET_EPSILON) return "left";
-	if (Math.abs(offsetX - range.x.max) < CAPTION_POSITION_PRESET_EPSILON) return "right";
-	return null;
+	const candidates: ReadonlyArray<[CaptionHorizontalPosition, number]> = [
+		["center", 0],
+		["left", range.x.min],
+		["right", range.x.max],
+	];
+	let closest: CaptionHorizontalPosition | null = null;
+	let closestDistance = CAPTION_POSITION_PRESET_EPSILON;
+	for (const [preset, target] of candidates) {
+		const distance = Math.abs(offsetX - target);
+		if (distance < closestDistance) {
+			closest = preset;
+			closestDistance = distance;
+		}
+	}
+	return closest;
 }
 
 /** The `offsetX` that puts the band at a given horizontal preset, for a preset
