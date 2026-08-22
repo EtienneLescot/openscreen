@@ -636,16 +636,25 @@ it deletes data
 
 ## Known gaps
 
-- **No language selector in the UI.** The renderer always sends
-  `language: "auto"`. Forcing a language would skip detection on the
-  first window and slightly improve WER. Needs a UI control wired
-  through `setTranscript` and a mapping from the UI string to a
-  whisper.cpp language token.
+- **Language selector.** The "Regenerate as" picker
+  (`SourceTranscriptModal` in
+  [`src/components/ai-edition/Modals.tsx`](../../src/components/ai-edition/Modals.tsx))
+  offers `"auto"` plus every language the `small` multilingual model
+  resolves. `TRANSCRIPT_LANGUAGE_CODES` / `TRANSCRIPT_LANGUAGE_NAMES` in
+  [`src/lib/ai-edition/schema/index.ts`](../../src/lib/ai-edition/schema/index.ts)
+  mirror whisper.cpp's own `g_lang` table verbatim — a code outside that list
+  fails to resolve a language id in `wparams.language`
+  (`electron/native/whisper-stt/src/main.cpp`) — and are the single source
+  the picker's options are built from, so the two cannot drift the way a
+  hand-duplicated list would. Option labels come from `Intl.DisplayNames` in
+  the active UI locale, falling back to whisper.cpp's own English name for a
+  code that locale's ICU data can't resolve. Forcing a language skips
+  detection on the first window and slightly improves WER.
 
   Note that `"auto"` is a *request* value only. The helper used to echo the
   request straight back into `detected_language`, so with no selector the field
   was permanently the literal string `"auto"`: the media stage's "detected
-  language" line ([`src/components/ai-edition/Modals.tsx:1763`](../../src/components/ai-edition/Modals.tsx:1763))
+  language" line ([`src/components/ai-edition/Modals.tsx:1891`](../../src/components/ai-edition/Modals.tsx:1891))
   displayed it verbatim, and `transcribe.ts` wrote it onto
   `AxcutTranscript.language`. It now reports `whisper_full_lang_id()` — the
   detected language under `"auto"`, the forced one otherwise.

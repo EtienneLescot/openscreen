@@ -17,50 +17,55 @@ import {
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { CropRegion } from "@/components/video-editor/types";
-import { useScopedT } from "@/contexts/I18nContext";
+import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { toAxcutTranscriptDsl } from "@/lib/ai-edition/document/transcribe";
-import type { AxcutClip, AxcutTranscript } from "@/lib/ai-edition/schema";
+import {
+	type AxcutClip,
+	type AxcutTranscript,
+	TRANSCRIPT_LANGUAGE_CODES,
+	TRANSCRIPT_LANGUAGE_NAMES,
+	type TranscriptLanguageCode,
+} from "@/lib/ai-edition/schema";
 import { formatSec, formatSeconds } from "@/lib/ai-edition/timeline/format";
 import styles from "./NewEditorShell.module.css";
 import type { VideoSource } from "./VirtualPreview";
 
-// ponytail: keep the UI's language list literal in one place. Mirrors
-// `transcriptLanguageSchema` in schema/index.ts; if the schema gains a
-// language, add it here too.
-const REGEN_LANGUAGES = [
-	"auto",
-	"en",
-	"fr",
-	"de",
-	"es",
-	"it",
-	"pt",
-	"nl",
-	"ja",
-	"ko",
-	"zh",
-] as const;
+const languageDisplayNamesCache = new Map<string, Intl.DisplayNames>();
 
-type TranscriptLanguage = (typeof REGEN_LANGUAGES)[number];
+function languageDisplayNamesFor(locale: string): Intl.DisplayNames | null {
+	const cached = languageDisplayNamesCache.get(locale);
+	if (cached) return cached;
+	try {
+		const names = new Intl.DisplayNames([locale], { type: "language" });
+		languageDisplayNamesCache.set(locale, names);
+		return names;
+	} catch {
+		return null;
+	}
+}
 
-const LANGUAGE_LABELS: Record<TranscriptLanguage, string> = {
-	auto: "Auto",
-	en: "EN",
-	fr: "FR",
-	de: "DE",
-	es: "ES",
-	it: "IT",
-	pt: "PT",
-	nl: "NL",
-	ja: "JA",
-	ko: "KO",
-	zh: "ZH",
-};
+/**
+ * Localized name for a whisper.cpp language code, e.g. "jw" -> "Javanese" in
+ * an English UI, "japonais" in a French one. Falls back to whisper's own
+ * English name (`TRANSCRIPT_LANGUAGE_NAMES`) when the active locale's ICU
+ * data can't resolve one — `Intl.DisplayNames` echoes the input code back
+ * rather than throwing when it doesn't recognize it.
+ */
+function languageLabel(code: Exclude<TranscriptLanguageCode, "auto">, locale: string): string {
+	try {
+		const resolved = languageDisplayNamesFor(locale)?.of(code);
+		if (resolved && resolved.toLowerCase() !== code.toLowerCase()) return resolved;
+	} catch {
+		// Malformed/unsupported subtag for this Intl implementation.
+	}
+	return TRANSCRIPT_LANGUAGE_NAMES[code];
+}
 
 interface BaseModalProps {
 	open: boolean;
@@ -1548,7 +1553,7 @@ export interface SourceTranscriptModalProps extends BaseModalProps {
 	isFailed: boolean;
 	/** Why the last run produced nothing — "no audio track", or the engine's own message. */
 	failureMessage?: string;
-	onRegenerate: (language: TranscriptLanguage) => void;
+	onRegenerate: (language: TranscriptLanguageCode) => void;
 }
 
 export function SourceTranscriptModal({
@@ -1569,16 +1574,29 @@ export function SourceTranscriptModal({
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [playTime, setPlayTime] = useState(0);
 	const [duration, setDuration] = useState<number | null>(null);
-	const [regenLang, setRegenLang] = useState<TranscriptLanguage>(
-		(transcript?.language as TranscriptLanguage) ?? "auto",
+	const { locale } = useI18n();
+	const [regenLang, setRegenLang] = useState<TranscriptLanguageCode>(
+		(transcript?.language as TranscriptLanguageCode) ?? "auto",
 	);
 
 	// ponytail: sync the language picker to whatever the stored transcript was
 	// generated with. Avoids surprising the user with a different selection on
 	// every open after a regenerate.
 	useEffect(() => {
-		if (open) setRegenLang((transcript?.language as TranscriptLanguage) ?? "auto");
+		if (open) setRegenLang((transcript?.language as TranscriptLanguageCode) ?? "auto");
 	}, [open, transcript?.language]);
+
+	// Auto pinned first; the rest sorted by localized name so a 100-language
+	// list is scannable instead of ordered by whisper's internal language id.
+	const regenLanguageOptions = useMemo(() => {
+		const collator = new Intl.Collator(locale);
+		const rest = TRANSCRIPT_LANGUAGE_CODES.filter(
+			(code): code is Exclude<TranscriptLanguageCode, "auto"> => code !== "auto",
+		)
+			.map((code) => ({ code, label: languageLabel(code, locale) }))
+			.sort((a, b) => collator.compare(a.label, b.label));
+		return [{ code: "auto" as const, label: t("mediaStage.auto") }, ...rest];
+	}, [locale, t]);
 
 	useEffect(() => {
 		if (!open) {
@@ -1900,7 +1918,7 @@ export function SourceTranscriptModal({
 								aria-label={t("mediaStage.regenerateAs")}
 								value={regenLang}
 								disabled={isTranscribing}
-								onChange={(e) => setRegenLang(e.target.value as TranscriptLanguage)}
+								onChange={(e) => setRegenLang(e.target.value as TranscriptLanguageCode)}
 								style={{
 									width: "100%",
 									padding: "10px 12px",
@@ -1911,9 +1929,9 @@ export function SourceTranscriptModal({
 									font: "500 13px var(--font-body)",
 								}}
 							>
-								{REGEN_LANGUAGES.map((code) => (
+								{regenLanguageOptions.map(({ code, label }) => (
 									<option key={code} value={code}>
-										{code === "auto" ? t("mediaStage.auto") : LANGUAGE_LABELS[code]}
+										{label}
 									</option>
 								))}
 							</select>
