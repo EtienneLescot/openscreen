@@ -454,8 +454,14 @@ export type CaptionSettingsPatch = Partial<CaptionSettings>;
 export function patchCaptionSettings(
 	doc: AxcutDocument,
 	patch: CaptionSettingsPatch,
+	aspectValue = 16 / 9,
 ): AxcutDocument {
-	const next: CaptionSettings = { ...getCaptionSettings(doc), ...patch };
+	// The aspect matters on the FIRST write to a document that has never carried
+	// caption settings: that write is what materialises the defaults, and a portrait
+	// export wants a much larger inset than a landscape one. Reading without it here
+	// would freeze the landscape default into a 9:16 project — the exact failure the
+	// aspect-derived default exists to prevent.
+	const next: CaptionSettings = { ...getCaptionSettings(doc, aspectValue), ...patch };
 	next.insetY = clamp(next.insetY, 0, CAPTION_INSET_Y_MAX);
 	next.insetX = clamp(next.insetX, 0, CAPTION_INSET_X_MAX);
 	return {
