@@ -1777,6 +1777,9 @@ impl Compositor {
                         italic: text.font_style == "italic",
                         underline: text.text_decoration == "underline",
                         align: text.text_align.clone(),
+                        // Absent = "center", le comportement historique : les
+                        // annotations ne changent pas d'un pixel.
+                        valign: text.vertical_align.clone().unwrap_or_default(),
                         box_px: [quad_px[0].round() as u32, quad_px[1].round() as u32],
                     };
                     let key = spec.cache_key();
