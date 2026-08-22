@@ -601,50 +601,72 @@ mod tests {
         let (w, h) = (400usize, 200usize);
         let long = "un texte assez long pour devoir se replier sur plusieurs lignes";
 
-        let one = |valign: &str, content: &str| {
+        // On mesure la PLAQUE, pas le dernier pixel d'encre. La plaque epouse la boite
+        // de lignes posee par cosmic-text : c'est exactement ce que ce code epingle et
+        // ce que le compositeur dessine. Le bas de l'ENCRE, lui, depend des jambages du
+        // contenu — "Hx" n'en a aucun, "replier" en a — donc il descend plus bas a
+        // ancrage identique. Ancrer la boite de lignes plutot que l'encre est le
+        // comportement typographique attendu partout, et c'est la premiere version de
+        // ce test qui avait tort : elle comparait 184 a 199 et appelait ca une derive.
+        let plate_of = |valign: &str, content: &str| {
             let mut s = spec(content, "center");
             s.valign = valign.to_owned();
-            let atlas = raster.build_atlas(&s).expect("atlas").pixels;
-            let rows = ink_rows(&atlas, w, 0, w);
+            let atlas = raster.build_atlas(&s).expect("atlas");
+            let [_, py, _, ph] = atlas.plate;
+            let rows = ink_rows(&atlas.pixels, w, 0, w);
             assert!(!rows.is_empty(), "aucune encre pour {valign:?}");
-            (rows[0], *rows.last().unwrap())
+            (py, py + ph, rows[0], *rows.last().unwrap())
         };
 
-        let (_, short_bottom) = one("bottom", "Hx");
-        let (_, long_bottom) = one("bottom", long);
+        let (short_top_edge, short_bottom, _, _) = plate_of("bottom", "Hx");
+        let (long_top_edge, long_bottom, _, _) = plate_of("bottom", long);
         assert!(
-            (short_bottom as i32 - long_bottom as i32).abs() <= 1,
+            (short_bottom - long_bottom).abs() < 1.0,
             "ancrage bas : l'arete basse a bouge de {short_bottom} a {long_bottom} \
              en passant d'une ligne a plusieurs"
         );
 
         // Et le miroir, pour que « haut » ne soit pas juste « pas bas ».
-        let (short_top, _) = one("top", "Hx");
-        let (long_top, _) = one("top", long);
+        let (short_top, _, _, _) = plate_of("top", "Hx");
+        let (long_top, _, _, _) = plate_of("top", long);
         assert!(
-            (short_top as i32 - long_top as i32).abs() <= 1,
+            (short_top - long_top).abs() < 1.0,
             "ancrage haut : l'arete haute a bouge de {short_top} a {long_top}"
         );
 
-        // Le texte long doit vraiment occuper plus de hauteur, sinon les deux
-        // assertions ci-dessus passeraient sur deux rendus identiques.
-        let (lt, lb) = one("bottom", long);
-        let (st, sb) = one("bottom", "Hx");
+        // Le texte long doit vraiment se replier, sinon les deux assertions ci-dessus
+        // passeraient sur deux rendus identiques et ne prouveraient rien.
         assert!(
-            (lb - lt) > (sb - st),
+            (long_bottom - long_top_edge) > (short_bottom - short_top_edge) + 1.0,
             "le texte « long » ne s'est pas replie : le test ne prouve rien"
         );
 
-        // Enfin, les trois ancrages doivent poser l'encre a trois endroits
-        // differents dans la boite — sinon `valign` n'est pas applique du tout.
-        let (top_t, _) = one("top", "Hx");
-        let (ctr_t, _) = one("center", "Hx");
-        let (bot_t, _) = one("bottom", "Hx");
+        // Les trois ancrages doivent poser la plaque a trois endroits differents,
+        // sinon `valign` n'est pas applique du tout.
+        let (top_y, _, _, _) = plate_of("top", "Hx");
+        let (ctr_y, _, _, _) = plate_of("center", "Hx");
+        let (bot_y, _, _, _) = plate_of("bottom", "Hx");
         assert!(
-            top_t < ctr_t && ctr_t < bot_t,
-            "les trois ancrages ne se distinguent pas : haut={top_t} centre={ctr_t} bas={bot_t}"
+            top_y < ctr_y && ctr_y < bot_y,
+            "les trois ancrages ne se distinguent pas : haut={top_y} centre={ctr_y} bas={bot_y}"
         );
-        assert!(bot_t > h / 2, "l'ancrage bas laisse l'encre dans la moitie haute");
+
+        // Enfin, l'encre reste dans la plaque qui la porte, et la plaque dans la boite :
+        // c'est ce qui relie la boite mesuree ci-dessus a ce que le viewer voit.
+        //
+        // Tolerance `pad_y`, la meme que `the_plate_hugs_the_text_instead_of_filling_the_box`
+        // plus haut : l'encre est bornee par la boite de LIGNES, et un glyphe peut deborder
+        // legerement la sienne (jambages, accents) sans que rien ne soit casse. C'est
+        // exactement l'hypothese que la premiere version de ce test avait fausse.
+        for valign in ["top", "bottom"] {
+            let (py, pb, ink_top, ink_bottom) = plate_of(valign, long);
+            let (_, pad_y) = crate::text_plate::padding(40.0);
+            assert!(
+                (ink_top as f32) >= py - pad_y && (ink_bottom as f32) <= pb + pad_y,
+                "{valign} : l'encre ({ink_top}..{ink_bottom}) sort de la plaque ({py}..{pb})"
+            );
+            assert!(pb <= (h as f32) + 0.01, "{valign} : la plaque sort de la boite");
+        }
     }
 
     #[test]
