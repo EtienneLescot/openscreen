@@ -228,6 +228,20 @@ describe("V4Timeline create-from-toolbar", () => {
 		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
 	});
 
+	it("pans from a wheel over the ruler too, not just the lanes", () => {
+		// Same gap as the zoom case above, but for the Shift+wheel pan path.
+		// Panning is a no-op fully zoomed out (nav already spans the whole
+		// timeline, so there is nowhere to pan to), so zoom in first — from the
+		// ruler too — to open up room to pan within.
+		renderTimeline();
+		const ruler = document.querySelector("[class*=tlRulerRow]") as HTMLElement;
+		wheelZoomOn(ruler, 40);
+		const navWindow = document.querySelector("[class*=tlNavWindow]") as HTMLElement;
+		const before = navWindow.style.left;
+		fireEvent.wheel(ruler, { shiftKey: true, deltaY: 100, clientX: 0 });
+		expect(navWindow.style.left).not.toBe(before);
+	});
+
 	it("never asks for a slice too short to be worth creating", () => {
 		// Past ~30x on a short timeline the pixels are worth hundredths of a
 		// second; the region would be born unusable, so the duration floors.
