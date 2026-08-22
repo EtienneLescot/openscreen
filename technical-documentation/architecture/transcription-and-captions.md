@@ -519,7 +519,7 @@ unit falls back to the original words (`untranslatedUnits`,
 
 Caption appearance lives in `document.legacyEditor.captions`, accessed
 through `getCaptionSettings` / `patchCaptionSettings`
-([`src/lib/ai-edition/captions/settings.ts:217,262`](../../src/lib/ai-edition/captions/settings.ts:217)).
+([`src/lib/ai-edition/captions/settings.ts:279,324`](../../src/lib/ai-edition/captions/settings.ts:279)).
 
 | Field | Default | Notes |
 |---|---|---|
@@ -578,6 +578,25 @@ so the reachable span and the slider span are the same span. Before #396 both
 ends were hardcoded to ±45 while the result was clamped separately, which left
 the bottom anchor honouring only −45…+3 — nearly half the slider moved the handle
 and nothing else.
+
+#### Position presets
+
+`verticalPosition` and `offsetX`/`offsetY` are independent fields — a preset is
+not a separate mode the offsets are locked out of, it's just a point on the same
+range the slider already covers. `activeVerticalPositionPreset` /
+`activeHorizontalPositionPreset` (`settings.ts`, right after `captionOffsetRange`)
+read "is a preset active" back out of that: a preset counts as active only while
+its axis' offset is (within a small epsilon) exactly the value that preset would
+set, so dragging a slider away from a preset silently un-highlights it with no
+separate "active preset" field to keep in sync. Clicking a preset writes that
+clean value back (`offsetY: 0` for a vertical preset; `captionHorizontalPositionOffset`
+for a horizontal one) rather than leaving whatever nudge was already there, which
+is what makes the click read as "go here" instead of "go here, plus whatever was
+left over." `CaptionHorizontalPosition` (left/center/right) is a new axis of
+meaning distinct from `CaptionTextAlign` (same three words, but for aligning the
+text *inside* the band) — there is no stored `horizontalPosition` field; it is
+derived from `offsetX` exactly the way the vertical preset is derived from
+`offsetY`.
 
 The Captions pane itself
 ([`src/components/ai-edition/CaptionsPane.tsx`](../../src/components/ai-edition/CaptionsPane.tsx))
