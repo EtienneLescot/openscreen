@@ -64,7 +64,7 @@ function clip(startSec: number, endSec: number) {
 }
 
 /** The asset every clip above points at. No `cameraTrack`: this recording has no webcam,
- *  which is what Add Full Camera is gated on. */
+ *  which is what the Full Camera button is gated on. */
 const NO_CAMERA_ASSET = { id: "a1", label: "rec", durationSec: TOTAL_SEC };
 
 /** By default one 30-minute clip carrying a single one-second annotation. */
@@ -221,11 +221,29 @@ describe("V4Timeline create-from-toolbar", () => {
 		expect(durationOf(tl)).toBeCloseTo(0.25, 3);
 	});
 
-	// The toolbar button is gone, but Add Full Camera is still reachable via the `C`
-	// shortcut, and an empty lane advertises it — so on a camera-less project it was
-	// still inviting a `C` press that `addCameraFullscreen` refuses (#353). It borrows
-	// the Layout pane's "No Webcam" wording instead, so the two surfaces agree about
-	// the same project.
+	// #353. A camera-fullscreen region grows the webcam overlay, so with no webcam on the
+	// timeline it renders nothing in the preview and nothing in the export — the region is
+	// stored and forgotten. `addCameraFullscreen` now refuses to write one; the button says
+	// so before it is clicked instead of looking like it worked.
+	it("disables Add Full Camera when no clip on the timeline has a camera", () => {
+		renderTimeline();
+		expect(screen.getByTitle("buttons.addCameraFullscreen")).toBeDisabled();
+	});
+
+	it("enables Add Full Camera as soon as a clip's asset carries one", () => {
+		renderTimeline(undefined, undefined, [
+			{
+				...NO_CAMERA_ASSET,
+				cameraTrack: { sourcePath: "/tmp/cam.webm", startMs: 0, offsetMs: 0, visible: true },
+			},
+		]);
+		expect(screen.getByTitle("buttons.addCameraFullscreen")).toBeEnabled();
+	});
+
+	// The disabled button is only half the promise: an empty lane advertises the shortcut
+	// that fills it, so on a camera-less project it was still inviting a `C` press that
+	// `addCameraFullscreen` now refuses. It borrows the Layout pane's "No Webcam" wording
+	// instead, so the two surfaces agree about the same project.
 	it("does not advertise the C shortcut on a lane that cannot be filled", () => {
 		renderTimeline();
 		expect(screen.getByText("layout.noWebcam")).toBeInTheDocument();

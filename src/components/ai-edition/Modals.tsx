@@ -17,50 +17,27 @@ import {
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { CropRegion } from "@/components/video-editor/types";
-import { useScopedT } from "@/contexts/I18nContext";
+import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { toAxcutTranscriptDsl } from "@/lib/ai-edition/document/transcribe";
-import type { AxcutClip, AxcutTranscript } from "@/lib/ai-edition/schema";
+import {
+	type AxcutClip,
+	type AxcutTranscript,
+	type TranscriptLanguageCode,
+	transcriptLanguageSchema,
+} from "@/lib/ai-edition/schema";
 import { formatSec, formatSeconds } from "@/lib/ai-edition/timeline/format";
+import {
+	languageLabel,
+	sortedLanguageOptions,
+} from "@/lib/ai-edition/transcription/languageLabels";
 import styles from "./NewEditorShell.module.css";
 import type { VideoSource } from "./VirtualPreview";
-
-// ponytail: keep the UI's language list literal in one place. Mirrors
-// `transcriptLanguageSchema` in schema/index.ts; if the schema gains a
-// language, add it here too.
-const REGEN_LANGUAGES = [
-	"auto",
-	"en",
-	"fr",
-	"de",
-	"es",
-	"it",
-	"pt",
-	"nl",
-	"ja",
-	"ko",
-	"zh",
-] as const;
-
-type TranscriptLanguage = (typeof REGEN_LANGUAGES)[number];
-
-const LANGUAGE_LABELS: Record<TranscriptLanguage, string> = {
-	auto: "Auto",
-	en: "EN",
-	fr: "FR",
-	de: "DE",
-	es: "ES",
-	it: "IT",
-	pt: "PT",
-	nl: "NL",
-	ja: "JA",
-	ko: "KO",
-	zh: "ZH",
-};
 
 interface BaseModalProps {
 	open: boolean;
@@ -1539,6 +1516,17 @@ export function InsertSourceModal({
 	);
 }
 
+/**
+ * `AxcutTranscript.language` is `z.string().min(1)`, not validated against
+ * the known code list, so a stored transcript can hold a value no
+ * `<option>` matches — falls back to "auto" rather than letting the select
+ * go visibly out of sync with the code a regenerate would actually submit.
+ */
+function supportedTranscriptLanguage(language: string | undefined): TranscriptLanguageCode {
+	const parsed = transcriptLanguageSchema.safeParse(language);
+	return parsed.success ? parsed.data : "auto";
+}
+
 export interface SourceTranscriptModalProps extends BaseModalProps {
 	assetLabel: string;
 	assetPath: string;
@@ -1548,7 +1536,7 @@ export interface SourceTranscriptModalProps extends BaseModalProps {
 	isFailed: boolean;
 	/** Why the last run produced nothing — "no audio track", or the engine's own message. */
 	failureMessage?: string;
-	onRegenerate: (language: TranscriptLanguage) => void;
+	onRegenerate: (language: TranscriptLanguageCode) => void;
 }
 
 export function SourceTranscriptModal({
@@ -1569,16 +1557,22 @@ export function SourceTranscriptModal({
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [playTime, setPlayTime] = useState(0);
 	const [duration, setDuration] = useState<number | null>(null);
-	const [regenLang, setRegenLang] = useState<TranscriptLanguage>(
-		(transcript?.language as TranscriptLanguage) ?? "auto",
+	const { locale } = useI18n();
+	const [regenLang, setRegenLang] = useState<TranscriptLanguageCode>(
+		supportedTranscriptLanguage(transcript?.language),
 	);
 
 	// ponytail: sync the language picker to whatever the stored transcript was
 	// generated with. Avoids surprising the user with a different selection on
 	// every open after a regenerate.
 	useEffect(() => {
-		if (open) setRegenLang((transcript?.language as TranscriptLanguage) ?? "auto");
+		if (open) setRegenLang(supportedTranscriptLanguage(transcript?.language));
 	}, [open, transcript?.language]);
+
+	const regenLanguageOptions = useMemo(
+		() => sortedLanguageOptions(locale, t("mediaStage.auto")),
+		[locale, t],
+	);
 
 	useEffect(() => {
 		if (!open) {
@@ -1875,7 +1869,9 @@ export function SourceTranscriptModal({
 									border: "1px solid color-mix(in srgb, var(--success) 22%, transparent)",
 								}}
 							>
-								{t("mediaStage.detectedLanguage", { language: detectedLanguage })}
+								{t("mediaStage.detectedLanguage", {
+									language: languageLabel(detectedLanguage, locale),
+								})}
 							</span>
 						) : null}
 					</div>
@@ -1900,7 +1896,7 @@ export function SourceTranscriptModal({
 								aria-label={t("mediaStage.regenerateAs")}
 								value={regenLang}
 								disabled={isTranscribing}
-								onChange={(e) => setRegenLang(e.target.value as TranscriptLanguage)}
+								onChange={(e) => setRegenLang(e.target.value as TranscriptLanguageCode)}
 								style={{
 									width: "100%",
 									padding: "10px 12px",
@@ -1911,9 +1907,9 @@ export function SourceTranscriptModal({
 									font: "500 13px var(--font-body)",
 								}}
 							>
-								{REGEN_LANGUAGES.map((code) => (
+								{regenLanguageOptions.map(({ code, label }) => (
 									<option key={code} value={code}>
-										{code === "auto" ? t("mediaStage.auto") : LANGUAGE_LABELS[code]}
+										{label}
 									</option>
 								))}
 							</select>
