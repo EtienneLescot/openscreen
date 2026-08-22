@@ -383,23 +383,24 @@ def _select_transcript(transcripts, transcript_id):
 
 
 def _same_transcript(a, b):
-    """判断两份 transcript 对象是否指向同一条（按稳定 id 或内容指纹）。"""
+    """判断两份 transcript 对象是否指向同一条。
+
+    仅在两者是同一对象，或两者都有非空 persisted id 且匹配时才返回 True。
+    不依赖 assetId / 首个单词 id 等不稳定字段，避免把不同 transcript 误判为同一份。
+    """
     if a is b:
         return True
     aid = a.get("id") or ""
     bid = b.get("id") or ""
     if aid and bid:
         return aid == bid
-    # 都没有稳定 id：退化为 key 字段一致（assetId + 首个单词 id）
-    return (a.get("assetId") or "") == (b.get("assetId") or "") and (
-        (a.get("words") or [{}])[0].get("id") if a.get("words") else None
-    ) == ((b.get("words") or [{}])[0].get("id") if b.get("words") else None)
+    return False
 
 
 def save_words(path, words_by_id, transcript_id=None):
     """把用户编辑的 words 写回；逐 segment 重建 text；备份原文件。
 
-    只更新选定 transcript_id 对应的那条 transcript;transcript_id 为空时回退到第一个。
+    只更新选定 transcript_id 对应的那条 transcript；transcript_id 为空时回退到第一个。
     """
     with open(path, "r", encoding="utf-8") as f:
         doc = json.load(f)
@@ -543,6 +544,9 @@ class Handler(BaseHTTPRequestHandler):
                     with open(path, "r", encoding="utf-8") as f:
                         raw_doc = json.load(f)
                     all_tr = raw_doc.get("transcripts") or []
+                    # 与 load_project 保持一致：legacy-only 项目把顶层 transcript 包装进去
+                    if not all_tr and isinstance(raw_doc.get("transcript"), dict):
+                        all_tr = [raw_doc["transcript"]]
                     keys = [_transcript_key(t, i) for i, t in enumerate(all_tr)]
                     if active_id not in keys:
                         raise ValueError("指定的转写不存在")
