@@ -60,6 +60,7 @@
 
 .iconButton:hover:not(:disabled) {
 	background: var(--accent);
+	color: var(--accent-on);
 }
 
 .iconButton:disabled {
