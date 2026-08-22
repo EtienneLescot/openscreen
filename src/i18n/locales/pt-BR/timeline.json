@@ -8,8 +8,7 @@
 		"autoFocusAllOff": "Ativar foco automático para todos os zooms (a câmera segue o cursor)",
 		"addTrim": "Adicionar Recorte (T)",
 		"addAnnotation": "Adicionar Anotação (A)",
-		"addSpeed": "Adicionar Velocidade (S)",
-		"addCameraFullscreen": "Adicionar Câmera em Tela Cheia (C)"
+		"addSpeed": "Adicionar Velocidade (S)"
 	},
 	"hints": {
 		"pressZoom": "Pressione Z para adicionar zoom",

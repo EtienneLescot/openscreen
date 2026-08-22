@@ -8,8 +8,7 @@
 		"autoFocusAllOff": "تفعيل التركيز التلقائي لجميع التكبيرات (الكاميرا تتبع المؤشر)",
 		"addTrim": "إضافة قص (T)",
 		"addAnnotation": "إضافة شرح (A)",
-		"addSpeed": "إضافة سرعة (S)",
-		"addCameraFullscreen": "إضافة كاميرا كاملة الشاشة (C)"
+		"addSpeed": "إضافة سرعة (S)"
 	},
 	"hints": {
 		"pressZoom": "اضغط Z لإضافة تكبير",
