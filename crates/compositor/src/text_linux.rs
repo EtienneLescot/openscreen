@@ -37,6 +37,12 @@ pub struct TextSpec {
     pub underline: bool,
     /// "left" | "center" | "right".
     pub align: String,
+    /// "top" | "center" | "bottom" -- quelle arete du bloc de texte est epinglee
+    /// a la boite. "center" est le comportement historique (et celui des
+    /// annotations, qui reproduisent `alignItems: center` de l'overlay web) ; les
+    /// sous-titres passent "bottom" ou "top" pour que l'arete ancree ne bouge pas
+    /// quand le texte gagne une ligne.
+    pub valign: String,
     /// Taille de la boite en px de sortie.
     pub box_px: [u32; 2],
 }
@@ -61,6 +67,10 @@ impl TextSpec {
         }
         mix(&[self.bold as u8, self.italic as u8, self.underline as u8]);
         mix(self.align.as_bytes());
+        // Juste apres `align`, memes octets et meme position que sur les deux
+        // autres backends : deux specs ne differant que par l'alignement vertical
+        // rendraient sinon les pixels l'une de l'autre depuis le cache.
+        mix(self.valign.as_bytes());
         mix(&self.box_px[0].to_le_bytes());
         mix(&self.box_px[1].to_le_bytes());
         h
@@ -194,7 +204,18 @@ impl TextRasterizer {
             .fold(0.0f32, f32::max);
         // `max(0)` : un texte plus haut que sa boite reste ancre en haut plutot
         // que de sortir par le dessus, ou il serait entierement rogne.
-        let y_offset = (((h as f32) - text_h) * 0.5).max(0.0).round() as i32;
+        //
+        // ANCRAGE. `center` est le comportement historique, et reste celui des
+        // annotations. Les sous-titres epinglent une arete : c'est la seule facon
+        // que l'arete ancree ne bouge pas quand le texte gagne une ligne, parce
+        // qu'un bloc centre voit ses DEUX aretes se deplacer.
+        let slack_y = ((h as f32) - text_h).max(0.0);
+        let y_offset = match spec.valign.as_str() {
+            "top" | "start" => 0.0,
+            "bottom" | "end" => slack_y,
+            _ => slack_y * 0.5,
+        }
+        .round() as i32;
 
         // LA PLAQUE EPOUSE LE BLOC, PAS LA BOITE. Miroir de
         // `text_macos::block_layout` (en coordonnees descendantes ici, CoreText
@@ -385,6 +406,7 @@ mod tests {
             italic: false,
             underline: false,
             align: align.to_owned(),
+            valign: "center".to_owned(),
             box_px: [400, 200],
         }
     }
@@ -564,6 +586,75 @@ mod tests {
             (above - below).abs() <= 12,
             "texte non centre verticalement : {above}px au-dessus, {below}px en dessous"
         );
+    }
+
+    #[test]
+    fn the_anchored_edge_holds_still_when_the_text_gains_a_line() {
+        // L'INVARIANT de la refonte du placement des sous-titres, en une
+        // assertion — et celle que l'ancienne architecture ne pouvait pas ecrire.
+        //
+        // Un bloc centre voit ses DEUX aretes bouger quand il grandit : c'est
+        // exactement pourquoi elargir la bande deplacait verticalement le
+        // sous-titre. Ancre en bas, l'arete basse ne doit pas bouger d'un pixel,
+        // que le texte tienne sur une ligne ou en reclame trois.
+        let raster = TextRasterizer::new().expect("rasterizer");
+        let (w, h) = (400usize, 200usize);
+        let long = "un texte assez long pour devoir se replier sur plusieurs lignes";
+
+        let one = |valign: &str, content: &str| {
+            let mut s = spec(content, "center");
+            s.valign = valign.to_owned();
+            let atlas = raster.build_atlas(&s).expect("atlas").pixels;
+            let rows = ink_rows(&atlas, w, 0, w);
+            assert!(!rows.is_empty(), "aucune encre pour {valign:?}");
+            (rows[0], *rows.last().unwrap())
+        };
+
+        let (_, short_bottom) = one("bottom", "Hx");
+        let (_, long_bottom) = one("bottom", long);
+        assert!(
+            (short_bottom as i32 - long_bottom as i32).abs() <= 1,
+            "ancrage bas : l'arete basse a bouge de {short_bottom} a {long_bottom} \
+             en passant d'une ligne a plusieurs"
+        );
+
+        // Et le miroir, pour que « haut » ne soit pas juste « pas bas ».
+        let (short_top, _) = one("top", "Hx");
+        let (long_top, _) = one("top", long);
+        assert!(
+            (short_top as i32 - long_top as i32).abs() <= 1,
+            "ancrage haut : l'arete haute a bouge de {short_top} a {long_top}"
+        );
+
+        // Le texte long doit vraiment occuper plus de hauteur, sinon les deux
+        // assertions ci-dessus passeraient sur deux rendus identiques.
+        let (lt, lb) = one("bottom", long);
+        let (st, sb) = one("bottom", "Hx");
+        assert!(
+            (lb - lt) > (sb - st),
+            "le texte « long » ne s'est pas replie : le test ne prouve rien"
+        );
+
+        // Enfin, les trois ancrages doivent poser l'encre a trois endroits
+        // differents dans la boite — sinon `valign` n'est pas applique du tout.
+        let (top_t, _) = one("top", "Hx");
+        let (ctr_t, _) = one("center", "Hx");
+        let (bot_t, _) = one("bottom", "Hx");
+        assert!(
+            top_t < ctr_t && ctr_t < bot_t,
+            "les trois ancrages ne se distinguent pas : haut={top_t} centre={ctr_t} bas={bot_t}"
+        );
+        assert!(bot_t > h / 2, "l'ancrage bas laisse l'encre dans la moitie haute");
+    }
+
+    #[test]
+    fn the_vertical_anchor_changes_the_cache_key() {
+        // Le piege du cache : la cle est partagee entre plateformes, et deux specs
+        // ne differant que par `valign` rendraient les pixels l'une de l'autre si
+        // le champ n'y entrait pas.
+        let mut bottom = spec("Hx", "center");
+        bottom.valign = "bottom".to_owned();
+        assert_ne!(bottom.cache_key(), spec("Hx", "center").cache_key());
     }
 
     #[test]
