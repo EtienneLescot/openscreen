@@ -25,7 +25,12 @@ import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { CropRegion } from "@/components/video-editor/types";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { toAxcutTranscriptDsl } from "@/lib/ai-edition/document/transcribe";
-import type { AxcutClip, AxcutTranscript, TranscriptLanguageCode } from "@/lib/ai-edition/schema";
+import {
+	type AxcutClip,
+	type AxcutTranscript,
+	type TranscriptLanguageCode,
+	transcriptLanguageSchema,
+} from "@/lib/ai-edition/schema";
 import { formatSec, formatSeconds } from "@/lib/ai-edition/timeline/format";
 import {
 	languageLabel,
@@ -1511,6 +1516,17 @@ export function InsertSourceModal({
 	);
 }
 
+/**
+ * `AxcutTranscript.language` is `z.string().min(1)`, not validated against
+ * the known code list, so a stored transcript can hold a value no
+ * `<option>` matches — falls back to "auto" rather than letting the select
+ * go visibly out of sync with the code a regenerate would actually submit.
+ */
+function supportedTranscriptLanguage(language: string | undefined): TranscriptLanguageCode {
+	const parsed = transcriptLanguageSchema.safeParse(language);
+	return parsed.success ? parsed.data : "auto";
+}
+
 export interface SourceTranscriptModalProps extends BaseModalProps {
 	assetLabel: string;
 	assetPath: string;
@@ -1543,14 +1559,14 @@ export function SourceTranscriptModal({
 	const [duration, setDuration] = useState<number | null>(null);
 	const { locale } = useI18n();
 	const [regenLang, setRegenLang] = useState<TranscriptLanguageCode>(
-		(transcript?.language as TranscriptLanguageCode) ?? "auto",
+		supportedTranscriptLanguage(transcript?.language),
 	);
 
 	// ponytail: sync the language picker to whatever the stored transcript was
 	// generated with. Avoids surprising the user with a different selection on
 	// every open after a regenerate.
 	useEffect(() => {
-		if (open) setRegenLang((transcript?.language as TranscriptLanguageCode) ?? "auto");
+		if (open) setRegenLang(supportedTranscriptLanguage(transcript?.language));
 	}, [open, transcript?.language]);
 
 	const regenLanguageOptions = useMemo(
