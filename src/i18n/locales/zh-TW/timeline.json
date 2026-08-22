@@ -8,8 +8,7 @@
 		"autoFocusAllOff": "為所有縮放開啟自動對焦（攝影機跟隨游標）",
 		"addTrim": "新增剪輯 (T)",
 		"addAnnotation": "新增標註 (A)",
-		"addSpeed": "新增速度 (S)",
-		"addCameraFullscreen": "新增全螢幕攝影機 (C)"
+		"addSpeed": "新增速度 (S)"
 	},
 	"hints": {
 		"pressZoom": "按 Z 新增縮放",

@@ -8,8 +8,7 @@
 		"autoFocusAllOff": "Bật lấy nét tự động cho tất cả các thu phóng (máy ảnh theo dõi con trỏ)",
 		"addTrim": "Thêm Cắt (T)",
 		"addAnnotation": "Thêm Chú thích (A)",
-		"addSpeed": "Thêm Tốc độ (S)",
-		"addCameraFullscreen": "Thêm Camera Toàn màn hình (C)"
+		"addSpeed": "Thêm Tốc độ (S)"
 	},
 	"hints": {
 		"pressZoom": "Nhấn Z để thêm thu phóng",
