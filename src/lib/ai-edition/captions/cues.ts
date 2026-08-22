@@ -23,7 +23,12 @@ import {
 } from "@/lib/captioning/annotationsFromCaptions";
 import type { CaptionSegment } from "@/lib/captioning/transcribe";
 import type { AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
-import { type CaptionSettings, captionBackgroundCss, captionBandRect } from "./settings";
+import {
+	type CaptionAnchorV,
+	type CaptionSettings,
+	captionBackgroundCss,
+	captionBoxRect,
+} from "./settings";
 import { type CaptionTranslations, captionTranslationUnits } from "./translations";
 
 /** One on-screen caption line, in whichever time base the producer documented. */
@@ -241,7 +246,14 @@ export function captionCueAt(cues: CaptionCue[], timeMs: number): CaptionCue | n
  * overhangs the frame edge — through `annotationRegionSchema`, which bounds position
  * to 0..100. Captions are never stored, so they never meet that schema.
  */
-export type CaptionTextRegion = AnnotationRegion & { space: "frame" };
+export type CaptionTextRegion = AnnotationRegion & {
+	space: "frame";
+	/** Which edge of the drawn block the compositor pins to the region's box. Carried
+	 *  here rather than on `AnnotationTextStyle` for the same reason as `space`: an
+	 *  annotation must keep rendering centred, and widening the shared style would put
+	 *  the key in every stored annotation's payload. */
+	verticalAlign: CaptionAnchorV;
+};
 
 /**
  * Cues as text annotation regions, so the export renderer draws captions through
@@ -254,10 +266,15 @@ export type CaptionTextRegion = AnnotationRegion & { space: "frame" };
 export function captionCuesToTextRegions(
 	cues: CaptionCue[],
 	settings: CaptionSettings,
+	aspectValue: number,
 ): CaptionTextRegion[] {
-	const rect = captionBandRect(settings);
+	const rect = captionBoxRect(settings, aspectValue);
 	return cues.map((cue, index) => ({
 		space: "frame" as const,
+		// The edge the compositor pins the drawn block to inside `size`. Without it the
+		// rasterizers centre the block — which is what made a caption drift vertically
+		// every time its text wrapped to another line.
+		verticalAlign: rect.verticalAlign,
 		id: cue.id,
 		startMs: cue.startMs,
 		endMs: cue.endMs,
@@ -273,7 +290,10 @@ export function captionCuesToTextRegions(
 			fontWeight: settings.fontWeight,
 			fontStyle: "normal" as const,
 			textDecoration: "none" as const,
-			textAlign: settings.textAlign,
+			// One horizontal control, not two: `anchorH` picks which edge of the block is
+			// pinned to the column, and the rasterizers' plate maths already snaps the
+			// plate onto that edge (`text_linux.rs` `plate_x`, and its two mirrors).
+			textAlign: settings.anchorH,
 			textAnimation: "none" as const,
 		},
 		zIndex: CAPTION_Z_INDEX_BASE + index,
