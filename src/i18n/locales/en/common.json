@@ -52,12 +52,6 @@
 		"failed": "Could not check for updates.",
 		"downloadFailed": "Could not download the update."
 	},
-	"playback": {
-		"play": "Play",
-		"pause": "Pause",
-		"fullscreen": "Fullscreen",
-		"exitFullscreen": "Exit Fullscreen"
-	},
 	"units": {
 		"pixelsPerSecond": "{{value}} px/s",
 		"pixels": "{{value}} px"

@@ -52,12 +52,6 @@
 		"failed": "Impossibile controllare gli aggiornamenti.",
 		"downloadFailed": "Impossibile scaricare l'aggiornamento."
 	},
-	"playback": {
-		"play": "Riproduci",
-		"pause": "Pausa",
-		"fullscreen": "Schermo intero",
-		"exitFullscreen": "Esci dallo schermo intero"
-	},
 	"units": {
 		"pixelsPerSecond": "{{value}} pixel/s",
 		"pixels": "{{value}} pixel"

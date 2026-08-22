@@ -16,7 +16,7 @@ The provider layer defines model metadata, protects credentials, discovers model
 > **Two doors, one dialog.** The settings dialog is opened from the AI panel — its gear, the
 > welcome card's CTA, the model pill with nothing configured, the quick-pick popover's "full
 > settings" row, and a send attempt with no provider — and from the app menu under the
-> wordmark. Its open state lives in a context rather than in `LeftPanel` because that panel
+> wordmark. Its open state lives in a context rather than in `ChatStripPanel` because that panel
 > mounts only in Edit mode with the chat panel expanded, which would have left the menu item
 > dead in Media and Rec (issue #420).
 

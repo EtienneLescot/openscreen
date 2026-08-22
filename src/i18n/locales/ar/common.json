@@ -52,12 +52,6 @@
 		"failed": "تعذّر التحقق من وجود تحديثات.",
 		"downloadFailed": "تعذّر تنزيل التحديث."
 	},
-	"playback": {
-		"play": "تشغيل",
-		"pause": "ايقاف مؤقت",
-		"fullscreen": "ملء الشاشة",
-		"exitFullscreen": "خروج من ملء الشاشة"
-	},
 	"units": {
 		"pixelsPerSecond": "{{value}} بكسل/ثانية",
 		"pixels": "{{value}} بكسل"

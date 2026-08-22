@@ -19,7 +19,6 @@
 .app[data-collapse~="left"] {
 	--panel-w-left: 0px;
 }
-.app[data-collapse~="left"] .leftRail,
 .app[data-collapse~="left"] .leftPanel,
 .app[data-collapse~="left"] .handleLeft {
 	display: none;
@@ -260,55 +259,6 @@
 	min-height: 0;
 }
 
-/* ─── rails — vertical icon strips ─────────────────────────────── */
-.rail {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: var(--sp-1);
-	padding: var(--sp-2) 0;
-	background: var(--bg);
-	min-width: 0;
-}
-.rail button {
-	width: 36px;
-	height: 36px;
-	display: grid;
-	place-items: center;
-	border-radius: var(--r-md);
-	color: var(--muted);
-	background: transparent;
-	border: 0;
-	cursor: pointer;
-	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
-	position: relative;
-}
-.rail button:hover {
-	background: var(--surface-3);
-	color: var(--fg);
-}
-.rail button[aria-pressed="true"] {
-	color: var(--accent);
-	background: var(--accent-soft);
-}
-.rail button[aria-pressed="true"]::before {
-	content: "";
-	position: absolute;
-	left: -8px;
-	top: 8px;
-	bottom: 8px;
-	width: 3px;
-	border-radius: 2px;
-	background: var(--accent);
-}
-.rail .sepH {
-	width: 24px;
-	height: 1px;
-	background: var(--border);
-	margin: var(--sp-1) 0;
-}
-
-/* ─── panels (chat, transcript, etc.) ──────────────────────────── */
 .panel {
 	display: flex;
 	flex-direction: column;
@@ -326,43 +276,6 @@
 }
 .panel > .panelBody {
 	flex: 1 1 0;
-}
-.panelHead {
-	display: flex;
-	align-items: center;
-	gap: var(--sp-2);
-	padding: var(--sp-3) var(--sp-4);
-	border-bottom: 1px solid var(--border-soft);
-	min-height: 44px;
-}
-.panelHead h2 {
-	margin: 0;
-	font-family: var(--font-display);
-	font-size: 14px;
-	font-weight: 500;
-	letter-spacing: -0.005em;
-	color: var(--fg);
-}
-.panelHead .right {
-	margin-left: auto;
-	display: inline-flex;
-	gap: var(--sp-1);
-}
-.panelHead .iconBtn {
-	width: 24px;
-	height: 24px;
-	display: grid;
-	place-items: center;
-	border-radius: var(--r-sm);
-	color: var(--meta);
-	background: transparent;
-	border: 0;
-	cursor: pointer;
-	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
-}
-.panelHead .iconBtn:hover {
-	background: var(--surface-3);
-	color: var(--fg-2);
 }
 .panelBody {
 	overflow-y: auto;
@@ -1999,78 +1912,6 @@
 	box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
-/* ─── media card (left panel media list) ───────────────────────── */
-.mediaList {
-	list-style: none;
-	padding: 0;
-	margin: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
-}
-.mediaCard {
-	display: flex;
-	flex-direction: column;
-	border-radius: var(--r-md);
-	overflow: hidden;
-	border: 1px solid var(--border-soft);
-	background: var(--bg);
-	cursor: pointer;
-	transition: border-color var(--motion-fast) var(--ease);
-}
-.mediaCard:hover { border-color: var(--brand); }
-.mediaCard .thumb {
-	aspect-ratio: 16 / 9;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	color: rgba(255, 255, 255, 0.95);
-}
-.thumbRed   { background: var(--danger); }
-.thumbGreen { background: var(--success); }
-.thumbAmber { background: var(--warn); }
-.thumbCyan  { background: var(--accent); }
-.mediaMeta {
-	padding: 8px 10px 10px;
-	background: var(--surface-2);
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-}
-.mediaMeta .name {
-	font: var(--fs-app) var(--font-body);
-	color: var(--fg);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.mediaMeta .row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
-}
-.mediaMeta .timecode { font: 11px var(--font-mono); color: var(--muted); }
-.mediaMeta .size     { font: 11px var(--font-body);  color: var(--muted); }
-
-.importBtn {
-	margin: 8px var(--sp-3) 12px;
-	padding: 10px 12px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: var(--sp-2);
-	border: 1px dashed var(--border-hi);
-	border-radius: var(--r-md);
-	background: transparent;
-	color: var(--muted);
-	font: var(--fs-app) var(--font-body);
-	font-weight: 500;
-	cursor: pointer;
-}
-.importBtn:hover { background: var(--surface-warm); color: var(--fg); border-color: var(--accent); }
-
-/* Custom range slider / progress bar */
 .scrubBar {
 	flex: 1;
 	min-width: 0;
