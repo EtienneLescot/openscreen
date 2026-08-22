@@ -143,22 +143,25 @@ function Pane({ title, icon, helpText, children }: PaneProps) {
 
 // keep the gradient palette small and curated — every block renders
 // in the picker and gets serialized to legacyEditor on save.
+// Spans the same hues as COLOR_PALETTE below rather than leaning on the
+// brand mint for half the grid — a wall of green reads as "we only
+// have one color" rather than "pick a gradient."
 const GRAD_PRESETS: readonly string[] = [
 	"linear-gradient(135deg, #eaebed, #bcc0c6)",
-	"linear-gradient(135deg, #10b981, #eaebed)",
-	"linear-gradient(135deg, #6b7280, #bcc0c6)",
-	"linear-gradient(135deg, #eaebed, #10b981)",
-	"linear-gradient(135deg, #16171d, #6b7280)",
-	"linear-gradient(135deg, #bcc0c6, #16171d)",
-	"linear-gradient(135deg, #10b981, #6b7280)",
-	"linear-gradient(135deg, #eaebed, #10b981)",
+	"linear-gradient(135deg, #3b82f6, #8b5cf6)",
+	"linear-gradient(135deg, #8b5cf6, #ec4899)",
+	"linear-gradient(135deg, #f97316, #ec4899)",
+	"linear-gradient(135deg, #f59e0b, #f97316)",
+	"linear-gradient(135deg, #10b981, #3b82f6)",
+	"linear-gradient(135deg, #22c55e, #10b981)",
 	"linear-gradient(135deg, #6b7280, #16171d)",
-	"linear-gradient(135deg, #bcc0c6, #10b981)",
-	"linear-gradient(135deg, #16171d, #6b7280)",
-	"linear-gradient(135deg, #eaebed, #bcc0c6)",
-	"linear-gradient(135deg, #10b981, #bcc0c6)",
-	"linear-gradient(135deg, #eaebed, #16171d)",
-	"linear-gradient(135deg, #6b7280, #10b981)",
+	"linear-gradient(135deg, #ec4899, #ef4444)",
+	"linear-gradient(135deg, #3b82f6, #22c55e)",
+	"linear-gradient(135deg, #8b5cf6, #3b82f6)",
+	"linear-gradient(135deg, #f59e0b, #ef4444)",
+	"linear-gradient(135deg, #16171d, #1e293b)",
+	"linear-gradient(135deg, #34d399, #3b82f6)",
+	"linear-gradient(135deg, #ef4444, #8b5cf6)",
 	"linear-gradient(135deg, #bcc0c6, #eaebed)",
 ];
 

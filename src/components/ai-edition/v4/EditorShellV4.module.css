@@ -389,7 +389,7 @@
 	padding: 0 14px;
 	border-radius: 9px;
 	background: var(--accent);
-	color: #fff;
+	color: var(--accent-on);
 	border: 1px solid var(--accent);
 	font-size: 13px;
 	font-weight: 600;
@@ -1126,7 +1126,7 @@
 	padding: 0 26px;
 	border-radius: 16px;
 	border: 1px solid var(--accent);
-	color: #fff;
+	color: var(--accent-on);
 	background: var(--accent);
 	font-size: 14px;
 	font-weight: 600;
