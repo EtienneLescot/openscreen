@@ -109,7 +109,7 @@ describe("useCaptions drag snapshots", () => {
 	it("does not record a snapshot of the project the user left", async () => {
 		const { result, rerender } = renderHook(() => useCaptions());
 
-		act(() => result.current.setLive({ width: 60 }));
+		act(() => result.current.setLive({ insetY: 20 }));
 
 		act(() => {
 			useProjectStore.setState({ projectId: "proj_b", document: docB });
@@ -135,7 +135,7 @@ describe("useCaptions drag snapshots", () => {
 	it("does not hand a bare commit a base the edits since have already buried", async () => {
 		const { result } = renderHook(() => useCaptions());
 
-		act(() => result.current.setLive({ width: 60 }));
+		act(() => result.current.setLive({ insetY: 20 }));
 
 		await act(async () => {
 			await result.current.set({ fontSize: 30 });

@@ -1,21 +1,18 @@
 // @vitest-environment jsdom
-// The placement sliders take their bounds from `captionOffsetRange`, the same
-// function the geometry clamps with. That shared range is the fix for the dead
-// travel in #396 — the vertical slider used to advertise ±45 while the bottom
-// anchor could only honour −45…+3 — so what these tests pin is the agreement
-// between what the slider offers and what the band can do, not any one number.
+// The placement controls after the anchor redesign. What these pin is the property
+// the previous UI could not hold: every control names the edge it measures from, and
+// nothing it can produce is a signed number or a dead affordance.
+//
+// The pane it replaced had four controls that overlapped — a band width nothing drew,
+// an offset measured against that invisible band, and a text alignment fighting the
+// offset for the same visual outcome — so the tests here are as much about what is
+// ABSENT as about what is present.
 
 import "@testing-library/jest-dom";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
-import {
-	captionBandRect,
-	captionInkHeightPct,
-	captionOffsetRange,
-	DEFAULT_CAPTION_SETTINGS,
-	getCaptionSettings,
-} from "@/lib/ai-edition/captions";
+import { getCaptionSettings } from "@/lib/ai-edition/captions";
 import type { AxcutAsset, AxcutDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useTranscriptionStore } from "@/lib/ai-edition/store/transcriptionStore";
@@ -81,6 +78,8 @@ function sliderFor(label: string): HTMLInputElement {
 	return input;
 }
 
+const button = (name: string) => screen.getByRole("button", { name });
+
 function show(captions: Record<string, unknown>) {
 	const document = documentWith(captions);
 	useProjectStore.setState({
@@ -108,119 +107,96 @@ afterEach(() => {
 });
 
 describe("caption placement controls", () => {
-	it("offers both axes", () => {
+	it("offers one anchor and one distance per axis", () => {
 		show({});
-		expect(sliderFor("Vertical position")).toBeInTheDocument();
-		expect(sliderFor("Horizontal position")).toBeInTheDocument();
+		expect(button("Bottom")).toHaveAttribute("aria-pressed", "true");
+		expect(button("Top")).toHaveAttribute("aria-pressed", "false");
+		expect(button("Center")).toHaveAttribute("aria-pressed", "true");
+		expect(sliderFor("Distance from bottom")).toBeInTheDocument();
 	});
 
-	it.each([
-		"top",
-		"middle",
-		"bottom",
-	] as const)("bounds the %s anchor's slider by what the band can actually reach", (verticalPosition) => {
-		const settings = show({ verticalPosition });
-		const range = captionOffsetRange(settings);
-		const slider = sliderFor("Vertical position");
-		expect(Number(slider.min)).toBeCloseTo(range.y.min, 6);
-		expect(Number(slider.max)).toBeCloseTo(range.y.max, 6);
+	it("names the edge the distance is measured from, and follows the anchor", () => {
+		// The old label said "Vertical offset" and the value could read "-7.3%", which
+		// corresponds to nothing in any subtitle format and to nothing a user can see.
+		show({ anchorV: "bottom" });
+		expect(screen.getByText("Distance from bottom")).toBeInTheDocument();
+		expect(screen.queryByText("Distance from top")).not.toBeInTheDocument();
+
+		fireEvent.click(button("Top"));
+		expect(screen.getByText("Distance from top")).toBeInTheDocument();
+		expect(screen.queryByText("Distance from bottom")).not.toBeInTheDocument();
 	});
 
-	it("puts both ends of the range on a step, so the edges stay reachable", () => {
-		// A fixed step of 1 would leave `max` off-grid for these fractional bounds and
-		// the caption would stop just short of the frame edge — the #396 complaint.
-		const settings = show({ verticalPosition: "bottom" });
-		const slider = sliderFor("Vertical position");
-		const [min, max, step] = [slider.min, slider.max, slider.step].map(Number);
-		const steps = (max - min) / step;
-		expect(steps).toBeCloseTo(Math.round(steps), 6);
-
-		// And landing on `max` really does put the ink on the frame's bottom edge —
-		// with the empty part of the band hanging off it, which is what buys the reach.
-		const band = captionBandRect({ ...settings, offsetY: max });
-		expect(band.y + band.height / 2 + captionInkHeightPct(settings) / 2).toBeCloseTo(100, 6);
-		expect(band.y + band.height).toBeGreaterThan(100);
+	it("never offers a negative distance", () => {
+		show({});
+		expect(Number(sliderFor("Distance from bottom").min)).toBe(0);
+		fireEvent.click(button("Left"));
+		expect(Number(sliderFor("Distance from left").min)).toBe(0);
 	});
 
-	it("disables the horizontal slider only when the band fills the frame", () => {
-		show({ width: 100 });
-		expect(sliderFor("Horizontal position")).toBeDisabled();
-		cleanup();
-		show({ width: DEFAULT_CAPTION_SETTINGS.width });
-		expect(sliderFor("Horizontal position")).toBeEnabled();
+	it("keeps the distance when the anchor flips, mirroring to the opposite edge", () => {
+		// The inset means the same thing on both anchors, so there is nothing to reset —
+		// unlike the old presets, which had to zero an offset that meant something else.
+		show({ anchorV: "bottom", insetY: 12 });
+		fireEvent.click(button("Top"));
+		expect(sliderFor("Distance from top")).toHaveValue("12");
+	});
+
+	it("hides the horizontal distance when centred instead of disabling it", () => {
+		// A centred block has no edge to measure from. A dead slider reads as a bug, so
+		// the control is absent rather than greyed out.
+		show({ anchorH: "center" });
+		expect(screen.queryByText("Distance from left")).not.toBeInTheDocument();
+		expect(screen.queryByText("Distance from right")).not.toBeInTheDocument();
+
+		fireEvent.click(button("Right"));
+		expect(sliderFor("Distance from right")).toBeEnabled();
+	});
+
+	it("leaves no control disabled once a document is open", () => {
+		show({});
+		for (const name of ["Bottom", "Top", "Left", "Center", "Right"]) {
+			expect(button(name)).toBeEnabled();
+		}
+		expect(sliderFor("Distance from bottom")).toBeEnabled();
+	});
+
+	it("writes the anchor and the inset straight through to the document", () => {
+		show({});
+		fireEvent.click(button("Top"));
+		fireEvent.change(sliderFor("Distance from top"), { target: { value: "18.5" } });
+
+		const stored = useProjectStore.getState().document as AxcutDocument;
+		expect(getCaptionSettings(stored)).toMatchObject({ anchorV: "top", insetY: 18.5 });
+	});
+
+	it("no longer offers the controls the redesign removed", () => {
+		// Band width drew nothing until the text happened to wrap; the separate text
+		// alignment fought the horizontal position for the same outcome.
+		show({});
+		expect(screen.queryByText("Width")).not.toBeInTheDocument();
+		expect(screen.queryByText("Text align")).not.toBeInTheDocument();
+		expect(screen.queryByText("Vertical offset")).not.toBeInTheDocument();
+		expect(screen.queryByText("Horizontal offset")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Middle" })).not.toBeInTheDocument();
+	});
+
+	it("explains which way a long caption grows", () => {
+		show({ anchorV: "bottom" });
+		expect(screen.getByText(/grow upward/i)).toBeInTheDocument();
+		fireEvent.click(button("Top"));
+		expect(screen.getByText(/grow downward/i)).toBeInTheDocument();
 	});
 });
 
-describe("caption position presets", () => {
-	const preset = (label: string) => screen.getByRole("button", { name: label });
-
-	it("shows the default settings' presets pressed: Bottom and Position center", () => {
-		show({});
-		expect(preset("Bottom")).toHaveAttribute("aria-pressed", "true");
-		expect(preset("Top")).toHaveAttribute("aria-pressed", "false");
-		expect(preset("Position center")).toHaveAttribute("aria-pressed", "true");
-		expect(preset("Position left")).toHaveAttribute("aria-pressed", "false");
-	});
-
-	it("clicking a vertical preset resets the vertical slider and lights that preset up", () => {
-		show({ verticalPosition: "bottom", offsetY: -20 });
-		expect(preset("Bottom")).toHaveAttribute("aria-pressed", "false");
-
-		fireEvent.click(preset("Top"));
-
-		expect(sliderFor("Vertical position")).toHaveValue("0");
-		expect(preset("Top")).toHaveAttribute("aria-pressed", "true");
-		expect(preset("Bottom")).toHaveAttribute("aria-pressed", "false");
-	});
-
-	it("dragging the vertical slider clears every vertical preset's pressed state", () => {
-		show({});
-		expect(preset("Bottom")).toHaveAttribute("aria-pressed", "true");
-
-		fireEvent.change(sliderFor("Vertical position"), { target: { value: "-10" } });
-
-		expect(preset("Bottom")).toHaveAttribute("aria-pressed", "false");
-		expect(preset("Top")).toHaveAttribute("aria-pressed", "false");
-		expect(preset("Middle")).toHaveAttribute("aria-pressed", "false");
-	});
-
-	it("clicking Position left/right moves the horizontal slider to the true frame edge", () => {
-		const settings = show({});
-		const range = captionOffsetRange(settings);
-
-		fireEvent.click(preset("Position left"));
-		expect(Number(sliderFor("Horizontal position").value)).toBeCloseTo(range.x.min, 6);
-		expect(preset("Position left")).toHaveAttribute("aria-pressed", "true");
-
-		fireEvent.click(preset("Position right"));
-		expect(Number(sliderFor("Horizontal position").value)).toBeCloseTo(range.x.max, 6);
-		expect(preset("Position right")).toHaveAttribute("aria-pressed", "true");
-		expect(preset("Position left")).toHaveAttribute("aria-pressed", "false");
-	});
-
-	it("dragging the horizontal slider clears the horizontal preset row", () => {
-		show({});
-		fireEvent.change(sliderFor("Horizontal position"), { target: { value: "3" } });
-
-		expect(preset("Position center")).toHaveAttribute("aria-pressed", "false");
-		expect(preset("Position left")).toHaveAttribute("aria-pressed", "false");
-		expect(preset("Position right")).toHaveAttribute("aria-pressed", "false");
-	});
-
-	it("disables the horizontal preset row exactly when the horizontal slider is disabled", () => {
-		show({ width: 100 });
-		expect(preset("Position left")).toBeDisabled();
-		cleanup();
-		show({ width: DEFAULT_CAPTION_SETTINGS.width });
-		expect(preset("Position left")).toBeEnabled();
-	});
-
-	it("gives the text-align row its own section label, separate from Position", () => {
-		show({});
-		expect(screen.getByText("Text align")).toBeInTheDocument();
-		// The words "Left"/"Center"/"Right" belong to text-align; "Position left" etc.
-		// belong to the new row — both must resolve without ambiguity.
-		expect(preset("Left")).toBeInTheDocument();
-		expect(preset("Position left")).toBeInTheDocument();
+describe("migrating a pre-anchor project into the pane", () => {
+	it("opens an old document on the anchor that reproduces where it was drawn", () => {
+		// A default bottom caption from the old model: band at 75%, ink centred in it,
+		// drawn block ending at 92.67% — so a 7.33% inset from the bottom.
+		show({ verticalPosition: "bottom", offsetY: 0, width: 80, textAlign: "center" });
+		expect(button("Bottom")).toHaveAttribute("aria-pressed", "true");
+		// The migrated value is the real distance, not a value snapped to the slider's
+		// step — the step governs dragging, not what a document may already hold.
+		expect(Number(sliderFor("Distance from bottom").value)).toBeCloseTo(7.333, 2);
 	});
 });
