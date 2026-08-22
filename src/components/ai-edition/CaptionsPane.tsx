@@ -9,11 +9,30 @@
 // translation is stored beside the transcript, keyed by segment id, and picking
 // "Original" goes straight back to the SSOT text.
 
-import { Captions as CaptionsIcon, Languages, Loader2, Trash2 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import {
+	AlignHorizontalJustifyCenter,
+	AlignHorizontalJustifyEnd,
+	AlignHorizontalJustifyStart,
+	Captions as CaptionsIcon,
+	Languages,
+	Loader2,
+	Trash2,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
-import type { CaptionTextAlign, CaptionVerticalPosition } from "@/lib/ai-edition/captions";
-import { captionOffsetRange, untranslatedUnits } from "@/lib/ai-edition/captions";
+import type {
+	CaptionHorizontalPosition,
+	CaptionTextAlign,
+	CaptionVerticalPosition,
+} from "@/lib/ai-edition/captions";
+import {
+	activeHorizontalPositionPreset,
+	activeVerticalPositionPreset,
+	captionHorizontalPositionOffset,
+	captionOffsetRange,
+	untranslatedUnits,
+} from "@/lib/ai-edition/captions";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useTimelineTranscriptGate,
@@ -461,24 +480,43 @@ export function CaptionsPane() {
 				{/* ── Placement ──────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.position")}</div>
 				<Segmented<CaptionVerticalPosition>
-					value={settings.verticalPosition}
+					value={activeVerticalPositionPreset(settings)}
 					disabled={disabled}
 					options={[
 						{ value: "top", label: t("captions.positionTop") },
 						{ value: "middle", label: t("captions.positionMiddle") },
 						{ value: "bottom", label: t("captions.positionBottom") },
 					]}
-					onChange={(verticalPosition) => void set({ verticalPosition })}
+					// A preset button is a shortcut to a clean position, not a nudge on top
+					// of one — resetting the offset is what makes clicking it feel like
+					// "go here" instead of "go here, plus whatever was left over".
+					onChange={(verticalPosition) => void set({ verticalPosition, offsetY: 0 })}
 				/>
-				<Segmented<CaptionTextAlign>
-					value={settings.textAlign}
-					disabled={disabled}
+				<Segmented<CaptionHorizontalPosition>
+					value={activeHorizontalPositionPreset(settings)}
+					// Mirrors the horizontal slider's own disabled condition just below: a
+					// full-width band has nowhere left or right to go.
+					disabled={disabled || offsetRange.x.max <= offsetRange.x.min}
 					options={[
-						{ value: "left", label: t("captions.alignLeft") },
-						{ value: "center", label: t("captions.alignCenter") },
-						{ value: "right", label: t("captions.alignRight") },
+						{
+							value: "left",
+							label: t("captions.positionLeft"),
+							icon: AlignHorizontalJustifyStart,
+						},
+						{
+							value: "center",
+							label: t("captions.positionCenter"),
+							icon: AlignHorizontalJustifyCenter,
+						},
+						{
+							value: "right",
+							label: t("captions.positionRight"),
+							icon: AlignHorizontalJustifyEnd,
+						},
 					]}
-					onChange={(textAlign) => void set({ textAlign })}
+					onChange={(preset) =>
+						void set({ offsetX: captionHorizontalPositionOffset(settings, preset) })
+					}
 				/>
 				<div className={styles.sliderGrid}>
 					<SliderCell
@@ -519,6 +557,19 @@ export function CaptionsPane() {
 						onCommit={() => void commit()}
 					/>
 				</div>
+
+				{/* ── Text align (inside the band — a different axis from Position) ── */}
+				<div className={styles.sectionLabel}>{t("captions.textAlign")}</div>
+				<Segmented<CaptionTextAlign>
+					value={settings.textAlign}
+					disabled={disabled}
+					options={[
+						{ value: "left", label: t("captions.alignLeft") },
+						{ value: "center", label: t("captions.alignCenter") },
+						{ value: "right", label: t("captions.alignRight") },
+					]}
+					onChange={(textAlign) => void set({ textAlign })}
+				/>
 
 				{/* ── Line length ────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.lineLength")}</div>
@@ -585,25 +636,39 @@ function Segmented<T extends string>({
 	disabled,
 	onChange,
 }: {
-	value: T;
-	options: ReadonlyArray<{ value: T; label: string }>;
+	/** `null` means no option is currently active — e.g. a free-dragged slider
+	 *  has moved off every preset this row offers. */
+	value: T | null;
+	options: ReadonlyArray<{
+		value: T;
+		label: string;
+		/** Renders in place of the text label when given (with `label` still used
+		 *  as the accessible name and hover title) — for a row that would otherwise
+		 *  repeat another row's words for a different axis of meaning. */
+		icon?: LucideIcon;
+	}>;
 	disabled?: boolean;
 	onChange: (next: T) => void;
 }) {
 	return (
 		<div className={styles.paneTabs}>
-			{options.map((option) => (
-				<button
-					type="button"
-					key={option.value}
-					className={value === option.value ? styles.isActive : ""}
-					aria-pressed={value === option.value}
-					disabled={disabled}
-					onClick={() => onChange(option.value)}
-				>
-					{option.label}
-				</button>
-			))}
+			{options.map((option) => {
+				const Icon = option.icon;
+				return (
+					<button
+						type="button"
+						key={option.value}
+						className={value === option.value ? styles.isActive : ""}
+						aria-pressed={value === option.value}
+						aria-label={Icon ? option.label : undefined}
+						title={Icon ? option.label : undefined}
+						disabled={disabled}
+						onClick={() => onChange(option.value)}
+					>
+						{Icon ? <Icon size={14} /> : option.label}
+					</button>
+				);
+			})}
 		</div>
 	);
 }

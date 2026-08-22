@@ -18,6 +18,13 @@ export type CaptionVerticalPosition = "top" | "middle" | "bottom";
 /** Horizontal alignment of the text inside the (always centred) caption band. */
 export type CaptionTextAlign = "left" | "center" | "right";
 
+/** Horizontal position preset for the caption band itself — a different axis of
+ *  meaning from `CaptionTextAlign`, which aligns the text *inside* the band.
+ *  Not a stored field: it is derived from `offsetX` (see
+ *  `activeHorizontalPositionPreset`) and set by writing `offsetX` directly (see
+ *  `captionHorizontalPositionOffset`). */
+export type CaptionHorizontalPosition = "left" | "center" | "right";
+
 export interface CaptionSettings {
 	/** Master show/hide for the whole caption layer (preview AND export). */
 	enabled: boolean;
@@ -84,6 +91,12 @@ export const CAPTION_BAND_HEIGHT_PCT = 22;
 
 /** Margin between the band and the frame edge for the top/bottom anchors, in %. */
 export const CAPTION_EDGE_MARGIN_PCT = 3;
+
+/** Tolerance for "is this offset at a preset's clean value", in % of frame.
+ *  Deliberately not `Number.EPSILON` (already used below as `sliderStep`'s
+ *  divide-by-zero floor, and far too small to absorb real float noise) —
+ *  matches the `toBeCloseTo(x, 6)` tolerance this file's own tests use. */
+export const CAPTION_POSITION_PRESET_EPSILON = 1e-6;
 
 /** Reference frame height the px-valued settings are authored against, matching
  *  `annotationScale.ts` — `fontSize` is "pixels at a 1080-high frame". */
@@ -173,6 +186,55 @@ export function captionOffsetRange(settings: CaptionSettings): CaptionOffsetRang
 			max: 100 - CAPTION_BAND_HEIGHT_PCT + overhang - anchor.y,
 		},
 	};
+}
+
+/**
+ * Which vertical preset, if any, the current settings match exactly.
+ *
+ * `verticalPosition` is always a real stored value, but a preset button should
+ * only read as "active" while the user hasn't nudged away from it — otherwise
+ * clicking a slider would leave a preset highlighted that no longer describes
+ * where the band actually is. `offsetY` is the nudge *from* the anchor, so
+ * "at the preset" is exactly "no nudge".
+ */
+export function activeVerticalPositionPreset(
+	settings: CaptionSettings,
+): CaptionVerticalPosition | null {
+	return Math.abs(settings.offsetY) < CAPTION_POSITION_PRESET_EPSILON
+		? settings.verticalPosition
+		: null;
+}
+
+/**
+ * Which horizontal position preset, if any, the current settings match exactly.
+ *
+ * There is no stored `horizontalPosition` field — `offsetX` is already an
+ * absolute-feeling value centred on 0 with a range that reaches both frame
+ * edges (see `captionOffsetRange`), so "left"/"center"/"right" are just names
+ * for three points on that existing range, checked in this order because all
+ * three coincide at `offsetX === 0` when the band is full-width (no travel).
+ */
+export function activeHorizontalPositionPreset(
+	settings: CaptionSettings,
+): CaptionHorizontalPosition | null {
+	const range = captionOffsetRange(settings);
+	const { offsetX } = settings;
+	if (Math.abs(offsetX) < CAPTION_POSITION_PRESET_EPSILON) return "center";
+	if (Math.abs(offsetX - range.x.min) < CAPTION_POSITION_PRESET_EPSILON) return "left";
+	if (Math.abs(offsetX - range.x.max) < CAPTION_POSITION_PRESET_EPSILON) return "right";
+	return null;
+}
+
+/** The `offsetX` that puts the band at a given horizontal preset, for a preset
+ *  button's click handler to write. `left`/`right` reach the true frame edge —
+ *  the same span `activeHorizontalPositionPreset` reads back against. */
+export function captionHorizontalPositionOffset(
+	settings: CaptionSettings,
+	preset: CaptionHorizontalPosition,
+): number {
+	if (preset === "center") return 0;
+	const range = captionOffsetRange(settings);
+	return preset === "left" ? range.x.min : range.x.max;
 }
 
 const VERTICAL_POSITIONS: readonly CaptionVerticalPosition[] = ["top", "middle", "bottom"];
