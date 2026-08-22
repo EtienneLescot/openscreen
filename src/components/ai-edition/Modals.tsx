@@ -25,47 +25,14 @@ import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { CropRegion } from "@/components/video-editor/types";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { toAxcutTranscriptDsl } from "@/lib/ai-edition/document/transcribe";
-import {
-	type AxcutClip,
-	type AxcutTranscript,
-	TRANSCRIPT_LANGUAGE_CODES,
-	TRANSCRIPT_LANGUAGE_NAMES,
-	type TranscriptLanguageCode,
-} from "@/lib/ai-edition/schema";
+import type { AxcutClip, AxcutTranscript, TranscriptLanguageCode } from "@/lib/ai-edition/schema";
 import { formatSec, formatSeconds } from "@/lib/ai-edition/timeline/format";
+import {
+	languageLabel,
+	sortedLanguageOptions,
+} from "@/lib/ai-edition/transcription/languageLabels";
 import styles from "./NewEditorShell.module.css";
 import type { VideoSource } from "./VirtualPreview";
-
-const languageDisplayNamesCache = new Map<string, Intl.DisplayNames>();
-
-function languageDisplayNamesFor(locale: string): Intl.DisplayNames | null {
-	const cached = languageDisplayNamesCache.get(locale);
-	if (cached) return cached;
-	try {
-		const names = new Intl.DisplayNames([locale], { type: "language" });
-		languageDisplayNamesCache.set(locale, names);
-		return names;
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Localized name for a whisper.cpp language code, e.g. "jw" -> "Javanese" in
- * an English UI, "japonais" in a French one. Falls back to whisper's own
- * English name (`TRANSCRIPT_LANGUAGE_NAMES`) when the active locale's ICU
- * data can't resolve one — `Intl.DisplayNames` echoes the input code back
- * rather than throwing when it doesn't recognize it.
- */
-function languageLabel(code: Exclude<TranscriptLanguageCode, "auto">, locale: string): string {
-	try {
-		const resolved = languageDisplayNamesFor(locale)?.of(code);
-		if (resolved && resolved.toLowerCase() !== code.toLowerCase()) return resolved;
-	} catch {
-		// Malformed/unsupported subtag for this Intl implementation.
-	}
-	return TRANSCRIPT_LANGUAGE_NAMES[code];
-}
 
 interface BaseModalProps {
 	open: boolean;
@@ -1586,17 +1553,10 @@ export function SourceTranscriptModal({
 		if (open) setRegenLang((transcript?.language as TranscriptLanguageCode) ?? "auto");
 	}, [open, transcript?.language]);
 
-	// Auto pinned first; the rest sorted by localized name so a 100-language
-	// list is scannable instead of ordered by whisper's internal language id.
-	const regenLanguageOptions = useMemo(() => {
-		const collator = new Intl.Collator(locale);
-		const rest = TRANSCRIPT_LANGUAGE_CODES.filter(
-			(code): code is Exclude<TranscriptLanguageCode, "auto"> => code !== "auto",
-		)
-			.map((code) => ({ code, label: languageLabel(code, locale) }))
-			.sort((a, b) => collator.compare(a.label, b.label));
-		return [{ code: "auto" as const, label: t("mediaStage.auto") }, ...rest];
-	}, [locale, t]);
+	const regenLanguageOptions = useMemo(
+		() => sortedLanguageOptions(locale, t("mediaStage.auto")),
+		[locale, t],
+	);
 
 	useEffect(() => {
 		if (!open) {
@@ -1893,7 +1853,9 @@ export function SourceTranscriptModal({
 									border: "1px solid color-mix(in srgb, var(--success) 22%, transparent)",
 								}}
 							>
-								{t("mediaStage.detectedLanguage", { language: detectedLanguage })}
+								{t("mediaStage.detectedLanguage", {
+									language: languageLabel(detectedLanguage, locale),
+								})}
 							</span>
 						) : null}
 					</div>
