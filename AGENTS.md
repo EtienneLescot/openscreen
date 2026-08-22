@@ -89,6 +89,8 @@ This section is the *mechanics*. **What to actually run is [`technical-documenta
 
 **Run whatever slice was asked for.** The whole file is one option, not the only one: a single section, one platform block, or the three checks that cover the change you just made are all legitimate runs — every row in the results log so far is a partial. What is not legitimate is silence about the rest. A check you did not run is **skipped with its reason**, never passed, and the run only exists once it is a row in the results log carrying the build/tag, the platform, and what you did not cover.
 
+**A release candidate is the exception.** The checklist asks for the whole file before a promote, in its own opening, and that is not softened by anything above: a slice covers a *change*, never a promotion. Scope one down and the row you write says `Partial`, which is not a green light to dispatch `promote.yml`.
+
 **Launch the app**
 
 - Normal: `npm run dev` — Vite serves the renderer and `vite-plugin-electron` opens the Electron window. The main process logs `Global shortcut registered: CommandOrControl+Shift+O` when ready (Ctrl/Cmd+Shift+O toggles the HUD).
