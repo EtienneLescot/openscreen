@@ -122,12 +122,16 @@ function dragHandle(handle: Element, dxPx: number) {
 	window.dispatchEvent(new MouseEvent("pointerup", { clientX: dxPx }));
 }
 
-/** Ctrl+wheel up = zoom in; the handler is a native listener, so dispatch real events. */
-function zoomIn(notches: number) {
-	const canvas = document.querySelector("[class*=tlTracks]") as HTMLElement;
+/** Ctrl+wheel up = zoom in; the handler is a native listener, so dispatch real events.
+ *  Takes the target element so a test can prove the listener isn't confined to the
+ *  lanes — it fires from wherever in the pane the cursor happens to be. */
+function wheelZoomOn(el: HTMLElement, notches: number) {
 	for (let i = 0; i < notches; i++) {
-		fireEvent.wheel(canvas, { ctrlKey: true, deltaY: -100, clientX: 0 });
+		fireEvent.wheel(el, { ctrlKey: true, deltaY: -100, clientX: 0 });
 	}
+}
+function zoomIn(notches: number) {
+	wheelZoomOn(document.querySelector("[class*=tlTracks]") as HTMLElement, notches);
 }
 
 describe("V4Timeline lane pills", () => {
@@ -210,6 +214,32 @@ describe("V4Timeline create-from-toolbar", () => {
 		zoomIn(40);
 		fireEvent.click(screen.getByTitle("buttons.addZoom"));
 		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
+	});
+
+	it("zooms from a wheel over the ruler too, not just the lanes", () => {
+		// The ruler row is pinned above .tlTracks (so its ticks don't scroll away
+		// with the lanes) and isn't a descendant of it. The wheel listener used to
+		// live on .tlTracks alone, so Ctrl/Shift+scrolling anywhere else in the
+		// pane — the ruler included — silently did nothing.
+		const { tl } = renderTimeline();
+		const ruler = document.querySelector("[class*=tlRulerRow]") as HTMLElement;
+		wheelZoomOn(ruler, 40);
+		fireEvent.click(screen.getByTitle("buttons.addZoom"));
+		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
+	});
+
+	it("pans from a wheel over the ruler too, not just the lanes", () => {
+		// Same gap as the zoom case above, but for the Shift+wheel pan path.
+		// Panning is a no-op fully zoomed out (nav already spans the whole
+		// timeline, so there is nowhere to pan to), so zoom in first — from the
+		// ruler too — to open up room to pan within.
+		renderTimeline();
+		const ruler = document.querySelector("[class*=tlRulerRow]") as HTMLElement;
+		wheelZoomOn(ruler, 40);
+		const navWindow = document.querySelector("[class*=tlNavWindow]") as HTMLElement;
+		const before = navWindow.style.left;
+		fireEvent.wheel(ruler, { shiftKey: true, deltaY: 100, clientX: 0 });
+		expect(navWindow.style.left).not.toBe(before);
 	});
 
 	it("never asks for a slice too short to be worth creating", () => {

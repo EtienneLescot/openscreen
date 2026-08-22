@@ -374,6 +374,10 @@ export function V4Timeline({
 	// The camera lane borrows the Layout pane's "No Webcam" wording when there is no
 	// camera to grow, so the two surfaces say the same thing about the same project.
 	const ts = useScopedT("settings");
+	// Wheel zoom/pan listens on the whole pane (toolbar down through the nav bar),
+	// not just the lanes — a user scrolling over the ruler or the hint labels
+	// expects the same zoom/pan the lanes give, not silence.
+	const panelRef = useRef<HTMLDivElement | null>(null);
 	const tracksRef = useRef<HTMLDivElement | null>(null);
 	// The transformed canvas is the true timeline coordinate frame — clips, pills
 	// and the playhead are all positioned inside it. Time↔x math must measure THIS
@@ -815,14 +819,22 @@ export function V4Timeline({
 	// React marks wheel handlers passive by default, so e.preventDefault()
 	// there silently no-ops and the browser/OS still intercepts Ctrl+wheel as
 	// a page-zoom gesture.
+	// Listens on the whole panel (ref below) so the ruler, the hint labels and
+	// the nav bar all zoom/pan too — only .tlTracks scrolls natively, but the
+	// gesture shouldn't be confined to wherever that scroll happens to live.
+	// The rect stays tracksRef regardless of which descendant the wheel fired
+	// on: ruler + tracks share one horizontal padding (see the width effect
+	// below), so tracksRef reads the same left/width either way, and it's the
+	// one guaranteed to exist whenever showLanes is true.
 	useEffect(() => {
-		const el = tracksRef.current;
-		if (!el) return;
+		const panel = panelRef.current;
+		const tracks = tracksRef.current;
+		if (!panel || !tracks) return;
 		// Media shows no zoom window, so leave the wheel alone there: a zoom with
 		// no control to undo it and no ruler reading to explain it is a trap.
 		if (!showLanes) return;
 		const onWheelNative = (e: WheelEvent) => {
-			const r = el.getBoundingClientRect();
+			const r = tracks.getBoundingClientRect();
 			const viewportPct = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
 			if (e.shiftKey) {
 				e.preventDefault();
@@ -852,8 +864,8 @@ export function V4Timeline({
 			}
 			// Otherwise let the native vertical scroll of .tlTracks run (no preventDefault).
 		};
-		el.addEventListener("wheel", onWheelNative, { passive: false });
-		return () => el.removeEventListener("wheel", onWheelNative);
+		panel.addEventListener("wheel", onWheelNative, { passive: false });
+		return () => panel.removeEventListener("wheel", onWheelNative);
 	}, [showLanes]);
 
 	// Track the tracks' content width for the ruler. .tlTracks and .tlRulerRow
@@ -1256,7 +1268,7 @@ export function V4Timeline({
 	};
 
 	return (
-		<div className={styles.tl}>
+		<div className={styles.tl} ref={panelRef}>
 			<div className={styles.tlToolbar}>
 				{showLanes ? (
 					<div className={styles.tlTools} role="toolbar" aria-label={t("toolbar.timelineTools")}>

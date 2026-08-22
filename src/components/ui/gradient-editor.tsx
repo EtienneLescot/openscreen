@@ -462,7 +462,7 @@ export default function GradientEditor({ onChange }: GradientEditorProps) {
 						aria-valuemin={0}
 						aria-valuemax={360}
 						aria-valuenow={Math.round(((mainAngle % 360) + 360) % 360)}
-						className="absolute w-11 h-11 rounded-full cursor-grab shadow-[0_0_0_4px_#f5f5f5,0_4px_14px_rgba(0,0,0,0.35)] transition-shadow z-10 active:cursor-grabbing focus:outline-none focus:ring-2 focus:ring-[#34B27B]"
+						className="absolute w-11 h-11 rounded-full cursor-grab shadow-[0_0_0_4px_#f5f5f5,0_4px_14px_rgba(0,0,0,0.35)] transition-shadow z-10 active:cursor-grabbing focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
 						style={{
 							left: `${mainX}%`,
 							top: `${mainY}%`,
@@ -478,7 +478,7 @@ export default function GradientEditor({ onChange }: GradientEditorProps) {
 						type="button"
 						onClick={addPoint}
 						disabled={totalColors >= MAX_COLORS}
-						className={`w-6 h-6 rounded-full flex items-center justify-center border-none bg-transparent transition-all text-white/60 hover:text-white ${
+						className={`w-6 h-6 rounded-full flex items-center justify-center border-none bg-transparent transition-all text-white/80 hover:text-white ${
 							totalColors >= MAX_COLORS
 								? "opacity-40 cursor-not-allowed"
 								: "hover:bg-white/10 cursor-pointer"
@@ -492,7 +492,7 @@ export default function GradientEditor({ onChange }: GradientEditorProps) {
 						type="button"
 						onClick={removePoint}
 						disabled={totalColors <= 1}
-						className={`w-6 h-6 rounded-full flex items-center justify-center border-none bg-transparent transition-all text-white/60 hover:text-white ${
+						className={`w-6 h-6 rounded-full flex items-center justify-center border-none bg-transparent transition-all text-white/80 hover:text-white ${
 							totalColors <= 1
 								? "opacity-40 cursor-not-allowed"
 								: "hover:bg-white/10 cursor-pointer"
@@ -506,7 +506,7 @@ export default function GradientEditor({ onChange }: GradientEditorProps) {
 						type="button"
 						onClick={cycleHarmony}
 						disabled={eligibleHarmonies.length <= 1}
-						className={`w-6 h-6 rounded-full flex items-center justify-center border-none bg-transparent transition-all text-white/60 hover:text-white ${
+						className={`w-6 h-6 rounded-full flex items-center justify-center border-none bg-transparent transition-all text-white/80 hover:text-white ${
 							eligibleHarmonies.length <= 1
 								? "opacity-40 cursor-not-allowed"
 								: "hover:bg-white/10 cursor-pointer"
@@ -520,7 +520,10 @@ export default function GradientEditor({ onChange }: GradientEditorProps) {
 
 			{/* Bottom controls: Brightness + Angle */}
 			<div className="flex items-center gap-3.5 mt-3.5">
-				{/* Brightness wavy slider */}
+				{/* Brightness wavy slider. Its thumb/track are colored for the dark
+				    canvas above, so it needs its own dark backing here too — this row
+				    otherwise sits directly on the (theme-dependent) popover background,
+				    where the light thumb disappears in light mode. */}
 				<div
 					ref={trackRef}
 					onPointerDown={onSliderPointerDown}
@@ -531,7 +534,7 @@ export default function GradientEditor({ onChange }: GradientEditorProps) {
 					aria-valuemin={0}
 					aria-valuemax={100}
 					aria-valuenow={Math.round(brightness)}
-					className="relative flex-1 h-10 flex items-center cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#34B27B] rounded"
+					className="relative flex-1 h-10 flex items-center cursor-pointer bg-[#141414] rounded-full focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
 				>
 					<svg
 						width="100%"
@@ -571,7 +574,7 @@ export default function GradientEditor({ onChange }: GradientEditorProps) {
 					aria-valuemin={0}
 					aria-valuemax={360}
 					aria-valuenow={angle}
-					className="relative w-[42px] h-[42px] rounded-full bg-[radial-gradient(circle_at_35%_30%,#2b2b2b,#0c0c0c)] shadow-[0_3px_10px_rgba(0,0,0,0.4)] cursor-grab flex-shrink-0 active:cursor-grabbing focus:outline-none focus:ring-2 focus:ring-[#34B27B]"
+					className="relative w-[42px] h-[42px] rounded-full bg-[radial-gradient(circle_at_35%_30%,#2b2b2b,#0c0c0c)] shadow-[0_3px_10px_rgba(0,0,0,0.4)] cursor-grab flex-shrink-0 active:cursor-grabbing focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
 					title="Gradient angle"
 				>
 					<div className="absolute inset-0" style={{ transform: `rotate(${angleKnobAngle}deg)` }}>

@@ -519,7 +519,7 @@ unit falls back to the original words (`untranslatedUnits`,
 
 Caption appearance lives in `document.legacyEditor.captions`, accessed
 through `getCaptionSettings` / `patchCaptionSettings`
-([`src/lib/ai-edition/captions/settings.ts:217,262`](../../src/lib/ai-edition/captions/settings.ts:217)).
+([`src/lib/ai-edition/captions/settings.ts:279,324`](../../src/lib/ai-edition/captions/settings.ts:279)).
 
 | Field | Default | Notes |
 |---|---|---|
@@ -579,6 +579,25 @@ ends were hardcoded to ±45 while the result was clamped separately, which left
 the bottom anchor honouring only −45…+3 — nearly half the slider moved the handle
 and nothing else.
 
+#### Position presets
+
+`verticalPosition` and `offsetX`/`offsetY` are independent fields — a preset is
+not a separate mode the offsets are locked out of, it's just a point on the same
+range the slider already covers. `activeVerticalPositionPreset` /
+`activeHorizontalPositionPreset` (`settings.ts`, right after `captionOffsetRange`)
+read "is a preset active" back out of that: a preset counts as active only while
+its axis' offset is (within a small epsilon) exactly the value that preset would
+set, so dragging a slider away from a preset silently un-highlights it with no
+separate "active preset" field to keep in sync. Clicking a preset writes that
+clean value back (`offsetY: 0` for a vertical preset; `captionHorizontalPositionOffset`
+for a horizontal one) rather than leaving whatever nudge was already there, which
+is what makes the click read as "go here" instead of "go here, plus whatever was
+left over." `CaptionHorizontalPosition` (left/center/right) is a new axis of
+meaning distinct from `CaptionTextAlign` (same three words, but for aligning the
+text *inside* the band) — there is no stored `horizontalPosition` field; it is
+derived from `offsetX` exactly the way the vertical preset is derived from
+`offsetY`.
+
 The Captions pane itself
 ([`src/components/ai-edition/CaptionsPane.tsx`](../../src/components/ai-edition/CaptionsPane.tsx))
 is the only place that runs `transcribe` from the editor shell, and
@@ -636,16 +655,34 @@ it deletes data
 
 ## Known gaps
 
-- **No language selector in the UI.** The renderer always sends
-  `language: "auto"`. Forcing a language would skip detection on the
-  first window and slightly improve WER. Needs a UI control wired
-  through `setTranscript` and a mapping from the UI string to a
-  whisper.cpp language token.
+- **Language selector.** The "Regenerate as" picker offers `"auto"` plus
+  every language the `small` multilingual model resolves. There are two
+  copies of it in the tree — `MediaStage.tsx`'s Media stage panel
+  ([`src/components/ai-edition/v4/MediaStage.tsx`](../../src/components/ai-edition/v4/MediaStage.tsx)),
+  the one actually mounted by `NewEditorShell`, and `SourceTranscriptModal`
+  ([`src/components/ai-edition/Modals.tsx`](../../src/components/ai-edition/Modals.tsx)),
+  which is currently unreachable: `LeftPanel` (its only mount site) is only
+  ever rendered with `active="chat"` by `NewEditorShell.tsx`, so the
+  `MediaPane` branch that would render it never runs. Both are kept correct
+  rather than deleting the unreachable one, since nothing marks it dead code
+  and a future rewire could reach it. `TRANSCRIPT_LANGUAGE_CODES` in
+  [`src/lib/ai-edition/schema/index.ts`](../../src/lib/ai-edition/schema/index.ts)
+  mirrors whisper.cpp's own `g_lang` table verbatim — a code outside that
+  list fails to resolve a language id in `wparams.language`
+  (`electron/native/whisper-stt/src/main.cpp`) — and `languageLabel` /
+  `sortedLanguageOptions` in
+  [`src/lib/ai-edition/transcription/languageLabels.ts`](../../src/lib/ai-edition/transcription/languageLabels.ts)
+  are the single place both pickers build their options and labels from, so
+  the two copies cannot drift from each other the way two hand-duplicated
+  lists would. Option labels come from `Intl.DisplayNames` in the active UI
+  locale, falling back to whisper.cpp's own English name for a code that
+  locale's ICU data can't resolve. Forcing a language skips detection on the
+  first window and slightly improves WER.
 
   Note that `"auto"` is a *request* value only. The helper used to echo the
   request straight back into `detected_language`, so with no selector the field
   was permanently the literal string `"auto"`: the media stage's "detected
-  language" line ([`src/components/ai-edition/Modals.tsx:1763`](../../src/components/ai-edition/Modals.tsx:1763))
+  language" line ([`src/components/ai-edition/v4/MediaStage.tsx:347`](../../src/components/ai-edition/v4/MediaStage.tsx:347))
   displayed it verbatim, and `transcribe.ts` wrote it onto
   `AxcutTranscript.language`. It now reports `whisper_full_lang_id()` — the
   detected language under `"auto"`, the forced one otherwise.

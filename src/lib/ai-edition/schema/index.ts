@@ -811,19 +811,124 @@ export const chatInputSchema = z.object({
 	message: z.string().trim().min(1),
 });
 
-export const transcriptLanguageSchema = z.enum([
+// Every code whisper.cpp's multilingual model can resolve, plus "auto" for
+// detection. Codes and order mirror whisper.cpp's own `g_lang` table
+// (`src/whisper.cpp`, verified against the tag `nix/whisper-stt.nix` pins —
+// v1.9.1) — `wparams.language` in
+// electron/native/whisper-stt/src/main.cpp forwards the code verbatim, so a
+// value outside this list fails to resolve a language id there. "auto" is
+// always index 0 — code that needs "every real language, no sentinel" relies
+// on that (see `WhisperLanguageCode` below) rather than filtering it out.
+// Consumed by both "Regenerate as" pickers: `MediaStage.tsx` (the one
+// actually mounted by `NewEditorShell`) and `Modals.tsx`'s
+// `SourceTranscriptModal` (currently unreachable — `LeftPanel` is only ever
+// mounted with `active="chat"` — but kept correct rather than deleted, since
+// nothing marks it dead code and a test or a future rewire could reach it).
+export const TRANSCRIPT_LANGUAGE_CODES = [
 	"auto",
 	"en",
-	"fr",
+	"zh",
 	"de",
 	"es",
-	"it",
-	"pt",
-	"nl",
-	"ja",
+	"ru",
 	"ko",
-	"zh",
-]);
+	"fr",
+	"ja",
+	"pt",
+	"tr",
+	"pl",
+	"ca",
+	"nl",
+	"ar",
+	"sv",
+	"it",
+	"id",
+	"hi",
+	"fi",
+	"vi",
+	"he",
+	"uk",
+	"el",
+	"ms",
+	"cs",
+	"ro",
+	"da",
+	"hu",
+	"ta",
+	"no",
+	"th",
+	"ur",
+	"hr",
+	"bg",
+	"lt",
+	"la",
+	"mi",
+	"ml",
+	"cy",
+	"sk",
+	"te",
+	"fa",
+	"lv",
+	"bn",
+	"sr",
+	"az",
+	"sl",
+	"kn",
+	"et",
+	"mk",
+	"br",
+	"eu",
+	"is",
+	"hy",
+	"ne",
+	"mn",
+	"bs",
+	"kk",
+	"sq",
+	"sw",
+	"gl",
+	"mr",
+	"pa",
+	"si",
+	"km",
+	"sn",
+	"yo",
+	"so",
+	"af",
+	"oc",
+	"ka",
+	"be",
+	"tg",
+	"sd",
+	"gu",
+	"am",
+	"yi",
+	"lo",
+	"uz",
+	"fo",
+	"ht",
+	"ps",
+	"tk",
+	"nn",
+	"mt",
+	"sa",
+	"lb",
+	"my",
+	"bo",
+	"tl",
+	"mg",
+	"as",
+	"tt",
+	"haw",
+	"ln",
+	"ha",
+	"ba",
+	"jw",
+	"su",
+	"yue",
+] as const;
+
+export const transcriptLanguageSchema = z.enum(TRANSCRIPT_LANGUAGE_CODES);
 
 export type AxcutWord = z.infer<typeof wordSchema>;
 export type AxcutTranscriptSegment = z.infer<typeof transcriptSegmentSchema>;
@@ -845,6 +950,9 @@ export type AxcutDocumentInput = z.input<typeof documentSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectInputSchema>;
 export type AddAssetInput = z.infer<typeof addAssetInputSchema>;
 export type ChatInput = z.infer<typeof chatInputSchema>;
+export type TranscriptLanguageCode = z.infer<typeof transcriptLanguageSchema>;
+/** A real whisper.cpp language code — `TranscriptLanguageCode` minus the "auto" detection sentinel. */
+export type WhisperLanguageCode = Exclude<TranscriptLanguageCode, "auto">;
 
 export function createEmptyDocument(
 	input: CreateProjectInput & { projectId: string; createdAt?: string },
