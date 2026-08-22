@@ -431,9 +431,9 @@ export function V4Timeline({
 	const clips = tl.clips;
 	// A camera-fullscreen region grows the webcam overlay, so on a project with no webcam
 	// it renders nothing in the preview and nothing in the export. `addCameraFullscreen`
-	// refuses to write one (see useTimeline) — this is why the empty lane's hint below
-	// swaps to "no webcam" instead of advertising the `C` shortcut. Same question, same
-	// helper as the Layout pane: is a camera attached anywhere on this timeline?
+	// refuses to write one (see useTimeline) — this makes the control say so before it is
+	// clicked instead of looking like it worked. Same question, same helper as the Layout
+	// pane: is a camera attached anywhere on this timeline?
 	const hasAnyCamera = useMemo(() => hasAnyClipWithCamera(tl.assets, clips), [tl.assets, clips]);
 	const total = useMemo(
 		() =>
@@ -1359,6 +1359,17 @@ export function V4Timeline({
 						>
 							<Crosshair size={15} />
 						</button>
+						<button
+							type="button"
+							className={styles.tlToolBtn}
+							title={t("buttons.addCameraFullscreen")}
+							aria-label={t("buttons.addCameraFullscreen")}
+							disabled={!hasAnyCamera}
+							style={!hasAnyCamera ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
+							onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}
+						>
+							<Maximize2 size={15} />
+						</button>
 					</div>
 				) : (
 					// Media is an ARRANGING surface: add, remove, reorder. Nothing here
@@ -1452,7 +1463,8 @@ export function V4Timeline({
 								<div className={styles.tlLane}>{renderPills(zoomPills, t("hints.pressZoom"))}</div>
 								<div className={styles.tlLane}>
 									{/* Advertising "Press C" on a project with no webcam invites a keystroke
-									    that `addCameraFullscreen` now refuses (#353). */}
+									    that `addCameraFullscreen` now refuses (#353). The toolbar button is
+									    already disabled; this keeps the lane from contradicting it. */}
 									{renderPills(
 										cameraFullscreenPills,
 										hasAnyCamera ? t("hints.pressCameraFullscreen") : ts("layout.noWebcam"),
