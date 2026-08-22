@@ -422,9 +422,11 @@ def save_words(path, words_by_id, transcript_id=None):
         if w["id"] in new_words and new_words[w["id"]] != w.get("text", ""):
             w["text"] = new_words[w["id"]]
             touched += 1
+    # 从更新后的 tr["words"] 重建 text map（保留未提交词的原始值，避免 partial payload 清空 segment）
+    text_by_id = {w["id"]: w.get("text", "") for w in tr.get("words") or []}
     # 重建每个 segment 的 text（与 words 保持一致）
     for s in tr.get("segments") or []:
-        parts = [new_words.get(wid, "") for wid in s.get("wordIds", [])]
+        parts = [text_by_id.get(wid, "") for wid in s.get("wordIds", [])]
         s["text"] = _join_segment_text(parts, language)
     # 仅当 legacy 字段确实就是 transcripts 里的那条时同步，避免误改不同内容。
     if legacy and _same_transcript(legacy, tr):
@@ -432,8 +434,10 @@ def save_words(path, words_by_id, transcript_id=None):
             for w in legacy["words"]:
                 if w["id"] in new_words and new_words[w["id"]] != w.get("text", ""):
                     w["text"] = new_words[w["id"]]
+        # legacy 也从更新后的 legacy["words"] 重建，保持与 words 一致
+        legacy_text = {w["id"]: w.get("text", "") for w in legacy.get("words") or []}
         for s in legacy.get("segments") or []:
-            parts = [new_words.get(wid, "") for wid in s.get("wordIds", [])]
+            parts = [legacy_text.get(wid, "") for wid in s.get("wordIds", [])]
             s["text"] = _join_segment_text(parts, language)
     # 备份：加纳秒时间戳防同一秒两次保存互相覆盖；先写临时文件再原子替换，
     # 避免 json.dump 写到一半中断导致项目文件损坏。
@@ -441,10 +445,23 @@ def save_words(path, words_by_id, transcript_id=None):
     shutil.copy2(path, backup)
     temp_path = path + ".tmp-" + str(os.getpid()) + "-" + str(time.time_ns())
     try:
-        with open(temp_path, "w", encoding="utf-8") as f:
+        # 先读原文件权限，保存后再还原，避免 os.replace 把 restrictive mode 覆盖掉
+        original_mode = 0o600
+        try:
+            original_mode = 0o777 & os.stat(path).st_mode
+        except OSError:
+            pass
+        # 临时文件先用 restrictive mode 创建
+        fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(doc, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
+        # 把原文件 mode 应用到临时文件，确保 os.replace 后 live project 保持原权限
+        try:
+            os.chmod(temp_path, original_mode)
+        except OSError:
+            pass
         os.replace(temp_path, path)
     finally:
         if os.path.exists(temp_path):
