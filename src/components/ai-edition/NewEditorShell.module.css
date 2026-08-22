@@ -507,7 +507,7 @@
 	padding: var(--sp-3) var(--sp-4);
 	border-radius: var(--r-sm);
 	background: var(--primary, #34B27B);
-	color: #fff;
+	color: var(--accent-on);
 	border: none;
 	font-weight: 500;
 	font-size: 0.875rem;

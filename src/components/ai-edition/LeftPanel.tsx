@@ -1668,7 +1668,7 @@ export function ChatStripPanel() {
 										background: "var(--accent)",
 										border: "1px solid var(--accent)",
 										borderRadius: "var(--r-sm)",
-										color: "var(--bg)",
+										color: "var(--accent-on)",
 										font: "500 12px var(--font-body)",
 										cursor: "pointer",
 									}}

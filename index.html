@@ -5,6 +5,20 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title></title>
+    <script>
+      // Apply the stored theme before first paint — src/hooks/useTheme.ts
+      // does the same thing, but only once the editor's code-split chunk
+      // mounts and its useEffect runs. Left to that alone, a dark-theme
+      // user sees the CSS-token-driven UI (the Suspense fallback, etc.)
+      // flash light on every load, since design-tokens.css's :root:root
+      // block (light) applies until data-theme="dark" lands.
+      try {
+        if (localStorage.getItem("openscreen-theme") === "dark") {
+          document.documentElement.setAttribute("data-theme", "dark");
+          document.documentElement.classList.add("dark");
+        }
+      } catch {}
+    </script>
   </head>
   <body style="background:#09090b;margin:0">
     <div id="root"></div>
