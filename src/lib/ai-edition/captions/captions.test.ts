@@ -3,9 +3,12 @@ import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { captionCuesToTextRegions, deriveCaptionCues } from "./cues";
 import type { CaptionSettings, CaptionSettingsPatch } from "./settings";
 import {
+	activeHorizontalPositionPreset,
+	activeVerticalPositionPreset,
 	CAPTION_BAND_HEIGHT_PCT,
 	captionBackgroundCss,
 	captionBandRect,
+	captionHorizontalPositionOffset,
 	captionInkHeightPct,
 	captionOffsetRange,
 	DEFAULT_CAPTION_SETTINGS,
@@ -248,6 +251,67 @@ describe("caption settings", () => {
 			captionBackgroundCss({ ...ON, backgroundColor: "#10b981", backgroundOpacity: 0.5 }),
 		).toBe("rgba(16, 185, 129, 0.5)");
 		expect(captionBackgroundCss({ ...ON, backgroundEnabled: false })).toBe("transparent");
+	});
+});
+
+describe("caption position presets", () => {
+	it("reads a vertical preset as active only while there's no nudge off it", () => {
+		for (const verticalPosition of ["top", "middle", "bottom"] as const) {
+			const settings = { ...ON, verticalPosition, offsetY: 0 };
+			expect(activeVerticalPositionPreset(settings)).toBe(verticalPosition);
+			// Any nudge at all — even one too small to see — means the band is no
+			// longer exactly at the preset, so nothing should read as "active".
+			expect(activeVerticalPositionPreset({ ...settings, offsetY: 5 })).toBeNull();
+		}
+	});
+
+	it("reads left/center/right off offsetX, and null off the preset grid", () => {
+		expect(activeHorizontalPositionPreset(ON)).toBe("center");
+		const range = captionOffsetRange(ON);
+		expect(activeHorizontalPositionPreset({ ...ON, offsetX: range.x.min })).toBe("left");
+		expect(activeHorizontalPositionPreset({ ...ON, offsetX: range.x.max })).toBe("right");
+		expect(activeHorizontalPositionPreset({ ...ON, offsetX: range.x.min / 2 })).toBeNull();
+	});
+
+	it("collapses to center when the band is full-width, since left/right have nowhere to go", () => {
+		expect(activeHorizontalPositionPreset({ ...ON, width: 100, offsetX: 0 })).toBe("center");
+	});
+
+	it("sets offsetX to the true frame edge for left/right, matching the reachable range", () => {
+		const range = captionOffsetRange(ON);
+		expect(captionHorizontalPositionOffset(ON, "left")).toBeCloseTo(range.x.min, 6);
+		expect(captionHorizontalPositionOffset(ON, "center")).toBe(0);
+		expect(captionHorizontalPositionOffset(ON, "right")).toBeCloseTo(range.x.max, 6);
+	});
+
+	it("reaches the true left and right frame edges through the left/right presets", () => {
+		const left = captionBandRect({ ...ON, offsetX: captionHorizontalPositionOffset(ON, "left") });
+		expect(left.x).toBeCloseTo(0, 6);
+		const right = captionBandRect({
+			...ON,
+			offsetX: captionHorizontalPositionOffset(ON, "right"),
+		});
+		expect(right.x + right.width).toBeCloseTo(100, 6);
+	});
+
+	it("de-activates the horizontal preset when width moves the band, without touching offsetX", () => {
+		// The real asymmetry against the vertical axis: `range.x` moves with
+		// `width` (`captionAnchor.x` depends on it), so a preset that was flush
+		// can stop being flush purely because the band got narrower or wider.
+		// `offsetY === 0` has no such dependency, so a vertical preset never does
+		// this — it's intended, not a regression.
+		const atWidth80 = {
+			...ON,
+			width: 80,
+			offsetX: captionOffsetRange({ ...ON, width: 80 }).x.min,
+		};
+		expect(activeHorizontalPositionPreset(atWidth80)).toBe("left");
+		expect(captionBandRect(atWidth80).x).toBeCloseTo(0, 6);
+
+		const narrowed = { ...atWidth80, width: 50 };
+		expect(activeHorizontalPositionPreset(narrowed)).toBeNull();
+		expect(narrowed.offsetX).toBe(atWidth80.offsetX);
+		expect(captionBandRect(narrowed).x).toBeCloseTo(15, 6);
 	});
 });
 
