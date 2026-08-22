@@ -178,7 +178,7 @@ export function ShortcutsConfigDialog() {
 										</button>
 									</div>
 									{hasConflict && conflict?.conflictWith.type === "configurable" && (
-										<div className="flex items-center justify-between px-1 py-1.5 mb-0.5 bg-[var(--warn-soft)] border border-[var(--warn-soft)] rounded text-xs">
+										<div className="flex items-center justify-between px-1 py-1.5 mb-0.5 bg-[var(--warn-soft)] border border-[var(--warn)] rounded text-xs">
 											<span className="text-[var(--warn)]">
 												⚠{" "}
 												{t("alreadyUsedBy", {
@@ -189,7 +189,7 @@ export function ShortcutsConfigDialog() {
 												<button
 													type="button"
 													onClick={handleSwap}
-													className="px-2 py-0.5 bg-[var(--warn-soft)] hover:bg-[var(--warn-soft)] border border-[var(--warn)] rounded text-[var(--warn)] font-medium transition-colors"
+													className="px-2 py-0.5 bg-[var(--warn-soft)] hover:bg-[color-mix(in_srgb,var(--warn)_28%,transparent)] border border-[var(--warn)] rounded text-[var(--warn)] font-medium transition-colors"
 												>
 													{t("swap")}
 												</button>

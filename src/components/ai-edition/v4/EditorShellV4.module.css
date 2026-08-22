@@ -1140,6 +1140,7 @@
 .bigRecBtn.recording {
 	border-color: var(--danger);
 	background: var(--danger);
+	color: #fff;
 }
 .bigRecDot {
 	width: 10px;
