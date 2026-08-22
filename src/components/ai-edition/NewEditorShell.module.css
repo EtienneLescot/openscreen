@@ -1052,12 +1052,34 @@
 	color: var(--meta);
 }
 
-/* Caveat under a control, when the control is true but not the whole story. */
-.paneHint {
-	margin: -2px var(--sp-4) 8px;
-	font: 400 var(--fs-app-sm)/1.4 var(--font-body);
-	color: var(--meta);
+/* A section title that carries an action on its right. */
+.sectionHead {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin: 4px var(--sp-4) 8px;
 }
+.sectionHead .sectionLabel { margin: 0; }
+/* Deliberately quieter than the settings it overwrites: it is reached on purpose, not
+   stumbled into, and it must not read as a fifth control in the group. */
+.sectionAction {
+	padding: 3px 8px;
+	border: 1px solid transparent;
+	border-radius: 999px;
+	background: var(--surface-2);
+	color: var(--muted);
+	font: 500 var(--fs-app-sm)/1.4 var(--font-body);
+	white-space: nowrap;
+	cursor: pointer;
+	transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+.sectionAction:hover:not(:disabled) {
+	border-color: var(--brand);
+	background: var(--bg);
+	color: var(--fg);
+}
+.sectionAction:disabled { cursor: default; opacity: 0.45; }
 .uploadBtn {
 	display: flex;
 	align-items: center;

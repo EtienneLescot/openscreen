@@ -83,11 +83,9 @@
 		"frame": "Frame",
 		"format": "Format",
 		"formatOriginal": "Original",
-		"fitClip": "Fit the clip",
-		"fitAClip": "Fit a clip",
+		"fitClip": "Fit",
 		"fitClipOne": "{{count}} clip",
 		"fitClipMany": "{{count}} clips",
-		"fitClipMixed": "Clips in another shape still show the background.",
 		"motion": "Motion",
 		"help": "Frame styling for the recording: background blur, drop shadow, motion blur, corner radius, and padding around the video."
 	},

@@ -76,11 +76,9 @@
 		"frame": "Çerçeve",
 		"format": "Biçim",
 		"formatOriginal": "Orijinal",
-		"fitClip": "Klibe sığdır",
-		"fitAClip": "Bir klibe sığdır",
+		"fitClip": "Sığdır",
 		"fitClipOne": "{{count}} klip",
 		"fitClipMany": "{{count}} klip",
-		"fitClipMixed": "Başka bir orandaki klipler arka planı göstermeye devam eder.",
 		"motion": "Hareket",
 		"on": "açık",
 		"help": "Kayıt çerçevesinin biçimi: arka plan bulanıklığı, gölge, hareket bulanıklığı, köşe yuvarlaklığı ve videonun çevresindeki boşluk."

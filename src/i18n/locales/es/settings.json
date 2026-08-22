@@ -76,11 +76,9 @@
 		"frame": "Marco",
 		"format": "Formato",
 		"formatOriginal": "Original",
-		"fitClip": "Ajustar al clip",
-		"fitAClip": "Ajustar a un clip",
+		"fitClip": "Ajustar",
 		"fitClipOne": "{{count}} clip",
 		"fitClipMany": "{{count}} clips",
-		"fitClipMixed": "Los clips con otra forma siguen mostrando el fondo.",
 		"motion": "Movimiento",
 		"on": "activado",
 		"help": "Estilo del marco de la grabación: desenfoque de fondo, sombra, desenfoque de movimiento, radio de esquinas y margen alrededor del vídeo."

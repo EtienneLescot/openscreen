@@ -48,7 +48,6 @@ import type {
 import {
 	AUDIO_GAIN_DB_LIMIT,
 	type EditorSettingsPatch,
-	type EditorSettingsSnapshot,
 } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
@@ -1470,34 +1469,7 @@ function restoreCaretBeforeWord(editor: HTMLElement | null, wordId: string): voi
 // pulling the schema into the helpers block.
 export type { AxcutWord };
 
-// ─── Fill frame ────────────────────────────────────────────────────
-
-/**
- * Does the recording cover the whole output frame — i.e. is no background visible?
- *
- * DERIVED, never stored. "No background" is a fact about four settings, not a fifth setting
- * alongside them, and storing it would immediately be able to disagree with them: nudge the
- * padding slider and a stored flag still claims the background is off. Reading it back keeps
- * the toggle honest for free, needs no schema change, and survives a reload.
- *
- * The aspect ratio is part of the test and not an afterthought — padding 0 only fills the
- * WIDTH. A 16:10 capture in a 16:9 project still shows wallpaper bars top and bottom at zero
- * padding, which is exactly why #84 reads as unfixable to someone who found the slider.
- */
-export function fillsFrame(
-	settings: Pick<
-		EditorSettingsSnapshot,
-		"padding" | "borderRadius" | "shadowIntensity" | "aspectRatio"
-	>,
-	nativeTokens: ReadonlySet<AspectRatio>,
-): boolean {
-	return (
-		settings.padding === 0 &&
-		settings.borderRadius === 0 &&
-		settings.shadowIntensity === 0 &&
-		nativeTokens.has(settings.aspectRatio)
-	);
-}
+// ─── Fit a clip ────────────────────────────────────────────────────
 
 /**
  * The patch behind the action.
@@ -1549,17 +1521,6 @@ export function VideoEffectsPane() {
 	// can never disagree about what shape the footage is. Already sorted by clip count then by
 	// pixel area, so [0] is "the shape most of this timeline is in" with no heuristic of ours.
 	const nativeFormats = useMemo(() => (document ? collectNativeFormats(document) : []), [document]);
-	const nativeTokens = useMemo(() => new Set(nativeFormats.map((f) => f.token)), [nativeFormats]);
-	const frameIsFilled = fillsFrame(settings, nativeTokens);
-	// One output frame cannot be filled by clips of different shapes — the screen path
-	// contain-fits (see compositeLayout.ts), so anything not in the chosen shape keeps its
-	// bars. The switch is honest about the SETTINGS; without this it would also be read as a
-	// claim about the picture, and be wrong on every mixed timeline.
-	const clipsStillFramed = useMemo(() => {
-		const filled = nativeFormats.find((f) => f.token === settings.aspectRatio);
-		const total = nativeFormats.reduce((n, f) => n + f.clipCount, 0);
-		return total - (filled?.clipCount ?? 0);
-	}, [nativeFormats, settings.aspectRatio]);
 	const [fitMenuOpen, setFitMenuOpen] = useState(false);
 	const [ratioMenuOpen, setRatioMenuOpen] = useState(false);
 	const { locale } = useI18n();
@@ -1594,7 +1555,70 @@ export function VideoEffectsPane() {
 			helpText={`${ts("background.help")} ${ts("effects.help")}`}
 		>
 			<BackgroundSection />
-			<div className={styles.sectionLabel}>{ts("effects.frame")}</div>
+			<div className={styles.sectionHead}>
+				<span className={styles.sectionLabel}>{ts("effects.frame")}</span>
+				{/* #84: "how do I turn the background off". The honest answer was four settings
+				    in three places, so nobody found it. This is that answer as one control.
+
+				    An ACTION, not a state, and not one setting among the four below either — it
+				    overwrites all of them at once, which is why it rides the section header
+				    instead of joining the list. The nearest thing it has to a peer is a reset
+				    button, except it resets to a TARGET state rather than to the initial one.
+
+				    It was a switch first, and a switch has room for one outcome while a timeline
+				    with several shapes has one per shape — so it took the majority silently.
+				    Making the choice explicit as a row of chips then failed on its own terms:
+				    the chips read `683:384` and `64:27`, and ten of them do not fit. So: a
+				    button that does the thing, and a list to pick from when there is more than
+				    one thing it could do. Rows lead with the RESOLUTION, which is what a user
+				    recognises about their own footage. */}
+				<Popover open={fitMenuOpen} onOpenChange={setFitMenuOpen}>
+					<PopoverTrigger asChild>
+						<button
+							type="button"
+							className={styles.sectionAction}
+							disabled={!hasDocument || nativeFormats.length === 0}
+							onClick={(e) => {
+								// One shape means no decision to delegate: act, do not ask.
+								if (nativeFormats.length <= 1) {
+									e.preventDefault();
+									applyFitClip(nativeFormats[0].token);
+								}
+							}}
+						>
+							{ts("effects.fitClip")}
+						</button>
+					</PopoverTrigger>
+					<PopoverContent
+						align="center"
+						sideOffset={6}
+						collisionPadding={12}
+						animated={false}
+						className="w-auto border-0 bg-transparent p-0 shadow-none"
+					>
+						<div className={styles.actionMenu} role="menu" aria-label={ts("effects.fitClip")}>
+							{nativeFormats.map((format) => (
+								<button
+									type="button"
+									role="menuitem"
+									key={format.token}
+									className={styles.actionMenuRow}
+									onClick={() => {
+										setFitMenuOpen(false);
+										applyFitClip(format.token);
+									}}
+								>
+									<span className={styles.actionMenuMain}>
+										{format.width} × {format.height}
+									</span>
+									<span className={styles.actionMenuMeta}>{format.token}</span>
+									<span className={styles.actionMenuCount}>{clipCountLabel(format.clipCount)}</span>
+								</button>
+							))}
+						</div>
+					</PopoverContent>
+				</Popover>
+			</div>
 			{/* The output shape moved here from the timeline toolbar. It is the one setting the
 			    other three depend on — padding, roundness and shadow only mean anything against
 			    a known frame — and among Trim / Speed / Zoom / transport it read as a playback
@@ -1639,10 +1663,10 @@ export function VideoEffectsPane() {
 									<span className={styles.actionMenuMain}>{ratio}</span>
 								</button>
 							))}
-							{/* The timeline's own shapes stay listed here, and NOT only behind "fit a
-							    clip": that action also zeroes the frame styling, so without these rows
-							    there would be no way to export at the footage's native shape while
-							    keeping a padded, rounded look. */}
+							{/* The timeline's own shapes stay listed here, and NOT only behind "fit":
+							    that action also zeroes the frame styling, so without these rows there
+							    would be no way to export at the footage's native shape while keeping a
+							    padded, rounded look. */}
 							{nativeFormats.length > 0 ? (
 								<>
 									<div className={styles.actionMenuGroup}>{ts("effects.formatOriginal")}</div>
@@ -1659,12 +1683,14 @@ export function VideoEffectsPane() {
 												void set({ aspectRatio: format.token });
 											}}
 										>
-											<span className={styles.actionMenuMain}>
-												{format.width} × {format.height}
-											</span>
-											<span className={styles.actionMenuMeta}>{format.token}</span>
+											{/* Token leads and the pixel size rides on the right, exactly as this
+											    menu read in the timeline toolbar — here the row names an output
+											    FORMAT, so the ratio is the identity. (The "fit" menu leads with
+											    the resolution instead, because there a row names a clip.) */}
+											<span className={styles.actionMenuMain}>{format.token}</span>
 											<span className={styles.actionMenuCount}>
-												{clipCountLabel(format.clipCount)}
+												{`${format.width}×${format.height}`}
+												{nativeFormats.length > 1 ? ` · ${format.clipCount}` : ""}
 											</span>
 										</button>
 									))}
@@ -1674,70 +1700,6 @@ export function VideoEffectsPane() {
 					</PopoverContent>
 				</Popover>
 			</div>
-			{/* #84: "how do I turn the background off". The honest answer was four settings in
-			    three places, so nobody found it. This is that answer as one control.
-			
-			    An ACTION, not a state. It was a switch first, and a switch has room for one
-			    outcome while a timeline with several shapes has one per shape — so it took the
-			    majority silently. Making the choice explicit as a row of chips then failed on
-			    its own terms: the chips read `683:384` and `64:27`, and ten of them do not fit.
-			
-			    So: a button that does the thing, and a list to pick from when there is more
-			    than one thing it could do — the shape the "edit clip" rail button already has.
-			    Rows lead with the RESOLUTION, which is what a user recognises about their own
-			    footage. Nothing here reports state: what the action did is visible in the three
-			    sliders below it, which is where it lives. */}
-			<Popover open={fitMenuOpen} onOpenChange={setFitMenuOpen}>
-				<PopoverTrigger asChild>
-					<button
-						type="button"
-						className={styles.uploadBtn}
-						disabled={!hasDocument || nativeFormats.length === 0}
-						onClick={(e) => {
-							// One shape means no decision to delegate: act, do not ask.
-							if (nativeFormats.length <= 1) {
-								e.preventDefault();
-								applyFitClip(nativeFormats[0].token);
-							}
-						}}
-					>
-						{nativeFormats.length > 1 ? ts("effects.fitAClip") : ts("effects.fitClip")}
-					</button>
-				</PopoverTrigger>
-				<PopoverContent
-					align="center"
-					sideOffset={6}
-					collisionPadding={12}
-					animated={false}
-					className="w-auto border-0 bg-transparent p-0 shadow-none"
-				>
-					<div className={styles.actionMenu} role="menu" aria-label={ts("effects.fitAClip")}>
-						{nativeFormats.map((format) => (
-							<button
-								type="button"
-								role="menuitem"
-								key={format.token}
-								className={styles.actionMenuRow}
-								onClick={() => {
-									setFitMenuOpen(false);
-									applyFitClip(format.token);
-								}}
-							>
-								<span className={styles.actionMenuMain}>
-									{format.width} × {format.height}
-								</span>
-								<span className={styles.actionMenuMeta}>{format.token}</span>
-								<span className={styles.actionMenuCount}>{clipCountLabel(format.clipCount)}</span>
-							</button>
-						))}
-					</div>
-				</PopoverContent>
-			</Popover>
-			{frameIsFilled && clipsStillFramed > 0 ? (
-				<div className={styles.paneHint} role="note">
-					{ts("effects.fitClipMixed")}
-				</div>
-			) : null}
 			<div className={styles.sliderGrid}>
 				<SliderCell
 					label={ts("effects.shadow")}
