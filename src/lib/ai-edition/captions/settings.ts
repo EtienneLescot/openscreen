@@ -368,12 +368,21 @@ function migrateLegacyPlacement(
 		legacyAlign === "left" ? bandX : legacyAlign === "right" ? bandX + width : bandX + width / 2;
 	const anchorH: CaptionAnchorH =
 		inkCentre < 100 / 3 ? "left" : inkCentre > (2 * 100) / 3 ? "right" : "center";
+	// And the distance from that edge to where the band actually sat — the same
+	// reproduce-the-pixels rule as the vertical half. Returning 0 here would have
+	// snapped every migrated left/right caption flush to the frame edge, which is a
+	// place the old band almost never was.
+	const insetX = clamp(
+		anchorH === "left" ? bandX : anchorH === "right" ? 100 - (bandX + width) : 0,
+		0,
+		CAPTION_INSET_X_MAX,
+	);
 
 	return {
 		anchorV,
 		insetY: Number.isFinite(insetY) ? insetY : fallbackInsetY,
 		anchorH,
-		insetX: 0,
+		insetX,
 	};
 }
 
