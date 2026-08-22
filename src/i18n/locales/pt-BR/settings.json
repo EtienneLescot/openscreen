@@ -79,6 +79,7 @@
 		"formatOriginal": "Original",
 		"fitClip": "Ajustar",
 		"fitClipOne": "{{count}} clipe",
+		"fitClipFew": "{{count}} clipes",
 		"fitClipMany": "{{count}} clipes",
 		"motion": "Movimento",
 		"help": "Estilo do quadro da gravação: desfoque de fundo, sombra, desfoque de movimento, raio dos cantos e margem em volta do vídeo."

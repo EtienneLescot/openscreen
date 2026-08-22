@@ -78,6 +78,7 @@
 		"formatOriginal": "Orijinal",
 		"fitClip": "Sığdır",
 		"fitClipOne": "{{count}} klip",
+		"fitClipFew": "{{count}} klip",
 		"fitClipMany": "{{count}} klip",
 		"motion": "Hareket",
 		"on": "açık",

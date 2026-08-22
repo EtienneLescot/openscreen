@@ -79,6 +79,7 @@
 		"formatOriginal": "원본",
 		"fitClip": "맞추기",
 		"fitClipOne": "{{count}}개 클립",
+		"fitClipFew": "{{count}}개 클립",
 		"fitClipMany": "{{count}}개 클립",
 		"motion": "모션",
 		"help": "녹화 프레임 스타일: 배경 흐림, 그림자, 모션 블러, 모서리 둥글기, 영상 주변 여백."

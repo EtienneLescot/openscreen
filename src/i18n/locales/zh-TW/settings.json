@@ -79,6 +79,7 @@
 		"formatOriginal": "原始",
 		"fitClip": "符合",
 		"fitClipOne": "{{count}} 個片段",
+		"fitClipFew": "{{count}} 個片段",
 		"fitClipMany": "{{count}} 個片段",
 		"motion": "動態",
 		"on": "開",

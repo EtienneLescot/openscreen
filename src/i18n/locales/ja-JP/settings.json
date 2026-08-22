@@ -78,6 +78,7 @@
 		"formatOriginal": "元のサイズ",
 		"fitClip": "合わせる",
 		"fitClipOne": "{{count}} クリップ",
+		"fitClipFew": "{{count}} クリップ",
 		"fitClipMany": "{{count}} クリップ",
 		"motion": "モーション",
 		"on": "オン",

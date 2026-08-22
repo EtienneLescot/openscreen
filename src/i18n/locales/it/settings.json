@@ -79,6 +79,7 @@
 		"formatOriginal": "Originale",
 		"fitClip": "Adatta",
 		"fitClipOne": "{{count}} clip",
+		"fitClipFew": "{{count}} clip",
 		"fitClipMany": "{{count}} clip",
 		"motion": "Movimento",
 		"help": "Stile della cornice della registrazione: sfocatura dello sfondo, ombra, sfocatura di movimento, raggio degli angoli e margine attorno al video."
