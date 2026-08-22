@@ -21,6 +21,7 @@ export {
 	captionBoxRect,
 	captionSafeColumn,
 	DEFAULT_CAPTION_SETTINGS,
+	defaultCaptionInsetX,
 	defaultCaptionInsetY,
 	getCaptionSettings,
 	patchCaptionSettings,
