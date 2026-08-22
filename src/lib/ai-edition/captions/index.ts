@@ -9,6 +9,7 @@ export {
 } from "./cues";
 export type {
 	CaptionBandRect,
+	CaptionHorizontalPosition,
 	CaptionOffsetRange,
 	CaptionSettings,
 	CaptionSettingsPatch,
@@ -16,10 +17,14 @@ export type {
 	CaptionVerticalPosition,
 } from "./settings";
 export {
+	activeHorizontalPositionPreset,
+	activeVerticalPositionPreset,
 	CAPTION_BAND_HEIGHT_PCT,
 	CAPTION_EDGE_MARGIN_PCT,
+	CAPTION_POSITION_PRESET_EPSILON,
 	captionBackgroundCss,
 	captionBandRect,
+	captionHorizontalPositionOffset,
 	captionInkHeightPct,
 	captionOffsetRange,
 	DEFAULT_CAPTION_SETTINGS,
