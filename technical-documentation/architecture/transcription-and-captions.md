@@ -636,25 +636,34 @@ it deletes data
 
 ## Known gaps
 
-- **Language selector.** The "Regenerate as" picker
-  (`SourceTranscriptModal` in
-  [`src/components/ai-edition/Modals.tsx`](../../src/components/ai-edition/Modals.tsx))
-  offers `"auto"` plus every language the `small` multilingual model
-  resolves. `TRANSCRIPT_LANGUAGE_CODES` / `TRANSCRIPT_LANGUAGE_NAMES` in
+- **Language selector.** The "Regenerate as" picker offers `"auto"` plus
+  every language the `small` multilingual model resolves. There are two
+  copies of it in the tree — `MediaStage.tsx`'s Media stage panel
+  ([`src/components/ai-edition/v4/MediaStage.tsx`](../../src/components/ai-edition/v4/MediaStage.tsx)),
+  the one actually mounted by `NewEditorShell`, and `SourceTranscriptModal`
+  ([`src/components/ai-edition/Modals.tsx`](../../src/components/ai-edition/Modals.tsx)),
+  which is currently unreachable: `LeftPanel` (its only mount site) is only
+  ever rendered with `active="chat"` by `NewEditorShell.tsx`, so the
+  `MediaPane` branch that would render it never runs. Both are kept correct
+  rather than deleting the unreachable one, since nothing marks it dead code
+  and a future rewire could reach it. `TRANSCRIPT_LANGUAGE_CODES` in
   [`src/lib/ai-edition/schema/index.ts`](../../src/lib/ai-edition/schema/index.ts)
-  mirror whisper.cpp's own `g_lang` table verbatim — a code outside that list
-  fails to resolve a language id in `wparams.language`
-  (`electron/native/whisper-stt/src/main.cpp`) — and are the single source
-  the picker's options are built from, so the two cannot drift the way a
-  hand-duplicated list would. Option labels come from `Intl.DisplayNames` in
-  the active UI locale, falling back to whisper.cpp's own English name for a
-  code that locale's ICU data can't resolve. Forcing a language skips
-  detection on the first window and slightly improves WER.
+  mirrors whisper.cpp's own `g_lang` table verbatim — a code outside that
+  list fails to resolve a language id in `wparams.language`
+  (`electron/native/whisper-stt/src/main.cpp`) — and `languageLabel` /
+  `sortedLanguageOptions` in
+  [`src/lib/ai-edition/transcription/languageLabels.ts`](../../src/lib/ai-edition/transcription/languageLabels.ts)
+  are the single place both pickers build their options and labels from, so
+  the two copies cannot drift from each other the way two hand-duplicated
+  lists would. Option labels come from `Intl.DisplayNames` in the active UI
+  locale, falling back to whisper.cpp's own English name for a code that
+  locale's ICU data can't resolve. Forcing a language skips detection on the
+  first window and slightly improves WER.
 
   Note that `"auto"` is a *request* value only. The helper used to echo the
   request straight back into `detected_language`, so with no selector the field
   was permanently the literal string `"auto"`: the media stage's "detected
-  language" line ([`src/components/ai-edition/Modals.tsx:1891`](../../src/components/ai-edition/Modals.tsx:1891))
+  language" line ([`src/components/ai-edition/v4/MediaStage.tsx:347`](../../src/components/ai-edition/v4/MediaStage.tsx:347))
   displayed it verbatim, and `transcribe.ts` wrote it onto
   `AxcutTranscript.language`. It now reports `whisper_full_lang_id()` — the
   detected language under `"auto"`, the forced one otherwise.
