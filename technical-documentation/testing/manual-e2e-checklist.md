@@ -2,6 +2,8 @@
 
 This checklist covers the real desktop capture-to-export path: the parts that unit, browser, and Playwright tests cannot exercise, including real screen capture, a physical webcam, the system tray, the native compositor, and export. Run it before promoting a release candidate and after any change to native capture, preview, or export.
 
+**"Manual" is about the input, not the operator.** These checks need real OS mouse and keyboard events, not a human hand — so an agent with the computer-use MCP runs them, on demand, and a request for one section after a targeted change is as much a run as the whole file before a promote. Availability check and the rule on partial runs: [AGENTS.md](../../AGENTS.md#desktop-e2e-testing-with-computer-use).
+
 Sections marked **v1.8.0** cover what this release changed: chat-driven editing through the agent tool set, clip-anchored modifiers, local transcription, the macOS Metal compositor, and the new effect controls. Run the whole file for a release candidate; the v1.8.0 sections are the ones with no prior release to fall back on.
 
 ## How to run this
