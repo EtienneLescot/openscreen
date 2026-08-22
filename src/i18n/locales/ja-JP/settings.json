@@ -76,11 +76,9 @@
 		"frame": "フレーム",
 		"format": "フォーマット",
 		"formatOriginal": "元のサイズ",
-		"fitClip": "クリップに合わせる",
-		"fitAClip": "クリップを選んで合わせる",
+		"fitClip": "合わせる",
 		"fitClipOne": "{{count}} クリップ",
 		"fitClipMany": "{{count}} クリップ",
-		"fitClipMixed": "別の形状のクリップには背景が残ります。",
 		"motion": "モーション",
 		"on": "オン",
 		"help": "録画フレームのスタイル設定: 背景ぼかし、ドロップシャドウ、モーションブラー、角丸、動画まわりの余白。"

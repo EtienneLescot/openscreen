@@ -77,11 +77,9 @@
 		"frame": "外框",
 		"format": "格式",
 		"formatOriginal": "原始",
-		"fitClip": "符合片段",
-		"fitAClip": "選擇要符合的片段",
+		"fitClip": "符合",
 		"fitClipOne": "{{count}} 個片段",
 		"fitClipMany": "{{count}} 個片段",
-		"fitClipMixed": "其他比例的片段仍會顯示背景。",
 		"motion": "動態",
 		"on": "開",
 		"help": "錄製畫面的外框樣式：背景模糊、陰影、動態模糊、圓角半徑，以及影片四周的內距。"

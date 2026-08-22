@@ -76,11 +76,9 @@
 		"frame": "Khung",
 		"format": "Định dạng",
 		"formatOriginal": "Gốc",
-		"fitClip": "Vừa khít clip",
-		"fitAClip": "Vừa khít một clip",
+		"fitClip": "Vừa khít",
 		"fitClipOne": "{{count}} clip",
 		"fitClipMany": "{{count}} clip",
-		"fitClipMixed": "Các clip có tỉ lệ khác vẫn hiển thị nền.",
 		"motion": "Chuyển động",
 		"on": "bật",
 		"help": "Kiểu khung của bản ghi: làm mờ nền, đổ bóng, mờ chuyển động, bo góc và khoảng đệm quanh video."

@@ -68,9 +68,9 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("fitting a clip is an action, and a choice only when there is one", () => {
-	it("labels the button for the single-shape case and acts without asking", () => {
+	it("acts without asking when the timeline holds one shape", () => {
 		mount(documentWithShapes([[1920, 1080]]));
-		fireEvent.click(screen.getByRole("button", { name: "Fit the clip" }));
+		fireEvent.click(screen.getByRole("button", { name: "Fit" }));
 		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 	});
 
@@ -88,7 +88,7 @@ describe("fitting a clip is an action, and a choice only when there is one", () 
 				[1080, 1920],
 			]),
 		);
-		fireEvent.click(screen.getByRole("button", { name: "Fit a clip" }));
+		fireEvent.click(screen.getByRole("button", { name: "Fit" }));
 
 		const menu = screen.getByRole("menu");
 		// Resolution leads — `683:384` and `64:27` mean nothing to a user, `1920 × 1080` does.
@@ -108,7 +108,7 @@ describe("fitting a clip is an action, and a choice only when there is one", () 
 				[1080, 1920],
 			]),
 		);
-		fireEvent.click(screen.getByRole("button", { name: "Fit a clip" }));
+		fireEvent.click(screen.getByRole("button", { name: "Fit" }));
 		const menu = screen.getByRole("menu");
 		expect(
 			within(menu).getByRole("menuitem", { name: /1080 × 1920.*1 clip$/ }),
@@ -116,18 +116,6 @@ describe("fitting a clip is an action, and a choice only when there is one", () 
 		expect(
 			within(menu).getByRole("menuitem", { name: /1920 × 1080.*2 clips/ }),
 		).toBeInTheDocument();
-	});
-
-	it("says the other shapes still show the background", () => {
-		mount(
-			documentWithShapes([
-				[1920, 1080],
-				[1080, 1920],
-			]),
-		);
-		expect(screen.getByRole("note")).toHaveTextContent(
-			"Clips in another shape still show the background.",
-		);
 	});
 
 	it("collapses same-shape clips to one entry, labelled with the biggest", () => {
@@ -139,7 +127,7 @@ describe("fitting a clip is an action, and a choice only when there is one", () 
 		);
 		// Both are 16:9, so there is one shape and nothing to arbitrate — and the ratio menu's
 		// rule applies: the label shows the best resolution available.
-		expect(screen.getByRole("button", { name: "Fit the clip" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Fit" })).toBeInTheDocument();
 		expect(screen.queryByRole("note")).not.toBeInTheDocument();
 	});
 });

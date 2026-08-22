@@ -76,11 +76,9 @@
 		"frame": "画框",
 		"format": "格式",
 		"formatOriginal": "原始",
-		"fitClip": "适配片段",
-		"fitAClip": "选择要适配的片段",
+		"fitClip": "适配",
 		"fitClipOne": "{{count}} 个片段",
 		"fitClipMany": "{{count}} 个片段",
-		"fitClipMixed": "其他比例的片段仍会显示背景。",
 		"motion": "运动",
 		"on": "开",
 		"help": "录制画面的边框样式：背景模糊、投影、运动模糊、圆角半径以及视频四周的内边距。"
