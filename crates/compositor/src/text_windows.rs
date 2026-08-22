@@ -112,11 +112,13 @@ fn wide(s: &str) -> Vec<u16> {
 /// * horizontalement, le texte est dessiné à `pad_x` et commence donc à `pad_x + m.left` :
 ///   la plaque part de `m.left`, l'inset de la boîte de mise en page et la marge de
 ///   plaque se compensent exactement, quel que soit l'alignement ;
-/// * verticalement, le texte est dessiné à `pad_y` dans une boîte de mise en page rentrée
-///   de `2*pad_y`, donc son haut réel vaut `pad_y + m.top` et la plaque va de `m.top` à
-///   `m.top + m.height + 2*pad_y`. Ancré en bas (`DWRITE_PARAGRAPH_ALIGNMENT_FAR`), ce
-///   second terme tombe pile sur `box_h` : la marge basse tient tout juste au lieu d'être
-///   rognée par le `.min()`.
+/// * verticalement, la plaque n'est dessinée QUE si le fond est opaque, et dans ce cas le
+///   texte est dessiné à `pad_y` dans une boîte de mise en page rentrée de `2*pad_y`
+///   (`anchor_pad` vaut alors `pad_y`). Son haut réel vaut donc `pad_y + m.top` et la
+///   plaque va de `m.top` à `m.top + m.height + 2*pad_y`. Ancré en bas
+///   (`DWRITE_PARAGRAPH_ALIGNMENT_FAR`), ce second terme tombe pile sur `box_h` : la
+///   marge basse tient tout juste au lieu d'être rognée par le `.min()`, et la plaque
+///   respire autant en dessous qu'au-dessus du texte.
 ///
 /// Le bornage à la boîte est ce qui empêche la plaque d'être coupée net par le bord de
 /// la texture, où elle perdrait ses coins arrondis.
@@ -232,11 +234,18 @@ impl TextRasterizer {
         let (pad_x, pad_y) = crate::text_plate::padding(font_px);
         let layout_w = crate::text_plate::layout_width(w as f32, font_px);
         // La boîte de mise en page est aussi rentrée VERTICALEMENT de la marge de plaque,
-        // et le texte se dessine à `pad_y`. Sans ça, un ancrage bas colle les glyphes au
-        // bord de la boîte et le `.min(h)` de la plaque, plus bas, rogne net sa marge
-        // basse. Le centrage est rigoureusement inchangé par cette paire (l'inset et le
-        // décalage s'annulent), donc les annotations ne bougent pas d'un pixel.
-        let layout_h = ((h as f32) - pad_y * 2.0).max(1.0);
+        // et le texte se dessine à `anchor_pad`. Sans ça, un ancrage bas colle les glyphes
+        // au bord de la boîte : la plaque pose alors toute sa marge du côté opposé et zéro
+        // du côté ancré, et le `.min(h)` plus bas rogne net sa marge basse. Ce qui doit
+        // toucher le bord de la boîte est la PLAQUE, pas les glyphes.
+        //
+        // Conditionné à la présence d'une plaque, comme sur les deux autres backends :
+        // sans fond il n'y a pas de marge à réserver, et réserver quand même décalerait
+        // le texte de `pad_y` par rapport à Linux et macOS. Le centrage est rigoureusement
+        // inchangé dans les deux cas (l'inset et le décalage s'annulent), donc les
+        // annotations ne bougent pas d'un pixel.
+        let anchor_pad = if spec.background[3] > 0.0 { pad_y } else { 0.0 };
+        let layout_h = ((h as f32) - anchor_pad * 2.0).max(1.0);
         let layout = self
             .dwrite
             .CreateTextLayout(&text, &format, layout_w, layout_h)?;
@@ -285,7 +294,7 @@ impl TextRasterizer {
             );
         }
         rt.DrawTextLayout(
-            D2D_POINT_2F { x: pad_x, y: pad_y },
+            D2D_POINT_2F { x: pad_x, y: anchor_pad },
             &layout,
             &brush,
             D2D1_DRAW_TEXT_OPTIONS_NONE,

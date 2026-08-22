@@ -209,12 +209,22 @@ impl TextRasterizer {
         // annotations. Les sous-titres epinglent une arete : c'est la seule facon
         // que l'arete ancree ne bouge pas quand le texte gagne une ligne, parce
         // qu'un bloc centre voit ses DEUX aretes se deplacer.
+        //
+        // `anchor_pad` reserve la marge de la plaque DU COTE ANCRE. Sans elle, coller
+        // le bloc de texte au bord laisse la plaque poser toute sa marge du cote
+        // oppose et zero du cote ancre : le fond epouse alors le bas des lettres au
+        // pixel pres tout en respirant deux fois trop au-dessus. Ce qui doit toucher
+        // le bord de la boite est la PLAQUE, pas les glyphes — c'est elle que le
+        // viewer voit. Sans plaque, il n'y a rien a reserver.
+        let has_plate = spec.background[3] > 0.0;
+        let anchor_pad = if has_plate { pad_y } else { 0.0 };
         let slack_y = ((h as f32) - text_h).max(0.0);
         let y_offset = match spec.valign.as_str() {
-            "top" | "start" => 0.0,
-            "bottom" | "end" => slack_y,
+            "top" | "start" => anchor_pad,
+            "bottom" | "end" => slack_y - anchor_pad,
             _ => slack_y * 0.5,
         }
+        .clamp(0.0, slack_y)
         .round() as i32;
 
         // LA PLAQUE EPOUSE LE BLOC, PAS LA BOITE. Miroir de
