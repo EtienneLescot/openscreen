@@ -285,7 +285,7 @@ export function MediaStage({
 									borderRadius: 9,
 									border: "1px solid var(--accent)",
 									background: "var(--accent)",
-									color: "var(--on-accent, #fff)",
+									color: "var(--accent-on)",
 									fontSize: 12.5,
 									fontWeight: 650,
 									cursor: "pointer",
