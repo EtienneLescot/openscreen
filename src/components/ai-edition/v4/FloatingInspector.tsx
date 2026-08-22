@@ -14,7 +14,7 @@ import {
 	ZoomIn,
 } from "lucide-react";
 import type { ComponentProps } from "react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { parseCustomPlaybackSpeedInput } from "@/components/video-editor/customPlaybackSpeed";
 import {
@@ -101,6 +101,17 @@ export function FloatingInspector({
 	const ts = useScopedT("settings");
 	const te = useScopedT("editor");
 	const [clipPickerOpen, setClipPickerOpen] = useState(false);
+	const clipPickerRef = useRef<HTMLDivElement | null>(null);
+	useEffect(() => {
+		if (!clipPickerOpen) return;
+		const onDocMouseDown = (e: MouseEvent) => {
+			if (clipPickerRef.current && !clipPickerRef.current.contains(e.target as Node)) {
+				setClipPickerOpen(false);
+			}
+		};
+		document.addEventListener("mousedown", onDocMouseDown);
+		return () => document.removeEventListener("mousedown", onDocMouseDown);
+	}, [clipPickerOpen]);
 	const selection = tl.selection;
 	const effectiveOpen = open || selection !== null;
 	return (
@@ -136,7 +147,7 @@ export function FloatingInspector({
 						<Icon size={17} />
 					</button>
 				))}
-				<div style={{ position: "relative" }}>
+				<div ref={clipPickerRef} style={{ position: "relative" }}>
 					<button
 						type="button"
 						title={te("editClipDialog.title")}
