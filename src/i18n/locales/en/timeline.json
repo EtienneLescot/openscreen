@@ -8,8 +8,7 @@
 		"autoFocusAllOff": "Auto-Focus all zooms (camera follows the cursor)",
 		"addTrim": "Add Trim (T)",
 		"addAnnotation": "Add Annotation (A)",
-		"addSpeed": "Add Speed (S)",
-		"addCameraFullscreen": "Add Full Camera (C)"
+		"addSpeed": "Add Speed (S)"
 	},
 	"hints": {
 		"pressZoom": "Press Z to add zoom",

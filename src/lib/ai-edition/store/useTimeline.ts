@@ -407,9 +407,9 @@ export function useTimeline() {
 	// a missing `webcamRect`) and nothing in the export — it just sits in
 	// `legacyEditor.cameraFullscreenRegions` forever. The agent's `addCameraFullscreen`
 	// tool already refuses this and says why (electron/ai-edition/agent-tools.ts,
-	// `noCameraUnderSpan`); the gate lives HERE rather than at each button so both UI
-	// entry points — the toolbar and the `C` shortcut — and any future one are covered
-	// by construction. `hasAnyClipWithCamera` is the consolidated answer to "does this
+	// `noCameraUnderSpan`); the gate lives HERE rather than at each caller so the `C`
+	// shortcut and any future entry point are covered by construction.
+	// `hasAnyClipWithCamera` is the consolidated answer to "does this
 	// project have a camera at all", used the same way by the Layout pane.
 	const addCameraFullscreen = useCallback(
 		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
