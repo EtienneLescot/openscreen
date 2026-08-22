@@ -5,7 +5,7 @@
 // document, with clips of two shapes, and the frame already zeroed — so it gets its own file.
 
 import "@testing-library/jest-dom";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
@@ -43,12 +43,15 @@ function documentWithShapes(shapes: Array<[number, number]>): AxcutDocument {
 				reason: "",
 			})),
 		},
-		// The frame already zeroed, so the switch reads ON and the choice is live.
+		// Deliberately NOT the fitted state, and not any shape the timeline holds: an
+		// assertion that the action produced 16:9 + zeros proves nothing if the document
+		// started there. These are the shipped defaults, which is what a real project opens
+		// with anyway.
 		legacyEditor: {
-			padding: 0,
-			borderRadius: 0,
-			shadowIntensity: 0,
-			aspectRatio: "16:9",
+			padding: 50,
+			borderRadius: 40,
+			shadowIntensity: 0.2,
+			aspectRatio: "1:1",
 		},
 	} as unknown as AxcutDocument;
 }
@@ -62,16 +65,69 @@ function mount(doc: AxcutDocument) {
 	);
 }
 
+/** What the action actually wrote, read back off the document it wrote to. */
+function frameSettings() {
+	const legacy = useProjectStore.getState().document?.legacyEditor as
+		| Record<string, unknown>
+		| undefined;
+	return {
+		aspectRatio: legacy?.aspectRatio,
+		padding: legacy?.padding,
+		borderRadius: legacy?.borderRadius,
+		shadowIntensity: legacy?.shadowIntensity,
+	};
+}
+
 beforeEach(() => {
 	useProjectStore.setState({ document: null });
 });
 afterEach(cleanup);
 
 describe("fitting a clip is an action, and a choice only when there is one", () => {
-	it("acts without asking when the timeline holds one shape", () => {
+	it("acts without asking when the timeline holds one shape", async () => {
 		mount(documentWithShapes([[1920, 1080]]));
 		fireEvent.click(screen.getByRole("button", { name: "Fit" }));
+
 		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+		// The whole point of the button, and what none of these cases used to check: not that
+		// a menu did or did not open, but that the four frame settings actually moved.
+		await waitFor(() =>
+			expect(frameSettings()).toEqual({
+				aspectRatio: "16:9",
+				padding: 0,
+				borderRadius: 0,
+				shadowIntensity: 0,
+			}),
+		);
+	});
+
+	it("applies the shape the user picked, not the majority one", async () => {
+		// Five landscape clips, two portrait. Picking the minority must win over the default,
+		// or the menu is decoration.
+		mount(
+			documentWithShapes([
+				[1920, 1080],
+				[1920, 1080],
+				[1920, 1080],
+				[1920, 1080],
+				[1920, 1080],
+				[1080, 1920],
+				[1080, 1920],
+			]),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Fit" }));
+		fireEvent.click(
+			within(screen.getByRole("menu")).getByRole("menuitem", { name: /1080 × 1920/ }),
+		);
+
+		await waitFor(() =>
+			expect(frameSettings()).toEqual({
+				aspectRatio: "9:16",
+				padding: 0,
+				borderRadius: 0,
+				shadowIntensity: 0,
+			}),
+		);
 	});
 
 	it("asks which clip when the timeline holds more than one shape", () => {
