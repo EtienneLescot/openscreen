@@ -10,7 +10,7 @@
 // "Original" goes straight back to the SSOT text.
 
 import { Captions as CaptionsIcon, Languages, Loader2, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { CaptionAnchorH, CaptionAnchorV } from "@/lib/ai-edition/captions";
 import {
@@ -23,7 +23,6 @@ import {
 	useTimelineTranscriptGate,
 	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
-import { useCaptionGuideBus } from "@/lib/ai-edition/store/useCaptionGuideBus";
 import { useCaptions } from "@/lib/ai-edition/store/useCaptions";
 import { nativeBridgeClient } from "@/native";
 import { ColorField } from "./ColorField";
@@ -117,15 +116,6 @@ export function CaptionsPane() {
 
 	const disabled = !hasDocument;
 	const languageOptions = useMemo(() => Object.values(translations), [translations]);
-
-	// The preview draws the anchor line and the column edges while this pane is open.
-	// `FacetBody` mounts exactly one pane at a time, so mounting is the signal — no
-	// prop to thread down through the inspector, and nothing to remember to turn off.
-	const setGuideOpen = useCaptionGuideBus((s) => s.setOpen);
-	useEffect(() => {
-		setGuideOpen(true);
-		return () => setGuideOpen(false);
-	}, [setGuideOpen]);
 
 	const handleTranslate = async () => {
 		const doc = useProjectStore.getState().document;

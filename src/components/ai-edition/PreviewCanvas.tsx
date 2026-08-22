@@ -55,7 +55,6 @@ import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { computeCameraFullscreenProgress } from "@/lib/zoomMath/cameraFullscreenUtils";
 import { clamp, clamp01 } from "@/utils/math";
 import { AnnotationLayer } from "./AnnotationLayer";
-import { CaptionGuideOverlay } from "./CaptionGuideOverlay";
 import { NativeCompositorOverlay } from "./NativeCompositorOverlay";
 import styles from "./NewEditorShell.module.css";
 import { type VideoSource, VirtualPreview } from "./VirtualPreview";
@@ -406,11 +405,6 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			    hitbox) still render on top as normal DOM so they stay clickable. No more
 			    dual preview path. */}
 			<NativeCompositorOverlay />
-			{/* Sibling of `.screenStage`, never a child of it: captions are measured
-			    against the output FRAME, and `.screenStage` shrinks with the padding
-			    slider — so a guide mounted inside it would drift away from the thing
-			    it is drawing (issue #396, in the guide meant to explain it). */}
-			<CaptionGuideOverlay />
 			{layout?.screenRect ? (
 				<div className={styles.screenStage} style={screenStyle}>
 					{(() => {

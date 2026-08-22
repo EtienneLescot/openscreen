@@ -621,21 +621,6 @@ two controls fighting over that one outcome — `offsetX` moved an invisible ban
 `textAlign` moved the text inside it — and neither could be read without seeing the
 band.
 
-#### The guide overlay
-
-`CaptionGuideOverlay`
-([`src/components/ai-edition/CaptionGuideOverlay.tsx`](../../src/components/ai-edition/CaptionGuideOverlay.tsx))
-draws the anchor line and the column's edges over the preview while the Captions
-pane is open, signalled by `useCaptionGuideBus`. It mounts as a child of
-`.previewFrame` and **not** of `.screenStage`: the latter is the screen rect, which
-shrinks with the padding slider, so a guide mounted there would reproduce #396
-inside the guide meant to explain it.
-
-This does not revive the deleted DOM caption painter described below. That one drew
-the same *text* through a second wrapping engine and the two disagreed on line
-breaks; a rule and two hairlines have no glyphs to disagree about, and a `<div>` has
-no route into `buildSceneDescription`, so it cannot reach an export.
-
 The Captions pane itself
 ([`src/components/ai-edition/CaptionsPane.tsx`](../../src/components/ai-edition/CaptionsPane.tsx))
 is the only place that runs `transcribe` from the editor shell, and
