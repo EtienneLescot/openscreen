@@ -276,6 +276,15 @@ def load_project(path):
     return doc, segments, word_map, title, language
 
 
+# 中文/日文的词之间不插空格（"你好世界" 不能被 join 成 "你好 世界"），
+# 其它语言保留空格分隔。
+def _join_segment_text(pieces, language):
+    kept = [p for p in pieces if p and p.strip()]
+    if not kept:
+        return ""
+    return "".join(kept) if (language or "").lower() in ("zh", "ja") else " ".join(kept)
+
+
 def save_words(path, words_by_id):
     """把用户编辑的 words 写回；逐 segment 重建 text；备份原文件。"""
     with open(path, "r", encoding="utf-8") as f:
@@ -283,6 +292,7 @@ def save_words(path, words_by_id):
     tr = (doc.get("transcripts") or [None])[0]
     if not tr:
         raise ValueError("该项目没有 transcripts 数组")
+    language = tr.get("language") or (doc.get("transcript") or {}).get("language") or ""
     new_words = {}
     for item in words_by_id:
         new_words[item["id"]] = item["text"]
@@ -294,7 +304,7 @@ def save_words(path, words_by_id):
     # 重建每个 segment 的 text（与 words 保持一致）
     for s in tr.get("segments") or []:
         parts = [new_words.get(wid, "") for wid in s.get("wordIds", [])]
-        s["text"] = " ".join(p for p in parts if p.strip())
+        s["text"] = _join_segment_text(parts, language)
     # 兼容旧字段 transcript（如果有）
     old = doc.get("transcript")
     if isinstance(old, dict) and old.get("words"):
@@ -303,11 +313,24 @@ def save_words(path, words_by_id):
                 w["text"] = new_words[w["id"]]
         for s in old.get("segments") or []:
             parts = [new_words.get(wid, "") for wid in s.get("wordIds", [])]
-            s["text"] = " ".join(p for p in parts if p.strip())
-    backup = path + ".bak-" + time.strftime("%Y%m%d-%H%M%S")
+            s["text"] = _join_segment_text(parts, language)
+    # 备份：加纳秒时间戳防同一秒两次保存互相覆盖；先写临时文件再原子替换，
+    # 避免 json.dump 写到一半中断导致项目文件损坏。
+    backup = path + ".bak-" + time.strftime("%Y%m%d-%H%M%S-") + str(time.time_ns())
     shutil.copy2(path, backup)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(doc, f, ensure_ascii=False, indent=2)
+    temp_path = path + ".tmp-" + str(os.getpid()) + "-" + str(time.time_ns())
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
     return os.path.basename(backup), touched
 
 
@@ -329,6 +352,28 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
+    def _check_request(self):
+        # 只接受来自本工具页面的同源 JSON 请求，防止外部网页跨站调用。
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip()
+        origin = self.headers.get("Origin")
+        if content_type != "application/json":
+            raise ValueError("请使用 application/json 提交")
+        if origin and origin != "http://127.0.0.1:%d" % PORT:
+            raise ValueError("拒绝跨站请求")
+
+    @staticmethod
+    def _resolve_project_path(raw_path):
+        # 归一化并限制在 PROJECTS_DIR 内，防止路径穿越。
+        root = os.path.realpath(PROJECTS_DIR)
+        path = os.path.realpath(raw_path)
+        try:
+            inside = os.path.commonpath([root, path]) == root
+        except ValueError:
+            inside = False
+        if not inside or not path.endswith(".openscreen"):
+            raise ValueError("无效的项目路径")
+        return path
+
     def do_GET(self):
         if urlparse(self.path).path in ("/", "/index.html"):
             body = PAGE.encode("utf-8")
@@ -342,6 +387,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            self._check_request()
             data = self._read_json()
             action = urlparse(self.path).path.rsplit("/", 1)[-1]
             if action == "projects":
@@ -356,7 +402,7 @@ class Handler(BaseHTTPRequestHandler):
                                 title = (json.load(f).get("project") or {}).get(
                                     "title", fn
                                 )
-                        except Exception:
+                        except (OSError, ValueError):
                             title = fn
                         out.append({
                             "path": p,
@@ -368,10 +414,10 @@ class Handler(BaseHTTPRequestHandler):
                         })
                 self._send({"ok": True, "projects": out})
             elif action == "load":
-                path = data.get("path", "")
-                if not path or not os.path.isfile(path):
+                path = self._resolve_project_path(data.get("path", ""))
+                if not os.path.isfile(path):
                     raise ValueError("文件不存在")
-                doc, segments, word_map, title, language = load_project(path)
+                _doc, segments, word_map, title, language = load_project(path)
                 self._send({
                     "ok": True,
                     "title": title,
@@ -380,14 +426,14 @@ class Handler(BaseHTTPRequestHandler):
                     "words": word_map,
                 })
             elif action == "save":
-                path = data.get("path", "")
+                path = self._resolve_project_path(data.get("path", ""))
                 words = data.get("words", [])
                 if not words:
                     raise ValueError("没有收到修改内容")
                 backup, touched = save_words(path, words)
                 self._send({"ok": True, "backup": backup, "touched": touched})
             elif action == "export":
-                path = data.get("path", "")
+                path = self._resolve_project_path(data.get("path", ""))
                 with open(path, "r", encoding="utf-8") as f:
                     raw = f.read()
                 import base64
