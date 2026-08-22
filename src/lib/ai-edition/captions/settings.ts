@@ -97,11 +97,12 @@ export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
 	backgroundColor: "#000000",
 	backgroundOpacity: 0.55,
 	anchorV: "bottom",
-	// Overridden per output aspect on first read (`defaultCaptionInsetY`); this is the
-	// landscape value, and the one a document keeps once anything has been written.
-	insetY: 5,
+	// Overridden per output aspect on first read (`defaultCaptionInsetY` /
+	// `defaultCaptionInsetX`); these are the landscape values, and the ones a document
+	// keeps once anything has been written.
+	insetY: 1.5,
 	anchorH: "center",
-	insetX: 16,
+	insetX: 10,
 	minWordsPerLine: 2,
 	maxWordsPerLine: 7,
 };
@@ -159,12 +160,27 @@ export function captionSafeColumn(aspectValue: number): { x: number; width: numb
 	return aspectValue >= CAPTION_LANDSCAPE_ASPECT ? { x: 16, width: 68 } : { x: 5, width: 90 };
 }
 
-/** Default distance from the anchored edge, in % of frame height, for a given output
- *  aspect. BBC puts the lowest line at a 5% inset; vertical formats need much more,
- *  because the bottom eighth of a 9:16 export is where TikTok, Reels and Shorts draw
- *  their own chrome over the video. */
+/** Default distance from the anchored edge, in % of frame height.
+ *
+ *  The landscape value is picked against the editor's DEFAULT PADDING rather than from
+ *  a broadcast spec: the footage sits inset inside the frame, so a caption a hair off
+ *  the frame edge lands where the eye expects it *relative to the picture*. It was
+ *  chosen by looking at a 16:9 export.
+ *
+ *  Vertical keeps a much larger inset, and for an unrelated reason: the bottom eighth
+ *  of a 9:16 export is where TikTok, Reels and Shorts draw their own chrome over the
+ *  video, so a caption sitting a hair off that edge is a caption behind a UI. Nobody
+ *  has eyeballed this one — it is the conservative value, and the slider is right
+ *  there if it proves wrong. */
 export function defaultCaptionInsetY(aspectValue: number): number {
-	return aspectValue >= CAPTION_LANDSCAPE_ASPECT ? 5 : 12.5;
+	return aspectValue >= CAPTION_LANDSCAPE_ASPECT ? 1.5 : 12.5;
+}
+
+/** Default distance for the horizontal anchor, in % of frame width. Same source as the
+ *  landscape `insetY`: it matches the default padding, not the safe column's own margin,
+ *  which is why it is stated here rather than borrowed from `captionSafeColumn`. */
+export function defaultCaptionInsetX(aspectValue: number): number {
+	return aspectValue >= CAPTION_LANDSCAPE_ASPECT ? 10 : 5;
 }
 
 /** Upper bound for the vertical inset, in % of the frame. 50 puts the anchored edge
@@ -400,7 +416,7 @@ export function getCaptionSettings(
 	const raw = storedCaptions(doc);
 	const d = DEFAULT_CAPTION_SETTINGS;
 	const defaultInsetY = defaultCaptionInsetY(aspectValue);
-	if (!raw) return { ...d, insetY: defaultInsetY, insetX: captionSafeColumn(aspectValue).x };
+	if (!raw) return { ...d, insetY: defaultInsetY, insetX: defaultCaptionInsetX(aspectValue) };
 
 	const minWords = Math.round(readNumber(raw.minWordsPerLine, d.minWordsPerLine, 1, 12));
 	const maxWords = Math.round(readNumber(raw.maxWordsPerLine, d.maxWordsPerLine, 1, 12));
@@ -416,7 +432,7 @@ export function getCaptionSettings(
 		anchorH: readEnum(raw.anchorH, ANCHORS_H, legacy?.anchorH ?? d.anchorH),
 		insetX: readNumber(
 			raw.insetX,
-			legacy?.insetX ?? captionSafeColumn(aspectValue).x,
+			legacy?.insetX ?? defaultCaptionInsetX(aspectValue),
 			0,
 			CAPTION_INSET_X_MAX,
 		),
