@@ -318,8 +318,9 @@ fn block_layout(
     text_h: CGFloat,
     align: u8,
     valign: &str,
-    /// Une plaque de fond est-elle dessinée ? Elle décide de la marge à réserver du
-    /// côté ancré — voir `anchor_pad` plus bas.
+    // Une plaque de fond est-elle dessinée ? Elle décide de la marge à réserver du côté
+    // ancré — voir `anchor_pad` plus bas. (Commentaire ordinaire et pas `///` : rustc
+    // refuse un doc-comment sur un paramètre.)
     has_plate: bool,
     font_px: CGFloat,
 ) -> (CGRect, CGRect) {
