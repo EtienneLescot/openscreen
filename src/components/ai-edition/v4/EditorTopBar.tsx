@@ -10,7 +10,6 @@ import {
 	PanelLeft,
 	RefreshCw,
 	Save,
-	Settings,
 	Sparkles,
 	Sun,
 } from "lucide-react";
@@ -181,15 +180,6 @@ export function EditorTopBar({
 				onClick={toggleTheme}
 			>
 				{theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
-			</button>
-			<button
-				type="button"
-				className={styles.iconBtn}
-				title={t("topbar.settings")}
-				aria-label={t("topbar.settings")}
-				onClick={actions.openSettings}
-			>
-				<Settings size={16} />
 			</button>
 			<button
 				type="button"

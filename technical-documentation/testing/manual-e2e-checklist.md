@@ -306,7 +306,6 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 
 ## Settings, shortcuts, themes, i18n
 
-- [ ] Activate the top-bar settings control by its `aria-label` and confirm the shortcuts configuration dialog opens.
 - [ ] Change one shortcut, save it, use the new key in the editor, and confirm it triggers the configured action.
 - [ ] Confirm `Ctrl/Cmd+S` saves the current project.
 - [ ] Confirm `Ctrl/Cmd+O` opens the project dialog.
@@ -332,7 +331,7 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 - [ ] On Windows and Linux, open the editor, hold Alt, and confirm the Help menu lists Check for Updates and About OpenScreen.
 - [ ] In the editor, click the OpenScreen wordmark in the top bar and confirm it opens a menu listing Keyboard Shortcuts, AI settings, Check for Updates and About OpenScreen. This is the discoverable path on Windows and Linux, where the two above are not.
 - [ ] Confirm the About row in that menu shows the running version, and that it matches what the About box then reports.
-- [ ] Open the wordmark menu and pick Keyboard Shortcuts; confirm it opens the same dialog the top bar's gear does, and that only one dialog appears.
+- [ ] Open the wordmark menu and pick Keyboard Shortcuts; confirm the shortcuts configuration dialog opens and that only one dialog appears.
 - [ ] Open the wordmark menu and pick AI settings; confirm it opens the same provider dialog the AI panel's gear does, and that only one dialog appears.
 - [ ] Repeat that in Media mode, in Rec mode, and in Edit mode with the chat panel collapsed — the three states in which the dialog had no owner before, and the reason the row must not be Edit-only.
 - [ ] Connect or disconnect a provider from the menu's dialog while the chat panel is open behind it, close the dialog, and confirm the composer and the model pill follow without reopening the panel.

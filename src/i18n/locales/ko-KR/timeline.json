@@ -8,8 +8,7 @@
 		"autoFocusAllOff": "모든 줌에 자동 초점 켜기 (카메라가 커서를 따라갑니다)",
 		"addTrim": "트림 추가 (T)",
 		"addAnnotation": "주석 추가 (A)",
-		"addSpeed": "속도 추가 (S)",
-		"addCameraFullscreen": "전체 화면 카메라 추가 (C)"
+		"addSpeed": "속도 추가 (S)"
 	},
 	"hints": {
 		"pressZoom": "Z를 눌러 줌 추가",
