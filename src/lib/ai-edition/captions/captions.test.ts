@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { captionCuesToTextRegions, deriveCaptionCues } from "./cues";
+import type { CaptionSettings } from "./settings";
 import {
 	captionBackgroundCss,
 	captionBoxRect,
@@ -296,6 +297,22 @@ describe("migrating a pre-anchor document", () => {
 	it("gives a document with no caption settings the aspect-appropriate default", () => {
 		expect(getCaptionSettings(doc(), LANDSCAPE).insetY).toBe(5);
 		expect(getCaptionSettings(doc(), PORTRAIT).insetY).toBe(12.5);
+	});
+
+	it("freezes the PORTRAIT defaults on the first write to a vertical project", () => {
+		// The first patch is what materialises the defaults into the document, so it
+		// has to know the aspect too. Patching without it stored the landscape inset
+		// into a 9:16 project and the stored value then won for good — putting the
+		// caption under the platform's own chrome, the exact failure the
+		// aspect-derived default exists to prevent.
+		const first = patchCaptionSettings(doc(), { enabled: true }, PORTRAIT);
+		const stored = (first.legacyEditor as { captions: CaptionSettings }).captions;
+		expect(stored.insetY).toBe(12.5);
+		expect(stored.insetX).toBe(captionSafeColumn(PORTRAIT).x);
+
+		// And it stays: a later patch reads what is stored rather than re-deriving.
+		const later = patchCaptionSettings(first, { fontSize: 60 }, PORTRAIT);
+		expect(getCaptionSettings(later, PORTRAIT).insetY).toBe(12.5);
 	});
 });
 
