@@ -46,7 +46,7 @@ vi.mock("@/contexts/I18nContext", () => ({
 }));
 
 import { EditorDialogsProvider, useEditorDialogActions } from "@/contexts/EditorDialogsContext";
-import { LeftPanel } from "./LeftPanel";
+import { ChatStripPanel } from "./LeftPanel";
 
 let dialogActions: ReturnType<typeof useEditorDialogActions> | null = null;
 
@@ -82,7 +82,7 @@ describe("ChatStripPanel, against the lifted provider dialog", () => {
 		render(
 			<EditorDialogsProvider>
 				<CaptureDialogActions />
-				<LeftPanel active="chat" />
+				<ChatStripPanel />
 			</EditorDialogsProvider>,
 		);
 		// Mount: the dialog is closed, so the same effect that watches for a close seeds the

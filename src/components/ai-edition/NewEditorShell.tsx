@@ -32,7 +32,7 @@ import type { AiEditionProjectSummary } from "@/native/contracts";
 import { resolveVisibleClips } from "@/native/sceneDescription";
 import { useNativePlaybackSync } from "@/native/useNativePlaybackSync";
 import { ExportDialog } from "./ExportDialog";
-import { LeftPanel } from "./LeftPanel";
+import { ChatStripPanel } from "./LeftPanel";
 import {
 	EditClipModal,
 	NewProjectModal,
@@ -1191,7 +1191,7 @@ export function NewEditorShell() {
 				{mode === "edit" && chatOpen ? (
 					<>
 						<aside className={v4.agent} aria-label={te("shell.aiEditor")}>
-							<LeftPanel active="chat" />
+							<ChatStripPanel />
 						</aside>
 						<div
 							className={v4.chatResizeHandle}

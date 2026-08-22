@@ -138,7 +138,6 @@
 		"sourceTranscript": "Transcripción de la fuente",
 		"close": "Cerrar",
 		"transcriptReady": "Transcripción lista",
-		"notGeneratedYet": "Aún no generada",
 		"regenerateAs": "Regenerar en",
 		"auto": "Auto",
 		"regenerate": "Regenerar",
@@ -151,12 +150,7 @@
 		"transcriptionFailed": "Error de transcripción",
 		"cpuBackendHint": "Ejecutándose en la CPU — unas 2× más lento que en la GPU",
 		"noTranscript": "Sin transcripción",
-		"generating": "Generando",
-		"generationFailed": "Error de generación",
-		"generated": "Generado",
 		"generationFailedHint": "Error de generación — elige un idioma y vuelve a generar.",
-		"noPreviewAvailable": "Vista previa no disponible",
-		"restart": "Reiniciar",
 		"detectedLanguage": "Idioma detectado: {{language}}",
 		"noAudioTrack": "Sin pista de audio",
 		"noAudioTrackHint": "Este medio no tiene pista de audio: no hay nada que transcribir.",
@@ -212,18 +206,6 @@
 		"cameraFullscreenDescription": "Mientras se reproduce esta región, la cámara ocupa todo el cuadro —sin borde, sin redondeo, sin fondo— y vuelve suavemente al final. Arrastra los bordes de la región en la línea de tiempo para cambiar cuándo empieza y cuánto dura.",
 		"deleteRegion": "Eliminar región",
 		"freehandRendersAsBox": "En la exportación, una forma libre se cubre con su caja contenedora: cubre de más, nunca de menos."
-	},
-	"leftPanel": {
-		"mediaTitle": "Medios",
-		"searchPlaceholder": "Buscar…",
-		"clearSearch": "Borrar búsqueda",
-		"emptyHint": "Aún no hay medios en este proyecto. Importa un vídeo a continuación.",
-		"transcriptReadyBadge": "TRANSCRIPCIÓN LISTA"
-	},
-	"leftRail": {
-		"chat": "Chat",
-		"media": "Medios",
-		"ariaLabel": "Herramientas izquierdas"
 	},
 	"chat": {
 		"changeProvider": "Cambiar proveedor",

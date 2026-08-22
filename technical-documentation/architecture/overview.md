@@ -63,7 +63,7 @@ goes back through it.
 ```mermaid
 flowchart TD
     User(("User"))
-    Chat["LeftPanel.tsx<br/>(chat + media list)"]
+    Chat["ChatStripPanel<br/>(LeftPanel.tsx)"]
     LLM["LLM provider<br/>electron/ai-edition/deep-agent/chat-model.ts<br/>provider-registry.ts"]
     DSL[["AxcutDocument<br/>src/lib/ai-edition/schema/index.ts<br/>— SSOT —"]]
     Store["useProjectStore<br/>(Zustand, in renderer)"]
