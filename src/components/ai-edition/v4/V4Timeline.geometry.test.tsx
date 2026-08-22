@@ -122,12 +122,16 @@ function dragHandle(handle: Element, dxPx: number) {
 	window.dispatchEvent(new MouseEvent("pointerup", { clientX: dxPx }));
 }
 
-/** Ctrl+wheel up = zoom in; the handler is a native listener, so dispatch real events. */
-function zoomIn(notches: number) {
-	const canvas = document.querySelector("[class*=tlTracks]") as HTMLElement;
+/** Ctrl+wheel up = zoom in; the handler is a native listener, so dispatch real events.
+ *  Takes the target element so a test can prove the listener isn't confined to the
+ *  lanes — it fires from wherever in the pane the cursor happens to be. */
+function wheelZoomOn(el: HTMLElement, notches: number) {
 	for (let i = 0; i < notches; i++) {
-		fireEvent.wheel(canvas, { ctrlKey: true, deltaY: -100, clientX: 0 });
+		fireEvent.wheel(el, { ctrlKey: true, deltaY: -100, clientX: 0 });
 	}
+}
+function zoomIn(notches: number) {
+	wheelZoomOn(document.querySelector("[class*=tlTracks]") as HTMLElement, notches);
 }
 
 describe("V4Timeline lane pills", () => {
@@ -208,6 +212,18 @@ describe("V4Timeline create-from-toolbar", () => {
 		// Zoomed to the 50x ceiling the same 96px is worth 3.84 s: same pill on
 		// screen, a region 50x shorter.
 		zoomIn(40);
+		fireEvent.click(screen.getByTitle("buttons.addZoom"));
+		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
+	});
+
+	it("zooms from a wheel over the ruler too, not just the lanes", () => {
+		// The ruler row is pinned above .tlTracks (so its ticks don't scroll away
+		// with the lanes) and isn't a descendant of it. The wheel listener used to
+		// live on .tlTracks alone, so Ctrl/Shift+scrolling anywhere else in the
+		// pane — the ruler included — silently did nothing.
+		const { tl } = renderTimeline();
+		const ruler = document.querySelector("[class*=tlRulerRow]") as HTMLElement;
+		wheelZoomOn(ruler, 40);
 		fireEvent.click(screen.getByTitle("buttons.addZoom"));
 		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
 	});
