@@ -7,6 +7,7 @@ import {
 	captionBoxRect,
 	captionSafeColumn,
 	DEFAULT_CAPTION_SETTINGS,
+	defaultCaptionInsetX,
 	defaultCaptionInsetY,
 	getCaptionSettings,
 	patchCaptionSettings,
@@ -233,8 +234,12 @@ describe("caption safe column", () => {
 	});
 
 	it("defaults a vertical export well clear of the platform chrome", () => {
-		// 5% on a 9:16 export puts the caption under the Reels/TikTok profile row.
-		expect(defaultCaptionInsetY(LANDSCAPE)).toBe(5);
+		// The landscape values are eyeballed against the editor's default padding; the
+		// portrait one answers a different question — TikTok/Reels/Shorts draw their own
+		// chrome over the bottom eighth of a 9:16 export, so the same 1.5% would put the
+		// caption behind a UI.
+		expect(defaultCaptionInsetY(LANDSCAPE)).toBe(1.5);
+		expect(defaultCaptionInsetX(LANDSCAPE)).toBe(10);
 		expect(defaultCaptionInsetY(PORTRAIT)).toBeGreaterThan(10);
 	});
 });
@@ -295,7 +300,8 @@ describe("migrating a pre-anchor document", () => {
 	});
 
 	it("gives a document with no caption settings the aspect-appropriate default", () => {
-		expect(getCaptionSettings(doc(), LANDSCAPE).insetY).toBe(5);
+		expect(getCaptionSettings(doc(), LANDSCAPE).insetY).toBe(1.5);
+		expect(getCaptionSettings(doc(), LANDSCAPE).insetX).toBe(10);
 		expect(getCaptionSettings(doc(), PORTRAIT).insetY).toBe(12.5);
 	});
 
@@ -308,7 +314,7 @@ describe("migrating a pre-anchor document", () => {
 		const first = patchCaptionSettings(doc(), { enabled: true }, PORTRAIT);
 		const stored = (first.legacyEditor as { captions: CaptionSettings }).captions;
 		expect(stored.insetY).toBe(12.5);
-		expect(stored.insetX).toBe(captionSafeColumn(PORTRAIT).x);
+		expect(stored.insetX).toBe(defaultCaptionInsetX(PORTRAIT));
 
 		// And it stays: a later patch reads what is stored rather than re-deriving.
 		const later = patchCaptionSettings(first, { fontSize: 60 }, PORTRAIT);
