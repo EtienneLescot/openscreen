@@ -292,6 +292,12 @@ refreshProjects().catch((e) => status('项目列表加载失败：' + e.message,
 """
 
 
+# 统一的 transcript key：有持久化 id 用 id，否则用 "transcript[<index>]"。
+# 让 metadata 构建、get 选择、load 校验和 save 选择都走这一套，避免 key 不一致。
+def _transcript_key(tr, idx):
+    return tr.get("id") or ("transcript[%d]" % idx)
+
+
 def load_project(path, active_id=None):
     """返回 (doc, segments_view, word_map, title, language, transcripts_meta, active_id)
 
@@ -310,23 +316,27 @@ def load_project(path, active_id=None):
     for idx, tr in enumerate(transcripts):
         transcripts_meta.append({
             "index": idx,
-            "id": tr.get("id") or ("transcript[%d]" % idx),
+            "id": _transcript_key(tr, idx),
             "assetId": tr.get("assetId") or "",
             "language": tr.get("language") or "?",
             "wordCount": len(tr.get("words") or []),
             "segmentCount": len(tr.get("segments") or []),
         })
 
-    # 按 active_id 选出目标；找不到则回退第一个。
+    # 按 active_id 选出目标；active_id 非空但找不到要报错，不静默回退第一个。
     active = None
+    active_idx = 0
     if active_id:
-        for tr in transcripts:
-            if (tr.get("id") or "") == active_id:
+        for idx, tr in enumerate(transcripts):
+            if _transcript_key(tr, idx) == active_id:
                 active = tr
+                active_idx = idx
                 break
-    if active is None:
+        if active is None:
+            raise ValueError("指定的转写不存在")
+    else:
         active = transcripts[0] if transcripts else {}
-        active_id = active.get("id") or ("transcript[0]" if transcripts else "")
+        active_id = _transcript_key(active, 0) if transcripts else ""
 
     language = active.get("language") or ""
     word_map = {}
@@ -359,31 +369,50 @@ def _join_segment_text(pieces, language):
 
 
 def _select_transcript(transcripts, transcript_id):
-    """按 id 选出目标 transcript；找不到时回退到第一个。返回 (transcript, index)。"""
+    """按统一 key 选出目标 transcript。
+
+    transcript_id 为空时回退到第一个；(非空) 找不到则抛错，绝不静默改到别的 transcript。
+    返回 (transcript, index)。
+    """
     if transcript_id:
         for idx, tr in enumerate(transcripts):
-            if (tr.get("id") or "") == transcript_id:
+            if _transcript_key(tr, idx) == transcript_id:
                 return tr, idx
+        raise ValueError("指定的转写不存在")
     return (transcripts[0], 0) if transcripts else (None, -1)
+
+
+def _same_transcript(a, b):
+    """判断两份 transcript 对象是否指向同一条（按稳定 id 或内容指纹）。"""
+    if a is b:
+        return True
+    aid = a.get("id") or ""
+    bid = b.get("id") or ""
+    if aid and bid:
+        return aid == bid
+    # 都没有稳定 id：退化为 key 字段一致（assetId + 首个单词 id）
+    return (a.get("assetId") or "") == (b.get("assetId") or "") and (
+        (a.get("words") or [{}])[0].get("id") if a.get("words") else None
+    ) == ((b.get("words") or [{}])[0].get("id") if b.get("words") else None)
 
 
 def save_words(path, words_by_id, transcript_id=None):
     """把用户编辑的 words 写回；逐 segment 重建 text；备份原文件。
 
-    只更新选定 transcript_id 对应的那条 transcript；未指定时回退到第一个。
+    只更新选定 transcript_id 对应的那条 transcript;transcript_id 为空时回退到第一个。
     """
     with open(path, "r", encoding="utf-8") as f:
         doc = json.load(f)
     transcripts = doc.get("transcripts") or []
     if not transcripts and isinstance(doc.get("transcript"), dict):
         transcripts = [doc["transcript"]]
-    # 兼容旧字段：顶层 transcript 与 transcripts[] 是同一份（旧项目只有顶层）
-    has_legacy = isinstance(doc.get("transcript"), dict)
+    # 兼容旧字段：顶层 transcript 与 transcripts[] 可能是同一份（旧项目只有顶层）
+    legacy = doc.get("transcript") if isinstance(doc.get("transcript"), dict) else None
 
     tr, idx = _select_transcript(transcripts, transcript_id)
     if tr is None:
         raise ValueError("该项目没有 transcripts 数组")
-    language = tr.get("language") or (doc.get("transcript") or {}).get("language") or ""
+    language = tr.get("language") or (legacy or {}).get("language") or ""
     new_words = {}
     for item in words_by_id:
         new_words[item["id"]] = item["text"]
@@ -396,9 +425,8 @@ def save_words(path, words_by_id, transcript_id=None):
     for s in tr.get("segments") or []:
         parts = [new_words.get(wid, "") for wid in s.get("wordIds", [])]
         s["text"] = _join_segment_text(parts, language)
-    # 旧字段 transcript 与 transcripts[] 指向同一份：若目标就是它，保持同步。
-    if has_legacy and idx == 0 and isinstance(doc.get("transcript"), dict):
-        legacy = doc["transcript"]
+    # 仅当 legacy 字段确实就是 transcripts 里的那条时同步，避免误改不同内容。
+    if legacy and _same_transcript(legacy, tr):
         if legacy.get("words"):
             for w in legacy["words"]:
                 if w["id"] in new_words and new_words[w["id"]] != w.get("text", ""):
@@ -515,7 +543,8 @@ class Handler(BaseHTTPRequestHandler):
                     with open(path, "r", encoding="utf-8") as f:
                         raw_doc = json.load(f)
                     all_tr = raw_doc.get("transcripts") or []
-                    if active_id not in [t.get("id") for t in all_tr]:
+                    keys = [_transcript_key(t, i) for i, t in enumerate(all_tr)]
+                    if active_id not in keys:
                         raise ValueError("指定的转写不存在")
                 _doc, segments, word_map, title, language, transcripts_meta, active_id = load_project(path, active_id)
                 self._send({
