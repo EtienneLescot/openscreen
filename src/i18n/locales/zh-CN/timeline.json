@@ -8,7 +8,8 @@
 		"autoFocusAllOff": "为所有缩放开启自动对焦（摄像头跟随光标）",
 		"addTrim": "添加剪辑 (T)",
 		"addAnnotation": "添加标注 (A)",
-		"addSpeed": "添加速度 (S)"
+		"addSpeed": "添加速度 (S)",
+		"addCameraFullscreen": "添加全屏摄像头 (C)"
 	},
 	"hints": {
 		"pressZoom": "按 Z 添加缩放",

@@ -8,7 +8,8 @@
 		"autoFocusAllOff": "Tüm yakınlaştırmalarda Otomatik Odağı aç (kamera imleci takip eder)",
 		"addTrim": "Kırpma Ekle (T)",
 		"addAnnotation": "Açıklama Ekle (A)",
-		"addSpeed": "Hız Ekle (S)"
+		"addSpeed": "Hız Ekle (S)",
+		"addCameraFullscreen": "Tam Ekran Kamera Ekle (C)"
 	},
 	"hints": {
 		"pressZoom": "Yakınlaştırma eklemek için Z tuşuna basın",

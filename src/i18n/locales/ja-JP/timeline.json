@@ -8,7 +8,8 @@
 		"autoFocusAllOff": "すべてのズームでオートフォーカスをオンにする（カメラがカーソルに追従）",
 		"addTrim": "トリムを追加 (T)",
 		"addAnnotation": "注釈を追加 (A)",
-		"addSpeed": "再生速度を追加 (S)"
+		"addSpeed": "再生速度を追加 (S)",
+		"addCameraFullscreen": "フルスクリーンカメラを追加 (C)"
 	},
 	"hints": {
 		"pressZoom": "Zキーを押してズームを追加",
