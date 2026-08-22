@@ -97,6 +97,7 @@ PAGE = r"""<!DOCTYPE html>
 <div class="main">
   <div class="bar">
     <select id="project"></select>
+    <select id="transcript" title="选择转写（项目含多个音视频转写时可用）" style="display:none"></select>
     <button id="load" class="ghost">加载转写</button>
     <button id="save" class="primary">💾 保存修改</button>
     <button id="reload" class="ghost" title="放弃未保存的修改，重新读取文件">撤销修改</button>
@@ -112,6 +113,21 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 const $ = (id) => document.getElementById(id);
 let currentPath = null;
+let currentTranscriptId = null;
+
+function fillTranscriptSelect(transcripts, activeId) {
+  const sel = $('transcript');
+  const visible = transcripts && transcripts.length > 1;
+  sel.style.display = visible ? '' : 'none';
+  sel.innerHTML = '';
+  (transcripts || []).forEach((t) => {
+    const o = document.createElement('option');
+    o.value = t.id;
+    o.textContent = `转写 ${t.index + 1} · ${t.language} · ${t.wordCount}词/${t.segmentCount}段`;
+    sel.appendChild(o);
+  });
+  if (visible) sel.value = activeId || (transcripts && transcripts[0].id);
+}
 
 // 一个隐藏的测量元素，用来让每个输入框自动加宽到能容纳完整内容，
 // 这样长句子（一个字词是一整句）不用右滑就能看全。
@@ -165,11 +181,27 @@ $('load').onclick = async () => {
   try {
     const j = await api('load', { path });
     currentPath = path;
+    currentTranscriptId = j.activeId || null;
+    fillTranscriptSelect(j.transcripts, j.activeId);
     $('meta').textContent = '项目：' + j.title + '  ·  转写语言 ' + (j.language || '?') +
       '  ·  共 ' + Object.keys(j.words).length + ' 词 / ' + j.segments.length + ' 段';
     render(j.segments, j.words);
     status('已加载');
   } catch (e) { status('加载失败：' + e.message, 3500); }
+};
+
+// 切换转写（多转写项目）
+$('transcript').onchange = async () => {
+  if (!currentPath) return;
+  const tid = $('transcript').value;
+  try {
+    const j = await api('load', { path: currentPath, transcriptId: tid });
+    currentTranscriptId = j.activeId || tid;
+    $('meta').textContent = '项目：' + j.title + '  ·  转写语言 ' + (j.language || '?') +
+      '  ·  共 ' + Object.keys(j.words).length + ' 词 / ' + j.segments.length + ' 段';
+    render(j.segments, j.words);
+    status('已切换转写');
+  } catch (e) { status('切换失败：' + e.message, 3500); }
 };
 
 function render(segments, wordMap) {
@@ -221,7 +253,9 @@ $('save').onclick = async () => {
   const inputs = Array.from(document.querySelectorAll('.word input'));
   const words = inputs.map((i) => ({ id: i.dataset.wid, text: i.value }));
   try {
-    const j = await api('save', { path: currentPath, words });
+    const payload = { path: currentPath, words };
+    if (currentTranscriptId) payload.transcriptId = currentTranscriptId;
+    const j = await api('save', payload);
     status('✅ 已保存（备份：' + j.backup + '）', 4200);
   } catch (e) { status('保存失败：' + e.message, 4000); }
 };
@@ -229,7 +263,11 @@ $('save').onclick = async () => {
 $('reload').onclick = async () => {
   if (!currentPath) return;
   try {
-    const j = await api('load', { path: currentPath });
+    const payload = { path: currentPath };
+    if (currentTranscriptId) payload.transcriptId = currentTranscriptId;
+    const j = await api('load', payload);
+    currentTranscriptId = j.activeId || currentTranscriptId;
+    fillTranscriptSelect(j.transcripts, j.activeId);
     render(j.segments, j.words);
     status('已恢复为磁盘上的版本');
   } catch (e) { status('读取失败：' + e.message, 3500); }
@@ -254,43 +292,96 @@ refreshProjects().catch((e) => status('项目列表加载失败：' + e.message,
 """
 
 
-def load_project(path):
-    """返回 (doc, segments_view, word_map, title, language)"""
+def load_project(path, active_id=None):
+    """返回 (doc, segments_view, word_map, title, language, transcripts_meta, active_id)
+
+    transcripts_meta 列出项目里所有 transcript 的概览（用于前端下拉）；
+    segments/word_map 对应 active_id 指定的那条 transcript（默认第一条）。
+    """
     with open(path, "r", encoding="utf-8") as f:
         doc = json.load(f)
-    tr = (doc.get("transcripts") or [None])[0]
-    language = (tr or {}).get("language", "?")
+    transcripts = doc.get("transcripts") or []
+    # 兼容旧字段 transcript（无 transcripts 数组时用顶层 transcript 包装）
+    if not transcripts and isinstance(doc.get("transcript"), dict):
+        transcripts = [doc["transcript"]]
     title = (doc.get("project") or {}).get("title", os.path.basename(path))
+
+    transcripts_meta = []
+    for idx, tr in enumerate(transcripts):
+        transcripts_meta.append({
+            "index": idx,
+            "id": tr.get("id") or ("transcript[%d]" % idx),
+            "assetId": tr.get("assetId") or "",
+            "language": tr.get("language") or "?",
+            "wordCount": len(tr.get("words") or []),
+            "segmentCount": len(tr.get("segments") or []),
+        })
+
+    # 按 active_id 选出目标；找不到则回退第一个。
+    active = None
+    if active_id:
+        for tr in transcripts:
+            if (tr.get("id") or "") == active_id:
+                active = tr
+                break
+    if active is None:
+        active = transcripts[0] if transcripts else {}
+        active_id = active.get("id") or ("transcript[0]" if transcripts else "")
+
+    language = active.get("language") or ""
     word_map = {}
     segments = []
-    if tr:
-        for w in tr.get("words") or []:
-            word_map[w["id"]] = w
-        for s in tr.get("segments") or []:
-            segments.append({
-                "id": s["id"],
-                "startSec": s.get("startSec", 0),
-                "endSec": s.get("endSec", 0),
-                "wordIds": s.get("wordIds", []),
-            })
-    return doc, segments, word_map, title, language
+    for w in active.get("words") or []:
+        word_map[w["id"]] = w
+    for s in active.get("segments") or []:
+        segments.append({
+            "id": s["id"],
+            "startSec": s.get("startSec", 0),
+            "endSec": s.get("endSec", 0),
+            "wordIds": s.get("wordIds", []),
+        })
+    return doc, segments, word_map, title, language, transcripts_meta, active_id
 
 
-# 中文/日文的词之间不插空格（"你好世界" 不能被 join 成 "你好 世界"），
-# 其它语言保留空格分隔。
+# 取语言的主 sub-tag（如 zh-CN -> zh），用于决定 join 策略。
+def _language_primary(language):
+    return (language or "").split("-")[0].strip().lower()
+
+
+# 中文/日文的词之间不插空格（"你好世界" 不能被 join 成 "你好 世界"）；
+# 其它语言保留空格。按主 sub-tag 判断，因此 zh-CN / zh-TW / ja-JP 也走无空格。
 def _join_segment_text(pieces, language):
     kept = [p for p in pieces if p and p.strip()]
     if not kept:
         return ""
-    return "".join(kept) if (language or "").lower() in ("zh", "ja") else " ".join(kept)
+    base = _language_primary(language)
+    return "".join(kept) if base in ("zh", "ja") else " ".join(kept)
 
 
-def save_words(path, words_by_id):
-    """把用户编辑的 words 写回；逐 segment 重建 text；备份原文件。"""
+def _select_transcript(transcripts, transcript_id):
+    """按 id 选出目标 transcript；找不到时回退到第一个。返回 (transcript, index)。"""
+    if transcript_id:
+        for idx, tr in enumerate(transcripts):
+            if (tr.get("id") or "") == transcript_id:
+                return tr, idx
+    return (transcripts[0], 0) if transcripts else (None, -1)
+
+
+def save_words(path, words_by_id, transcript_id=None):
+    """把用户编辑的 words 写回；逐 segment 重建 text；备份原文件。
+
+    只更新选定 transcript_id 对应的那条 transcript；未指定时回退到第一个。
+    """
     with open(path, "r", encoding="utf-8") as f:
         doc = json.load(f)
-    tr = (doc.get("transcripts") or [None])[0]
-    if not tr:
+    transcripts = doc.get("transcripts") or []
+    if not transcripts and isinstance(doc.get("transcript"), dict):
+        transcripts = [doc["transcript"]]
+    # 兼容旧字段：顶层 transcript 与 transcripts[] 是同一份（旧项目只有顶层）
+    has_legacy = isinstance(doc.get("transcript"), dict)
+
+    tr, idx = _select_transcript(transcripts, transcript_id)
+    if tr is None:
         raise ValueError("该项目没有 transcripts 数组")
     language = tr.get("language") or (doc.get("transcript") or {}).get("language") or ""
     new_words = {}
@@ -305,13 +396,14 @@ def save_words(path, words_by_id):
     for s in tr.get("segments") or []:
         parts = [new_words.get(wid, "") for wid in s.get("wordIds", [])]
         s["text"] = _join_segment_text(parts, language)
-    # 兼容旧字段 transcript（如果有）
-    old = doc.get("transcript")
-    if isinstance(old, dict) and old.get("words"):
-        for w in old["words"]:
-            if w["id"] in new_words and new_words[w["id"]] != w.get("text", ""):
-                w["text"] = new_words[w["id"]]
-        for s in old.get("segments") or []:
+    # 旧字段 transcript 与 transcripts[] 指向同一份：若目标就是它，保持同步。
+    if has_legacy and idx == 0 and isinstance(doc.get("transcript"), dict):
+        legacy = doc["transcript"]
+        if legacy.get("words"):
+            for w in legacy["words"]:
+                if w["id"] in new_words and new_words[w["id"]] != w.get("text", ""):
+                    w["text"] = new_words[w["id"]]
+        for s in legacy.get("segments") or []:
             parts = [new_words.get(wid, "") for wid in s.get("wordIds", [])]
             s["text"] = _join_segment_text(parts, language)
     # 备份：加纳秒时间戳防同一秒两次保存互相覆盖；先写临时文件再原子替换，
@@ -417,20 +509,31 @@ class Handler(BaseHTTPRequestHandler):
                 path = self._resolve_project_path(data.get("path", ""))
                 if not os.path.isfile(path):
                     raise ValueError("文件不存在")
-                _doc, segments, word_map, title, language = load_project(path)
+                # 支持选定某条 transcript（默认第一条）
+                active_id = data.get("transcriptId") or ""
+                if active_id:
+                    with open(path, "r", encoding="utf-8") as f:
+                        raw_doc = json.load(f)
+                    all_tr = raw_doc.get("transcripts") or []
+                    if active_id not in [t.get("id") for t in all_tr]:
+                        raise ValueError("指定的转写不存在")
+                _doc, segments, word_map, title, language, transcripts_meta, active_id = load_project(path, active_id)
                 self._send({
                     "ok": True,
                     "title": title,
                     "language": language,
                     "segments": segments,
                     "words": word_map,
+                    "transcripts": transcripts_meta,
+                    "activeId": active_id,
                 })
             elif action == "save":
                 path = self._resolve_project_path(data.get("path", ""))
                 words = data.get("words", [])
                 if not words:
                     raise ValueError("没有收到修改内容")
-                backup, touched = save_words(path, words)
+                transcript_id = data.get("transcriptId") or ""
+                backup, touched = save_words(path, words, transcript_id)
                 self._send({"ok": True, "backup": backup, "touched": touched})
             elif action == "export":
                 path = self._resolve_project_path(data.get("path", ""))
