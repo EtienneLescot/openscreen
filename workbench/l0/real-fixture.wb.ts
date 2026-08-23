@@ -75,8 +75,8 @@ describe("la fixture réelle — le document", () => {
 	it("n'a PAS de piste caméra dans le document, quoi qu'il y ait sur le disque", () => {
 		// Le dossier d'enregistrement contient bien un fichier webcam ; le document
 		// écrit par l'app, lui, porte `cameraTrack: null`. La fixture ne corrige
-		// pas ça — voir workbench/fixtures/README.md. Cette assertion existe pour
-		// que personne ne « complète » la fixture sans s'en apercevoir : le modèle
+		// pas ça — voir workbench/README.md § « La prise réelle ». Cette assertion
+		// existe pour que personne ne « complète » la fixture sans le voir : le modèle
 		// verra `hasCameraTrack: false`, et c'est l'état réel du projet.
 		expect(realScreencastDocument().assets[0].cameraTrack).toBeNull();
 	});

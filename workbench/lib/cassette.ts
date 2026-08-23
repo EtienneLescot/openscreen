@@ -24,9 +24,42 @@ export interface CassetteRound {
 export interface Cassette {
 	scenario: string;
 	provider: string;
+	/** Le modèle DEMANDÉ — ce que la config a envoyé. */
 	model: string;
+	/**
+	 * Le modèle qui a RÉPONDU, lu dans le flux, quand il s'y nomme.
+	 *
+	 * ponytail: deux faits, pas un. Un provider est libre de résoudre un alias
+	 * vers autre chose — `deepseek-chat` a rendu `deepseek-v4-flash` sur toutes
+	 * les cassettes de cette passe — et n'enregistrer que la demande fait qu'une
+	 * mesure ne sait plus dire qui l'a produite. C'est ce qui rend deux baselines
+	 * incomparables sans que rien ne le signale, et c'est la même discipline qu'
+	 * ailleurs ici : « ce que j'ai demandé » et « ce qui a répondu » ne sont pas
+	 * la même phrase. Absent = le flux ne l'a pas dit, jamais « identique à la
+	 * demande ».
+	 */
+	resolvedModel?: string;
 	recordedAt: string;
 	rounds: CassetteRound[];
+}
+
+/** Le `model` que le flux s'attribue, ou null s'il ne s'en attribue aucun. Les
+ *  chunks le répètent ; on prend le premier et on ne suppose pas les suivants
+ *  identiques — un flux qui changerait d'avis en cours de route est justement le
+ *  genre de chose qu'on veut voir, donc on garde le premier ET on le dit. */
+export function modelFromSse(sse: string): string | null {
+	for (const line of sse.split("\n")) {
+		if (!line.startsWith("data: ")) continue;
+		const payload = line.slice(6).trim();
+		if (payload === "[DONE]") break;
+		try {
+			const model = (JSON.parse(payload) as { model?: unknown }).model;
+			if (typeof model === "string" && model.length > 0) return model;
+		} catch {
+			// Un chunk illisible n'est pas une réponse à cette question.
+		}
+	}
+	return null;
 }
 
 export function hashRequest(body: Record<string, unknown>): string {
@@ -101,6 +134,8 @@ export async function startRecorder(options: {
 }): Promise<ModelServerHandle> {
 	const requests: CapturedRequest[] = [];
 	const rounds: CassetteRound[] = [];
+	// Le premier flux qui se nomme fixe la réponse pour la cassette entière.
+	let resolvedModel: string | null = null;
 	let round = 0;
 
 	const server: Server = createServer((req, res) => {
@@ -141,6 +176,7 @@ export async function startRecorder(options: {
 				body,
 			});
 			const sse = await upstreamRes.text();
+			resolvedModel ??= modelFromSse(sse);
 			rounds.push({
 				round: myRound,
 				requestHash: hashRequest(parsed),
@@ -152,6 +188,7 @@ export async function startRecorder(options: {
 					scenario: options.scenario,
 					provider: options.provider,
 					model: options.model,
+					...(resolvedModel ? { resolvedModel } : {}),
 					recordedAt: new Date().toISOString(),
 					rounds: [...rounds].sort((a, b) => a.round - b.round),
 				});
@@ -164,7 +201,17 @@ export async function startRecorder(options: {
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const addr = server.address();
 	if (!addr || typeof addr === "string") throw new Error("recorder has no address");
-	return { url: `http://127.0.0.1:${addr.port}/v1`, requests, close: () => server.close() };
+	// `resolvedModel` est lu APRÈS coup : rien ne le connaît avant la première
+	// réponse, et le nom affiché au lancement est celui de la config. Un
+	// getter, donc, pas une valeur figée à zéro round.
+	return {
+		url: `http://127.0.0.1:${addr.port}/v1`,
+		requests,
+		get resolvedModel() {
+			return resolvedModel;
+		},
+		close: () => server.close(),
+	};
 }
 
 export interface ReplayHandle extends ModelServerHandle {

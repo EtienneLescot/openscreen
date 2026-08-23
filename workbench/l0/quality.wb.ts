@@ -415,6 +415,34 @@ describe("zoomPlacement — précision ET rappel, jamais une note unique", () =>
 		expect(zoomPlacement(document, ZONES, { coverFraction: 0.2 }).missedZones).toHaveLength(2);
 	});
 
+	it("ne compte pas deux fois les secondes de deux zooms empilés", () => {
+		// Sur fixture synthétique, à rebours de ce fichier, et pour la raison que
+		// son en-tête donne : ce qui se vérifie ici est de l'arithmétique
+		// d'intervalles, pas une lecture de matériau. Rule 2 dans `timelineMap.ts`
+		// interdit à deux zooms de se chevaucher, mais seul `setZoom` passe par le
+		// clamp qui l'applique — `addZoom` ajoute à la suite — donc l'agent PEUT
+		// empiler, et cet oracle doit être juste sur les documents fautifs qu'il
+		// est là pour exposer.
+		const document = zoom(
+			zoom(recordingWithSilences({ durationSec: 60, silences: [[10, 12]] }), 8, 13),
+			10,
+			15,
+		);
+		expect(document.zoomRanges).toHaveLength(2);
+
+		// Union : 8→15, soit 7 s, entièrement sur la zone 8→15. Somme : 5 + 5 = 10 s,
+		// qui rendrait 0,7 — une précision abaissée par le double comptage et non par
+		// un défaut de placement.
+		const placement = zoomPlacement(document, [{ startSec: 8, endSec: 15, label: "zone" }]);
+		expect(placement.zoomSec).toBeCloseTo(7, 4);
+		// Les deux termes séparément, pas seulement leur rapport : un rapport se lit
+		// juste quand numérateur ET dénominateur double-comptent de concert. Ici
+		// `zoomSec` suffirait à l'attraper, mais le lecteur ne devrait pas avoir à
+		// le déduire d'un ratio pour savoir ce que l'oracle compte.
+		expect(placement.onZoneSec).toBeCloseTo(7, 4);
+		expect(placement.precision).toBeCloseTo(1, 4);
+	});
+
 	it("rend une précision de 1 quand aucun zoom n'a été émis", () => {
 		// Ne rien émettre est un échec de RAPPEL et jamais de précision : gonfler
 		// la précision d'un document vide serait absurde, l'annuler aussi.

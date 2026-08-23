@@ -6,8 +6,17 @@
 // `min(behaviour, dsl)`, not their mean.
 
 import { documentSchema } from "../../src/lib/ai-edition/schema";
+import type { JudgeReading } from "./judge";
 import { documentInvariants } from "./oracles";
-import { type Check, type EvalContext, fail, pass, type Scenario } from "./scenario";
+import {
+	type Check,
+	type EvalContext,
+	fail,
+	type JudgedCheck,
+	pass,
+	type Scenario,
+	undecided,
+} from "./scenario";
 
 export interface CheckResult {
 	id: string;
@@ -16,11 +25,38 @@ export interface CheckResult {
 	evidence?: string;
 	/** True when this failure is recorded in the scenario's expectedFailures. */
 	expected: boolean;
+	/** True when the check did not decide — `indéterminé`. Implies `!ok`, and
+	 *  every consumer that ignores this field therefore reads it as a failure
+	 *  rather than as a pass. See `Verdict` in `scenario.ts`. */
+	indeterminate: boolean;
 }
 
 export interface AxisScore {
-	/** Σ(weight of passing checks) / Σ(weight), in [0,1]. 1 when no checks. */
+	/**
+	 * Σ(weight of passing checks) / Σ(weight of DECIDED checks), in [0,1].
+	 *
+	 * ponytail: le poids indéterminé sort des deux termes. Le mettre au
+	 * dénominateur ferait chuter l'axe pour une raison qui ne parle pas du
+	 * comportement du modèle — le défaut même qu'on répare. Le mettre au
+	 * numérateur le convertirait en passage, ce que la consigne interdit. Une
+	 * abstention ne déplace donc pas l'estimation ; elle rétrécit `n`, et
+	 * c'est l'intervalle de Wilson du rapport qui s'élargit à sa place.
+	 */
 	score: number;
+	/** Somme des poids tranchés (conforme ou fautif). */
+	decidedWeight: number;
+	/** Somme des poids indéterminés. */
+	undecidedWeight: number;
+	/**
+	 * Faux quand l'axe n'a pas été mesuré : il porte des checks, et le poids
+	 * indéterminé y dépasse le poids tranché.
+	 *
+	 * ponytail: sans ce drapeau, un juge qui s'abstiendrait sur TOUT rendrait un
+	 * axe à 1,0 sur un dénominateur vide, la porte `min()` passerait, et le run
+	 * partirait au vert sur une propriété que personne n'a mesurée. C'est mot
+	 * pour mot la panne que ce banc existe pour attraper, remontée d'un étage.
+	 */
+	measured: boolean;
 	results: CheckResult[];
 }
 
@@ -31,6 +67,9 @@ export interface ScoredRun {
 	/** The conjoint gate value: `min(behaviour, dsl)`. */
 	gateScore: number;
 	passed: boolean;
+	/** Ids des checks restés indéterminés, pour que le rapport puisse les nommer
+	 *  au lieu d'afficher un trou. */
+	undecided: string[];
 	failureClass: ReturnType<EvalContext["classifyFailure"]>;
 	ms: number;
 }
@@ -82,23 +121,72 @@ export function runChecks(
 			// like one. Swallowing it into a pass would silently shrink coverage.
 			verdict = fail(`check threw: ${error instanceof Error ? error.message : String(error)}`);
 		}
+		const indeterminate = !verdict.ok && verdict.indeterminate === true;
 		return {
 			id: check.id,
 			weight: check.weight,
 			ok: verdict.ok,
 			evidence: verdict.ok ? undefined : verdict.evidence,
-			expected: !verdict.ok && known.has(check.id),
+			// ponytail: un check indéterminé n'est pas « attendu en échec ». Le
+			// marquer ainsi inscrirait l'abstention du juge dans expectedFailures au
+			// premier `--update-baseline`, c'est-à-dire blanchirait en défaut connu
+			// ce qui n'a simplement pas été mesuré.
+			expected: !verdict.ok && !indeterminate && known.has(check.id),
+			indeterminate,
 		};
 	});
-	const total = results.reduce((sum, r) => sum + r.weight, 0);
-	if (total === 0) return { score: 1, results };
+	const decidedWeight = results.reduce((sum, r) => sum + (r.indeterminate ? 0 : r.weight), 0);
+	const undecidedWeight = results.reduce((sum, r) => sum + (r.indeterminate ? r.weight : 0), 0);
+	const measured = results.length === 0 || decidedWeight >= undecidedWeight;
+	if (decidedWeight === 0) return { score: 1, decidedWeight, undecidedWeight, measured, results };
 	const earned = results.reduce((sum, r) => sum + (r.ok ? r.weight : 0), 0);
-	return { score: earned / total, results };
+	return { score: earned / decidedWeight, decidedWeight, undecidedWeight, measured, results };
 }
 
-export function scoreRun(scenario: Scenario, context: EvalContext): ScoredRun {
+/**
+ * Les checks jugés, vus comme des checks ordinaires.
+ *
+ * `readings` porte le verdict du juge par id de check. Un id absent n'est PAS
+ * un passage : c'est un tour que le juge n'a pas encore lu, et le check le dit.
+ */
+export function judgedChecks(
+	judged: JudgedCheck[],
+	readings?: ReadonlyMap<string, JudgeReading>,
+): Check[] {
+	return judged.map((entry) => ({
+		id: entry.id,
+		weight: entry.weight,
+		check: (): ReturnType<Check["check"]> => {
+			const reading = readings?.get(entry.id);
+			if (!reading) {
+				return undecided(
+					`non jugé — les tours sont sur disque, lancez \`npm run wb:judge -- --label <label>\` ` +
+						`(rubric ${entry.rubric.id})`,
+				);
+			}
+			if (reading.verdict === "conforme") return pass();
+			const detail =
+				reading.raw === undefined
+					? reading.reason
+					: `${reading.reason} · ${reading.raw.slice(0, 200)}`;
+			return reading.verdict === "fautif"
+				? fail(`juge : ${detail}`)
+				: undecided(`juge indéterminé : ${detail}`);
+		},
+	}));
+}
+
+export function scoreRun(
+	scenario: Scenario,
+	context: EvalContext,
+	readings?: ReadonlyMap<string, JudgeReading>,
+): ScoredRun {
 	const expected = scenario.expectedFailures ?? {};
-	const behaviour = runChecks(scenario.behaviour, context, expected);
+	const behaviour = runChecks(
+		[...scenario.behaviour, ...judgedChecks(scenario.judged ?? [], readings)],
+		context,
+		expected,
+	);
 	const dsl = runChecks([...scenario.dsl, ...STRUCTURAL_CHECKS], context, expected);
 	const gateScore = Math.min(behaviour.score, dsl.score);
 	return {
@@ -106,7 +194,14 @@ export function scoreRun(scenario: Scenario, context: EvalContext): ScoredRun {
 		behaviour,
 		dsl,
 		gateScore,
-		passed: gateScore >= scenario.gate,
+		// ponytail: `measured` est une CONDITION de passage, pas une décoration.
+		// Un axe majoritairement indéterminé n'a pas de score à comparer à la
+		// porte ; déclarer « passé » dessus serait convertir l'abstention en
+		// succès par la porte de derrière, là même où la consigne l'interdit.
+		passed: gateScore >= scenario.gate && behaviour.measured && dsl.measured,
+		undecided: [...behaviour.results, ...dsl.results]
+			.filter((result) => result.indeterminate)
+			.map((result) => result.id),
 		failureClass: context.classifyFailure(),
 		ms: context.run.ms,
 	};

@@ -11,6 +11,7 @@ import { NotesWindow } from "./components/launch/NotesWindow.tsx";
 import { SourceSelector } from "./components/launch/SourceSelector";
 import { Toaster } from "./components/ui/sonner";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { EditorDialogsProvider } from "./contexts/EditorDialogsContext";
 import { useScopedT } from "./contexts/I18nContext";
 import { ShortcutsProvider } from "./contexts/ShortcutsContext";
 import { loadAllCustomFonts } from "./lib/customFonts";
@@ -27,6 +28,11 @@ const CliCaptionsRunner = lazy(() => import("./cli/CliCaptionsRunner"));
 const ShortcutsConfigDialog = lazy(() =>
 	import("./components/video-editor/ShortcutsConfigDialog").then((module) => ({
 		default: module.ShortcutsConfigDialog,
+	})),
+);
+const ProviderSettingsDialog = lazy(() =>
+	import("./components/ai-edition/ProviderSettings").then((module) => ({
+		default: module.ProviderSettingsDialog,
 	})),
 );
 
@@ -107,38 +113,41 @@ export default function App() {
 			case "editor":
 				return (
 					<ShortcutsProvider>
-						<Suspense
-							fallback={
-								<div className="flex flex-col items-center justify-center gap-3 h-screen bg-[#09090b]">
-									<svg
-										className="animate-spin text-[#34B27B]"
-										xmlns="http://www.w3.org/2000/svg"
-										fill="none"
-										viewBox="0 0 24 24"
-										width={28}
-										height={28}
-									>
-										<circle
-											className="opacity-25"
-											cx="12"
-											cy="12"
-											r="10"
-											stroke="currentColor"
-											strokeWidth="4"
-										/>
-										<path
-											className="opacity-75"
-											fill="currentColor"
-											d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-										/>
-									</svg>
-									<span className="text-white/50 text-sm">{tEditor("loadingEditor")}</span>
-								</div>
-							}
-						>
-							<VideoEditorEntry />
-							<ShortcutsConfigDialog />
-						</Suspense>
+						<EditorDialogsProvider>
+							<Suspense
+								fallback={
+									<div className="flex flex-col items-center justify-center gap-3 h-screen bg-[var(--bg)]">
+										<svg
+											className="animate-spin text-[var(--brand)]"
+											xmlns="http://www.w3.org/2000/svg"
+											fill="none"
+											viewBox="0 0 24 24"
+											width={28}
+											height={28}
+										>
+											<circle
+												className="opacity-25"
+												cx="12"
+												cy="12"
+												r="10"
+												stroke="currentColor"
+												strokeWidth="4"
+											/>
+											<path
+												className="opacity-75"
+												fill="currentColor"
+												d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+											/>
+										</svg>
+										<span className="text-[var(--muted)] text-sm">{tEditor("loadingEditor")}</span>
+									</div>
+								}
+							>
+								<VideoEditorEntry />
+								<ShortcutsConfigDialog />
+								<ProviderSettingsDialog />
+							</Suspense>
+						</EditorDialogsProvider>
 					</ShortcutsProvider>
 				);
 			default:

@@ -85,6 +85,13 @@ final class AudioTrackMixerTests: XCTestCase {
 		XCTAssertEqual(sink.buffers.first?.presentationTimeStamp, sessionStart)
 		XCTAssertEqual(seconds(ofFrames: frames), 0.1, accuracy: 0.011)
 		XCTAssertGreaterThan(peak(frames, from: 0, to: 0.1), audibleThreshold)
+
+		// The 100 ms that predates the origin is accounted as trimmed, never as dropped. Both
+		// are cut by the same code, and counting them together is what made `droppedSeconds`
+		// non-zero on every real take and unusable as a fault signal.
+		let report = mixer.deliveryReport(for: .system)
+		XCTAssertEqual(report.trimmedSeconds, 0.1, accuracy: 0.011)
+		XCTAssertEqual(report.droppedSeconds, 0, accuracy: 0.011)
 	}
 
 	// MARK: - Trailing silence
@@ -380,7 +387,10 @@ final class AudioTrackMixerTests: XCTestCase {
 		clock.advance(seconds: 1)
 		mixer.finish(atSourceTime: clock.now)
 
-		XCTAssertEqual(mixer.deliveryReport(for: .system).droppedSeconds, 0.5, accuracy: 0.011)
+		let report = mixer.deliveryReport(for: .system)
+		XCTAssertEqual(report.droppedSeconds, 0.5, accuracy: 0.011)
+		// Nothing here predates the session, so the other half of the split stays clear.
+		XCTAssertEqual(report.trimmedSeconds, 0, accuracy: 0.011)
 	}
 
 	// MARK: - Pause

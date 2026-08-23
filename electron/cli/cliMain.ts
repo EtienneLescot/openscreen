@@ -13,6 +13,7 @@ import type {
 	CliRequest,
 	CliSourcesResult,
 } from "../../src/lib/cliContracts";
+import { isDiagnosticModeEnabled } from "../diagnostics/main-log-buffer";
 import { getSelectedDesktopSource, registerIpcHandlers } from "../ipc/handlers";
 import { registerSttIpc } from "../stt";
 import { ASSET_BASE_URL_ARG } from "../windows";
@@ -39,6 +40,24 @@ function safeWrite(stream: NodeJS.WriteStream, text: string): void {
 	} catch {
 		// EPIPE or closed stream; drop the output.
 	}
+}
+
+// Timestamped startup milestones on stderr. A process that stops answering says
+// nothing about where it stopped, and `openscreen sources` has hung on roughly
+// half of its headless CI runs while emitting no renderer output whatsoever --
+// which rules out everything after the renderer starts and leaves everything
+// before it. These narrow that down without guessing.
+//
+// Gated on the existing diagnostic flag, so a normal run is byte-identical and
+// no other packaging path can observe this.
+const startedAt = Date.now();
+function milestone(name: string): void {
+	if (!isDiagnosticModeEnabled()) return;
+	safeWrite(
+		process.stderr,
+		`[milestone +${Date.now() - startedAt}ms] ${name}
+`,
+	);
 }
 
 function createOutput(json: boolean): CliOutput {
@@ -214,6 +233,7 @@ function setupRecordStopSignals(stop: (reason: string) => void): void {
 const writeStdout = (text: string) => safeWrite(process.stdout, text);
 
 export function runCli(command: CliCommand): void {
+	milestone(`runCli entered (${command.kind})`);
 	if (command.kind === "help") {
 		safeWrite(process.stdout, CLI_USAGE);
 		app.exit(0);
@@ -285,9 +305,11 @@ export function runCli(command: CliCommand): void {
 		app.exit(1);
 	});
 
+	milestone("awaiting app ready");
 	void app
 		.whenReady()
 		.then(async () => {
+			milestone("app ready");
 			if (command.kind === "info") {
 				const code = await runInfoCommand(command.projectPath, command.json === true, writeStdout);
 				app.exit(code);
@@ -305,7 +327,11 @@ export function runCli(command: CliCommand): void {
 				return;
 			}
 
-			await fs.mkdir(path.join(app.getPath("userData"), "recordings"), { recursive: true });
+			milestone("resolving userData path");
+			const userDataDir = app.getPath("userData");
+			milestone(`userData = ${userDataDir}`);
+			await fs.mkdir(path.join(userDataDir, "recordings"), { recursive: true });
+			milestone("recordings directory ready");
 
 			// Media/screen permissions for the renderer (mic metering, future browser
 			// capture paths). Mirrors the GUI allowlist.
@@ -343,6 +369,7 @@ export function runCli(command: CliCommand): void {
 				},
 				{ useSystemPicker: false },
 			);
+			milestone("session permission handlers registered");
 
 			if (command.kind === "record" && command.mic && process.platform === "darwin") {
 				const micStatus = systemPreferences.getMediaAccessStatus("microphone");
@@ -351,12 +378,16 @@ export function runCli(command: CliCommand): void {
 				}
 			}
 
+			milestone("media access checked");
+
 			let cliWindow: BrowserWindow | null = null;
 			registerAppHandlersForCli(() => cliWindow);
+			milestone("app handlers registered");
 
 			// Speech-to-text backs the captions command; registered by the GUI boot
 			// path (main.ts) rather than registerIpcHandlers.
 			registerSttIpc(ipcMain);
+			milestone("stt ipc registered");
 
 			// Registered by the GUI boot path (main.ts) rather than registerIpcHandlers;
 			// the renderer's i18n init invokes it unconditionally.
@@ -366,7 +397,10 @@ export function runCli(command: CliCommand): void {
 			ipcMain.handle("update-global-shortcut", () => ({ success: false }));
 
 			const request: CliRequest = command;
-			ipcMain.handle("cli-get-request", () => request);
+			ipcMain.handle("cli-get-request", () => {
+				milestone("renderer asked for the request");
+				return request;
+			});
 			ipcMain.on("cli-log", (_event, level: string, message: string) => {
 				if (level === "error") {
 					output.error(message);
@@ -380,6 +414,7 @@ export function runCli(command: CliCommand): void {
 			});
 
 			ipcMain.handle("cli-done", async (_event, result: CliDoneResult) => {
+				milestone(`renderer reported done (success=${result.success})`);
 				if (finished) return;
 				finished = true;
 
@@ -393,9 +428,46 @@ export function runCli(command: CliCommand): void {
 					if (result.success && command.kind === "captions" && result.projectData !== undefined) {
 						await writeProjectFile(command.projectPath, result.projectData);
 					}
+					// -o writes where no wrapper can redirect. stdout itself is fine --
+					// Chromium logs to stderr -- but a caller does not control what wraps
+					// this process, and xvfb-run on Ubuntu merges the two, which is enough
+					// to make `sources --json | jq` fail under the very tool used to run a
+					// GUI binary headlessly.
+					if (
+						result.success &&
+						command.kind === "sources" &&
+						command.jsonOutPath &&
+						result.sources
+					) {
+						// Same as writeProjectFile above: `record --project out/x` creates
+						// `out/`, so `sources -o out/x.json` has to as well. Without it a
+						// fully successful enumeration is lost on every channel at once --
+						// the ENOENT lands in the catch below, which clears result.success
+						// and so skips printSources and the `done` payload alike.
+						await fs.mkdir(path.dirname(command.jsonOutPath), { recursive: true });
+						// Write beside the target and rename over it. writeFile truncates
+						// first, so a failure part-way through -- a full disk is the easy
+						// case -- would leave a half-written file where docs/cli.md promises
+						// an earlier run's result is untouched by a later failure. rename is
+						// atomic within a directory, so the reader sees the old file or the
+						// new one and never a torn one.
+						const tmpOutPath = `${command.jsonOutPath}.${process.pid}.tmp`;
+						try {
+							await fs.writeFile(
+								tmpOutPath,
+								`${JSON.stringify(result.sources, null, 2)}\n`,
+								"utf8",
+							);
+							await fs.rename(tmpOutPath, command.jsonOutPath);
+						} catch (writeError) {
+							// Best-effort: the original error is what the caller needs to see.
+							await fs.rm(tmpOutPath, { force: true }).catch(() => undefined);
+							throw writeError;
+						}
+					}
 				} catch (error) {
 					result.success = false;
-					result.error = `Run succeeded but writing the project file failed: ${String(error)}`;
+					result.error = `Run succeeded but writing the output file failed: ${String(error)}`;
 				}
 
 				if (result.success) {
@@ -435,6 +507,7 @@ export function runCli(command: CliCommand): void {
 				setupRecordStopSignals(stop);
 			}
 
+			milestone("cli ipc registered; resolving window type");
 			const windowType = {
 				export: "cli-export",
 				record: "cli-record",
@@ -442,6 +515,9 @@ export function runCli(command: CliCommand): void {
 				captions: "cli-captions",
 			}[command.kind];
 			cliWindow = loadRunnerWindow(windowType);
+			milestone(`runner window created (${windowType})`);
+			cliWindow.webContents.on("did-finish-load", () => milestone("renderer did-finish-load"));
+			cliWindow.webContents.on("dom-ready", () => milestone("renderer dom-ready"));
 
 			// Surface renderer console errors/warnings on stderr — the hidden window
 			// has no other way to show what went wrong (toasts are invisible).
@@ -454,6 +530,9 @@ export function runCli(command: CliCommand): void {
 			cliWindow.webContents.on("did-fail-load", (_e, code, description) => {
 				output.error(`Failed to load runner window: ${description} (${code})`);
 				app.exit(1);
+			});
+			app.on("child-process-gone", (_e, details) => {
+				milestone(`child-process-gone: ${details.type} (${details.reason})`);
 			});
 			cliWindow.webContents.on("render-process-gone", (_e, details) => {
 				output.error(`Renderer crashed: ${details.reason}`);

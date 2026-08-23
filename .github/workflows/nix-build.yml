@@ -1,0 +1,524 @@
+name: Nix build
+
+# nix-check.yml verifies that npmDepsHash still matches the lockfile. That is a
+# necessary condition for `nix build` to succeed, not a sufficient one, and the
+# distinction has never been tested: nothing in CI has ever actually built
+# nix/package.nix. `grep -rn "nix build" .github/workflows` returns one hit, and
+# it is inside a comment.
+#
+# So the derivation is verified the way its npmDepsHash was before its sibling
+# existed — by a user, after it breaks. The failure mode is worse here, because
+# the build can succeed while producing a reduced application: buildPhase runs
+# `vite build` alone, while package.json's build:linux also chains the PipeWire
+# helper, the compositor addon and an ffmpeg download. The native components are
+# resolved at runtime behind existence checks, so their absence degrades the app
+# instead of failing it. A green `nix build` therefore proves the derivation
+# compiles, and nothing about whether the result can record or export.
+#
+# Hence two steps rather than one: build, then run the headless CLI against the
+# artefact. The build catches drift in what installPhase copies; the smoke test
+# catches the gap between "compiles" and "runs".
+#
+# Deliberately not on every pull request yet. Nobody has measured what this
+# costs on a runner, and a check whose duration is unknown is not one to put in
+# front of every merge. Promote it once the schedule has reported a few times.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    # Mondays, 06:00 UTC. Drift here comes from the lockfile and from the app's
+    # own build requirements, neither of which respects a release cadence.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  # github.ref is refs/heads/main for the schedule as well as for a push to main,
+  # so keying on it alone puts both triggers in one group -- and with
+  # cancel-in-progress the Monday run is killed by any merge landing inside its
+  # half-hour window. A cancelled run is not a failure, so nothing goes red and
+  # the periodic report this workflow exists to produce silently stops arriving.
+  # Keying on the event as well keeps a merge train collapsing to its latest push
+  # without letting it cancel the schedule.
+  group: nix-build-${{ github.event_name }}-${{ github.ref }}
+  # false, where a PR-branch check would want true. This job takes half an hour
+  # and main takes merges minutes apart, so cancel-in-progress meant each merge
+  # evicted the previous run before it finished: the first four runs on main were
+  # cancelled at 21m38s, 25s, 7m05s and then one that only survived because the
+  # merges happened to stop. A cancelled run is not a failure either, so the
+  # branch showed nothing while the workflow reported nothing.
+  #
+  # What this buys is that a started run finishes, not that every merge is
+  # verified: GitHub holds a single pending entry per group and a newer push
+  # replaces it, so merges landing while a run is in flight still go unbuilt.
+  # That is the affordable half. Verifying each merge would need a queue this
+  # workflow does not have, and is not worth it for a half-hour job whose purpose
+  # is catching drift rather than gating a commit.
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: nix build .#openscreen
+    runs-on: ubuntu-latest
+    # Set from the smoke step's own arithmetic, not from a build measurement.
+    # `timeout --kill-after` is additive to wall clock, so each run_cli costs up
+    # to CLI_TIMEOUT + 10: two probes at 130 + one --help at 130 + 5x130 for
+    # sources + 3x(130 + 190) for record/export = 2000s, a shade over 33 minutes
+    # before a single second of build.
+    #
+    # The earlier 30 came from "two minutes, cold, 1.7G closure", measured when
+    # the script had four bounded invocations and the derivation had neither the
+    # Rust/wgpu compositor nor an ffmpeg override that cannot be substituted from
+    # cache.nixos.org and so compiles from source. Both landed afterwards and the
+    # budget was never revisited, which left the inner bounds summing to more than
+    # the outer one -- the job would be cancelled mid-step, printing no verdict,
+    # which is the exact "sat on a runner and learned nothing" outcome the bounds
+    # were added to prevent.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # checkout writes the job token into .git/config by default. This job
+          # builds the checked-out tree and then *runs the produced binary*, so a
+          # persisted token sits within reach of that code. Nothing here pushes.
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # The compositor renders through wgpu, so exporting needs a Vulkan ICD.
+      # A GitHub runner has no GPU and no software rasteriser, and the app says
+      # so itself when it gets there:
+      #
+      #   aucun pilote Vulkan sur cet hote ... le repli logiciel a echoue aussi
+      #   (aucun rasteriseur logiciel Vulkan (lavapipe))
+      #
+      # apt was the obvious source and was the wrong one: installing
+      # mesa-vulkan-drivers on this image left exactly one ICD behind,
+      # asahi_icd.json -- the Apple Silicon driver, on an x86 runner. Nix is
+      # already here and its mesa carries lavapipe, so take it from there and
+      # verify what landed rather than assuming a package's contents twice.
+      #
+      # Note what this is: the runner acquiring a capability an ordinary desktop
+      # already has, in the same category as its missing dbus. The derivation
+      # gains nothing -- a nix package that forced its own rasteriser would put
+      # every user with a real GPU into software rendering.
+      - name: Provide a software Vulkan rasteriser
+        run: |
+          set -euo pipefail
+          # --inputs-from . resolves nixpkgs through this flake's lock rather than
+          # the ambient registry. Without it the ICD comes from whatever
+          # nixpkgs-unstable happens to be current that day while the package under
+          # test is built from the pinned rev, so the loader and the driver are
+          # never the same pair twice -- a drift source injected into the very
+          # check that exists to catch drift, and one that can redden the export
+          # assertion for a reason unrelated to nix/package.nix.
+          MESA=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#mesa)
+          # --print-out-paths prints one line per output. Keep the first, or a
+          # multi-output mesa turns $MESA into a newline-joined argument and the
+          # find below fails on a path that does not exist -- taking the step down
+          # before the diagnostic branch can say why.
+          MESA=${MESA%%$'\n'*}
+          echo "mesa: $MESA"
+          # -print -quit rather than `| head -1`: find stops itself at the first
+          # match, so there is no pipe whose status pipefail can propagate into the
+          # assignment and no SIGPIPE to reason about.
+          ICD=$(find "$MESA" -name 'lvp_icd*.json' -print -quit)
+          if [ -z "$ICD" ]; then
+            echo "ICDs actually present:"
+            find "$MESA" -name '*_icd*.json' || true
+            echo "::error::nixpkgs#mesa carries no lavapipe ICD; the export test cannot run here"
+            exit 1
+          fi
+          echo "lavapipe ICD: $ICD"
+          echo "VK_ICD_FILENAMES=$ICD" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: nix build .#openscreen --print-build-logs
+
+      - name: Report closure size
+        run: |
+          set -euo pipefail
+          echo "closure: $(nix path-info --closure-size --human-readable ./result | tail -1)"
+          ls -la result/bin/
+
+      # The native components are resolved at runtime behind existence checks, so
+      # a wrapper pointing at a path that is not there degrades the app instead of
+      # failing it -- silently, which is the failure mode this whole workflow was
+      # written for. The smoke test below covers the compositor addon by
+      # exercising export; nothing exercises the PipeWire helper, because that
+      # needs a Wayland portal this runner does not have. Asserting the file
+      # exists and is executable is the part that can be checked here, and it is
+      # the part that actually broke when a --set pointed somewhere wrong.
+      - name: Check the wrapper's native components
+        run: |
+          set -euo pipefail
+          missing=0
+
+          wrapper_value() {
+            sed -nE "s/^export $1='(.*)'\$/\1/p" result/bin/openscreen | tail -1
+          }
+
+          # -x, not -e, for the ones that get spawned. The app agrees: the helper
+          # lookup in pipeWireCursorRecordingSession.ts requires X_OK before it
+          # accepts a candidate, so a present-but-not-executable file would pass a
+          # mere existence check here and be rejected at runtime. The compositor
+          # addon is require()'d rather than spawned, so readable is its bar.
+          for entry in \
+            "OPENSCREEN_FFMPEG_PATH:-x" \
+            "OPENSCREEN_COMPOSITOR_VIEW_NODE:-r" \
+            "OPENSCREEN_LINUX_CURSOR_HELPER_EXE:-x" \
+            "OPENSCREEN_WHISPER_SERVER_EXE:-x"; do
+            var=${entry%:*}
+            test=${entry##*:}
+            # Read the value the wrapper exports rather than re-deriving it here,
+            # so this checks the artefact and not the recipe.
+            path=$(wrapper_value "$var")
+            if [ -z "$path" ]; then
+              echo "::error::$var is not set by the wrapper"
+              missing=$((missing + 1))
+              continue
+            fi
+            if [ ! "$test" "$path" ]; then
+              echo "::error::$var points at $path, which fails $test"
+              missing=$((missing + 1))
+              continue
+            fi
+            echo "$var -> $path ($test)"
+          done
+
+          # ldd was the wrong instrument here, and it passed for the wrong reason:
+          # it resolves DT_NEEDED entries, and libpipewire is reached by dlopen, so
+          # it is never a DT_NEEDED and never appears. The check would have gone
+          # green with the hand-added RPATH missing entirely -- validating
+          # everything except the one thing this packaging adds.
+          #
+          # Read the RPATH out of the object instead, and require that one of its
+          # directories actually holds the soname handed to dlopen.
+          #
+          # Both components have one. The helper's libpipewire entry is the one
+          # that caught a real regression; the addon's libvulkan entry is the same
+          # construction and was silently being stripped too, unnoticed because
+          # ubuntu-latest has a system libvulkan that satisfies the dlopen anyway.
+          # That is exactly why it needs asserting rather than exercising: the
+          # runner cannot reproduce the host where it matters.
+          check_dlopen_rpath() {
+            local what="$1" obj="$2" soname="$3"
+            [ -n "$obj" ] || return 0
+            echo "--- $what dlopen contract ---"
+            # DT_RPATH or DT_RUNPATH: the derivations ask for the former, but read
+            # whichever is there rather than asserting which, so a silent
+            # conversion is reported instead of looking like an absent RPATH.
+            local rpath
+            rpath=$(readelf -d "$obj" | sed -nE 's/.*\((RPATH|RUNPATH)\).*\[(.*)\]/\2/p' | tail -1)
+            echo "rpath: ${rpath:-<none>}"
+            local origin found="" dirs dir
+            origin=$(dirname "$obj")
+            IFS=: read -ra dirs <<<"$rpath"
+            for dir in ${dirs[@]+"${dirs[@]}"}; do
+              # $ORIGIN is relative to the object; the ffmpeg entries use it.
+              dir=${dir//\$ORIGIN/$origin}
+              if [ -e "$dir/$soname" ]; then
+                found="$dir"
+                break
+              fi
+            done
+            if [ -z "$found" ]; then
+              echo "::error::no RPATH entry of the $what holds $soname; its dlopen will fail on any host without an ld.so.cache"
+              missing=$((missing + 1))
+            else
+              echo "$soname resolves from $found"
+            fi
+            # Unresolved DT_NEEDED entries are a different fault, and this is
+            # where they would show.
+            if ldd "$obj" | grep -q "not found"; then
+              echo "::error::the $what has unresolved DT_NEEDED libraries"
+              ldd "$obj" | grep "not found"
+              missing=$((missing + 1))
+            fi
+          }
+
+          check_dlopen_rpath "PipeWire helper" \
+            "$(wrapper_value OPENSCREEN_LINUX_CURSOR_HELPER_EXE)" libpipewire-0.3.so.0
+          check_dlopen_rpath "compositor addon" \
+            "$(wrapper_value OPENSCREEN_COMPOSITOR_VIEW_NODE)" libvulkan.so.1
+
+          [ "$missing" -eq 0 ]
+
+      # Electron initialises Chromium even for the headless CLI, so it needs a
+      # display server present. xvfb ships on ubuntu-latest.
+      #
+      # Two attempts, because "does the artefact run" and "can Chromium sandbox
+      # here" are different questions and only the first is about the build.
+      # chrome-sandbox has to be setuid root; a nix store path cannot be. NixOS
+      # answers that with security.chromiumSuidSandbox.enable, which a non-NixOS
+      # host running nix does not have, and Chromium's fallback -- unprivileged
+      # user namespaces -- is what Ubuntu restricts by default since 23.10.
+      #
+      # So a failure of the first attempt alone says nothing about the
+      # derivation. A failure of both does.
+      - name: Smoke-test the built binary
+        run: |
+          set -euo pipefail
+
+          # What this host actually gives X11 and Chromium, rather than what
+          # Debian's copy of xvfb-run says it would. Both capture paths die in
+          # screen_capturer_x11.cc "Failed to initialize pixel buffer", and the
+          # usual suspects are a shallow screen depth and a small /dev/shm.
+          echo "--- capture-relevant environment ---"
+          echo "xvfb-run default args: $(grep -m1 '^XVFBARGS=' "$(command -v xvfb-run)" || echo unknown)"
+          echo "/dev/shm: $(df -h /dev/shm | tail -1)"
+
+          echo "--- sandbox-relevant kernel settings ---"
+          echo "unprivileged_userns_clone: $(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || echo 'n/a')"
+          echo "apparmor_restrict_unprivileged_userns: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 'n/a')"
+
+          # Probe for the sandbox mode this host can run, then assert against it.
+          # The probe decides how to invoke; it is not itself the test.
+          # Every invocation is bounded. A CLI that never returns is a failure
+          # mode this workflow has already produced once, and an unbounded
+          # command turns it into a full runner slot spent learning nothing.
+          # Both of these were guesses at the X11 capture failure and the
+          # measurements above disproved both: this xvfb-run already defaults to
+          # 24-bit, and /dev/shm is 7.9G and empty. They stay because they are
+          # harmless and explicit beats inherited, but neither is the fix, and
+          # the capture failure remains unexplained.
+          XVFB_SCREEN="-screen 0 1920x1080x24"
+          CHROME_FLAGS="--disable-dev-shm-usage"
+          # Counted, because position is the variable under test and it is not
+          # fixed. The sandbox probe costs one invocation or two depending on the
+          # host, and the record loop breaks on first success, so it costs anywhere
+          # between two and six. An aggregate success rate therefore cannot be
+          # attributed to position on its own -- the workload ahead of it moved
+          # too. Labelling every block with the invocation it starts at is what
+          # makes the rates comparable across runs; reading them unlabelled is the
+          # mistake this counter exists to prevent.
+          RUN_CLI_N=0
+          run_cli() {
+            RUN_CLI_N=$((RUN_CLI_N + 1))
+            timeout --signal=TERM --kill-after=10s "${CLI_TIMEOUT:-120}" xvfb-run -a -s "$XVFB_SCREEN" ./result/bin/openscreen "$@"
+          }
+
+          SANDBOX=""
+          echo "--- probe: as shipped ---"
+          if run_cli --help >/dev/null 2>&1; then
+            echo "Chromium sandboxes normally here."
+          elif run_cli --no-sandbox --help >/dev/null 2>&1; then
+            SANDBOX="--no-sandbox"
+            echo "::warning::The artefact runs only with --no-sandbox. chrome-sandbox cannot be setuid inside the nix store, so this package has no sandbox story on non-NixOS hosts."
+          else
+            echo "::error::The artefact does not run, with or without the Chromium sandbox."
+            exit 1
+          fi
+
+          echo "--- openscreen --help ---"
+          run_cli $SANDBOX $CHROME_FLAGS --help
+
+          # `sources` enumerates displays, windows and microphones, so it
+          # exercises the capture stack rather than proving that a usage string
+          # can be printed.
+          #
+          # Read through -o rather than stdout. Ubuntu's xvfb-run folds the
+          # command's stderr into its stdout -- established by probing it here,
+          # after an earlier reading of Debian's copy of the script said
+          # otherwise -- so Chromium's startup complaints about dbus and OpenGL
+          # arrive mixed into what a parser would read. The CLI is not at fault
+          # and stdout needs no fixing; the wrapper is simply not something a
+          # caller controls, which is the whole reason -o exists.
+          # The hang reproduces about half the time, so a single invocation
+          # proves nothing either way. Five per run, sharing one build: the
+          # build is the expensive part and it is already done by here.
+          #
+          # OPENSCREEN_DIAGNOSTIC turns on the timestamped startup milestones.
+          # Three of six earlier runs stopped here with the renderer emitting
+          # nothing at all, so the question is how far the main process got, and
+          # the last milestone before the kill is the answer.
+          ATTEMPTS=5
+          # Named once so the invocation and the message that reports a kill
+          # cannot drift apart -- they already had.
+          SOURCES_TIMEOUT=120
+          HUNG=0
+          OK=0
+          FAILED=0
+          LAST_OK=""
+          for i in $(seq 1 "$ATTEMPTS"); do
+            echo "=== attempt $i/$ATTEMPTS (run_cli #$((RUN_CLI_N + 1))) ==="
+            RC=0
+            # 120, matching record: the renderer's own bounds can legitimately
+            # spend 35s here (20s on getSources, then up to 3x5s on the audio
+            # path), and 60 left barely 25s for a cold Electron start under Xvfb
+            # from a 1.7G closure -- so the outer kill could fire while every
+            # internal bound was working.
+            # 2>&1, like record and export: the probe above established that this
+            # host's xvfb-run folds stderr into stdout anyway, so the separate .err
+            # capture was a file nothing could ever read.
+            CLI_TIMEOUT=$SOURCES_TIMEOUT OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>&1 || RC=$?
+            # Before the branching, so a success reports its duration too. The
+            # measurement was added to compare this path against record's, and the
+            # first run to carry it printed only record's -- the grep lived in a
+            # failure branch, so the successful side, which is the interesting one,
+            # went into a scratch file and stayed there.
+            grep -a "get-sources\]" "/tmp/sources.$i.out" || true
+            # Every non-zero outcome is a failure. The kill is tracked on top of
+            # that rather than instead of it, because it says something different:
+            # the run never got far enough to report a reason at all.
+            if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
+              FAILED=$((FAILED + 1))
+              HUNG=$((HUNG + 1))
+              echo "HUNG after ${SOURCES_TIMEOUT}s. Milestones reached:"
+              # Read from stdout, not stderr. The probe above shows this host's
+              # xvfb-run folds the command's stderr into stdout, so the stderr
+              # capture is empty and every milestone lands in the other file.
+              grep -a milestone "/tmp/sources.$i.out" || echo "  (none at all)"
+            elif [ "$RC" -eq 0 ]; then
+              OK=$((OK + 1))
+              LAST_OK="/tmp/sources.$i.json"
+              echo "succeeded. Last milestone:"
+              grep -a milestone "/tmp/sources.$i.out" | tail -1 || echo "  (none)"
+            else
+              # Bounded failure, not a hang: the CLI gave up and said why. Its -o
+              # file does not exist, so it must not become LAST_OK -- an earlier
+              # version assumed any non-timeout exit meant success and then tried
+              # to read a file that was never written.
+              FAILED=$((FAILED + 1))
+              echo "failed with rc=$RC. Last milestone:"
+              grep -a milestone "/tmp/sources.$i.out" | tail -1 || echo "  (none)"
+              echo "reported error:"
+              grep -a "Error:" "/tmp/sources.$i.out" | tail -2 || true
+            fi
+          done
+
+          echo "=== $ATTEMPTS attempts: $OK ok, $FAILED failed ($HUNG of them killed on timeout) ==="
+
+          # A run where nothing hung still has to prove the -o channel works.
+          if [ -n "$LAST_OK" ]; then
+            echo "--- the -o file from the last attempt that returned ---"
+            cat "$LAST_OK"
+            SOURCES_FILE="$LAST_OK" python3 <<'PY'
+          import json, os
+          doc = json.load(open(os.environ["SOURCES_FILE"]))
+          missing = [k for k in ("displays", "windows", "microphones") if k not in doc]
+          if missing:
+              raise SystemExit(f"-o file is missing {missing}")
+          print(f"displays={len(doc['displays'])} windows={len(doc['windows'])} microphones={len(doc['microphones'])}")
+          PY
+          fi
+
+          # Noted, not acted on. Enumeration is flaky here and the export
+          # assertion below is the more
+          # important question; a flaky attempt costs an annotation rather than
+          # the answer. Verdict at the end, once both have had their say.
+          if [ "$HUNG" -gt 0 ]; then
+            echo "::warning::openscreen sources had to be killed on $HUNG of $ATTEMPTS attempts. Check the milestones above for how far it got before the outer bound fired."
+          fi
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::warning::openscreen sources failed on $FAILED of $ATTEMPTS attempts. The capture path is not reliable on this host."
+          fi
+
+          # The real acceptance test. Everything above proves the package starts
+          # and can list a screen; none of it touches the compositor addon, which
+          # is what actually renders output. Record a couple of seconds, export it,
+          # and look at what came out.
+          #
+          # This block was briefly moved ahead of the sources loop and moved back,
+          # so that it is not tried a third time. The theory was that position
+          # explained why record seemed to fail far more often than sources --
+          # run_cli spawns a fresh `xvfb-run -a` each time, so record was always
+          # invocations 6-8, after five Xvfb servers had come and gone. The
+          # experiment could not answer it: by the time it ran, record had started
+          # succeeding from its old position anyway, so there was no contrast left
+          # to measure. From position 4 it succeeded, which proves nothing it was
+          # not already doing from position 9.
+          #
+          # What the runs did establish is that the premise was wrong. Enumeration
+          # here is bimodal -- 12-31ms when it answers, no return at all when it
+          # does not, with nothing in between across every measurement so far --
+          # and the failures cluster by run and by window within a run rather than
+          # by command. The apparent record-versus-sources gap was that clustering
+          # seen through a denominator, not a property of either path. Reopen this
+          # with the run_cli labels, on a run that actually fails, before assuming
+          # otherwise.
+          #
+          # Up to three goes, because screen capture on this host is unreliable in
+          # its own right. One success is enough for the question being asked here.
+          echo "--- record then export (first run_cli here is #$((RUN_CLI_N + 1))) ---"
+          EXPORTED=""
+          # Tracked apart from EXPORTED so the verdict can name the stage that
+          # actually failed. For three runs every attempt died in record without
+          # export ever executing, while the annotation said "the export path does
+          # not work" -- an accusation aimed at the one component the run never
+          # reached, and the compositor addon is precisely what this step exists
+          # to vouch for.
+          RECORDED=0
+          for i in 1 2 3; do
+            echo "=== export attempt $i/3 (run_cli #$((RUN_CLI_N + 1))) ==="
+            rm -f /tmp/demo.openscreen /tmp/demo.mp4
+            RC=0
+            CLI_TIMEOUT=120 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS record --duration 2 --project /tmp/demo.openscreen >"/tmp/rec.$i.out" 2>&1 || RC=$?
+            # Outside the failure branch for the same reason as above: a record that
+            # works is exactly the measurement missing from the comparison, since
+            # this path has never yet produced one.
+            grep -a "get-sources\]" "/tmp/rec.$i.out" || true
+            if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.openscreen ]; then
+              echo "record failed (rc=$RC); last lines:"
+              tail -5 "/tmp/rec.$i.out" || true
+              continue
+            fi
+            RECORDED=1
+            echo "recorded. project:"
+            head -c 200 /tmp/demo.openscreen; echo
+
+            RC=0
+            CLI_TIMEOUT=180 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS export /tmp/demo.openscreen -o /tmp/demo.mp4 >"/tmp/exp.$i.out" 2>&1 || RC=$?
+            if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.mp4 ]; then
+              echo "export failed (rc=$RC); last lines:"
+              tail -15 "/tmp/exp.$i.out" || true
+              continue
+            fi
+            EXPORTED=/tmp/demo.mp4
+            break
+          done
+
+          EXPORT_OK=0
+          if [ -z "$EXPORTED" ] && [ "$RECORDED" -eq 0 ]; then
+            echo "::error::No attempt got past record, so export never ran and the compositor addon is unproven. This is a capture failure on this host, not an export failure."
+          elif [ -z "$EXPORTED" ]; then
+            echo "::error::record produced a project but no attempt produced an MP4. The compositor addon is packaged and the export path does not work."
+          else
+            SIZE=$(wc -c < "$EXPORTED")
+            # An MP4 opens with a 4-byte length then 'ftyp'. A zero-length or
+            # truncated file would otherwise pass a mere existence check.
+            MAGIC=$(dd if="$EXPORTED" bs=1 skip=4 count=4 2>/dev/null || true)
+            echo "exported $SIZE bytes, magic at offset 4: $MAGIC"
+            if [ "$MAGIC" != "ftyp" ]; then
+              echo "::error::output is not an MP4 (no ftyp box)"
+            elif [ "$SIZE" -lt 10000 ]; then
+              echo "::error::MP4 is only $SIZE bytes, too small to hold two seconds of video"
+            else
+              echo "Export works: $SIZE bytes of MP4."
+              EXPORT_OK=1
+            fi
+          fi
+
+          # One verdict, after both questions have been asked. Enumeration being
+          # flaky must not hide whether export works, which is the whole point of
+          # having packaged the compositor addon.
+          #
+          # The gate is "did enumeration ever work" and "does export work", not
+          # "did all five attempts pass". Requiring FAILED -eq 0 made the job red
+          # by construction: the standing numbers on this runner are 1/5, 3/5 and
+          # 4/5 ok, so a run where export is perfect and four enumerations succeed
+          # still failed. A post-merge check that is red by design is one that gets
+          # muted, which costs more than the flakiness it was reporting. The
+          # per-attempt warnings above keep that flakiness visible without letting
+          # it decide the build; tighten this to $ATTEMPTS once the capture failure
+          # is understood and fixed.
+          echo "=== verdict: enumeration $OK/$ATTEMPTS ok, record $RECORDED, export $EXPORT_OK, $RUN_CLI_N run_cli invocations ==="
+          if [ "$EXPORT_OK" -ne 1 ] || [ "$OK" -eq 0 ]; then
+            exit 1
+          fi

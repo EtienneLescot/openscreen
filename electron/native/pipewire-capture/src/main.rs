@@ -1108,7 +1108,8 @@ fn finish_capture<W: Write>(
             code: "audio-dropped".to_owned(),
             message: format!(
                 "{samples} {label} sample(s) were discarded because the encoder could not \
-                 keep up. Unlike a dropped video frame, this is audible."
+                 keep up, and stand in the recording as that much silence. Unlike a dropped \
+                 video frame, this is audible."
             ),
         });
     }

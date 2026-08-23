@@ -3,6 +3,7 @@
 // shapes the provider actually sees.
 
 import { describe, expect, it } from "vitest";
+import { modelFromSse } from "../lib/cassette";
 import type { CapturedRequest } from "../lib/model-server";
 import { transcriptFromSse, wireFromRequests } from "../lib/wire";
 
@@ -244,5 +245,37 @@ describe("transcriptFromSse", () => {
 			"",
 		].join("\n");
 		expect(transcriptFromSse(sse).finalText).toBe("Hello");
+	});
+});
+
+describe("modelFromSse — qui a répondu, pas ce qu'on a demandé", () => {
+	const chunk = (model: string) =>
+		`data: ${JSON.stringify({ object: "chat.completion.chunk", model, choices: [] })}\n\n`;
+
+	it("rend le modèle que le flux s'attribue", () => {
+		expect(modelFromSse(chunk("deepseek-v4-flash"))).toBe("deepseek-v4-flash");
+	});
+
+	it("rend celui du PREMIER chunk qui se nomme, et ne suppose pas les suivants", () => {
+		// Un flux qui change d'avis en cours de route est précisément ce qu'on veut
+		// pouvoir constater ; le premier nom est la réponse, pas une moyenne.
+		expect(modelFromSse(chunk("a") + chunk("b"))).toBe("a");
+	});
+
+	it("rend null quand le flux ne se nomme pas — jamais le modèle demandé", () => {
+		// L'absence est une absence. Retomber sur la demande ici rendrait la
+		// divergence invisible, ce qui est le défaut que cette fonction répare.
+		expect(
+			modelFromSse('data: {"object":"chat.completion.chunk","choices":[]}' + `\n\n`),
+		).toBeNull();
+	});
+
+	it("ignore un chunk illisible au lieu d'abandonner le flux", () => {
+		expect(modelFromSse("data: {pas du json}" + `\n\n` + chunk("c"))).toBe("c");
+	});
+
+	it("s'arrête à [DONE] et ne rend rien d'un flux vide", () => {
+		expect(modelFromSse("data: [DONE]" + `\n\n` + chunk("d"))).toBeNull();
+		expect(modelFromSse("")).toBeNull();
 	});
 });

@@ -1,11 +1,6 @@
 {
 	"scenario": "wizard-enhance",
-	"expectedFailures": [
-		"beh.multiplier",
-		"beh.no-false-negative",
-		"beh.sandbox",
-		"dsl.focus.not-fabricated"
-	],
+	"expectedFailures": ["beh.multiplier", "dsl.focus.not-fabricated"],
 	"behaviour": 0.6667,
 	"dsl": 1,
 	"recordedAt": "2026-07-31"

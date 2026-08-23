@@ -14,8 +14,8 @@ const EDITOR_URL = `${BASE_URL}/?windowType=editor`;
 // 300 MB exactly, so MediaStage's formatSize renders "300 MB".
 const SIZED_BYTES = 314_572_800;
 
-function makeDoc() {
-	const asset = (id: string, label: string, sizeBytes?: number) => ({
+function makeAsset(id: string, label: string, sizeBytes?: number) {
+	return {
 		id,
 		kind: "video" as const,
 		label,
@@ -24,7 +24,10 @@ function makeDoc() {
 		...(sizeBytes === undefined ? {} : { sizeBytes }),
 		video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
 		cameraTrack: null,
-	});
+	};
+}
+
+function makeDoc() {
 	return {
 		schemaVersion: 5,
 		project: {
@@ -34,7 +37,10 @@ function makeDoc() {
 			updatedAt: "2026-07-01T00:00:00.000Z",
 			primaryAssetId: "asset_sized",
 		},
-		assets: [asset("asset_sized", "Sized.mp4", SIZED_BYTES), asset("asset_unsized", "Unsized.mp4")],
+		assets: [
+			makeAsset("asset_sized", "Sized.mp4", SIZED_BYTES),
+			makeAsset("asset_unsized", "Unsized.mp4"),
+		],
 		transcript: null,
 		transcripts: [],
 		timeline: {
@@ -67,22 +73,56 @@ function makeDoc() {
 	};
 }
 
-async function seedAndOpen(page: Page): Promise<void> {
+// Same fixture, split into two clips: FloatingInspector's "Edit clip" button
+// only renders its picker popover past one clip (clips.length === 1 jumps
+// straight to onEditClip instead), so testing the popover needs a second clip.
+function makeTwoClipDoc(): ReturnType<typeof makeDoc> {
+	const doc = makeDoc();
+	doc.timeline.clips = [
+		{
+			id: "clip_e2e_a",
+			assetId: "asset_sized",
+			sourceStartSec: 0,
+			sourceEndSec: 300,
+			timelineStartSec: 0,
+			timelineEndSec: 300,
+			wordRefs: [],
+			origin: "system" as const,
+			reason: "",
+		},
+		{
+			id: "clip_e2e_b",
+			assetId: "asset_sized",
+			sourceStartSec: 300,
+			sourceEndSec: 600,
+			timelineStartSec: 300,
+			timelineEndSec: 600,
+			wordRefs: [],
+			origin: "system" as const,
+			reason: "",
+		},
+	];
+	return doc;
+}
+
+async function seedAndOpen(page: Page, doc: ReturnType<typeof makeDoc> = makeDoc()): Promise<void> {
 	await page.addInitScript((serialized) => {
-		const doc = JSON.parse(serialized);
+		const parsed = JSON.parse(serialized);
 		// The shim keys documents by project id under one blob (see
 		// `createShimBridgeClient` in src/native/browserShim.ts); the shell's mount
 		// effect calls listProjects() → loadProject(first) on launch, so seeding
 		// this is what lands us in a populated editor.
 		localStorage.setItem(
 			"browser-shim-projects-v2",
-			JSON.stringify({ documents: { [doc.project.id]: doc }, order: [doc.project.id] }),
+			JSON.stringify({ documents: { [parsed.project.id]: parsed }, order: [parsed.project.id] }),
 		);
-	}, JSON.stringify(makeDoc()));
+	}, JSON.stringify(doc));
 	await page.goto(EDITOR_URL, { waitUntil: "domcontentloaded" });
-	// listProjects → loadProject are both async. A rendered clip pill is the
+	// listProjects → loadProject are both async. Rendered clip pills are the
 	// first observable proof the seeded document reached the timeline.
-	await expect(page.locator("[data-clip-id]")).toHaveCount(1, { timeout: 15_000 });
+	await expect(page.locator("[data-clip-id]")).toHaveCount(doc.timeline.clips.length, {
+		timeout: 15_000,
+	});
 }
 
 test.describe("v4 editor shell", () => {
@@ -201,5 +241,18 @@ test.describe("v4 editor shell", () => {
 		await page.mouse.up();
 		await expect.poll(leftPct).toBeCloseTo(75, 0);
 		expect(await storeTimeSec()).toBeGreaterThan(400);
+	});
+
+	test("clicking outside the clip picker popover closes it", async ({ page }) => {
+		await seedAndOpen(page, makeTwoClipDoc());
+
+		await page.getByRole("button", { name: "Edit clip" }).click();
+		const picker = page.getByRole("menu", { name: "Choose a clip to edit" });
+		await expect(picker).toBeVisible();
+
+		// Any unrelated point outside the popover — the timeline tracks are a
+		// stable target the other tests already click on.
+		await page.locator('[class*="tlTracks"]').click({ position: { x: 10, y: 10 } });
+		await expect(picker).toBeHidden();
 	});
 });

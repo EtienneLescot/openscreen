@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
 	app,
 	BrowserWindow,
+	clipboard,
 	dialog,
 	ipcMain,
 	Menu,
@@ -16,26 +17,30 @@ import {
 } from "electron";
 import { ShortcutBinding } from "../src/lib/shortcuts";
 import {
+	type AboutFacts,
+	COPYRIGHT,
+	formatAboutDetail,
+	PRODUCT_NAME,
+	usesNativeAboutPanel,
+} from "./about";
+import {
 	blockedFromInstalling,
 	checkForSelfUpdate,
 	downloadSelfUpdate,
 	installSelfUpdate,
+	type UpdateOutcome,
 } from "./auto-updater";
 import { parseCliArgs } from "./cli/args";
 import { runCli } from "./cli/cliMain";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "./diagnostics/main-log-buffer";
+import { buildEditMenuSubmenu, type EditorUndoRedoChannel, routeEditorUndoRedo } from "./edit-menu";
 import {
 	loadAndRegisterGlobalShortcut,
 	registerOpenAppShortcut,
 	unregisterAllGlobalShortcuts,
 } from "./globalShortcut";
 import { mainT, setMainLocale } from "./i18n";
-import {
-	classifyInstall,
-	type InstallChannel,
-	platformOwnsUpdates,
-	probeInstall,
-} from "./install-channel";
+import { getInstallChannel, offersUpdateCheck, platformOwnsUpdates } from "./install-channel";
 import { getSelectedDesktopSource, registerIpcHandlers } from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
 import { registerSttIpc, shutdownStt } from "./stt";
@@ -185,6 +190,15 @@ function sendEditorMenuAction(
 	targetWindow.webContents.send(channel);
 }
 
+/**
+ * Resolve which window the Edit menu's Undo/Redo is aimed at. The routing itself
+ * is `routeEditorUndoRedo`, in `edit-menu.ts`, where a test can reach it.
+ */
+function sendEditorUndoRedo(channel: EditorUndoRedoChannel) {
+	const targetWindow = BrowserWindow.getFocusedWindow() ?? mainWindow;
+	routeEditorUndoRedo(channel, targetWindow, () => !!targetWindow && isEditorWindow(targetWindow));
+}
+
 function setupApplicationMenu() {
 	const isMac = process.platform === "darwin";
 	const template: Electron.MenuItemConstructorOptions[] = [];
@@ -197,6 +211,17 @@ function setupApplicationMenu() {
 					role: "about",
 					label: mainT("common", "actions.about") || "About OpenScreen",
 				},
+				// Omitted entirely — here, in the Help menu and in the tray — where a package
+				// manager owns the update. See `canOfferUpdateCheck`.
+				...(canOfferUpdateCheck()
+					? [
+							{ type: "separator" as const },
+							{
+								label: mainT("common", "actions.checkForUpdates") || "Check for Updates",
+								click: runUpdateCheck,
+							},
+						]
+					: []),
 				{ type: "separator" },
 				{
 					role: "services",
@@ -259,18 +284,11 @@ function setupApplicationMenu() {
 		},
 		{
 			label: mainT("common", "actions.edit") || "Edit",
-			submenu: [
-				{ role: "undo", label: mainT("common", "actions.undo") || "Undo" },
-				{ role: "redo", label: mainT("common", "actions.redo") || "Redo" },
-				{ type: "separator" },
-				{ role: "cut", label: mainT("common", "actions.cut") || "Cut" },
-				{ role: "copy", label: mainT("common", "actions.copy") || "Copy" },
-				{ role: "paste", label: mainT("common", "actions.paste") || "Paste" },
-				{
-					role: "selectAll",
-					label: mainT("common", "actions.selectAll") || "Select All",
-				},
-			],
+			// Built in `edit-menu.ts` — read its header for why Undo/Redo are not roles.
+			submenu: buildEditMenuSubmenu({
+				label: (key, fallback) => mainT("common", key) || fallback,
+				dispatch: sendEditorUndoRedo,
+			}),
 		},
 		{
 			label: mainT("common", "actions.view") || "View",
@@ -332,6 +350,29 @@ function setupApplicationMenu() {
 		},
 	);
 
+	// Windows and Linux have no app menu, so the two items macOS keeps there — About and the
+	// update check — live under Help, which is where those platforms look for them.
+	if (!isMac) {
+		template.push({
+			label: mainT("common", "actions.help") || "Help",
+			submenu: [
+				...(canOfferUpdateCheck()
+					? [
+							{
+								label: mainT("common", "actions.checkForUpdates") || "Check for Updates",
+								click: runUpdateCheck,
+							},
+							{ type: "separator" as const },
+						]
+					: []),
+				{
+					label: mainT("common", "actions.about") || "About OpenScreen",
+					click: runAboutDialog,
+				},
+			],
+		});
+	}
+
 	const menu = Menu.buildFromTemplate(template);
 	Menu.setApplicationMenu(menu);
 }
@@ -357,14 +398,125 @@ function getTrayIcon(filename: string, size: number) {
 }
 
 let updateCheckInFlight = false;
-let installChannel: InstallChannel | null = null;
 /** Aborted on quit so a pending check cannot outlive the app and pop a dialog on the way out —
  *  or reject into `main-process-errors`, which re-throws and would take the process with it. */
 let updateCheckAbort: AbortController | null = null;
 
-function getInstallChannel(): InstallChannel {
-	if (installChannel === null) installChannel = classifyInstall(probeInstall());
-	return installChannel;
+/** Every update affordance in the app keys off this one answer, so that the rule in
+ *  install-channel.ts — a Store/Flathub/Snap/Nix copy is offered nothing at all, not even a
+ *  disabled item — cannot be asked two different ways by the menu, the tray and the HUD.
+ *
+ *  Recording is part of the same answer. The tray used to enforce it structurally — its
+ *  recording template holds nothing but "Stop Recording" — but the app and Help menus are
+ *  built once and would otherwise stay live mid-take, and `blockedFromInstalling` only vetoes
+ *  the install, i.e. after a 240 MB download has already competed with the encoder. Every
+ *  surface is rebuilt when the flag flips (see `setupApplicationMenu`/`updateTrayMenu`). */
+function canOfferUpdateCheck(): boolean {
+	return offersUpdateCheck(getInstallChannel(), { recording: isRecording });
+}
+
+/** What the HUD is told at mount, and only the permanent half of the veto. The recording half
+ *  is transient and the renderer already knows whether it is recording, so folding it into a
+ *  once-per-mount answer would strand the button off for the rest of a HUD that happened to
+ *  mount mid-take — and the HUD is rebuilt for every recording. The renderer applies the
+ *  transient half itself; `check-for-updates` still enforces both. */
+function channelAllowsUpdateCheck(): boolean {
+	return !platformOwnsUpdates(getInstallChannel());
+}
+
+/** Message boxes must be owned by a window. The HUD is `alwaysOnTop` and `skipTaskbar`
+ *  (electron/windows.ts), so an unowned dialog opens *behind* it on Windows and most Linux
+ *  WMs, with no taskbar entry to recover it — the user sees a button flash and nothing else.
+ *  Mirrors what ipc/handlers.ts already does for its own dialogs. */
+function showMessageBox(options: Electron.MessageBoxOptions) {
+	const visible = (win: BrowserWindow | null) =>
+		win && !win.isDestroyed() && win.isVisible() ? win : null;
+	// A modal owned by a hidden window may never be drawn, so an unowned dialog is the safer
+	// fallback when the HUD has been closed to the tray.
+	const parent = visible(BrowserWindow.getFocusedWindow()) ?? visible(mainWindow);
+	return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+}
+
+function aboutFacts(): AboutFacts {
+	return {
+		version: app.getVersion(),
+		channel: getInstallChannel(),
+		platform: process.platform,
+		arch: process.arch,
+		electron: process.versions.electron,
+		chrome: process.versions.chrome,
+		node: process.versions.node,
+	};
+}
+
+/** macOS gets its native About panel (the app menu's `role: "about"` opens it) because that
+ *  is the window its users expect; this is the only chance to put our facts in it. Nothing
+ *  here is translated, so it needs no re-run when the locale changes. */
+function configureAboutPanel() {
+	if (!usesNativeAboutPanel(process.platform)) return;
+	const facts = aboutFacts();
+	app.setAboutPanelOptions({
+		applicationName: PRODUCT_NAME,
+		applicationVersion: facts.version,
+		// Rendered in parentheses after the version, where a build number would go. The install
+		// channel is worth more there than a second copy of the version.
+		version: facts.channel,
+		copyright: COPYRIGHT,
+		credits: formatAboutDetail(facts),
+	});
+}
+
+/** Mirrors `updateCheckInFlight`. A menu item cannot fire twice — the menu closes on the
+ *  click — but the in-app menu reaches the same box from a renderer, where a double click or
+ *  a held Enter can, and every one of those would stack another modal on the same parent. */
+let aboutDialogOpen = false;
+
+/** The About box for the platforms with no native panel worth opening. The "Copy" button is
+ *  the point of building it ourselves: version, runtime and install channel are exactly what
+ *  a bug report needs, and retyping them off a screenshot is how they arrive wrong. */
+async function showAboutDialog() {
+	if (aboutDialogOpen) return;
+	aboutDialogOpen = true;
+	try {
+		await presentAboutDialog();
+	} finally {
+		aboutDialogOpen = false;
+	}
+}
+
+async function presentAboutDialog() {
+	const facts = aboutFacts();
+	const detail = `${formatAboutDetail(facts)}\n${COPYRIGHT}`;
+	const heading = `${PRODUCT_NAME} ${facts.version}`;
+	const choice = await showMessageBox({
+		type: "info",
+		title: mainT("common", "actions.about") || "About OpenScreen",
+		message: heading,
+		detail,
+		buttons: [
+			mainT("common", "actions.close") || "Close",
+			mainT("common", "actions.copy") || "Copy",
+		],
+		defaultId: 0,
+		cancelId: 0,
+		noLink: true,
+	});
+	if (choice.response === 1) clipboard.writeText(`${heading}\n${detail}`);
+}
+
+/** Menu entry point. Not `void showAboutDialog()`: an unhandled rejection here is re-thrown
+ *  by main-process-errors and would take the main process with it. */
+function runAboutDialog() {
+	showAboutDialog().catch((error) => {
+		console.error("[about] dialog failed", error);
+	});
+}
+
+/** Menu and tray entry point, for the same reason `runAboutDialog` exists. */
+function runUpdateCheck() {
+	checkForUpdates().catch((error) => {
+		console.error("[updates] check failed", error);
+	});
 }
 
 /** Mirrors the flag that already drives the tray icon. An update must never interrupt a take —
@@ -375,9 +527,9 @@ let isRecording = false;
 async function downloadAndInstall(latestVersion: string) {
 	const downloaded = await downloadSelfUpdate();
 	if (downloaded.kind === "failed") {
-		await dialog.showMessageBox({
+		await showMessageBox({
 			type: "error",
-			title: app.name,
+			title: PRODUCT_NAME,
 			// Not `updates.failed`: the CHECK succeeded — that is how we got here — and telling
 			// the user we could not check for updates sends them looking in the wrong place.
 			message: mainT("common", "updates.downloadFailed"),
@@ -394,9 +546,9 @@ async function downloadAndInstall(latestVersion: string) {
 		platform: process.platform,
 	});
 	if (blocked) {
-		await dialog.showMessageBox({
+		await showMessageBox({
 			type: "info",
-			title: app.name,
+			title: PRODUCT_NAME,
 			message: mainT(
 				"common",
 				blocked === "recording" ? "updates.blockedRecording" : "updates.blockedLocation",
@@ -405,9 +557,9 @@ async function downloadAndInstall(latestVersion: string) {
 		return;
 	}
 
-	const restart = await dialog.showMessageBox({
+	const restart = await showMessageBox({
 		type: "info",
-		title: app.name,
+		title: PRODUCT_NAME,
 		message: mainT("common", "updates.readyToInstall", { latestVersion }),
 		buttons: [
 			mainT("common", "actions.restartNow") || "Restart Now",
@@ -419,8 +571,36 @@ async function downloadAndInstall(latestVersion: string) {
 	if (restart.response === 0) await installSelfUpdate();
 }
 
-async function checkForUpdates() {
-	if (updateCheckInFlight) return;
+/** `onVerdict` fires as soon as we know whether an update exists — before any of the dialogs
+ *  that answer leads to. The HUD's button waits on it to drop its "Checking…" label, and must
+ *  not be left spinning behind a dialog the user walked away from, or behind a 240 MB
+ *  download they approved. */
+/** `checkForSelfUpdate` accepts no signal and no timeout, so a stalled update feed (corporate
+ *  proxy, CDN blackhole) hangs it forever. Unbounded, that would leave `checkForUpdates`'
+ *  `finally` unreachable and `updateCheckInFlight` latched true for the rest of the session,
+ *  silently turning every later check — menu, tray and HUD — into a no-op. */
+async function probeSelfUpdate(): Promise<UpdateOutcome> {
+	let timer: NodeJS.Timeout | undefined;
+	const timeout = new Promise<UpdateOutcome>((resolve) => {
+		timer = setTimeout(
+			() => resolve({ kind: "failed", error: new Error("self-update probe timed out") }),
+			30_000,
+		);
+		timer.unref?.();
+	});
+	try {
+		return await Promise.race([checkForSelfUpdate(getInstallChannel()), timeout]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+async function checkForUpdates(onVerdict?: () => void) {
+	if (updateCheckInFlight) {
+		// Another check owns the dialogs; this caller has nothing left to wait for.
+		onVerdict?.();
+		return;
+	}
 	updateCheckInFlight = true;
 	updateCheckAbort = new AbortController();
 	const signal = AbortSignal.any([updateCheckAbort.signal, AbortSignal.timeout(10_000)]);
@@ -431,9 +611,9 @@ async function checkForUpdates() {
 			signal,
 		});
 		if (result.kind === "current") {
-			await dialog.showMessageBox({
+			await showMessageBox({
 				type: "info",
-				title: app.name,
+				title: PRODUCT_NAME,
 				message: mainT("common", "updates.current", {
 					currentVersion: result.currentVersion,
 				}),
@@ -445,7 +625,7 @@ async function checkForUpdates() {
 		// payload, and every macOS install predating Developer ID signing, which Squirrel can
 		// never update — can only be pointed at the download page. Ask the updater first so the
 		// buttons offered match what this install can actually do.
-		const selfUpdate = await checkForSelfUpdate(getInstallChannel());
+		const selfUpdate = await probeSelfUpdate();
 		const canSelfUpdate = selfUpdate.kind === "downloaded";
 		if (selfUpdate.kind === "failed") {
 			// A release published before the update feeds existed has no latest*.yml. Not worth a
@@ -456,9 +636,9 @@ async function checkForUpdates() {
 			});
 		}
 
-		const choice = await dialog.showMessageBox({
+		const choice = await showMessageBox({
 			type: "info",
-			title: app.name,
+			title: PRODUCT_NAME,
 			message: mainT("common", "updates.available", {
 				currentVersion: result.currentVersion,
 				latestVersion: result.latestVersion,
@@ -482,15 +662,20 @@ async function checkForUpdates() {
 		// Quitting is not a failure, and the app is already on its way out — there is nothing
 		// left to show the dialog on.
 		if (signal.aborted && updateCheckAbort?.signal.aborted) return;
-		await dialog.showMessageBox({
+		await showMessageBox({
 			type: "error",
-			title: app.name,
+			title: PRODUCT_NAME,
 			message: mainT("common", "updates.failed"),
 			detail: error instanceof Error ? error.message : String(error),
 		});
 	} finally {
 		updateCheckInFlight = false;
 		updateCheckAbort = null;
+		// Reported here, not the moment the release lookup returns. Until this point
+		// `updateCheckInFlight` is still set, so a caller told "done" early re-enables a
+		// button whose very next click hits the guard above and does nothing at all — no
+		// dialog, no error, nothing the user can see.
+		onVerdict?.();
 	}
 }
 
@@ -501,7 +686,7 @@ function updateTrayMenu(recording: boolean = false) {
 		? mainT("common", "actions.recordingStatus", {
 				source: selectedSourceName,
 			}) || `Recording: ${selectedSourceName}`
-		: "OpenScreen";
+		: PRODUCT_NAME;
 	const menuTemplate = recording
 		? [
 				{
@@ -523,20 +708,28 @@ function updateTrayMenu(recording: boolean = false) {
 				// Omitted entirely where a package manager owns the update (Microsoft Store,
 				// Flathub, Snap, Nix): there the app is already kept current, and offering a
 				// GitHub download walks the user into a second, parallel installation.
-				...(platformOwnsUpdates(getInstallChannel())
-					? []
-					: [
+				...(canOfferUpdateCheck()
+					? [
 							{
 								label: mainT("common", "actions.checkForUpdates") || "Check for Updates",
-								click: () => {
-									// Not `void`: an unhandled rejection here is re-thrown by
-									// main-process-errors and would kill the main process.
-									checkForUpdates().catch((error) => {
-										console.error("[updates] check failed", error);
-									});
-								},
+								click: runUpdateCheck,
 							},
-						]),
+						]
+					: []),
+				// The About box's other homes are menu-bar items, and no window this app creates
+				// shows a menu bar: the HUD is frameless (electron/windows.ts), and the editor and
+				// notes windows call setAutoHideMenuBar(true) on Windows and Linux. Without this
+				// entry the box — and the Copy button that is the point of building it ourselves —
+				// is reachable there only by opening the editor and holding Alt.
+				isMac
+					? {
+							role: "about" as const,
+							label: mainT("common", "actions.about") || "About OpenScreen",
+						}
+					: {
+							label: mainT("common", "actions.about") || "About OpenScreen",
+							click: runAboutDialog,
+						},
 				{ type: "separator" as const },
 				{
 					label: mainT("common", "actions.quit") || "Quit",
@@ -830,8 +1023,59 @@ appReady?.then(async () => {
 		return { success };
 	});
 
+	// The HUD's settings panel shows the running version and, where this copy owns its updates,
+	// runs the same check the menu does. Registered here rather than in ipc/handlers.ts because
+	// this is where the check and the install channel already live — but inside `appReady`, like
+	// every other handler in this file: at module scope they would also be live in the headless
+	// CLI boot path and in a losing second instance that is on its way to app.quit().
+	ipcMain.handle("get-app-info", () => ({
+		version: app.getVersion(),
+		canCheckForUpdates: channelAllowsUpdateCheck(),
+	}));
+
+	// The FULL veto, permanent and transient, for a caller that can ask again at the moment it
+	// needs the answer. `get-app-info` deliberately carries only the permanent half because the
+	// HUD reads it once per mount (see 33e19d6e); the editor's app menu has no such excuse — it
+	// asks each time it opens, so a stale "yes" cannot outlive the take that invalidated it.
+	// Without this, that menu would keep offering a check mid-recording that the handler below
+	// then silently refuses.
+	ipcMain.handle("can-check-for-updates-now", () => canOfferUpdateCheck());
+
+	// The editor's app menu opens the SAME About box the native menu and the tray do, rather
+	// than rendering its own panel: the version block exists to be pasted into a bug report,
+	// and a second React spelling of it is a second thing to keep in step with about.ts.
+	//
+	// Returns immediately instead of awaiting the box. `check-for-updates` resolves on its
+	// verdict because the caller has a spinner to stop; this one has nothing to wait for, and
+	// awaiting it would leave the renderer's promise pending for as long as the user leaves
+	// the dialog open.
+	ipcMain.handle("show-about", () => {
+		// macOS asked for its own panel and `configureAboutPanel()` already filled it in.
+		// Calling runAboutDialog() here would open a second, differently-shaped box beside the
+		// one the app menu's `role: "about"` gives — the exact duplication about.ts:31-33 warns
+		// against.
+		if (usesNativeAboutPanel(process.platform)) {
+			app.showAboutPanel();
+			return;
+		}
+		runAboutDialog();
+	});
+
+	ipcMain.handle("check-for-updates", async () => {
+		// The renderer hides the button on a package-manager channel, and while recording. A
+		// renderer is not where those rules get to be enforced.
+		if (!canOfferUpdateCheck()) return;
+		await new Promise<void>((resolve) => {
+			checkForUpdates(resolve).catch((error) => {
+				console.error("[updates] check failed", error);
+				resolve();
+			});
+		});
+	});
+
 	createTray();
 	updateTrayMenu();
+	configureAboutPanel();
 	setupApplicationMenu();
 	await ensureRecordingsDir();
 
@@ -859,6 +1103,9 @@ appReady?.then(async () => {
 			isRecording = recording;
 			if (!tray) createTray();
 			updateTrayMenu(recording);
+			// `canOfferUpdateCheck()` now answers "not mid-take" too, and the app/Help menus are
+			// built once at startup — without this they keep offering the check during a take.
+			setupApplicationMenu();
 			if (!recording) {
 				showMainWindow();
 			}

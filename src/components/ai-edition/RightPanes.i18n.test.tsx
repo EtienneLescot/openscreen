@@ -6,12 +6,12 @@
 // localized text is what actually reaches the DOM.
 
 import "@testing-library/jest-dom";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
 import { LOCALE_STORAGE_KEY } from "@/i18n/config";
-import { BackgroundPane, CursorPane, LayoutPane, VideoEffectsPane } from "./RightPanes";
+import { CursorPane, LayoutPane, VideoEffectsPane } from "./RightPanes";
 
 function renderIn(locale: string, ui: ReactElement) {
 	localStorage.setItem(LOCALE_STORAGE_KEY, locale);
@@ -28,10 +28,21 @@ afterEach(() => {
 });
 
 describe("right-rail panes are localized", () => {
-	it("renders the background pane in French", () => {
-		renderIn("fr", <BackgroundPane />);
-		expect(screen.getByRole("heading", { name: "Arrière-plan" })).toBeInTheDocument();
+	it("renders the background section of the effects pane in French", () => {
+		// Background stopped being its own pane when the two facets merged; it is a section
+		// of the effects pane now, so the same strings must survive under the new heading.
+		renderIn("fr", <VideoEffectsPane />);
+		expect(screen.getByRole("heading", { name: "Composition" })).toBeInTheDocument();
+		expect(screen.getByText("Arrière-plan")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Aide" })).toBeInTheDocument();
+	});
+
+	it("renders the floating background picker in French once it is opened", () => {
+		// The picker collapsed into a popover so the frame sliders stay above the fold, so
+		// its strings are only in the DOM after the trigger is clicked — the assertion has
+		// to open it, or it would pass on an empty document forever.
+		renderIn("fr", <VideoEffectsPane />);
+		fireEvent.click(screen.getByRole("button", { name: "Arrière-plan" }));
 		expect(screen.getByRole("button", { name: "Téléverser une image" })).toBeInTheDocument();
 		// wallpaper swatches interpolate their index through the catalog
 		expect(screen.getByRole("button", { name: "Fond 1" })).toBeInTheDocument();
@@ -39,14 +50,17 @@ describe("right-rail panes are localized", () => {
 
 	it("renders the video-effects pane in Spanish", () => {
 		renderIn("es", <VideoEffectsPane />);
-		expect(screen.getByRole("heading", { name: "Efectos de video" })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Composición" })).toBeInTheDocument();
 		expect(screen.getByText("Desenfoque de movimiento")).toBeInTheDocument();
 		expect(screen.getByText("Sombra")).toBeInTheDocument();
+		// the merged pane's own section headers
+		expect(screen.getByText("Marco")).toBeInTheDocument();
+		expect(screen.getByText("Movimiento")).toBeInTheDocument();
 	});
 
 	it("renders the layout pane in Japanese", () => {
 		renderIn("ja-JP", <LayoutPane />);
-		expect(screen.getByRole("heading", { name: "レイアウト" })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "カメラレイアウト" })).toBeInTheDocument();
 		// the preset <option> labels come from the shared layout.* catalog
 		expect(screen.getByRole("option", { name: "ピクチャーインピクチャ" })).toBeInTheDocument();
 	});
@@ -60,7 +74,7 @@ describe("right-rail panes are localized", () => {
 
 	it("falls back to English when the locale is English", () => {
 		renderIn("en", <VideoEffectsPane />);
-		expect(screen.getByRole("heading", { name: "Video Effects" })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Composition" })).toBeInTheDocument();
 		expect(screen.getByText("Blur BG")).toBeInTheDocument();
 	});
 });

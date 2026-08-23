@@ -99,6 +99,99 @@
 	letter-spacing: -0.015em;
 	color: var(--fg-emphasis);
 }
+/* The brand doubles as the app-menu trigger, so it has to read as a button on hover without
+   gaining any width: .modeSwitch is the only flex-shrink:1 element in the bar, so every pixel
+   a new control costs is paid out of the mode labels in the most verbose of 13 locales. The
+   negative margin lets the hover plate bleed past the logo without moving it. */
+.brandBtn {
+	border: 0;
+	background: transparent;
+	cursor: pointer;
+	padding: 4px 7px;
+	margin: 0 -7px;
+	border-radius: 9px;
+	transition: background var(--motion-fast) var(--ease);
+}
+.brandBtn:hover,
+.brandBtn[aria-expanded="true"] {
+	background: var(--surface-2);
+}
+/* Rotates to point up while the menu is open, the standard disclosure affordance. Hidden from
+   assistive tech: aria-expanded on the button already carries the state. */
+.brandChevron {
+	color: var(--muted);
+	transition: transform var(--motion-fast) var(--ease);
+}
+.brandBtn[aria-expanded="true"] .brandChevron {
+	transform: rotate(180deg);
+}
+/* Anchor for the menu. Not a portal: a portalled surface leaves the .topbar subtree and with
+   it the `.topbar button { app-region: no-drag }` rule that is the ONLY thing keeping controls
+   in this bar clickable — the OS would eat the click as a window drag. LangButton in this same
+   file anchors inline for exactly that reason. */
+.appMenuAnchor {
+	position: relative;
+	display: inline-flex;
+	flex-shrink: 0;
+}
+.appMenu {
+	position: absolute;
+	top: calc(100% + 6px);
+	left: 0;
+	min-width: 232px;
+	/* The trigger sits 13px from the top of a 58px bar, so the menu's first 7px overlap the
+	   titlebar's drag region. Only `.topbar button` is opted out of dragging, and that strip is
+	   the menu's padding, not a row — without this a mousedown on it drags the window out from
+	   under the open menu. Belt and braces: it also covers any future row that is not a button. */
+	-webkit-app-region: no-drag;
+	app-region: no-drag;
+	padding: 5px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	box-shadow: var(--elev-pop);
+	z-index: 60;
+}
+.appMenuRow {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	padding: 7px 9px;
+	border: 0;
+	background: transparent;
+	color: var(--fg-2);
+	border-radius: var(--r-sm);
+	cursor: pointer;
+	text-align: left;
+	font: 500 12.5px var(--font-body);
+	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+}
+.appMenuRow:hover,
+.appMenuRow:focus-visible {
+	background: var(--surface-2);
+	color: var(--fg);
+}
+.appMenuRow svg {
+	color: var(--muted);
+	flex-shrink: 0;
+}
+.appMenuRow:hover svg,
+.appMenuRow:focus-visible svg {
+	color: var(--fg);
+}
+/* Pushes the version to the right edge of the row it shares with "About". */
+.appMenuVersion {
+	margin-left: auto;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	font-size: 11.5px;
+}
+.appMenuSep {
+	height: 1px;
+	margin: 5px 7px;
+	background: var(--border);
+}
 .iconBtn {
 	width: 32px;
 	height: 32px;
@@ -296,7 +389,7 @@
 	padding: 0 14px;
 	border-radius: 9px;
 	background: var(--accent);
-	color: #fff;
+	color: var(--accent-on);
 	border: 1px solid var(--accent);
 	font-size: 13px;
 	font-weight: 600;
@@ -1033,7 +1126,7 @@
 	padding: 0 26px;
 	border-radius: 16px;
 	border: 1px solid var(--accent);
-	color: #fff;
+	color: var(--accent-on);
 	background: var(--accent);
 	font-size: 14px;
 	font-weight: 600;
@@ -1047,6 +1140,7 @@
 .bigRecBtn.recording {
 	border-color: var(--danger);
 	background: var(--danger);
+	color: #fff;
 }
 .bigRecDot {
 	width: 10px;
@@ -1532,7 +1626,12 @@
 	display: grid;
 	place-items: center;
 	border-radius: 7px;
-	color: var(--muted);
+	/* The chip itself is a fixed dark frosted-glass overlay regardless of
+	   theme (it sits on top of an arbitrary video thumbnail), so its icon
+	   needs the "light text on a dark overlay" token, not --muted — which
+	   is tuned for the app's own light/dark surfaces and reads as
+	   near-invisible against this chip in light theme. */
+	color: var(--overlay-text);
 	background: color-mix(in srgb, #080a0d 55%, transparent);
 	border: 1px solid rgba(255, 255, 255, 0.08);
 	backdrop-filter: blur(8px);

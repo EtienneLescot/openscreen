@@ -2,6 +2,7 @@ import { ArrowLeft, Check, Film, Loader2, MessageSquare, Plus, Search, X } from 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
+import { useEditorDialogActions, useEditorDialogSection } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutAsset } from "@/lib/ai-edition/schema";
 import {
@@ -33,7 +34,6 @@ import { ChatWelcome } from "./ChatWelcome";
 import { canSendChat } from "./chatAvailability";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
-import { ProviderSettings } from "./ProviderSettings";
 import { TranscriptionStatusDot } from "./TranscriptionStatus";
 import { useChatBudget } from "./useChatBudget";
 
@@ -737,7 +737,12 @@ function ChatStripPanel() {
 	const [input, setInput] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [llmConfig, setLlmConfig] = useState<AiEditionLlmConfig | null>(null);
-	const [settingsOpen, setSettingsOpen] = useState(false);
+	// The dialog itself is mounted in App.tsx so the app menu can reach it from every mode
+	// (issue #420); this panel only asks for it to be opened, and watches it close.
+	const dialogSection = useEditorDialogSection();
+	const { openDialog } = useEditorDialogActions();
+	const providerSettingsOpen = dialogSection === "providers";
+	const openProviderSettings = useCallback(() => openDialog("providers"), [openDialog]);
 	const [chatsOpen, setChatsOpen] = useState(false);
 	const [sessions, setSessions] = useState<
 		Array<{ id: string; title: string; messageCount: number; createdAt: string }>
@@ -809,9 +814,13 @@ function ChatStripPanel() {
 		}
 	}, []);
 
+	// On mount, and again every time the provider dialog closes. Connecting a provider there is
+	// what makes the composer usable here and what fills the model pill, and the dialog no
+	// longer hangs off this component, so there is no onClose to do it from. "Not open" covers
+	// both events at once, which is why there is no ref here watching for the falling edge.
 	useEffect(() => {
-		void refreshLlm();
-	}, [refreshLlm]);
+		if (!providerSettingsOpen) void refreshLlm();
+	}, [providerSettingsOpen, refreshLlm]);
 
 	// ponytail: subscribe to streamed chat events so the reasoning trace (and
 	// any future streaming text deltas) lands live instead of arriving all at
@@ -881,7 +890,7 @@ function ChatStripPanel() {
 		// but Auto-enhance calls send() directly and Enter can slip through.
 		if (!canChat) {
 			toast.error(t("chat.composerDisabledNoProvider"));
-			setSettingsOpen(true);
+			openProviderSettings();
 			return;
 		}
 		setInput("");
@@ -1143,7 +1152,7 @@ function ChatStripPanel() {
 		// full settings modal (the "providers" screen) instead of toggling a
 		// popover that would render empty.
 		if (!llmConfig) {
-			setSettingsOpen(true);
+			openProviderSettings();
 			return;
 		}
 		setModelPopoverOpen((wasOpen) => {
@@ -1163,7 +1172,7 @@ function ChatStripPanel() {
 			}
 			return !wasOpen;
 		});
-	}, [llmConfig]);
+	}, [llmConfig, openProviderSettings]);
 
 	// Prefer the main process's estimate of the windowed history it actually sends, so
 	// manual compaction can shrink this meter while the complete transcript remains
@@ -1333,7 +1342,7 @@ function ChatStripPanel() {
 								type="button"
 								title={t("chat.aiSettings")}
 								aria-label={t("chat.aiSettings")}
-								onClick={() => setSettingsOpen(true)}
+								onClick={openProviderSettings}
 							>
 								<svg
 									width={14}
@@ -1532,7 +1541,7 @@ function ChatStripPanel() {
 
 			<div className={styles.panelBody} ref={scrollRef}>
 				{!canChat && messages.length === 0 ? (
-					<ChatWelcome onOpenProviderSettings={() => setSettingsOpen(true)} />
+					<ChatWelcome onOpenProviderSettings={openProviderSettings} />
 				) : messages.length === 0 ? (
 					<p
 						style={{
@@ -1853,7 +1862,7 @@ function ChatStripPanel() {
 							connectedProviders={connectedProviders ?? []}
 							onClose={() => setModelPopoverOpen(false)}
 							onConfigChange={() => void refreshLlm()}
-							onOpenFullSettings={() => setSettingsOpen(true)}
+							onOpenFullSettings={openProviderSettings}
 						/>
 					) : null}
 					<button
@@ -1880,13 +1889,6 @@ function ChatStripPanel() {
 					</button>
 				</div>
 			</div>
-			<ProviderSettings
-				open={settingsOpen}
-				onClose={() => {
-					setSettingsOpen(false);
-					void refreshLlm();
-				}}
-			/>
 			<ChatHistoryModal
 				open={chatsOpen}
 				onClose={() => setChatsOpen(false)}
@@ -1950,7 +1952,7 @@ function ChatStripPanel() {
 										background: "var(--accent)",
 										border: "1px solid var(--accent)",
 										borderRadius: "var(--r-sm)",
-										color: "var(--bg)",
+										color: "var(--accent-on)",
 										font: "500 12px var(--font-body)",
 										cursor: "pointer",
 									}}

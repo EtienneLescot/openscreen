@@ -6,8 +6,6 @@
 		"cancelRecording": "Kaydı iptal et",
 		"pauseRecording": "Kaydı duraklat",
 		"resumeRecording": "Kayda devam et",
-		"openVideoFile": "Video dosyası aç",
-		"openProject": "Proje aç",
 		"useVerticalTray": "Dikey araç çubuğunu kullan",
 		"useHorizontalTray": "Yatay araç çubuğunu kullan",
 		"openStudio": "Stüdyoyu aç",
@@ -93,6 +91,9 @@
 		"micHint": "Mikrofonunuzu test etmek için konuşun",
 		"noMicrophones": "Mikrofon bulunamadı",
 		"preview": "Önizleme",
-		"previewUnavailable": "Önizleme kullanılamıyor"
+		"previewUnavailable": "Önizleme kullanılamıyor",
+		"about": "Hakkında",
+		"version": "Sürüm {{version}}",
+		"checkingForUpdates": "Denetleniyor…"
 	}
 }

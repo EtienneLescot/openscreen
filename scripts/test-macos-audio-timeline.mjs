@@ -42,8 +42,20 @@ const PLAY_AT_MS = Number(process.env.OPENSCREEN_SCK_TEST_PLAY_AT_MS ?? 4000);
 const TONE_MS = 3000;
 /** Silence after the tone, so the trailing half of the timeline is exercised too. */
 const TAIL_MS = 3000;
-/** How far the tone may sit from where it was asked for before this is a failure. */
-const TONE_TOLERANCE_S = 0.25;
+/**
+ * How far the tone may sit from where it was asked for before this is a failure.
+ *
+ * This budget is spent almost entirely before the timeline is involved: `afplay` has to
+ * fork, link, open the output device and hand CoreAudio its first samples, and none of that
+ * is charged to the code under test. Measured floor on an M1 Mac mini, output device already
+ * warm and the tone asked for at 1.5s, 4s and 7s: a flat +0.22s at every position. The
+ * original 0.25s left 30ms for the thing actually being measured, which is not a budget.
+ *
+ * 0.40s keeps the regression this exists to catch. The failure it guards against is a
+ * start-up rebase moving real audio by up to 250ms (PR #343); on top of the 0.22s floor that
+ * lands at 0.47s and still fails. A mis-rebase cannot hide under this number.
+ */
+const TONE_TOLERANCE_S = 0.4;
 /** How far the audio track may differ in length from the video track in the same file. */
 const TRACK_TOLERANCE_S = 0.1;
 /** Analysis window for locating the tone. Tight enough to resolve a 250 ms mis-rebase. */
@@ -144,25 +156,34 @@ if (!FFMPEG || !FFPROBE) {
 }
 
 const tonePath = path.join(os.tmpdir(), "openscreen-audio-timeline-tone.wav");
-const madeTone = spawnSync(FFMPEG, [
-	"-hide_banner",
-	"-loglevel",
-	"error",
-	"-f",
-	"lavfi",
-	"-i",
-	`sine=frequency=440:duration=${TONE_MS / 1000}`,
-	"-ac",
-	"2",
-	"-ar",
-	"48000",
-	"-acodec",
-	"pcm_s16le",
-	"-y",
-	tonePath,
-]);
+const madeTone = spawnSync(
+	FFMPEG,
+	[
+		"-hide_banner",
+		"-loglevel",
+		"error",
+		"-f",
+		"lavfi",
+		"-i",
+		`sine=frequency=440:duration=${TONE_MS / 1000}`,
+		"-ac",
+		"2",
+		"-ar",
+		"48000",
+		"-acodec",
+		"pcm_s16le",
+		"-y",
+		tonePath,
+	],
+	{ encoding: "utf8" },
+);
 if (madeTone.status !== 0 || !fs.existsSync(tonePath)) {
-	console.error("Could not synthesise the test tone.");
+	// Report what ffmpeg said. A shared-library build whose dylibs are not on the loader path
+	// fails here with a linker error that has nothing to do with the tone, and swallowing it
+	// sends you looking at the audio pipeline instead of at the binary.
+	const detail = `${madeTone.stderr ?? ""}${madeTone.error?.message ?? ""}`.trim();
+	console.error(`Could not synthesise the test tone with ${FFMPEG}.`);
+	if (detail) console.error(detail.split("\n").slice(-5).join("\n"));
 	process.exit(1);
 }
 
@@ -185,6 +206,53 @@ const request = {
 	cursor: { mode: "editable-overlay" },
 	outputs: { screenPath: outputPath },
 };
+
+/**
+ * Starts the default output device before the take, so its wake-up is not measured as offset.
+ *
+ * The tone's position is compared against the instant playback was ASKED for, so everything
+ * between the two lands in the budget — including CoreAudio starting an idle output device,
+ * which is not free. Measured on an M1 Mac mini: a cold device puts the tone 0.28s late and
+ * fails the 0.25s tolerance on its own, while a warm one is reproducibly 0.18s late at every
+ * position tried. Removing the wake-up is worth more than widening the tolerance would be,
+ * because the tolerance is what gives the measurement its teeth.
+ *
+ * It has to make a real sound: a warm-up of digital silence was tried first and measured no
+ * better than no warm-up at all (0.32s late from cold), because nothing starts the device
+ * until there are samples to play. It is short and it runs BEFORE the helper starts, which is
+ * what keeps it out of the measurement — a warm-up playing once the writer session was open
+ * would be found by `firstAudibleSecond` instead of the tone and reported as a wildly early
+ * hit.
+ */
+function warmOutputDevice() {
+	const warmPath = path.join(os.tmpdir(), "openscreen-audio-timeline-warmup.wav");
+	const made = spawnSync(
+		FFMPEG,
+		[
+			"-hide_banner",
+			"-loglevel",
+			"error",
+			"-f",
+			"lavfi",
+			"-i",
+			"sine=frequency=440:duration=0.5",
+			"-ac",
+			"2",
+			"-ar",
+			"48000",
+			"-acodec",
+			"pcm_s16le",
+			"-y",
+			warmPath,
+		],
+		{ encoding: "utf8" },
+	);
+	if (made.status === 0 && fs.existsSync(warmPath)) {
+		spawnSync("/usr/bin/afplay", [warmPath]);
+		fs.rmSync(warmPath, { force: true });
+	}
+}
+warmOutputDevice();
 
 console.log(
 	`Recording ${(PLAY_AT_MS + TONE_MS + TAIL_MS) / 1000}s on display ${displayId}: ` +
@@ -380,10 +448,15 @@ proc.on("close", (code, signal) => {
 	// The mixer's own account of what the system-audio tap actually handed over. On a take
 	// where nothing plays, this is the measurement that says whether ScreenCaptureKit's
 	// system-audio output is silence-gapped the way the WASAPI loopback tap is, or whether it
-	// streams silence continuously — and `droppedSeconds` is the cost side: audio the tap
-	// delivered too late to place, which should be zero.
+	// streams silence continuously.
 	const summary = helperEvents.findLast((event) => event.event === "audio-timeline");
 	const system = summary?.system;
+	// `droppedSeconds` is audio the mixer could not place, and nothing else: what a source loses
+	// at the head of a take while it is still catching up to a cursor that has already started
+	// moving is reported apart, as `trimmedSeconds`. That one is normal here and varies from
+	// take to take — it was measured at 0.00s to 0.04s across runs on one machine — which is
+	// exactly why it cannot share a counter with a fault. This can now be checked against zero,
+	// the only threshold that means anything.
 	const dropped = Number(system?.droppedSeconds ?? 0);
 	if (dropped > 0) {
 		problems.push(
@@ -402,7 +475,8 @@ proc.on("close", (code, signal) => {
 		const undelivered = Number(system.undeliveredSeconds ?? 0);
 		console.log(
 			`      system audio delivered nothing for ${undelivered.toFixed(2)}s of a ${track.toFixed(2)}s ` +
-				`track, longest hole ${Number(system.longestHoleSeconds ?? 0).toFixed(2)}s\n` +
+				`track, longest hole ${Number(system.longestHoleSeconds ?? 0).toFixed(2)}s, ` +
+				`${Number(system.trimmedSeconds ?? 0).toFixed(2)}s trimmed while the tap caught up\n` +
 				`      => ${
 					undelivered > track / 2
 						? "ScreenCaptureKit GAPS its silence, like WASAPI loopback"

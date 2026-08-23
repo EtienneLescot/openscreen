@@ -48,6 +48,7 @@ import {
 } from "./editorial";
 import {
 	intersectSpans,
+	mergeSpans,
 	overlapSec,
 	SPAN_EPSILON_SEC,
 	type Span,
@@ -592,12 +593,16 @@ export function zoomPlacement(
 		};
 	});
 
-	// ponytail: the totals are unions, not sums of the per-hit overlaps. Zooms
-	// are forbidden from overlapping each other (`timelineMap.ts:113`), so on a
-	// valid document the two agree — but this oracle also has to be right about
-	// the invalid ones it is partly there to expose, and summing would report a
-	// precision above 1 on a document carrying two stacked zooms.
-	const zoomSec = totalSec(spans.map((entry) => entry.span));
+	// ponytail: BOTH totals are unions, and `zoomSec` was a sum until it wasn't.
+	// Rule 2 in `timelineMap.ts` forbids two zooms from overlapping, but only
+	// `setZoom` goes through the clamp that enforces it (`replacePillSpan`,
+	// `agent-tools.ts:1395`) — `addZoom` appends (`agent-tools.ts:1349`), so an
+	// agent CAN stack zooms, and `editorial.ts` carries an `overlap` check
+	// precisely because it happens. On such a document a summed denominator
+	// counts the shared seconds twice while the intersected numerator counts them
+	// once, and `precision` reads low for a reason that has nothing to do with
+	// placement. Union on both sides or the ratio is not a ratio of the same thing.
+	const zoomSec = totalSec(mergeSpans(spans.map((entry) => entry.span)));
 	const onZoneSec = totalSec(
 		intersectSpans(
 			spans.map((entry) => entry.span),
