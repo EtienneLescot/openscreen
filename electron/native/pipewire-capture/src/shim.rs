@@ -115,6 +115,14 @@ extern "C" {
         width: i32,
         height: i32,
     ) -> *const c_char;
+    #[cfg(test)]
+    fn osc_pw_dmabuf_mapped_len(
+        allocation_len: usize,
+        mapoffset: u32,
+        mapped_len: *mut usize,
+    ) -> i32;
+    #[cfg(test)]
+    fn osc_pw_dmabuf_map_lifecycle_valid() -> i32;
     fn osc_pw_start(
         fd: i32,
         node_id: u32,
@@ -309,6 +317,11 @@ impl FrameMailbox {
     }
 }
 
+/// How much silence the ring will stand in for before it stops trying.
+///
+/// This bounds the allocation after a long stall; drop accounting remains exact.
+const MAX_SILENCE_SECONDS: usize = 30;
+
 /// Interleaved samples waiting to be encoded.
 ///
 /// UNLIKE THE VIDEO MAILBOX, THIS IS A QUEUE. A dropped video frame costs one
@@ -333,27 +346,6 @@ impl FrameMailbox {
 /// until someone drains, which is also the only thing that can stop it growing —
 /// and it stops being exact at [`MAX_SILENCE_SECONDS`], which is where a bounded
 /// allocation starts to matter more than sync nobody can still use.
-/// How much silence the ring will stand in for before it stops trying.
-///
-/// The debt costs a counter while it is owed and only becomes memory when
-/// someone drains — 384 KB per second of it, at 48 kHz stereo f32. A drain runs
-/// on every tick of the main loop, heartbeat included (`Capture::advance` from
-/// the `RecvTimeoutError::Timeout` arm in main.rs), so a debt worth seconds
-/// means the loop itself has stopped. There is no bound on how long a stopped
-/// loop stays stopped, and one that comes back materialises the whole stall in a
-/// single allocation — which is also the one place the ring's own two-second cap
-/// does not reach. There is a second, quieter way to get there: nothing drains
-/// before the first video frame either, so the debt grows for as long as the
-/// portal picker is up. That normally ends in `clear` rather than a drain, but
-/// not if staging that first frame fails, and the stop path flushes the ring.
-///
-/// Thirty seconds is far past any stall a recording survives, and past it the
-/// take has a hole half a minute wide — the cap trades sync that is already lost
-/// for an allocation that stays bounded. `dropped_samples` keeps counting the
-/// whole loss regardless, so the `audio-dropped` warning still reports what
-/// really happened rather than what could be paid back.
-const MAX_SILENCE_SECONDS: usize = 30;
-
 #[derive(Debug)]
 pub struct AudioRing {
     inner: std::sync::Mutex<RingInner>,
@@ -819,6 +811,15 @@ impl Bounds {
     }
 }
 
+#[cfg(test)]
+fn dmabuf_mapped_len(allocation_len: usize, mapoffset: u32) -> Option<usize> {
+    let mut mapped_len = 0;
+    // SAFETY: `mapped_len` is a live `usize` destination. The helper only
+    // performs checked arithmetic and writes through this pointer on success.
+    let valid = unsafe { osc_pw_dmabuf_mapped_len(allocation_len, mapoffset, &mut mapped_len) };
+    (valid != 0).then_some(mapped_len)
+}
+
 /// SPA enum values as compiled from the vendored headers.
 pub fn constants() -> Constants {
     let mut out = Constants::default();
@@ -1161,41 +1162,55 @@ mod tests {
         assert_eq!(Bounds::dmabuf_1080p().reason(), "none");
     }
 
-    /// The fix for issue #287. Several portal backends put a token value in
-    /// `chunk->size` for a DMA-BUF plane instead of a byte count — xdg-desktop-
-    /// portal-wlr 0.8.2 writes 9, niri writes 1 — and clamping the frame to it
-    /// rejected every frame those compositors ever sent.
     #[test]
-    fn dmabuf_placeholder_chunk_sizes_are_ignored_rather_than_obeyed() {
-        for placeholder in [1, 9, 23] {
+    fn dmabuf_chunk_size_is_always_advisory() {
+        let healthy = Bounds::dmabuf_1080p();
+        let row_bytes = healthy.width as u32 * 4;
+        for chunk_size in [
+            0,
+            1,
+            9,
+            row_bytes - 1,
+            row_bytes,
+            healthy.chunk_size / 2,
+            healthy.chunk_size,
+            u32::MAX,
+        ] {
             let frame = Bounds {
-                chunk_size: placeholder,
-                ..Bounds::dmabuf_1080p()
+                chunk_size,
+                ..healthy
             };
             assert_eq!(
                 frame.reason(),
                 "none",
-                "a chunk size of {placeholder} is a placeholder, not a byte count"
+                "DMA-BUF chunk size {chunk_size} must not replace the fd allocation bound"
             );
         }
     }
 
-    /// The other half of that rule: a chunk size large enough to be a real byte
-    /// count is still believed. A compositor whose copy did not finish reports a
-    /// short chunk, and reading it as a whole frame splices the previous frame's
-    /// pixels into the bottom of this one.
     #[test]
-    fn a_torn_dmabuf_frame_is_still_refused() {
-        let healthy = Bounds::dmabuf_1080p();
-        let half_written = Bounds {
-            chunk_size: healthy.chunk_size / 2,
-            ..healthy
-        };
+    fn dmabuf_mapping_length_accounts_for_mapoffset() {
+        let allocation_len = 8 * 1024 * 1024;
+        assert_eq!(dmabuf_mapped_len(allocation_len, 0), Some(allocation_len));
         assert_eq!(
-            half_written.reason(),
-            "frame-bytes-exceed-available-chunk",
-            "half a frame is a plausible byte count and must still be clamped"
+            dmabuf_mapped_len(allocation_len, 4096),
+            Some(allocation_len - 4096)
         );
+        assert_eq!(
+            dmabuf_mapped_len(allocation_len, allocation_len as u32),
+            None
+        );
+        assert_eq!(
+            dmabuf_mapped_len(allocation_len, allocation_len as u32 + 4096),
+            None
+        );
+    }
+
+    #[test]
+    fn shared_dmabuf_mapping_is_reference_counted_by_exact_plane() {
+        // SAFETY: the helper owns its synthetic session and touches no external
+        // resources; it only exercises lookup and reference-count transitions.
+        assert_eq!(unsafe { osc_pw_dmabuf_map_lifecycle_valid() }, 1);
     }
 
     /// `maxsize` is advisory on the DMA-BUF path, so it can be arbitrarily
@@ -1218,8 +1233,20 @@ mod tests {
     fn each_rejection_names_itself() {
         let healthy = Bounds::dmabuf_1080p();
         let cases = [
-            ("chunk-size-zero", Bounds { chunk_size: 0, ..healthy }),
-            ("buffer-length-zero", Bounds { mapped_len: 0, ..healthy }),
+            (
+                "metadata-only",
+                Bounds {
+                    stride: 0,
+                    ..healthy
+                },
+            ),
+            (
+                "buffer-length-zero",
+                Bounds {
+                    mapped_len: 0,
+                    ..healthy
+                },
+            ),
             (
                 "chunk-offset-out-of-bounds",
                 Bounds {
@@ -1250,7 +1277,7 @@ mod tests {
             ),
         ];
         for (expected, frame) in cases {
-            assert_eq!(frame.reason(), expected);
+            assert_eq!(frame.reason(), expected, "the {expected} case");
         }
     }
 
@@ -1261,26 +1288,58 @@ mod tests {
     fn geometry_is_rejected_on_every_axis() {
         let healthy = Bounds::dmabuf_1080p();
         let broken = [
-            ("zero stride", Bounds { stride: 0, ..healthy }),
-            ("negative stride", Bounds { stride: -1, ..healthy }),
-            ("zero width", Bounds { width: 0, ..healthy }),
-            ("negative width", Bounds { width: -1, ..healthy }),
-            ("zero height", Bounds { height: 0, ..healthy }),
-            ("negative height", Bounds { height: -1, ..healthy }),
+            (
+                "negative stride",
+                Bounds {
+                    stride: -1,
+                    ..healthy
+                },
+            ),
+            (
+                "zero width",
+                Bounds {
+                    width: 0,
+                    ..healthy
+                },
+            ),
+            (
+                "negative width",
+                Bounds {
+                    width: -1,
+                    ..healthy
+                },
+            ),
+            (
+                "zero height",
+                Bounds {
+                    height: 0,
+                    ..healthy
+                },
+            ),
+            (
+                "negative height",
+                Bounds {
+                    height: -1,
+                    ..healthy
+                },
+            ),
         ];
         for (axis, frame) in broken {
             assert_eq!(frame.reason(), "invalid-frame-geometry", "{axis}");
         }
     }
 
-    /// A buffer carrying a cursor update and no pixels. The reader returns
-    /// without reporting a drop, but the bound still has to NAME it, or the
-    /// exported check and the production reader disagree about what it is.
     #[test]
-    fn a_cursor_only_buffer_is_not_a_frame() {
+    fn a_zero_stride_buffer_is_metadata_only() {
         for base in [Bounds::dmabuf_1080p(), Bounds::memfd_1080p()] {
-            let cursor_only = Bounds { chunk_size: 0, ..base };
-            assert_eq!(cursor_only.reason(), "chunk-size-zero");
+            for chunk_size in [0, 9, base.chunk_size] {
+                let metadata = Bounds {
+                    stride: 0,
+                    chunk_size,
+                    ..base
+                };
+                assert_eq!(metadata.reason(), "metadata-only");
+            }
         }
     }
 
@@ -1296,13 +1355,28 @@ mod tests {
                 ..Bounds::memfd_1080p()
             };
             assert!(healthy.is_accepted(), "a healthy shared-memory frame");
-            let placeholder = Bounds { chunk_size: 9, ..healthy };
-            assert_eq!(
-                placeholder.reason(),
-                "frame-bytes-exceed-available-chunk",
-                "9 bytes is 9 bytes on shared memory, not a placeholder"
-            );
+            for chunk_size in [0, 1, 9, healthy.chunk_size / 2] {
+                let short = Bounds {
+                    chunk_size,
+                    ..healthy
+                };
+                assert_eq!(
+                    short.reason(),
+                    "frame-bytes-exceed-available-chunk",
+                    "{chunk_size} bytes is a real bound on shared memory"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn corrupted_dmabuf_with_zero_chunk_size_is_rejected() {
+        let frame = Bounds {
+            chunk_size: 0,
+            chunk_flags: 1, // SPA_CHUNK_FLAG_CORRUPTED
+            ..Bounds::dmabuf_1080p()
+        };
+        assert_eq!(frame.reason(), "producer-marked-frame-corrupted");
     }
 
     /// stride * height is computed on widened operands because both come from
