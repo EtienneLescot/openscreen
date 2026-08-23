@@ -1664,6 +1664,66 @@ async function resolveMediaLinksForVideo(videoPath: string): Promise<{
 	return { resolvedVia: "none" };
 }
 
+/**
+ * Writes the diagnostic bundle a bug report needs: app/OS facts, the native
+ * helpers' raw stdout/stderr (which is where `[stop-timing]` and
+ * `encoder-selection` land — see nativeWindowsCaptureStop.ts), and the main
+ * process's own recent console output. Shared by the renderer's IPC call and
+ * the menu/tray "Save Diagnostics" entry point in main.ts, which has no
+ * renderer-side `projectState`/`logs` to offer and does not need to.
+ */
+export async function exportDiagnosticFile(payload: {
+	error: string;
+	stack?: string;
+	projectState: unknown;
+	logs: string[];
+}) {
+	const { filePath, canceled } = await dialog.showSaveDialog({
+		title: "Save Diagnostic File",
+		defaultPath: `openscreen-diagnostic-${Date.now()}.json`,
+		filters: [{ name: "JSON", extensions: ["json"] }],
+	});
+
+	if (canceled || !filePath) return { success: false, canceled: true };
+
+	const HELPER_OUTPUT_MAX_BYTES = 64 * 1024;
+	const tail = (s: string, max: number) => (s.length <= max ? s : s.slice(s.length - max));
+
+	const diagnostic = {
+		timestamp: new Date().toISOString(),
+		appVersion: app.getVersion(),
+		platform: process.platform,
+		arch: process.arch,
+		// The same fact the About box leads with, and for the same reason: it is what
+		// explains why a copy does or does not offer an update check. This file is the
+		// artifact users actually attach, so it must not be the one that omits it.
+		channel: getInstallChannel(),
+		osRelease: os.release(),
+		osVersion: os.version(),
+		totalMemoryMB: Math.round(os.totalmem() / 1024 / 1024),
+		nodeVersion: process.versions.node,
+		electronVersion: process.versions.electron,
+		chromeVersion: process.versions.chrome,
+		error: payload.error,
+		stack: payload.stack,
+		projectState: payload.projectState,
+		recentLogs: payload.logs,
+		helperOutput: {
+			windows: tail(nativeWindowsCaptureOutput, HELPER_OUTPUT_MAX_BYTES),
+			mac: tail(nativeMacCaptureOutput, HELPER_OUTPUT_MAX_BYTES),
+		},
+		mainProcessLogs: mainLogBuffer.snapshot(),
+	};
+
+	try {
+		await fs.writeFile(filePath, JSON.stringify(diagnostic, null, 2), "utf-8");
+		return { success: true, path: filePath };
+	} catch (error) {
+		console.error("Failed to write diagnostic file:", error);
+		return { success: false, error: String(error) };
+	}
+}
+
 export function registerIpcHandlers(
 	createEditorWindow: () => void,
 	createSourceSelectorWindow: () => BrowserWindow,
@@ -4092,55 +4152,8 @@ export function registerIpcHandlers(
 
 	ipcMain.handle(
 		"save-diagnostic",
-		async (
-			_,
-			payload: { error: string; stack?: string; projectState: unknown; logs: string[] },
-		) => {
-			const { filePath, canceled } = await dialog.showSaveDialog({
-				title: "Save Diagnostic File",
-				defaultPath: `openscreen-diagnostic-${Date.now()}.json`,
-				filters: [{ name: "JSON", extensions: ["json"] }],
-			});
-
-			if (canceled || !filePath) return { success: false, canceled: true };
-
-			const HELPER_OUTPUT_MAX_BYTES = 64 * 1024;
-			const tail = (s: string, max: number) => (s.length <= max ? s : s.slice(s.length - max));
-
-			const diagnostic = {
-				timestamp: new Date().toISOString(),
-				appVersion: app.getVersion(),
-				platform: process.platform,
-				arch: process.arch,
-				// The same fact the About box leads with, and for the same reason: it is what
-				// explains why a copy does or does not offer an update check. This file is the
-				// artifact users actually attach, so it must not be the one that omits it.
-				channel: getInstallChannel(),
-				osRelease: os.release(),
-				osVersion: os.version(),
-				totalMemoryMB: Math.round(os.totalmem() / 1024 / 1024),
-				nodeVersion: process.versions.node,
-				electronVersion: process.versions.electron,
-				chromeVersion: process.versions.chrome,
-				error: payload.error,
-				stack: payload.stack,
-				projectState: payload.projectState,
-				recentLogs: payload.logs,
-				helperOutput: {
-					windows: tail(nativeWindowsCaptureOutput, HELPER_OUTPUT_MAX_BYTES),
-					mac: tail(nativeMacCaptureOutput, HELPER_OUTPUT_MAX_BYTES),
-				},
-				mainProcessLogs: mainLogBuffer.snapshot(),
-			};
-
-			try {
-				await fs.writeFile(filePath, JSON.stringify(diagnostic, null, 2), "utf-8");
-				return { success: true, path: filePath };
-			} catch (error) {
-				console.error("Failed to write diagnostic file:", error);
-				return { success: false, error: String(error) };
-			}
-		},
+		async (_, payload: { error: string; stack?: string; projectState: unknown; logs: string[] }) =>
+			exportDiagnosticFile(payload),
 	);
 
 	// One instance each, not one per call. DocumentService serialises saves of a
