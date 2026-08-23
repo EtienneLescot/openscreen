@@ -865,7 +865,14 @@ int main(int argc, char* argv[]) {
               << "\",\"container\":\"" << encoder.containerFormat()
               << "\",\"preferSoftwareEncoder\":"
               << (config.preferSoftwareEncoder ? "true" : "false")
-              << "}" << std::endl;
+              // What BeginWriting() actually landed on, not what the "video"
+              // field above asked for -- see kVideoEncoderRuntime* in
+              // mf_encoder.h. "default" plus "software" here means the machine
+              // never got a hardware encoder in the first place, which is a
+              // different bug report than "default" plus "hardware" stalling
+              // on stop.
+              << ",\"videoEncoderRuntime\":\"" << encoder.videoEncoderRuntime()
+              << "\"}" << std::endl;
     MFEncoder webcamEncoder;
     if (writeSeparateWebcam) {
         MFEncoderOptions webcamEncoderOptions = encoderOptions;
