@@ -1353,6 +1353,12 @@ function readNativeWindowsEncoderSelection(output: string) {
 			// which is what `salvageNativeWindowsFragmentedCapture` asks.
 			container?: string;
 			preferSoftwareEncoder?: boolean;
+			// Whether BeginWriting() actually landed on a hardware H.264 MFT, as
+			// opposed to `video` above, which only says which configuration path
+			// was tried. "default" plus a software runtime means the machine never
+			// got hardware acceleration in the first place -- see
+			// kVideoEncoderRuntime* in mf_encoder.h.
+			videoEncoderRuntime?: string;
 		};
 	} catch {
 		return null;
@@ -2531,6 +2537,7 @@ export function registerIpcHandlers(
 					path: outputPath,
 					helperPath,
 					videoEncoderSelection: encoderSelection?.video ?? null,
+					videoEncoderRuntime: encoderSelection?.videoEncoderRuntime ?? null,
 					webcamUnavailable,
 					microphoneDefaulted,
 				};

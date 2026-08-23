@@ -48,6 +48,13 @@ export type NativeWindowsRecordingStartResult = {
 	/** Helper-reported encoder selection: "default", "software-preferred", or "software-fallback". */
 	videoEncoderSelection?: string | null;
 	/**
+	 * Whether the helper actually landed on a hardware H.264 encoder MFT, as
+	 * opposed to `videoEncoderSelection` above, which only says which
+	 * configuration path was tried: "hardware", "software", or "unknown" when
+	 * the helper could not introspect its own sink writer.
+	 */
+	videoEncoderRuntime?: string | null;
+	/**
 	 * A camera was asked for and the helper could not open it, so this take is
 	 * screen and audio only. Still a success — the recording is worth keeping —
 	 * but the user has to be told, or they discover it in the editor.
