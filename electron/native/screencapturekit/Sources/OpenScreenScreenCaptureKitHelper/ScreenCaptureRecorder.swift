@@ -802,6 +802,15 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 struct OpenScreenScreenCaptureKitHelper {
 	static func main() async {
 		do {
+			// This helper is a plain command-line executable, so nothing has connected it to
+			// the window server yet. `SCContentFilter(desktopIndependentWindow:)` reaches into
+			// SkyLight (`SLSGetDisplaysWithRect`) to find the display a window sits on, and
+			// SkyLight aborts with `CGS_REQUIRE_INIT` when CoreGraphics was never initialised
+			// in the process — so every window capture crashed before it produced a frame,
+			// while display capture (which never resolves a rect) worked fine. Touching any
+			// CoreGraphics display API first performs that initialisation.
+			_ = CGMainDisplayID()
+
 			guard CommandLine.arguments.count == 2 else {
 				throw HelperError.invalidArguments
 			}
