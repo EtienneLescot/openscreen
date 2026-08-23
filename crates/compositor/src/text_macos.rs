@@ -52,6 +52,11 @@ pub struct TextSpec {
     pub underline: bool,
     /// "left" | "center" | "right".
     pub align: String,
+    /// "top" | "center" | "bottom" — quelle arête du bloc est épinglée à la boîte.
+    /// "center" est le comportement historique (et celui des annotations) ; les
+    /// sous-titres passent "bottom" ou "top" pour que l'arête ancrée ne bouge pas
+    /// quand le texte gagne une ligne.
+    pub valign: String,
     /// Taille de la boîte en px de sortie — la mise en page en dépend (retours à la ligne).
     pub box_px: [u32; 2],
 }
@@ -79,6 +84,10 @@ impl TextSpec {
         }
         mix(&[self.bold as u8, self.italic as u8, self.underline as u8]);
         mix(self.align.as_bytes());
+        // Juste après `align`, mêmes octets et même position que sur les deux
+        // autres backends : deux specs ne différant que par l'alignement vertical
+        // rendraient sinon les pixels l'une de l'autre depuis le cache.
+        mix(self.valign.as_bytes());
         mix(&self.box_px[0].to_le_bytes());
         mix(&self.box_px[1].to_le_bytes());
         h
@@ -308,6 +317,11 @@ fn block_layout(
     text_w: CGFloat,
     text_h: CGFloat,
     align: u8,
+    valign: &str,
+    // Une plaque de fond est-elle dessinée ? Elle décide de la marge à réserver du côté
+    // ancré — voir `anchor_pad` plus bas. (Commentaire ordinaire et pas `///` : rustc
+    // refuse un doc-comment sur un paramètre.)
+    has_plate: bool,
     font_px: CGFloat,
 ) -> (CGRect, CGRect) {
     let (pad_x, pad_y) = plate_padding(font_px);
@@ -317,7 +331,24 @@ fn block_layout(
     // la mesure. On l'étend d'un pixel vers le BAS — donc en abaissant l'origine `y`, pas
     // en montant le sommet — pour que le haut du texte ne bouge pas d'un poil.
     const GUARD: CGFloat = 1.0;
-    let top = ((box_h - text_h) * 0.5).max(0.0);
+    // ANCRAGE. `center` reste le comportement historique (et celui des annotations,
+    // qui reproduisent `alignItems: center` de l'overlay web). Les sous-titres
+    // épinglent une arête : un bloc centré voit ses DEUX arêtes bouger quand il
+    // gagne une ligne, ce qui déplaçait le sous-titre. `top` est ici une distance
+    // depuis le HAUT de la boîte, en coordonnées descendantes.
+    // `anchor_pad` réserve la marge de la plaque DU CÔTÉ ANCRÉ. Sans elle, coller le
+    // bloc de texte au bord laisse la plaque poser toute sa marge du côté opposé et
+    // zéro du côté ancré : le fond épouse le bas des lettres au pixel près tout en
+    // respirant deux fois trop au-dessus. Ce qui doit toucher le bord de la boîte est
+    // la PLAQUE, pas les glyphes. Sans plaque, il n'y a rien à réserver.
+    let anchor_pad = if has_plate { pad_y } else { 0.0 };
+    let slack_y = (box_h - text_h).max(0.0);
+    let top = match valign {
+        "top" | "start" => anchor_pad,
+        "bottom" | "end" => slack_y - anchor_pad,
+        _ => slack_y * 0.5,
+    }
+    .clamp(0.0, slack_y);
     let frame_x = (box_w - avail_w) * 0.5;
     let frame = CGRect {
         origin: CGPoint {
@@ -593,7 +624,16 @@ impl TextRasterizer {
         let text_h = measured.height.ceil().max(0.0);
 
         let (frame_rect, plate_rect) =
-            block_layout(box_w, box_h, text_w, text_h, alignment, font_px);
+            block_layout(
+                box_w,
+                box_h,
+                text_w,
+                text_h,
+                alignment,
+                &spec.valign,
+                spec.background[3] > 0.0,
+                font_px,
+            );
 
         // --- plaque de fond, sous le texte ---
         if spec.background[3] > 0.0 && plate_rect.size.width > 0.0 && plate_rect.size.height > 0.0
@@ -651,6 +691,7 @@ mod tests {
             italic: false,
             underline: false,
             align: "center".into(),
+            valign: "center".into(),
             box_px: [256, 256],
         }
     }
@@ -828,7 +869,7 @@ mod tests {
     /// Géométrie pure — pas de GPU, pas de CoreText.
     #[test]
     fn block_layout_centres_the_frame_and_sizes_the_plate() {
-        let (frame, plate) = block_layout(1536.0, 238.0, 500.0, 56.0, 2, 48.0);
+        let (frame, plate) = block_layout(1536.0, 238.0, 500.0, 56.0, 2, "center", true, 48.0);
         // Cadre centré : autant de vide au-dessus qu'en dessous (repère CG, y vers le haut).
         let above = 238.0 - (frame.origin.y + frame.size.height);
         let below = frame.origin.y;
@@ -843,11 +884,49 @@ mod tests {
     fn block_layout_never_lets_the_plate_leave_the_box() {
         for align in [0u8, 1, 2] {
             // Bloc plus large et plus haut que la boîte : la plaque doit se contenter d'elle.
-            let (_, plate) = block_layout(200.0, 60.0, 400.0, 200.0, align, 48.0);
+            let (_, plate) = block_layout(200.0, 60.0, 400.0, 200.0, align, "center", true, 48.0);
             assert!(plate.origin.x >= 0.0, "align={align} : x={}", plate.origin.x);
             assert!(plate.origin.y >= 0.0, "align={align} : y={}", plate.origin.y);
             assert!(plate.origin.x + plate.size.width <= 200.0 + 0.01, "align={align}");
             assert!(plate.origin.y + plate.size.height <= 60.0 + 0.01, "align={align}");
         }
+    }
+
+    /// L'invariant de la refonte du placement des sous-titres, en géométrie pure.
+    /// Un bloc centré voit ses DEUX arêtes bouger quand il grandit ; ancré, l'arête
+    /// ancrée ne bouge pas. Repère CoreGraphics : `y` monte.
+    #[test]
+    fn block_layout_pins_the_anchored_edge_whatever_the_block_height() {
+        let (box_w, box_h) = (1536.0, 238.0);
+        let edges = |valign: &str, text_h: f64| {
+            let (frame, _) = block_layout(box_w, box_h, 500.0, text_h, 2, valign, true, 48.0);
+            // (bas, haut) en distance depuis le bas de la boîte.
+            (frame.origin.y, frame.origin.y + frame.size.height)
+        };
+
+        // Ancrage bas : l'arête basse est la même à une et à trois lignes.
+        let (one_bottom, _) = edges("bottom", 56.0);
+        let (three_bottom, _) = edges("bottom", 168.0);
+        assert!(
+            (one_bottom - three_bottom).abs() < 0.01,
+            "ancrage bas : l'arête basse a bougé de {one_bottom} à {three_bottom}"
+        );
+
+        // Ancrage haut : l'arête haute est la même.
+        let (_, one_top) = edges("top", 56.0);
+        let (_, three_top) = edges("top", 168.0);
+        assert!(
+            (one_top - three_top).abs() < 0.01,
+            "ancrage haut : l'arête haute a bougé de {one_top} à {three_top}"
+        );
+
+        // Et le centrage, lui, fait bien bouger les deux — c'est le comportement
+        // historique qu'on préserve pour les annotations.
+        let (c1_bottom, c1_top) = edges("center", 56.0);
+        let (c3_bottom, c3_top) = edges("center", 168.0);
+        assert!(
+            (c1_bottom - c3_bottom).abs() > 1.0 && (c1_top - c3_top).abs() > 1.0,
+            "le centrage devrait déplacer les deux arêtes"
+        );
     }
 }

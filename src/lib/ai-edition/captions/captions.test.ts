@@ -1,18 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { captionCuesToTextRegions, deriveCaptionCues } from "./cues";
-import type { CaptionSettings, CaptionSettingsPatch } from "./settings";
+import type { CaptionSettings } from "./settings";
 import {
-	activeHorizontalPositionPreset,
-	activeVerticalPositionPreset,
-	CAPTION_BAND_HEIGHT_PCT,
-	CAPTION_POSITION_PRESET_EPSILON,
 	captionBackgroundCss,
-	captionBandRect,
-	captionHorizontalPositionOffset,
-	captionInkHeightPct,
-	captionOffsetRange,
+	captionBoxRect,
+	captionSafeColumn,
 	DEFAULT_CAPTION_SETTINGS,
+	defaultCaptionInsetX,
+	defaultCaptionInsetY,
 	getCaptionSettings,
 	patchCaptionSettings,
 } from "./settings";
@@ -98,6 +94,18 @@ function doc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 }
 
 const ON = { ...DEFAULT_CAPTION_SETTINGS, enabled: true };
+const LANDSCAPE = 16 / 9;
+const PORTRAIT = 9 / 16;
+
+/** Where the DRAWN block's edges land, given the box and the edge it is pinned to.
+ *  The renderers put the block flush against the anchored edge of the box, so this
+ *  is the same arithmetic the rasterizers do — expressed once, here, so the tests
+ *  assert the thing the viewer sees rather than the box it lives in. */
+function drawnEdges(settings: typeof ON, aspect: number, blockHeightPct: number) {
+	const box = captionBoxRect(settings, aspect);
+	const top = box.verticalAlign === "bottom" ? box.y + box.height - blockHeightPct : box.y;
+	return { top, bottom: top + blockHeightPct };
+}
 
 describe("caption settings", () => {
 	it("defaults to hidden so an existing project doesn't sprout captions on upgrade", () => {
@@ -105,8 +113,8 @@ describe("caption settings", () => {
 	});
 
 	it("round-trips a patch through the legacyEditor envelope", () => {
-		const next = patchCaptionSettings(doc(), { enabled: true, fontSize: 44, offsetY: -10 });
-		expect(getCaptionSettings(next)).toMatchObject({ enabled: true, fontSize: 44, offsetY: -10 });
+		const next = patchCaptionSettings(doc(), { enabled: true, fontSize: 44, insetY: 12 });
+		expect(getCaptionSettings(next)).toMatchObject({ enabled: true, fontSize: 44, insetY: 12 });
 	});
 
 	it("keeps an explicit null language instead of falling back to the default", () => {
@@ -122,131 +130,6 @@ describe("caption settings", () => {
 		expect(getCaptionSettings(next)).toMatchObject({ minWordsPerLine: 3, maxWordsPerLine: 9 });
 	});
 
-	it("leaves an untouched project exactly where it was", () => {
-		// The frame/screen-rect reinterpretation is the only intended visual change. The
-		// anchor arithmetic must not move on top of it, or every existing project shifts.
-		expect(captionBandRect({ ...ON, verticalPosition: "top" })).toMatchObject({ x: 10, y: 3 });
-		expect(captionBandRect({ ...ON, verticalPosition: "middle" })).toMatchObject({ x: 10, y: 39 });
-		expect(captionBandRect({ ...ON, verticalPosition: "bottom" })).toMatchObject({ x: 10, y: 75 });
-	});
-
-	it("pushes the ink onto the frame edge, and no further", () => {
-		// The band is a 22% box whose text the renderers centre, so the box has to hang off
-		// the frame for the glyphs to reach the edge — asserting the BOX stays inside is what
-		// used to stop the caption a half-band short (#396). What must stay inside is the ink.
-		for (const verticalPosition of ["top", "middle", "bottom"] as const) {
-			const settings = { ...ON, verticalPosition };
-			const range = captionOffsetRange(settings);
-			const half = captionInkHeightPct(settings) / 2;
-
-			const low = captionBandRect({ ...settings, offsetY: range.y.min });
-			expect(low.y + low.height / 2 - half).toBeCloseTo(0, 6);
-			expect(low.y).toBeLessThan(0);
-
-			const high = captionBandRect({ ...settings, offsetY: range.y.max });
-			expect(high.y + high.height / 2 + half).toBeCloseTo(100, 6);
-			expect(high.y + high.height).toBeGreaterThan(100);
-		}
-	});
-
-	it("clamps an offset the anchor cannot reach instead of drawing off-frame", () => {
-		const pushed = captionBandRect({ ...ON, verticalPosition: "bottom", offsetY: 100 });
-		const capped = captionBandRect({
-			...ON,
-			verticalPosition: "bottom",
-			offsetY: captionOffsetRange(ON).y.max,
-		});
-		expect(pushed).toEqual(capped);
-	});
-
-	it("lets the band reach the left and right frame edges, but never past them", () => {
-		const range = captionOffsetRange(ON);
-		expect(captionBandRect({ ...ON, offsetX: range.x.min }).x).toBeCloseTo(0, 6);
-		expect(captionBandRect({ ...ON, offsetX: range.x.max }).x).toBeCloseTo(100 - ON.width, 6);
-		expect(captionBandRect({ ...ON, offsetX: 100 }).x).toBeCloseTo(100 - ON.width, 6);
-	});
-
-	it("gives a full-width band no horizontal travel to offer", () => {
-		const full = { ...ON, width: 100 };
-		const range = captionOffsetRange(full);
-		expect(range.x.min).toBeCloseTo(0, 6);
-		expect(range.x.max).toBeCloseTo(0, 6);
-		expect(captionBandRect({ ...full, offsetX: 40 }).x).toBeCloseTo(0, 6);
-	});
-
-	it("shrinks the reach as the font grows, so big captions still fit", () => {
-		// The guaranteed-visible slice is font-derived: a 200px caption fills the whole band,
-		// leaving nothing to spill, while a small one can hang most of the band off-frame.
-		const small = captionOffsetRange({ ...ON, fontSize: 12 }).y.max;
-		const large = captionOffsetRange({ ...ON, fontSize: 200 }).y.max;
-		expect(small).toBeGreaterThan(large);
-		expect(large).toBeCloseTo(100 - CAPTION_BAND_HEIGHT_PCT - 75, 6);
-	});
-
-	it("re-clamps the offsets against the geometry a patch just created", () => {
-		// A patch can move the reachable span itself — `width`, `fontSize`,
-		// `backgroundEnabled` and `verticalPosition` all do. Clamping only on read
-		// would leave the stored number outside the span until someone read it, and
-		// the next patch would write that stale number straight back out.
-		const wide = patchCaptionSettings(doc(), { enabled: true, width: 20 });
-		const pushed = patchCaptionSettings(wide, {
-			offsetX: captionOffsetRange(getCaptionSettings(wide)).x.max,
-		});
-		const narrowed = patchCaptionSettings(pushed, { width: 100 });
-
-		const stored = (narrowed.legacyEditor as { captions: CaptionSettings }).captions;
-		expect(stored.offsetX).toBeCloseTo(0, 6);
-		expect(stored.offsetX).toBeCloseTo(getCaptionSettings(narrowed).offsetX, 6);
-	});
-
-	it("re-clamps when the anchor moves, not just when the width does", () => {
-		const low = patchCaptionSettings(doc(), { enabled: true, verticalPosition: "bottom" });
-		const pushed = patchCaptionSettings(low, {
-			offsetY: captionOffsetRange(getCaptionSettings(low)).y.min,
-		});
-		const flipped = patchCaptionSettings(pushed, { verticalPosition: "top" });
-
-		const stored = (flipped.legacyEditor as { captions: CaptionSettings }).captions;
-		const range = captionOffsetRange(getCaptionSettings(flipped));
-		expect(stored.offsetY).toBeGreaterThanOrEqual(range.y.min - 1e-9);
-		expect(stored.offsetY).toBeLessThanOrEqual(range.y.max + 1e-9);
-		expect(stored.offsetY).toBeCloseTo(getCaptionSettings(flipped).offsetY, 6);
-	});
-
-	// `fontSize` and `backgroundEnabled` reach the range the long way round, through
-	// the height of the drawn block: the taller the ink, the less of the band is
-	// empty, and the empty part is all the band is allowed to hang off the frame.
-	it.each([
-		{ field: "fontSize", grow: { fontSize: 200 } as CaptionSettingsPatch },
-		{ field: "backgroundEnabled", grow: { backgroundEnabled: true } as CaptionSettingsPatch },
-	] as const)("re-clamps when $field narrows the reach", ({ grow }) => {
-		// Start where the reach is widest, so growing the ink has something to take.
-		const roomy = patchCaptionSettings(doc(), {
-			enabled: true,
-			verticalPosition: "bottom",
-			fontSize: 12,
-			backgroundEnabled: false,
-		});
-		const pushed = patchCaptionSettings(roomy, {
-			offsetY: captionOffsetRange(getCaptionSettings(roomy)).y.max,
-		});
-		const grown = patchCaptionSettings(pushed, grow);
-
-		const range = captionOffsetRange(getCaptionSettings(grown));
-		// The reach really did narrow — otherwise this proves nothing.
-		expect(range.y.max).toBeLessThan(captionOffsetRange(getCaptionSettings(pushed)).y.max);
-		const stored = (grown.legacyEditor as { captions: CaptionSettings }).captions;
-		expect(stored.offsetY).toBeLessThanOrEqual(range.y.max + 1e-9);
-		expect(stored.offsetY).toBeCloseTo(getCaptionSettings(grown).offsetY, 6);
-	});
-
-	it("normalises an offset left over from another anchor on read", () => {
-		// The stored value, the slider position and the drawn band stay the same number.
-		const parked = patchCaptionSettings(doc(), { enabled: true, offsetY: 45 });
-		const read = getCaptionSettings(parked);
-		expect(read.offsetY).toBeCloseTo(captionOffsetRange(read).y.max, 6);
-	});
-
 	it("folds the opacity into the background colour, and reports 'transparent' when off", () => {
 		expect(
 			captionBackgroundCss({ ...ON, backgroundColor: "#10b981", backgroundOpacity: 0.5 }),
@@ -255,76 +138,187 @@ describe("caption settings", () => {
 	});
 });
 
-describe("caption position presets", () => {
-	it("reads a vertical preset as active only while there's no nudge off it", () => {
-		for (const verticalPosition of ["top", "middle", "bottom"] as const) {
-			const settings = { ...ON, verticalPosition, offsetY: 0 };
-			expect(activeVerticalPositionPreset(settings)).toBe(verticalPosition);
-			// Any nudge at all — even one too small to see — means the band is no
-			// longer exactly at the preset, so nothing should read as "active".
-			expect(activeVerticalPositionPreset({ ...settings, offsetY: 5 })).toBeNull();
+describe("caption anchoring", () => {
+	// THE invariant of the redesign, asserted as a property rather than as numbers.
+	// The old model placed a fixed 22% band and let each renderer centre the ink in it,
+	// so the drawn block's edges moved with the font size, the background, the wrap —
+	// which is why widening the band shifted the caption vertically and why the offset
+	// had to be a signed number clamped against an estimate.
+	it("pins the anchored edge for every font size, background state and inset", () => {
+		for (const anchorV of ["bottom", "top"] as const) {
+			for (const insetY of [0, 0.5, 5, 12.5, 33.3, 50]) {
+				for (const fontSize of [12, 48, 120, 200]) {
+					for (const backgroundEnabled of [true, false]) {
+						const settings = { ...ON, anchorV, insetY, fontSize, backgroundEnabled };
+						const box = captionBoxRect(settings, LANDSCAPE);
+						const pinned = anchorV === "bottom" ? box.y + box.height : box.y;
+						expect(pinned).toBeCloseTo(anchorV === "bottom" ? 100 - insetY : insetY, 6);
+						// And the box itself never leaves the frame, so there is no overhang to
+						// compensate for and no negative `y` for the schema to reject.
+						expect(box.y).toBeGreaterThanOrEqual(-1e-9);
+						expect(box.y + box.height).toBeLessThanOrEqual(100 + 1e-9);
+					}
+				}
+			}
 		}
 	});
 
-	it("reads left/center/right off offsetX, and null off the preset grid", () => {
-		expect(activeHorizontalPositionPreset(ON)).toBe("center");
-		const range = captionOffsetRange(ON);
-		expect(activeHorizontalPositionPreset({ ...ON, offsetX: range.x.min })).toBe("left");
-		expect(activeHorizontalPositionPreset({ ...ON, offsetX: range.x.max })).toBe("right");
-		expect(activeHorizontalPositionPreset({ ...ON, offsetX: range.x.min / 2 })).toBeNull();
+	it("holds the anchored edge still while the block grows — the complaint this fixes", () => {
+		// One line vs three, same settings: the anchored edge must not move. Under the
+		// old geometry the block was centred, so BOTH edges moved and the subtitle
+		// visibly drifted whenever its text wrapped.
+		const bottom = { ...ON, anchorV: "bottom" as const, insetY: 5 };
+		expect(drawnEdges(bottom, LANDSCAPE, 6).bottom).toBeCloseTo(
+			drawnEdges(bottom, LANDSCAPE, 18).bottom,
+			6,
+		);
+		const top = { ...ON, anchorV: "top" as const, insetY: 5 };
+		expect(drawnEdges(top, LANDSCAPE, 6).top).toBeCloseTo(drawnEdges(top, LANDSCAPE, 18).top, 6);
 	});
 
-	it("collapses to center when the band is full-width, since left/right have nowhere to go", () => {
-		expect(activeHorizontalPositionPreset({ ...ON, width: 100, offsetX: 0 })).toBe("center");
+	it("tells the compositor which edge to pin", () => {
+		expect(captionBoxRect({ ...ON, anchorV: "bottom" }, LANDSCAPE).verticalAlign).toBe("bottom");
+		expect(captionBoxRect({ ...ON, anchorV: "top" }, LANDSCAPE).verticalAlign).toBe("top");
 	});
 
-	it("still picks left/right over center when a near-full-width band squeezes them inside the epsilon", () => {
-		// At width this close to 100, range.x.min/max themselves fall inside
-		// CAPTION_POSITION_PRESET_EPSILON of 0 — checking "is this near center?"
-		// first would wrongly claim an offset that is exactly at the true edge.
-		const squeezed = { ...ON, width: 100 - 1e-7 };
-		const range = captionOffsetRange(squeezed);
-		expect(Math.abs(range.x.min)).toBeLessThan(CAPTION_POSITION_PRESET_EPSILON);
-		expect(activeHorizontalPositionPreset({ ...squeezed, offsetX: range.x.min })).toBe("left");
-		expect(activeHorizontalPositionPreset({ ...squeezed, offsetX: range.x.max })).toBe("right");
-		expect(activeHorizontalPositionPreset({ ...squeezed, offsetX: 0 })).toBe("center");
-	});
-
-	it("sets offsetX to the true frame edge for left/right, matching the reachable range", () => {
-		const range = captionOffsetRange(ON);
-		expect(captionHorizontalPositionOffset(ON, "left")).toBeCloseTo(range.x.min, 6);
-		expect(captionHorizontalPositionOffset(ON, "center")).toBe(0);
-		expect(captionHorizontalPositionOffset(ON, "right")).toBeCloseTo(range.x.max, 6);
-	});
-
-	it("reaches the true left and right frame edges through the left/right presets", () => {
-		const left = captionBandRect({ ...ON, offsetX: captionHorizontalPositionOffset(ON, "left") });
-		expect(left.x).toBeCloseTo(0, 6);
-		const right = captionBandRect({
-			...ON,
-			offsetX: captionHorizontalPositionOffset(ON, "right"),
-		});
-		expect(right.x + right.width).toBeCloseTo(100, 6);
-	});
-
-	it("de-activates the horizontal preset when width moves the band, without touching offsetX", () => {
-		// The real asymmetry against the vertical axis: `range.x` moves with
-		// `width` (`captionAnchor.x` depends on it), so a preset that was flush
-		// can stop being flush purely because the band got narrower or wider.
-		// `offsetY === 0` has no such dependency, so a vertical preset never does
-		// this — it's intended, not a regression.
-		const atWidth80 = {
-			...ON,
-			width: 80,
-			offsetX: captionOffsetRange({ ...ON, width: 80 }).x.min,
+	it("keeps the vertical placement independent of everything on the other axis", () => {
+		// The old `width` slider moved the caption vertically, because a narrower band
+		// wrapped more, and more lines grew a centred block in both directions.
+		const base = { ...ON, anchorV: "bottom" as const, insetY: 8 };
+		const pinned = (s: typeof base) => {
+			const b = captionBoxRect(s, LANDSCAPE);
+			return b.y + b.height;
 		};
-		expect(activeHorizontalPositionPreset(atWidth80)).toBe("left");
-		expect(captionBandRect(atWidth80).x).toBeCloseTo(0, 6);
+		expect(pinned({ ...base, anchorH: "left", insetX: 0 })).toBeCloseTo(pinned(base), 6);
+		expect(pinned({ ...base, anchorH: "right", insetX: 25 })).toBeCloseTo(pinned(base), 6);
+	});
+});
 
-		const narrowed = { ...atWidth80, width: 50 };
-		expect(activeHorizontalPositionPreset(narrowed)).toBeNull();
-		expect(narrowed.offsetX).toBe(atWidth80.offsetX);
-		expect(captionBandRect(narrowed).x).toBeCloseTo(15, 6);
+describe("caption horizontal anchoring", () => {
+	it("pins the named edge, and centres between the column when asked to", () => {
+		const column = captionSafeColumn(LANDSCAPE);
+
+		const left = captionBoxRect({ ...ON, anchorH: "left", insetX: 4 }, LANDSCAPE);
+		expect(left.x).toBeCloseTo(4, 6);
+
+		const right = captionBoxRect({ ...ON, anchorH: "right", insetX: 4 }, LANDSCAPE);
+		expect(right.x + right.width).toBeCloseTo(96, 6);
+
+		const centre = captionBoxRect({ ...ON, anchorH: "center" }, LANDSCAPE);
+		expect(centre.x).toBeCloseTo((100 - column.width) / 2, 6);
+		expect(centre.width).toBeCloseTo(column.width, 6);
+	});
+
+	it("ignores insetX entirely when centred — there is no edge to measure from", () => {
+		const a = captionBoxRect({ ...ON, anchorH: "center", insetX: 0 }, LANDSCAPE);
+		const b = captionBoxRect({ ...ON, anchorH: "center", insetX: 25 }, LANDSCAPE);
+		expect(a).toEqual(b);
+	});
+
+	it("narrows the box rather than pushing it off-frame", () => {
+		// A 90%-wide portrait column pushed 25% in would otherwise end at 115%.
+		const box = captionBoxRect({ ...ON, anchorH: "left", insetX: 25 }, PORTRAIT);
+		expect(box.x + box.width).toBeLessThanOrEqual(100 + 1e-9);
+		expect(box.width).toBeCloseTo(75, 6);
+	});
+});
+
+describe("caption safe column", () => {
+	it("follows the BBC line-length table, and stays inside title-safe", () => {
+		expect(captionSafeColumn(LANDSCAPE)).toEqual({ x: 16, width: 68 });
+		expect(captionSafeColumn(PORTRAIT)).toEqual({ x: 5, width: 90 });
+		for (const aspect of [LANDSCAPE, 1, PORTRAIT]) {
+			const c = captionSafeColumn(aspect);
+			expect(c.x + c.width).toBeCloseTo(100 - c.x, 6);
+		}
+	});
+
+	it("defaults a vertical export well clear of the platform chrome", () => {
+		// The landscape values are eyeballed against the editor's default padding; the
+		// portrait one answers a different question — TikTok/Reels/Shorts draw their own
+		// chrome over the bottom eighth of a 9:16 export, so the same 1.5% would put the
+		// caption behind a UI.
+		expect(defaultCaptionInsetY(LANDSCAPE)).toBe(1.5);
+		expect(defaultCaptionInsetX(LANDSCAPE)).toBe(10);
+		expect(defaultCaptionInsetY(PORTRAIT)).toBeGreaterThan(10);
+	});
+});
+
+describe("migrating a pre-anchor document", () => {
+	// The rule is reproduce the PIXELS, not the fields: the old band was a fixed 22%
+	// box with the ink centred in it, so where the caption was drawn is recoverable,
+	// and the nearer edge becomes the anchor. A migrated project must not visibly move.
+	const legacy = (captions: Record<string, unknown>) =>
+		getCaptionSettings(
+			doc({ legacyEditor: { captions: { enabled: true, ...captions } } } as Partial<AxcutDocument>),
+			LANDSCAPE,
+		);
+
+	it("keeps a default bottom caption at the bottom", () => {
+		const s = legacy({ verticalPosition: "bottom", offsetY: 0 });
+		expect(s.anchorV).toBe("bottom");
+		// The old band sat at y=75 and its ink — 48px × (2 lines × 1.4em + 0.2em of
+		// plate) = 13.33% of frame height — was centred in the 22% box, so the drawn
+		// block ended at 92.67%. The migrated inset must reproduce exactly that edge.
+		expect(s.insetY).toBeCloseTo(7.333, 2);
+	});
+
+	it("flips the anchor for a caption that had been dragged to the top", () => {
+		const s = legacy({ verticalPosition: "bottom", offsetY: -79.333 });
+		expect(s.anchorV).toBe("top");
+		expect(s.insetY).toBeCloseTo(0, 1);
+	});
+
+	it("keeps a top caption at the top", () => {
+		const s = legacy({ verticalPosition: "top", offsetY: 0 });
+		expect(s.anchorV).toBe("top");
+	});
+
+	it("maps the old band+textAlign pair onto the single horizontal anchor", () => {
+		expect(legacy({ width: 80, offsetX: 0, textAlign: "center" }).anchorH).toBe("center");
+		expect(legacy({ width: 40, offsetX: -30, textAlign: "left" }).anchorH).toBe("left");
+		expect(legacy({ width: 40, offsetX: 30, textAlign: "right" }).anchorH).toBe("right");
+	});
+
+	it("reproduces the horizontal distance too, instead of snapping to the frame edge", () => {
+		// The old band's own left edge, not 0: `width: 40` centres its anchor at 30, so
+		// an offset of −25 put the band at 5% — and that is where the caption must stay.
+		const left = legacy({ width: 40, offsetX: -25, textAlign: "left" });
+		expect(left.anchorH).toBe("left");
+		expect(left.insetX).toBeCloseTo(5, 6);
+
+		// Mirrored: the band ends at 95%, so the distance from the right edge is 5%.
+		const right = legacy({ width: 40, offsetX: 25, textAlign: "right" });
+		expect(right.anchorH).toBe("right");
+		expect(right.insetX).toBeCloseTo(5, 6);
+	});
+
+	it("lets a stored anchor win, so the migration runs once and then stays out of the way", () => {
+		const s = legacy({ verticalPosition: "top", offsetY: 0, anchorV: "bottom", insetY: 9 });
+		expect(s.anchorV).toBe("bottom");
+		expect(s.insetY).toBe(9);
+	});
+
+	it("gives a document with no caption settings the aspect-appropriate default", () => {
+		expect(getCaptionSettings(doc(), LANDSCAPE).insetY).toBe(1.5);
+		expect(getCaptionSettings(doc(), LANDSCAPE).insetX).toBe(10);
+		expect(getCaptionSettings(doc(), PORTRAIT).insetY).toBe(12.5);
+	});
+
+	it("freezes the PORTRAIT defaults on the first write to a vertical project", () => {
+		// The first patch is what materialises the defaults into the document, so it
+		// has to know the aspect too. Patching without it stored the landscape inset
+		// into a 9:16 project and the stored value then won for good — putting the
+		// caption under the platform's own chrome, the exact failure the
+		// aspect-derived default exists to prevent.
+		const first = patchCaptionSettings(doc(), { enabled: true }, PORTRAIT);
+		const stored = (first.legacyEditor as { captions: CaptionSettings }).captions;
+		expect(stored.insetY).toBe(12.5);
+		expect(stored.insetX).toBe(defaultCaptionInsetX(PORTRAIT));
+
+		// And it stays: a later patch reads what is stored rather than re-deriving.
+		const later = patchCaptionSettings(first, { fontSize: 60 }, PORTRAIT);
+		expect(getCaptionSettings(later, PORTRAIT).insetY).toBe(12.5);
 	});
 });
 
@@ -432,7 +426,7 @@ describe("deriveCaptionCues", () => {
 
 describe("captionCuesToTextRegions", () => {
 	it("emits plain text regions with no annotationSource marker", () => {
-		const regions = captionCuesToTextRegions(deriveCaptionCues(doc(), ON, {}), ON);
+		const regions = captionCuesToTextRegions(deriveCaptionCues(doc(), ON, {}), ON, LANDSCAPE);
 		expect(regions.length).toBeGreaterThan(0);
 		for (const region of regions) {
 			expect(region.type).toBe("text");
@@ -446,16 +440,34 @@ describe("captionCuesToTextRegions", () => {
 			...ON,
 			color: "#fde047",
 			fontSize: 40,
-			textAlign: "left" as const,
+			anchorH: "left" as const,
 			backgroundEnabled: false,
 		};
-		const [region] = captionCuesToTextRegions(deriveCaptionCues(doc(), settings, {}), settings);
+		const [region] = captionCuesToTextRegions(
+			deriveCaptionCues(doc(), settings, {}),
+			settings,
+			LANDSCAPE,
+		);
 		expect(region.style).toMatchObject({
 			color: "#fde047",
 			fontSize: 40,
+			// One horizontal control: the anchor IS the text alignment the rasterizer gets.
 			textAlign: "left",
 			backgroundColor: "transparent",
 		});
+	});
+
+	it("tells the compositor which edge to pin, on every region", () => {
+		// Without this the rasterizers centre the block in the box, which is the whole
+		// bug: the caption would drift vertically every time its text wrapped.
+		const settings = { ...ON, anchorV: "top" as const };
+		const regions = captionCuesToTextRegions(
+			deriveCaptionCues(doc(), settings, {}),
+			settings,
+			LANDSCAPE,
+		);
+		expect(regions.length).toBeGreaterThan(0);
+		for (const region of regions) expect(region.verticalAlign).toBe("top");
 	});
 });
 

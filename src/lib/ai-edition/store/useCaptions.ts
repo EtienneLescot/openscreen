@@ -17,8 +17,10 @@ import {
 	putCaptionTranslation,
 	removeCaptionTranslation,
 } from "../captions";
+import { resolveAspectRatioValue } from "../document/outputFormat";
 import type { AxcutDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
+import { useEditorSettings } from "./useEditorSettings";
 
 export interface UseCaptionsResult {
 	settings: CaptionSettings;
@@ -48,7 +50,23 @@ export function useCaptions(): UseCaptionsResult {
 	const setDocument = useProjectStore((s) => s.setDocument);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
 
-	const settings = useMemo(() => getCaptionSettings(document), [document]);
+	// The output aspect decides the caption column and the DEFAULT insets, so it has
+	// to reach both the read and every write: the first write to a document that has
+	// never carried caption settings is what freezes those defaults in, and a 9:16
+	// export wants a much larger inset than a 16:9 one. `resolveAspectRatioValue` is
+	// the same resolver the preview and the scene description use — not
+	// `getAspectRatioValue`, which answers 16/9 for the legacy "native" selection and
+	// would disagree with what the compositor is handed.
+	const { settings: editorSettings } = useEditorSettings();
+	const aspectValue = useMemo(
+		() => resolveAspectRatioValue(document, editorSettings.aspectRatio),
+		[document, editorSettings.aspectRatio],
+	);
+
+	const settings = useMemo(
+		() => getCaptionSettings(document, aspectValue),
+		[document, aspectValue],
+	);
 	const translations = useMemo(() => getCaptionTranslations(document), [document]);
 	const cues = useMemo(
 		() => deriveCaptionCues(document, settings, translations),
@@ -65,14 +83,14 @@ export function useCaptions(): UseCaptionsResult {
 		async (patch: CaptionSettingsPatch) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
-			const next = patchCaptionSettings(doc, patch);
+			const next = patchCaptionSettings(doc, patch, aspectValue);
 			// The optimistic write is not the edit — the save is. Only the one that can
 			// fail records, and it names `doc` as what Ctrl+Z returns to because by then
 			// the store already holds `next`.
 			setDocument(next, { history: false });
 			await saveDocument(next, { history: true, historyBase: doc });
 		},
-		[setDocument, saveDocument],
+		[setDocument, saveDocument, aspectValue],
 	);
 
 	// See `useEditorSettings.setLive`: one undo step per slider drag, not one per
@@ -95,12 +113,12 @@ export function useCaptions(): UseCaptionsResult {
 		(patch: CaptionSettingsPatch) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
-			const next = patchCaptionSettings(doc, patch);
+			const next = patchCaptionSettings(doc, patch, aspectValue);
 			if (liveDocRef.current !== doc) liveBaseRef.current = doc;
 			setDocument(next, { history: false });
 			liveDocRef.current = next;
 		},
-		[setDocument],
+		[setDocument, aspectValue],
 	);
 
 	const commit = useCallback(async () => {
@@ -133,13 +151,13 @@ export function useCaptions(): UseCaptionsResult {
 			// language currently on screen is the one being deleted.
 			const cleared = removeCaptionTranslation(doc, language);
 			const next =
-				getCaptionSettings(cleared).language === language
-					? patchCaptionSettings(cleared, { language: null })
+				getCaptionSettings(cleared, aspectValue).language === language
+					? patchCaptionSettings(cleared, { language: null }, aspectValue)
 					: cleared;
 			setDocument(next, { history: false });
 			await saveDocument(next, { history: true, historyBase: doc });
 		},
-		[setDocument, saveDocument],
+		[setDocument, saveDocument, aspectValue],
 	);
 
 	return {

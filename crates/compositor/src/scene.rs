@@ -261,6 +261,18 @@ pub struct SceneAnnotationText {
     pub font_style: String,
     pub text_decoration: String,
     pub text_align: String,
+    /// Quelle arête du bloc de texte est épinglée à sa boîte : `"top"` / `"center"`
+    /// / `"bottom"`. Absent = `"center"`, le comportement historique — les
+    /// annotations n'émettent jamais la clé et ne bougent donc pas d'un pixel.
+    /// Les sous-titres l'émettent pour que l'arête ancrée tienne quand le texte
+    /// gagne une ligne (un bloc centré voit ses deux arêtes se déplacer).
+    ///
+    /// `Option<String>` et pas une enum, pour la même raison que `space` : serde
+    /// rejette une variante d'unité inconnue, donc une valeur future ferait
+    /// échouer `Scene::from_json` *en entier* sur un binaire plus ancien, au lieu
+    /// de coûter un seul sous-titre mal placé.
+    #[serde(default)]
+    pub vertical_align: Option<String>,
     #[serde(default)]
     pub animation: Option<String>,
 }
