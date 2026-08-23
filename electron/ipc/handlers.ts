@@ -52,8 +52,9 @@ import {
 import type { CursorTelemetryReader } from "../ai-edition/deep-agent/service";
 import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
-import { mainLogBuffer } from "../diagnostics/main-log-buffer";
+import { isDiagnosticModeEnabled, mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
+import { getInstallChannel } from "../install-channel";
 import { RECORDINGS_DIR } from "../main";
 import { type AudioPeaksResult, getAudioPeaks } from "../media/audioPeaks";
 import {
@@ -104,6 +105,31 @@ const ALLOWED_IMPORT_VIDEO_EXTENSIONS = new Set([
 ]);
 const PREVIEW_AUDIO_DIR = path.join(app.getPath("userData"), "preview-audio");
 const nativeMacCaptureEvents = new EventEmitter();
+
+// Enumeration walks every display and window and grabs a thumbnail of each, so it
+// is allowed to be slow on a loaded machine. It is not allowed to be unbounded.
+// Deliberately above the CLI runner's own 20s bound, so the more specific message
+// there still wins for `openscreen sources`; this is the backstop for everything
+// else that calls get-sources.
+const GET_SOURCES_TIMEOUT_MS = 30_000;
+
+/**
+ * Reject if `work` has not settled within `ms`.
+ *
+ * The abandoned promise keeps running — there is no way to cancel a
+ * desktopCapturer call — so this bounds the *wait*, not the work. That is the
+ * whole available remedy: an unbounded await leaves a caller with no error and no
+ * way out, which is strictly worse than a late failure it can report.
+ */
+function withDeadline<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return Promise.race([
+		work,
+		new Promise<never>((_resolve, reject) => {
+			timer = setTimeout(() => reject(new Error(message)), ms);
+		}),
+	]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
 
 // Paths the user approved via file picker or project load (i.e. outside the default dirs).
 const approvedPaths = new Set<string>();
@@ -1327,6 +1353,12 @@ function readNativeWindowsEncoderSelection(output: string) {
 			// which is what `salvageNativeWindowsFragmentedCapture` asks.
 			container?: string;
 			preferSoftwareEncoder?: boolean;
+			// Whether BeginWriting() actually landed on a hardware H.264 MFT, as
+			// opposed to `video` above, which only says which configuration path
+			// was tried. "default" plus a software runtime means the machine never
+			// got hardware acceleration in the first place -- see
+			// kVideoEncoderRuntime* in mf_encoder.h.
+			videoEncoderRuntime?: string;
 		};
 	} catch {
 		return null;
@@ -1682,7 +1714,48 @@ export function registerIpcHandlers(
 	}
 
 	ipcMain.handle("get-sources", async (_, opts) => {
-		const sources = await desktopCapturer.getSources(opts);
+		// desktopCapturer.getSources can never settle where the GL stack cannot be
+		// reached -- a container, a CI runner, a host whose ANGLE fails to
+		// initialise. Bounded here rather than per-caller because every caller has
+		// the same exposure and none of them can cancel this call: the CLI runners
+		// (`sources`, `record`) and the GUI pickers (SourceSelector, RecStage) all
+		// await it, and a renderer-side race would only stop *waiting* while this
+		// keeps running and its reply goes to nobody. Rejecting is what turns an
+		// indefinite spinner into the pickers' existing error branch.
+		// How long it actually took, under the existing diagnostic flag. The bound
+		// above turned an indefinite hang into a named failure, which is where the
+		// open question starts rather than ends: on a headless runner `openscreen
+		// sources` gets an answer within 20s four times in five while `record` --
+		// the same call with the same options -- exceeds 30s every time. A duration
+		// on both paths is what tells those apart; a threshold alone cannot.
+		const startedAt = Date.now();
+		const diagnostic = isDiagnosticModeEnabled();
+		let sources: Awaited<ReturnType<typeof desktopCapturer.getSources>>;
+		try {
+			sources = await withDeadline(
+				desktopCapturer.getSources(opts),
+				GET_SOURCES_TIMEOUT_MS,
+				`Desktop source enumeration did not return within ${GET_SOURCES_TIMEOUT_MS}ms. ` +
+					"This usually means the display or GPU stack cannot be reached — check that a display server is available.",
+			);
+		} catch (error) {
+			if (diagnostic) {
+				// The reason, not an assumption about it: this catch also sees a
+				// getSources that rejected on its own, well inside the deadline, and
+				// calling that a timeout would point the next reader at the wrong thing.
+				// The deadline error carries its own wording.
+				const reason = error instanceof Error ? error.message : String(error);
+				console.info(
+					`[get-sources] failed after ${Date.now() - startedAt}ms (types=${(opts?.types ?? []).join(",")}): ${reason}`,
+				);
+			}
+			throw error;
+		}
+		if (diagnostic) {
+			console.info(
+				`[get-sources] returned ${sources.length} source(s) in ${Date.now() - startedAt}ms (types=${(opts?.types ?? []).join(",")})`,
+			);
+		}
 		lastEnumeratedSources = new Map(sources.map((source) => [source.id, source]));
 		return sources.map((source) => ({
 			id: source.id,
@@ -2464,6 +2537,7 @@ export function registerIpcHandlers(
 					path: outputPath,
 					helperPath,
 					videoEncoderSelection: encoderSelection?.video ?? null,
+					videoEncoderRuntime: encoderSelection?.videoEncoderRuntime ?? null,
 					webcamUnavailable,
 					microphoneDefaulted,
 				};
@@ -4038,6 +4112,10 @@ export function registerIpcHandlers(
 				appVersion: app.getVersion(),
 				platform: process.platform,
 				arch: process.arch,
+				// The same fact the About box leads with, and for the same reason: it is what
+				// explains why a copy does or does not offer an update check. This file is the
+				// artifact users actually attach, so it must not be the one that omits it.
+				channel: getInstallChannel(),
 				osRelease: os.release(),
 				osVersion: os.version(),
 				totalMemoryMB: Math.round(os.totalmem() / 1024 / 1024),

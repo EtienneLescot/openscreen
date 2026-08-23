@@ -17,6 +17,7 @@ import type {
 	ZoomHygieneOptions,
 	ZoomIssue,
 } from "./editorial";
+import type { JudgeRubric } from "./judge";
 import type { ScriptedTurn } from "./model-server";
 import type {
 	CoverageOptions,
@@ -33,10 +34,32 @@ import type {
 } from "./quality";
 import type { WireCall, WireTranscript } from "./wire";
 
-export type Verdict = { ok: true } | { ok: false; evidence: string };
+/**
+ * TROIS verdicts, pas deux : `conforme`, `fautif`, `indéterminé`.
+ *
+ * ponytail: le troisième est porté par `ok: false` PLUS un drapeau, et cette
+ * asymétrie est délibérée. `runChecks` connaît le drapeau et sort ce poids du
+ * numérateur ET du dénominateur — une abstention ne déplace pas l'estimation.
+ * Tout le reste du banc ne lit que `ok`, et voit donc « pas un passage ».
+ *
+ * C'est le sens sûr. Un `indéterminé` oublié par un consommateur ressort en
+ * rouge visible, jamais en vert silencieux — et le vert silencieux est
+ * exactement ce que les regex fabriquaient.
+ */
+export type Verdict =
+	| { ok: true }
+	| { ok: false; evidence: string; indeterminate?: false }
+	| { ok: false; evidence: string; indeterminate: true };
 
 export const pass = (): Verdict => ({ ok: true });
 export const fail = (evidence: string): Verdict => ({ ok: false, evidence });
+/** « La question n'a pas été tranchée. » Ni un passage, ni un défaut : le check
+ *  n'a rien mesuré, et le rapport, le score et le cliquet doivent le dire. */
+export const undecided = (evidence: string): Verdict => ({
+	ok: false,
+	evidence,
+	indeterminate: true,
+});
 
 /** How a failed turn should be attributed. `TIMEOUT` and `TRANSPORT` are OUR
  * fault: the runner replays the repetition instead of scoring it. */
@@ -52,6 +75,11 @@ export interface EvalContext {
 	after: AxcutDocument;
 	/** True when `runChat` returned a document, i.e. a tool mutated something. */
 	mutated: boolean;
+	/** The `allowAgentEdits` the turn actually ran under — `true` unless the
+	 *  scenario turned it off. A judged check cannot recover it from anywhere
+	 *  else: the prompt block that carries it lives in `wire.systemBlocks`, and
+	 *  those do not survive the persisted file. */
+	allowAgentEdits: boolean;
 	run: { ok: boolean; error?: string; ms: number };
 
 	/** Every wire call to `name`, in emission order. */
@@ -126,6 +154,29 @@ export interface Check {
 	check: (context: EvalContext) => Verdict;
 }
 
+/**
+ * Un check de l'axe (a) dont la question demande de LIRE une phrase plutôt que
+ * de compter quelque chose. Il n'a pas de `check(context)` : il n'est pas
+ * décidable pendant le tour, il l'est par le juge, plus tard, sur le tour
+ * persisté (`lib/judge.ts`, commande `wb:judge`).
+ *
+ * ponytail: tant que le juge n'est pas passé, un check jugé vaut `indéterminé`
+ * et NON `conforme`. C'est la seule lecture honnête — la propriété n'a pas été
+ * mesurée — et c'est aussi ce qui rend le troisième verdict visible sur un run
+ * live ordinaire, plutôt que réservé aux cas tordus.
+ */
+export interface JudgedCheck {
+	id: string;
+	weight: number;
+	rubric: JudgeRubric;
+	/**
+	 * Les faits CALCULÉS remis au juge, tirés du même `EvalContext` que l'axe
+	 * (b). Jamais les attentes du scénario : un fait est ce qui s'est passé, la
+	 * conclusion reste au juge.
+	 */
+	facts: (context: EvalContext) => string[];
+}
+
 export interface ExpectedFailure {
 	/** Defect tag: "D1", "DSL-3", … */
 	defect: string;
@@ -163,6 +214,12 @@ export interface Scenario {
 	cursorReader?: () => CursorTelemetryReader;
 	/** Axis (a): does the agent behave — refuse, ask, describe truthfully? */
 	behaviour: Check[];
+	/**
+	 * La moitié de l'axe (a) qui se juge plutôt qu'elle ne se calcule. Notée sur
+	 * le MÊME axe que `behaviour` — c'est une seule question posée en deux
+	 * langues, pas un troisième axe qui viendrait diluer la porte `min()`.
+	 */
+	judged?: JudgedCheck[];
 	/** Axis (b): is the emitted DSL valid, well targeted, and honest? */
 	dsl: Check[];
 	/** L2 repetitions. Defaults to the CLI's `--reps`. */
@@ -202,7 +259,10 @@ export function defineScenario(scenario: Scenario): Scenario {
 				"one of the two would be silently dropped",
 		);
 	}
-	const all = [...scenario.behaviour, ...scenario.dsl];
+	// ponytail: les checks jugés entrent dans la MÊME table d'ids que les autres.
+	// Un check jugé qui reprend l'id d'un check déterministe ferait taire l'un
+	// des deux au fusionnement des verdicts, et lequel dépendrait de l'ordre.
+	const all = [...scenario.behaviour, ...(scenario.judged ?? []), ...scenario.dsl];
 	if (all.length === 0) throw new Error(`${scenario.id}: no checks — nothing would be measured`);
 	const ids = new Set<string>();
 	for (const check of all) {

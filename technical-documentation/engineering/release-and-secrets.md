@@ -32,6 +32,8 @@ Run `Promote RC to stable release` (`promote.yml`) with:
 
 The workflow validates the tag, closes the version milestone, checks out `release/vX.Y.Z`, changes `package.json` to the stable version, tags that branch tip, opens and rebase-merges a release-sync PR into `main`, explicitly dispatches `build.yml` at the stable tag, and announces the stable release. The build publishes signed/notarized artifacts when Apple credentials are complete; publication with `OPENSCREEN_RELEASE_TOKEN` emits the event that starts stable Homebrew, WinGet, Nix, and AUR workflows.
 
+**Before dispatching it, the RC has to have been through [the manual end-to-end checklist](../testing/manual-e2e-checklist.md).** Nothing in `promote.yml` enforces that — it will promote an untested tag exactly as readily — so the gate is the operator. It is not a human-only gate either: the checks need real OS mouse and keyboard events, which an agent with the computer-use MCP supplies, so asking one to run it is a normal way to get it done. For a promote that means the **whole file**, not a risk-picked subset — the checklist asks for it in its own opening, and its results log shows why: webcam PiP, microphone, GIF and the AI sections have been scoped out of every run recorded so far, so "the sections this RC puts at risk" is precisely the judgement that keeps missing them. A `Partial` row is not a green light to dispatch. Mechanics and the rule on partial runs: [AGENTS.md](../../AGENTS.md#desktop-e2e-testing-with-computer-use).
+
 ### Release branches (the contract)
 
 Every released version has **exactly one frozen branch**, named for the stable version, living from the first RC cut onward:

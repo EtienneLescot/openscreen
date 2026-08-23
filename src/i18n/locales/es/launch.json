@@ -91,6 +91,9 @@
 		"micHint": "Habla para probar tu micrófono",
 		"noMicrophones": "No se encontró ningún micrófono",
 		"preview": "Vista previa",
-		"previewUnavailable": "Vista previa no disponible"
+		"previewUnavailable": "Vista previa no disponible",
+		"about": "Acerca de",
+		"version": "Versión {{version}}",
+		"checkingForUpdates": "Buscando…"
 	}
 }

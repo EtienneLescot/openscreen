@@ -387,12 +387,16 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			guard let display = content.displays.first(where: { $0.displayID == displayId }) else {
 				throw HelperError.sourceNotFound("No ScreenCaptureKit display found for id \(displayId).")
 			}
-			let width = Int(CGDisplayPixelsWide(display.displayID))
-			let height = Int(CGDisplayPixelsHigh(display.displayID))
+			let filter = SCContentFilter(display: display, excludingWindows: [])
+			let size = captureSize(
+				for: filter,
+				fallbackPointSize: display.frame.size,
+				fallbackDisplayId: display.displayID
+			)
 			return CaptureTarget(
-				filter: SCContentFilter(display: display, excludingWindows: []),
-				width: clampCaptureDimension(width, fallback: request.video.width),
-				height: clampCaptureDimension(height, fallback: request.video.height),
+				filter: filter,
+				width: size.width,
+				height: size.height,
 				captureFrame: display.frame
 			)
 		case "window":
@@ -405,13 +409,19 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			let candidateDisplay = content.displays.first {
 				$0.frame.intersects(window.frame) || $0.frame.contains(CGPoint(x: window.frame.midX, y: window.frame.midY))
 			}
-			let scaleFactor = Self.scaleFactor(for: candidateDisplay?.displayID ?? CGMainDisplayID())
-			let width = Int(window.frame.width) * scaleFactor
-			let height = Int(window.frame.height) * scaleFactor
+			let filter = SCContentFilter(desktopIndependentWindow: window)
+			let size = captureSize(
+				for: filter,
+				fallbackPointSize: window.frame.size,
+				// Unrelated to `initializeCoreGraphicsWindowServerConnection()`: that call
+				// exists purely for its side effect at process startup, this one wants the
+				// actual display ID as a fallback when no display intersects the window.
+				fallbackDisplayId: candidateDisplay?.displayID ?? CGMainDisplayID()
+			)
 			return CaptureTarget(
-				filter: SCContentFilter(desktopIndependentWindow: window),
-				width: clampCaptureDimension(width, fallback: request.video.width),
-				height: clampCaptureDimension(height, fallback: request.video.height),
+				filter: filter,
+				width: size.width,
+				height: size.height,
 				captureFrame: window.frame
 			)
 		default:
@@ -423,6 +433,14 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		let configuration = SCStreamConfiguration()
 		configuration.width = outputWidth
 		configuration.height = outputHeight
+		// Belt and braces for the defect `captureOutputSize` exists to prevent. Left at its
+		// default of `false`, ScreenCaptureKit "only scales down" (SDK header), so any frame
+		// smaller than the buffer is drawn at native size in a corner and the rest stays
+		// background black — a whole recording letterboxed inside its own frame (issue #418).
+		// With the buffer now derived from the filter the two agree and this changes nothing;
+		// it is here so that a future source whose size we mispredict comes out scaled rather
+		// than cornered.
+		configuration.scalesToFit = true
 		configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, request.video.fps)))
 		configuration.queueDepth = 6
 		configuration.showsCursor = !request.video.hideSystemCursor
@@ -716,11 +734,36 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		return status == .complete
 	}
 
-	private func clampCaptureDimension(_ value: Int, fallback: Int) -> Int {
-		let requested = max(2, fallback)
-		let candidate = value > 0 ? value : requested
-		let clamped = min(candidate, requested)
-		return max(2, clamped - (clamped % 2))
+	/// Output-buffer size for a filter, capped by the resolution the app asked for.
+	///
+	/// The filter is asked first, because `contentRect × pointPixelScale` is by definition the
+	/// pixel size ScreenCaptureKit is about to rasterise — see `captureOutputSize`, which also
+	/// explains what a buffer sized any other way does to the frame (issue #418).
+	///
+	/// Those two properties are macOS 14. On 13 the fallback is the region's own point size
+	/// times the display's scale factor, which is the same product one step further from the
+	/// source. It is NOT `CGDisplayPixelsWide`/`High`: those follow the display *mode* rather
+	/// than the filter, and the mismatch between them is the bug.
+	private func captureSize(
+		for filter: SCContentFilter,
+		fallbackPointSize: CGSize,
+		fallbackDisplayId: CGDirectDisplayID
+	) -> (width: Int, height: Int) {
+		let contentSize: CGSize
+		let pointPixelScale: CGFloat
+		if #available(macOS 14.0, *) {
+			contentSize = filter.contentRect.size
+			pointPixelScale = CGFloat(filter.pointPixelScale)
+		} else {
+			contentSize = fallbackPointSize
+			pointPixelScale = CGFloat(Self.scaleFactor(for: fallbackDisplayId))
+		}
+		return captureOutputSize(
+			contentSize: contentSize,
+			pointPixelScale: pointPixelScale,
+			maxWidth: request.video.width,
+			maxHeight: request.video.height
+		)
 	}
 
 	private static func scaleFactor(for displayId: CGDirectDisplayID) -> Int {
@@ -760,8 +803,21 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
 @main
 struct OpenScreenScreenCaptureKitHelper {
+	// This helper is a plain command-line executable, so nothing has connected it to the
+	// window server yet. `SCContentFilter(desktopIndependentWindow:)` reaches into SkyLight
+	// (`SLSGetDisplaysWithRect`) to find the display a window sits on, and SkyLight aborts
+	// with `CGS_REQUIRE_INIT` when CoreGraphics was never initialised in the process — so
+	// every window capture crashed before it produced a frame, while display capture (which
+	// never resolves a rect) worked fine. Touching any CoreGraphics display API first
+	// performs that initialisation.
+	private static func initializeCoreGraphicsWindowServerConnection() {
+		_ = CGMainDisplayID()
+	}
+
 	static func main() async {
 		do {
+			initializeCoreGraphicsWindowServerConnection()
+
 			guard CommandLine.arguments.count == 2 else {
 				throw HelperError.invalidArguments
 			}

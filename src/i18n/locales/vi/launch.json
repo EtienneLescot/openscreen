@@ -91,6 +91,9 @@
 		"micHint": "Hãy nói để kiểm tra micrô",
 		"noMicrophones": "Không tìm thấy micrô",
 		"preview": "Xem trước",
-		"previewUnavailable": "Không thể xem trước"
+		"previewUnavailable": "Không thể xem trước",
+		"about": "Giới thiệu",
+		"version": "Phiên bản {{version}}",
+		"checkingForUpdates": "Đang kiểm tra…"
 	}
 }

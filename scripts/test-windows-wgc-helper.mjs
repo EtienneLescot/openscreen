@@ -554,6 +554,34 @@ if (
 		`WGC helper encoder selection was ${JSON.stringify(encoderSelection)}, expected ${expectedEncoderSelection} with preferSoftwareEncoder=${WITH_SOFTWARE_ENCODER}: ${result.stdout}`,
 	);
 }
+// videoEncoderRuntime is separate from `video` above: it is what
+// GetTransformForStream found in the sink writer's own resolved pipeline
+// after BeginWriting(), not which configuration path was tried. "unknown"
+// here on a run that otherwise passed means the introspection itself is
+// broken (wrong COM call, wrong category, wrong attribute), not a real
+// ambiguity -- a healthy sink writer always has exactly one encoder node.
+if (!["hardware", "software", "unknown"].includes(encoderSelection.videoEncoderRuntime)) {
+	throw new Error(
+		`WGC helper reported an unrecognised videoEncoderRuntime: ${JSON.stringify(encoderSelection)}`,
+	);
+}
+if (encoderSelection.videoEncoderRuntime === "unknown") {
+	throw new Error(
+		`WGC helper could not introspect its own sink writer for videoEncoderRuntime: ${JSON.stringify(encoderSelection)}`,
+	);
+}
+// forceSoftwareEncoder disables hardware transforms explicitly
+// (MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS=FALSE), so this is deterministic
+// regardless of what the test machine has registered -- unlike the "default"
+// path, whose runtime legitimately depends on the machine.
+if (
+	(WITH_SOFTWARE_ENCODER || WITH_SOFTWARE_FALLBACK) &&
+	encoderSelection.videoEncoderRuntime !== "software"
+) {
+	throw new Error(
+		`WGC helper forced the software encoder but videoEncoderRuntime was ${encoderSelection.videoEncoderRuntime}, expected software: ${JSON.stringify(encoderSelection)}`,
+	);
+}
 // Every fallback path has to stay fragmented, not just the nominal one. The
 // helper degrades to the plain container rather than failing a recording, so
 // without this the fix could quietly stop applying and every other assertion

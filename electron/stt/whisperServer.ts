@@ -173,8 +173,27 @@ export class WhisperServerManager {
 		throw new Error(`whisper-stt-server at ${baseUrl} did not respond within ${timeoutMs}ms`);
 	}
 
-	private recordError(message: string): void {
+	/**
+	 * Record a failure on `lastError`, and — unless `log` says otherwise — put it
+	 * in the main-process log.
+	 *
+	 * ponytail: to the log, not only to the field. `lastError` is read by the
+	 * `status` getter, which nothing on the transcribe path calls, so a missing or
+	 * non-executable helper used to leave no trace anywhere in the main process
+	 * and the only way to find out was to instrument the code. The renderer does
+	 * toast the failure; a packaged build still needs a line someone can point at
+	 * in a bug report.
+	 *
+	 * `log: false` exists because a death during startup reaches this method
+	 * TWICE — once from the `exit` listener, once from the startup catch that the
+	 * same exit rejects. Both writes are wanted (the second message is the more
+	 * specific of the two, and it is what `status` should end up holding), but two
+	 * differently-worded lines for one event is the kind of noise that makes a
+	 * reader doubt the log rather than trust it.
+	 */
+	private recordError(message: string, { log = true }: { log?: boolean } = {}): void {
 		this.lastError = message;
+		if (log) console.error(`[stt] ${message}`);
 	}
 
 	/** True when a process is alive and a model is loaded. */
@@ -285,7 +304,19 @@ export class WhisperServerManager {
 				}
 			});
 			child.once("error", (err) => {
-				this.recordError(`spawn error: ${err.message}`);
+				// ponytail: the same shape as the `exit` listener above, and for the same
+				// reason. A spawn error reaches the startup catch by the same route — the
+				// `exitedBeforeReady` race rejects on `error` too — so without clearing
+				// the startup state here, that catch cannot tell this failure has already
+				// been reported and logs it a second time in different words. Clearing is
+				// also just true: a child that never spawned is not a helper that is up,
+				// and `status` said it was.
+				if (this.process === child) {
+					this.recordError(`spawn error: ${err.message}`);
+					this.process = null;
+					this.port = null;
+					this.startedAtMs = null;
+				}
 			});
 
 			const exitedBeforeReady = new Promise<never>((_, reject) => {
@@ -310,8 +341,14 @@ export class WhisperServerManager {
 				]);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
+				// ponytail: read BEFORE `stop()`, which nulls it either way. The `exit`
+				// listener clears `this.process` as it records, so `!== child` here means
+				// the death has already been logged and this catch is the second voice on
+				// it. A readiness TIMEOUT leaves the child in place and is logged from
+				// here, which is the only place that sees it at all.
+				const alreadyLogged = this.process !== child;
 				await this.stop();
-				this.recordError(message);
+				this.recordError(message, { log: !alreadyLogged });
 				throw new Error(message);
 			}
 			return { port, backend: activeBackend };

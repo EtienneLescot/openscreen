@@ -40,7 +40,7 @@
 		"deleteRegion": "Elimina regione taglio"
 	},
 	"layout": {
-		"title": "Layout",
+		"title": "Disposizione camera",
 		"preset": "Predefinito",
 		"selectPreset": "Seleziona predefinito",
 		"pictureInPicture": "Immagine nell'immagine",
@@ -66,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "Effetti video",
+		"title": "Composizione",
 		"blurBg": "Sfuma sfondo",
 		"motionBlur": "Sfocatura movimento",
 		"off": "spento",
@@ -74,6 +74,14 @@
 		"shadow": "Ombra",
 		"roundness": "Arrotondamento",
 		"padding": "Spaziatura",
+		"frame": "Cornice",
+		"format": "Formato",
+		"formatOriginal": "Originale",
+		"fitClip": "Adatta",
+		"fitClipOne": "{{count}} clip",
+		"fitClipFew": "{{count}} clip",
+		"fitClipMany": "{{count}} clip",
+		"motion": "Movimento",
 		"help": "Stile della cornice della registrazione: sfocatura dello sfondo, ombra, sfocatura di movimento, raggio degli angoli e margine attorno al video."
 	},
 	"background": {
@@ -291,15 +299,17 @@
 		"backgroundColor": "Colore dello sfondo",
 		"backgroundOpacity": "Opacità",
 		"position": "Posizione",
-		"positionTop": "Alto",
-		"positionMiddle": "Centro",
-		"positionBottom": "Basso",
+		"anchorBottom": "Basso",
+		"anchorTop": "Alto",
+		"anchorHintBottom": "I sottotitoli lunghi crescono verso l'alto: il bordo inferiore non si sposta.",
+		"anchorHintTop": "I sottotitoli lunghi crescono verso il basso: il bordo superiore non si sposta.",
+		"distanceFromBottom": "Distanza dal basso",
+		"distanceFromTop": "Distanza dall'alto",
+		"distanceFromLeft": "Distanza da sinistra",
+		"distanceFromRight": "Distanza da destra",
 		"alignLeft": "Sinistra",
 		"alignCenter": "Centro",
 		"alignRight": "Destra",
-		"verticalOffset": "Scostamento verticale",
-		"horizontalOffset": "Scostamento orizzontale",
-		"width": "Larghezza",
 		"lineLength": "Lunghezza riga",
 		"minWords": "Parole min. per riga",
 		"maxWords": "Parole max. per riga"

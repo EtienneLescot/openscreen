@@ -1,14 +1,18 @@
 import { ArrowDown, Film, Plus, RotateCw, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useScopedT } from "@/contexts/I18nContext";
-import type { AxcutAsset } from "@/lib/ai-edition/schema";
+import { useI18n, useScopedT } from "@/contexts/I18nContext";
+import type { AxcutAsset, TranscriptLanguageCode } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
 	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { formatSeconds } from "@/lib/ai-edition/timeline/format";
+import {
+	languageLabel,
+	sortedLanguageOptions,
+} from "@/lib/ai-edition/transcription/languageLabels";
 import type {
 	AssetTranscriptionStatus,
 	AssetTranscriptionView,
@@ -49,6 +53,7 @@ export function MediaStage({
 	onAddToTimeline: (assetId: string) => Promise<void>;
 }) {
 	const t = useScopedT("editor");
+	const { locale } = useI18n();
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
@@ -62,7 +67,11 @@ export function MediaStage({
 	const [busy, setBusy] = useState(false);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [detailOpen, setDetailOpen] = useState(false);
-	const [lang, setLang] = useState("auto");
+	const [lang, setLang] = useState<TranscriptLanguageCode>("auto");
+	const regenLanguageOptions = useMemo(
+		() => sortedLanguageOptions(locale, t("mediaStage.auto")),
+		[locale, t],
+	);
 
 	const assets = document?.assets ?? [];
 	const filtered = useMemo(
@@ -276,7 +285,7 @@ export function MediaStage({
 									borderRadius: 9,
 									border: "1px solid var(--accent)",
 									background: "var(--accent)",
-									color: "var(--on-accent, #fff)",
+									color: "var(--accent-on)",
 									fontSize: 12.5,
 									fontWeight: 650,
 									cursor: "pointer",
@@ -335,7 +344,9 @@ export function MediaStage({
 											fontWeight: 600,
 										}}
 									>
-										{t("mediaStage.detectedLanguage", { language: transcript.language })}
+										{t("mediaStage.detectedLanguage", {
+											language: languageLabel(transcript.language, locale),
+										})}
 									</span>
 								) : null}
 							</div>
@@ -372,7 +383,7 @@ export function MediaStage({
 								<div style={{ display: "flex", gap: 8 }}>
 									<select
 										value={lang}
-										onChange={(e) => setLang(e.target.value)}
+										onChange={(e) => setLang(e.target.value as TranscriptLanguageCode)}
 										style={{
 											flex: 1,
 											minWidth: 0,
@@ -387,10 +398,11 @@ export function MediaStage({
 											outline: "none",
 										}}
 									>
-										<option value="auto">{t("mediaStage.auto")}</option>
-										<option value="en">English</option>
-										<option value="fr">Français</option>
-										<option value="es">Español</option>
+										{regenLanguageOptions.map(({ code, label }) => (
+											<option key={code} value={code}>
+												{label}
+											</option>
+										))}
 									</select>
 									<button
 										type="button"

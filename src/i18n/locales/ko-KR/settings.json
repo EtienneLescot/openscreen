@@ -40,7 +40,7 @@
 		"deleteRegion": "트림 구간 삭제"
 	},
 	"layout": {
-		"title": "레이아웃",
+		"title": "카메라 레이아웃",
 		"preset": "프리셋",
 		"selectPreset": "프리셋 선택",
 		"pictureInPicture": "화면 속 화면",
@@ -66,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "비디오 효과",
+		"title": "컴포지션",
 		"blurBg": "배경 흐림",
 		"motionBlur": "모션 블러",
 		"off": "끄기",
@@ -74,6 +74,14 @@
 		"shadow": "그림자",
 		"roundness": "모서리 둥글기",
 		"padding": "여백",
+		"frame": "프레임",
+		"format": "형식",
+		"formatOriginal": "원본",
+		"fitClip": "맞추기",
+		"fitClipOne": "{{count}}개 클립",
+		"fitClipFew": "{{count}}개 클립",
+		"fitClipMany": "{{count}}개 클립",
+		"motion": "모션",
 		"help": "녹화 프레임 스타일: 배경 흐림, 그림자, 모션 블러, 모서리 둥글기, 영상 주변 여백."
 	},
 	"background": {
@@ -291,15 +299,17 @@
 		"backgroundColor": "배경 색",
 		"backgroundOpacity": "불투명도",
 		"position": "위치",
-		"positionTop": "위",
-		"positionMiddle": "가운데",
-		"positionBottom": "아래",
+		"anchorBottom": "아래",
+		"anchorTop": "위",
+		"anchorHintBottom": "긴 자막은 위로 늘어납니다 — 아래쪽 가장자리는 그대로입니다.",
+		"anchorHintTop": "긴 자막은 아래로 늘어납니다 — 위쪽 가장자리는 그대로입니다.",
+		"distanceFromBottom": "아래에서의 거리",
+		"distanceFromTop": "위에서의 거리",
+		"distanceFromLeft": "왼쪽에서의 거리",
+		"distanceFromRight": "오른쪽에서의 거리",
 		"alignLeft": "왼쪽",
 		"alignCenter": "가운데",
 		"alignRight": "오른쪽",
-		"verticalOffset": "세로 오프셋",
-		"horizontalOffset": "가로 오프셋",
-		"width": "너비",
 		"lineLength": "줄 길이",
 		"minWords": "줄당 최소 단어 수",
 		"maxWords": "줄당 최대 단어 수"

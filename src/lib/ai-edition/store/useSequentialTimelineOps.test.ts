@@ -74,7 +74,7 @@ describe("useSequentialTimelineOps", () => {
 			// Mirror the real store: write the saved doc back so the next
 			// call in the queue sees the latest committed state, and report
 			// success the way `projectStore.saveDocument` does.
-			useProjectStore.getState().setDocument(doc);
+			useProjectStore.getState().setDocument(doc, { history: true });
 			callOrder.push(doc.timeline.trimRanges[0]?.startSec.toString() ?? "empty");
 			return true;
 		});
@@ -99,8 +99,8 @@ describe("useSequentialTimelineOps", () => {
 		};
 
 		await act(async () => {
-			const r1 = result.current.apply(op1);
-			const r2 = result.current.apply(op2);
+			const r1 = result.current.apply(op1, { history: true });
+			const r2 = result.current.apply(op2, { history: true });
 			await Promise.all([r1, r2]);
 		});
 
@@ -128,7 +128,7 @@ describe("useSequentialTimelineOps", () => {
 			.fn<(doc: AxcutDocument) => Promise<boolean>>()
 			.mockResolvedValueOnce(false)
 			.mockImplementationOnce(async (doc) => {
-				useProjectStore.getState().setDocument(doc);
+				useProjectStore.getState().setDocument(doc, { history: true });
 				return true;
 			});
 
@@ -152,8 +152,8 @@ describe("useSequentialTimelineOps", () => {
 		let firstResult: AxcutDocument | null | undefined;
 		let secondResult: AxcutDocument | null | undefined;
 		await act(async () => {
-			const p1 = result.current.apply(op1);
-			const p2 = result.current.apply(op2);
+			const p1 = result.current.apply(op1, { history: true });
+			const p2 = result.current.apply(op2, { history: true });
 			firstResult = await p1;
 			secondResult = await p2;
 		});
@@ -162,7 +162,7 @@ describe("useSequentialTimelineOps", () => {
 		expect(secondResult).not.toBeNull();
 		// The queue survived the first failure — both saves were attempted.
 		expect(saveDocument).toHaveBeenCalledTimes(2);
-		expect(saveDocument).toHaveBeenNthCalledWith(2, secondResult);
+		expect(saveDocument).toHaveBeenNthCalledWith(2, secondResult, { history: true });
 	});
 
 	it("runs an enqueued write after the op ahead of it has committed", async () => {
@@ -170,7 +170,7 @@ describe("useSequentialTimelineOps", () => {
 		useProjectStore.setState({ document: seed });
 
 		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
-			useProjectStore.getState().setDocument(doc);
+			useProjectStore.getState().setDocument(doc, { history: true });
 			return true;
 		});
 
@@ -182,13 +182,16 @@ describe("useSequentialTimelineOps", () => {
 		// it runs. On its own queue this would still be the pre-op count.
 		let trimsSeenByTask = -1;
 		await act(async () => {
-			const opPromise = result.current.apply({
-				type: "add_trim_range" as const,
-				assetId: "asset_1",
-				startSec: 1,
-				endSec: 2,
-				reason: "ahead of the insertion",
-			});
+			const opPromise = result.current.apply(
+				{
+					type: "add_trim_range" as const,
+					assetId: "asset_1",
+					startSec: 1,
+					endSec: 2,
+					reason: "ahead of the insertion",
+				},
+				{ history: true },
+			);
 			const taskPromise = result.current.enqueue(() => {
 				trimsSeenByTask = useProjectStore.getState().document?.timeline.trimRanges.length ?? -1;
 			});
@@ -203,7 +206,7 @@ describe("useSequentialTimelineOps", () => {
 		useProjectStore.setState({ document: seed });
 
 		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
-			useProjectStore.getState().setDocument(doc);
+			useProjectStore.getState().setDocument(doc, { history: true });
 			return true;
 		});
 
@@ -248,7 +251,7 @@ describe("useSequentialTimelineOps", () => {
 
 		let resolved: AxcutDocument | null | undefined;
 		await act(async () => {
-			resolved = await result.current.apply(op);
+			resolved = await result.current.apply(op, { history: true });
 		});
 
 		expect(resolved).toBeNull();
@@ -261,7 +264,7 @@ describe("useSequentialTimelineOps", () => {
 		useProjectStore.setState({ document: seed });
 
 		const saveDocument = vi.fn(async (doc: AxcutDocument) => {
-			useProjectStore.getState().setDocument(doc);
+			useProjectStore.getState().setDocument(doc, { history: true });
 			return true;
 		});
 
@@ -279,12 +282,43 @@ describe("useSequentialTimelineOps", () => {
 
 		let returned: AxcutDocument | null | undefined;
 		await act(async () => {
-			returned = await result.current.apply(op);
+			returned = await result.current.apply(op, { history: true });
 		});
 
 		expect(returned).toBeDefined();
 		expect(returned?.timeline.trimRanges).toHaveLength(1);
 		expect(returned?.timeline.trimRanges[0]?.startSec).toBe(1);
 		expect(returned?.timeline.trimRanges[0]?.endSec).toBe(2);
+	});
+
+	it("hands the caller's write options through instead of picking them", async () => {
+		// This used to hardcode `{ history: true }`, which was right for both of today's
+		// callers and invisible to any future one. That is the exact shape of the #433
+		// regression `projectStore.replaceTimeline` shipped with: a wrapper whose
+		// signature hides the option decides it, so no compile error can reach the call
+		// site that got it wrong. `documentWriteAudit.test.ts` pins the shape; this pins
+		// the behaviour.
+		const seed = makeDocWithAsset();
+		useProjectStore.setState({ document: seed });
+		const saveDocument = vi.fn(async () => true);
+
+		const { result } = renderHook(() =>
+			useSequentialTimelineOps({ fallbackDocument: seed, saveDocument }),
+		);
+
+		await act(async () => {
+			await result.current.apply(
+				{
+					type: "add_trim_range" as const,
+					assetId: "asset_1",
+					startSec: 1,
+					endSec: 2,
+					reason: "a background job, not the user",
+				},
+				{ history: false },
+			);
+		});
+
+		expect(saveDocument).toHaveBeenCalledWith(expect.anything(), { history: false });
 	});
 });

@@ -146,6 +146,11 @@ export interface SceneAnnotation {
 		fontStyle: "normal" | "italic";
 		textDecoration: "none" | "underline";
 		textAlign: "left" | "center" | "right";
+		/** Which edge of the drawn text block is pinned to the box. Omitted for
+		 *  annotations, which keep the historical centring — so their payload does not
+		 *  change shape at all. Captions send it because a centred block moves BOTH its
+		 *  edges as it grows, which made a subtitle drift every time its text wrapped. */
+		verticalAlign?: "top" | "center" | "bottom";
 		animation: string | null;
 	};
 	/** Present for `kind: "image"` — the authored `imageContent` (path or data URI). */
@@ -523,10 +528,19 @@ export function buildSceneDescription(
 	// so the compositor measures it against the output frame while annotations stay on the screen
 	// rect. Subtitles have to sit where the viewer's frame ends, not where the footage does, or
 	// they slide inward the moment padding shrinks the screen rect (issue #396).
-	const captionSettings = getCaptionSettings(document);
+	//
+	// The output aspect is what decides the caption column and the default inset (a
+	// caption 5% off the bottom of a 16:9 export sits under the platform's own chrome
+	// on a 9:16 one). It comes off `pickOutputDims`, hoisted above the webcam block that
+	// used to own it so there is exactly ONE caller — preview and export cannot pick a
+	// different column from each other.
+	const outputDims = pickOutputDims(document, settings.aspectRatio);
+	const captionAspect = outputDims.height > 0 ? outputDims.width / outputDims.height : 16 / 9;
+	const captionSettings = getCaptionSettings(document, captionAspect);
 	const captionRegions = captionCuesToTextRegions(
 		deriveCaptionCues(document, captionSettings, getCaptionTranslations(document)),
 		captionSettings,
+		captionAspect,
 	);
 	const projectedAnnotations = projectRegionsToSource(
 		[
@@ -567,7 +581,7 @@ export function buildSceneDescription(
 	// fait sur la résolution de sortie (= taille du canvas rendu) avec les unités sources du
 	// premier asset visible — la même convention que `pickOutputDims` + SCREEN_SOURCE_SIZE /
 	// WEBCAM_SOURCE_SIZE dans PreviewCanvas — ce qui garde preview/export/natif alignés.
-	const outputDims = pickOutputDims(document, settings.aspectRatio);
+	// (`outputDims` est résolu plus haut, avec le bloc sous-titres qui en dépend aussi.)
 	// ponytail: when the active camera has been probed (real webcam dims cached by
 	// WebcamOverlay's loadedmetadata handler), use them so the box matches the actual
 	// camera aspect. Without this the box defaults to a hardcoded 4:3 (960x720) and the
@@ -805,6 +819,8 @@ export function buildSceneDescription(
 				// Only captions carry a space; annotations must keep emitting the exact same keys
 				// they always have, so the field is omitted rather than sent as null/undefined.
 				const space = (region as { space?: "frame" }).space;
+				// Same treatment, same reason: only captions pin an edge.
+				const verticalAlign = (region as { verticalAlign?: "top" | "bottom" }).verticalAlign;
 				const base = {
 					id: region.id,
 					startSec: region.startMs / 1000,
@@ -839,6 +855,7 @@ export function buildSceneDescription(
 							fontStyle: style.fontStyle,
 							textDecoration: style.textDecoration,
 							textAlign: style.textAlign,
+							...(verticalAlign ? { verticalAlign } : {}),
 							animation: style.textAnimation ?? null,
 						},
 					};

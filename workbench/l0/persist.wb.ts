@@ -18,6 +18,7 @@ import type { CapturedRequest } from "../lib/model-server";
 import { buildEvalContext } from "../lib/oracles";
 import {
 	buildPersistedTurn,
+	contextFromPersistedTurn,
 	MAX_FIELD_CHARS,
 	MAX_SEGMENTS,
 	type PersistedTurn,
@@ -145,7 +146,10 @@ describe("persistRepetition", () => {
 		expect(written.file).toBe(`${root}/baseline/describe-project/rep-0.json`);
 
 		const turn = readTurn(written.file);
-		expect(turn.schema).toBe(1);
+		// 2 depuis l'arrivée du troisième verdict : `scores.checks[].indeterminate`
+		// et `mutated`. Un fichier de schéma 1 reste lisible et n'en porte aucun,
+		// ce qui est exact — à l'époque un check ne pouvait que passer ou échouer.
+		expect(turn.schema).toBe(2);
 		expect(turn.prompt).toBe(scenario.prompt);
 		expect(turn.answer).toBe("Two clips, one trim.");
 		// The arguments verbatim — the thing a report never keeps.
@@ -206,6 +210,58 @@ describe("persistRepetition", () => {
 		expect(turn.truncated.join(" ")).toContain("before.transcripts[0].segments");
 		// Everything an editorial oracle reads is untouched.
 		expect(before.timeline.clips).toHaveLength(1);
+	});
+
+	// ─── relecture ───────────────────────────────────────────────────────────
+	//
+	// La relecture est le chemin du juge (`cli.ts judge`). Ce qu'elle rend n'est
+	// pas seulement « ce qui a été écrit » : c'est ce sur quoi un verdict sera
+	// rendu, plus tard, par quelqu'un qui n'a pas vu le tour.
+
+	/** Le tour de référence, avec l'appel 0 réécrit pour le cas à éprouver. */
+	function turnWithCall(overrides: { argsJson: string; truncated?: string[] }): PersistedTurn {
+		const turn = buildPersistedTurn({
+			label: "baseline",
+			result: repetition(),
+			prompt: scenario.prompt,
+			allowAgentEdits: true,
+		});
+		turn.wire.calls[0].argsJson = overrides.argsJson;
+		turn.truncated = overrides.truncated ?? [];
+		return turn;
+	}
+
+	it("refuses to rebuild a turn whose call arguments were truncated", () => {
+		// ponytail: `cut()` coupe `argsJson` à MAX_FIELD_CHARS, et un JSON coupé ne
+		// parse pas. Le `catch` rendait alors `args: undefined`, qui dans `WireCall`
+		// veut dire « le modèle a émis du JSON invalide ». Notre propre troncature
+		// se relisait donc comme un fait sur le modèle — et un check jugé aurait
+		// pesé « aucun argument » là où la vérité est « arguments coupés ».
+		const turn = turnWithCall({
+			argsJson: `{"reason":"${"x".repeat(40)}…[tronqué]`,
+			truncated: ["wire.calls[0].argsJson (41234 → 20000 car.)"],
+		});
+		expect(() => contextFromPersistedTurn(turn)).toThrow(/tronqués à l'écriture/);
+	});
+
+	it("still lets the model's OWN invalid JSON through, which is a real verdict", () => {
+		// L'autre sens, et il compte : `args: undefined` reste la bonne lecture
+		// quand c'est le modèle qui a mal écrit. Refuser les deux cas ferait
+		// disparaître un défaut que l'axe (b) existe pour attraper.
+		const turn = turnWithCall({ argsJson: '{"startSec": 3,,}', truncated: [] });
+		const context = contextFromPersistedTurn(turn);
+		expect(context.wire.calls[0].args).toBeUndefined();
+		expect(context.wire.calls[0].argsJson).toBe('{"startSec": 3,,}');
+	});
+
+	it("does not mistake a truncated resultJson for truncated arguments", () => {
+		// Le piège du préfixe : les deux coupes s'inscrivent sous `wire.calls[0].`,
+		// et un résultat coupé n'empêche personne de relire les arguments.
+		const turn = turnWithCall({
+			argsJson: '{"startSec": 3,,}',
+			truncated: ["wire.calls[0].resultJson (99999 → 20000 car.)"],
+		});
+		expect(() => contextFromPersistedTurn(turn)).not.toThrow();
 	});
 
 	it("refuses to write a turn carrying the API key", () => {

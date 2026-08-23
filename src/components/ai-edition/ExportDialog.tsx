@@ -8,7 +8,7 @@
 // used by the legacy VideoEditor; this one is a compact surface tuned for
 // the new shell's modal style.
 
-import { Download, FileVideo, Loader2 } from "lucide-react";
+import { Download, FileVideo, FolderOpen, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
@@ -49,6 +49,29 @@ function formatHms(totalSeconds: number): string {
 	const m = Math.floor((s % 3600) / 60);
 	const sec = s % 60;
 	return [h, m, sec].map((v) => v.toString().padStart(2, "0")).join(":");
+}
+
+/** Opens the exported file's containing folder, selecting the file itself where the OS supports
+ *  it. The main handler owns the fallback (`shell.openPath` on the parent directory) for the
+ *  cases `showItemInFolder` rejects — a file moved or deleted since the export, or a platform
+ *  that cannot reveal — so nothing here has to pre-check that the file still exists.
+ *
+ *  Shared by the success toast's action and the done panel's button so the two can't drift.
+ *  `revealInFolder` is a bare ipcRenderer.invoke, so it rejects when the main handler throws,
+ *  and resolves `{ success: false }` when even the fallback failed. The export already
+ *  succeeded — failing to open the folder is not worth a second error toast, but it is worth
+ *  a line. */
+function revealExportedFile(filePath: string): void {
+	void window.electronAPI
+		?.revealInFolder?.(filePath)
+		.then((result) => {
+			if (!result?.success) {
+				console.warn("[export] could not open the exported file's folder:", result?.error);
+			}
+		})
+		.catch((err) => {
+			console.warn("[export] failed to reveal the file in its folder:", err);
+		});
 }
 
 /** Maps the document's timeline to the native multiclip export contract: ordered,
@@ -313,14 +336,9 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 					description: `${pickedPath} · ${formatHms(stats.videoDurationS)} ${t("exportDialog.exportedVideoOf")} ${formatHms(stats.wallS)}`,
 					action: {
 						label: t("exportDialog.showInFolder"),
-						onClick: () => {
-							// `revealInFolder` is a bare ipcRenderer.invoke, so it rejects when
-							// the main handler throws. The export already succeeded — failing to
-							// open the folder is not worth a second toast, but it is worth a line.
-							void window.electronAPI?.revealInFolder?.(pickedPath).catch((err) => {
-								console.warn("[export] failed to reveal the file in its folder:", err);
-							});
-						},
+						// The toast is gone in five seconds; the done panel below keeps the same
+						// action around for as long as the dialog is open.
+						onClick: () => revealExportedFile(pickedPath),
 					},
 				});
 			} catch (err) {
@@ -746,10 +764,27 @@ function ProgressBlock({
 					background: "var(--success-soft)",
 					color: "var(--fg-2)",
 					font: "500 12px var(--font-body)",
+					display: "flex",
+					flexDirection: "column",
+					alignItems: "flex-start",
+					gap: 12,
 				}}
 			>
-				{t("exportDialog.savedTo")}{" "}
-				<span style={{ fontFamily: "var(--font-mono)" }}>{savedPath}</span>
+				<div>
+					{t("exportDialog.savedTo")}{" "}
+					<span style={{ fontFamily: "var(--font-mono)" }}>{savedPath}</span>
+				</div>
+				{savedPath ? (
+					<button
+						type="button"
+						data-testid="export-show-in-folder"
+						className={`${styles.btn} ${styles.btnSecondary}`}
+						onClick={() => revealExportedFile(savedPath)}
+					>
+						<FolderOpen size={14} />
+						{t("exportDialog.showInFolder")}
+					</button>
+				) : null}
 			</div>
 		);
 	}
