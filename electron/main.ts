@@ -549,7 +549,23 @@ function runUpdateCheck() {
 function runSaveDiagnostics() {
 	exportDiagnosticFile({ error: "Manual diagnostic export", projectState: null, logs: [] })
 		.then((result) => {
-			if (result.success && result.path) {
+			if (result.canceled) return;
+			if (!result.success) {
+				// exportDiagnosticFile resolves rather than rejects on a write
+				// failure, so this is the branch that turns "user picked a save
+				// location and got silence" into a visible error instead of a
+				// menu action that looks like it did nothing.
+				showMessageBox({
+					type: "error",
+					title: PRODUCT_NAME,
+					message: mainT("dialogs", "export.failed") || "Export Failed",
+					detail: result.error,
+				}).catch((error) => {
+					console.error("[diagnostics] failure dialog failed", error);
+				});
+				return;
+			}
+			if (result.path) {
 				shell.showItemInFolder(result.path);
 			}
 		})
