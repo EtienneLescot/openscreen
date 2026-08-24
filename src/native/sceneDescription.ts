@@ -35,6 +35,7 @@ import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	computeCompositeLayout,
 	type RenderRect,
+	resolveWebcamLayoutPreset,
 	resolveWebcamReactiveZoom,
 	webcamSizeToFraction,
 } from "@/lib/compositeLayout";
@@ -103,7 +104,13 @@ export interface SceneSpeedRegion {
  *  SCREEN layer's rect, not of the output frame — the web overlay is handed
  *  `layout.screenRect` as its container. And they are deliberately NOT affected by the zoom
  *  crop: the overlay is a sibling of the element carrying the zoom transform, so annotations
- *  hold still while the content zooms underneath them. */
+ *  hold still while the content zooms underneath them.
+ *
+ *  `space: "frame"` opts an entry out of that and measures it against the output frame instead.
+ *  Only captions set it: an annotation is authored on top of the visible video, so it must track
+ *  the screen rect, whereas a subtitle belongs to the frame the viewer sees and has to hold still
+ *  when padding resizes the footage under it (issue #396). The key is omitted entirely for
+ *  annotations, so their payload — and the older binaries that read it — are unchanged. */
 export interface SceneAnnotation {
 	id: string;
 	startSec: number;
@@ -111,7 +118,10 @@ export interface SceneAnnotation {
 	/** See `SceneZoomRegion.clipIndex`. */
 	clipIndex?: number;
 	kind: "text" | "image" | "figure" | "blur";
-	/** Rect as fractions of the screen layer (x, y top-left). */
+	/** Which box `x`/`y`/`w`/`h` — and `text.fontSizeRel` — are fractions of. Absent means
+	 *  `"screen"`, the historical behaviour and the only one annotations ever use. */
+	space?: "frame";
+	/** Rect as fractions of the box named by `space` (x, y top-left). */
 	x: number;
 	y: number;
 	w: number;
@@ -124,16 +134,23 @@ export interface SceneAnnotation {
 		content: string;
 		color: string;
 		backgroundColor: string;
-		/** Font size as a FRACTION of the screen rect's height, like everything else in this
-		 *  struct — multiply by the rect's height in output pixels. See `annotationScale.ts`:
-		 *  the preview applies the identical product against its own box, so preview and render
-		 *  agree at any resolution. */
+		/** Font size as a FRACTION of the height of the box named by `space`, like everything
+		 *  else in this struct — multiply by that box's height in output pixels. See
+		 *  `annotationScale.ts`: the preview applies the identical product against its own box,
+		 *  so preview and render agree at any resolution. The denominator MUST follow `space`:
+		 *  measuring the rect against the frame while sizing the text off the screen rect would
+		 *  hold a caption still and still shrink its text with the padding slider. */
 		fontSizeRel: number;
 		fontFamily: string;
 		fontWeight: "normal" | "bold";
 		fontStyle: "normal" | "italic";
 		textDecoration: "none" | "underline";
 		textAlign: "left" | "center" | "right";
+		/** Which edge of the drawn text block is pinned to the box. Omitted for
+		 *  annotations, which keep the historical centring — so their payload does not
+		 *  change shape at all. Captions send it because a centred block moves BOTH its
+		 *  edges as it grows, which made a subtitle drift every time its text wrapped. */
+		verticalAlign?: "top" | "center" | "bottom";
 		animation: string | null;
 	};
 	/** Present for `kind: "image"` — the authored `imageContent` (path or data URI). */
@@ -213,6 +230,8 @@ export interface SceneLayout {
 	webcamPosition: { cx: number; cy: number } | null;
 	/** Webcam shrinks while a zoom region is active. */
 	webcamReactiveZoom: boolean;
+	/** User-authored webcam framing, as fractions of the camera source. */
+	webcamCrop: { x: number; y: number; width: number; height: number };
 	/**
 	 * Webcam rect resolved by the app (= `computeCompositeLayout(...).webcamRect`, pixels
 	 * → fractions of the output frame, parity EXACTE entre preview et natif). When set, the
@@ -382,6 +401,22 @@ export interface SceneDescription {
 	speedRegions: SceneSpeedRegion[];
 	cursor: SceneCursor;
 	/**
+	 * Audio finishing, applied identically by the preview and by `finish_audio` (Rust).
+	 *
+	 * One field, and it takes some resisting to keep it that way. The preview plays the
+	 * untouched SOURCE file, seeked; the export runs on the assembled timeline — trimmed,
+	 * speed-adjusted, concatenated. A linear gain is the only operation that means the same
+	 * thing on both. Anything with memory (a filter, a compressor) diverges across cuts;
+	 * anything measured over the whole programme (a loudness normaliser) cannot be computed
+	 * preview-side at all; and even a plain delay diverges, because the preview would apply
+	 * it in source seconds while this applies it in timeline seconds — a 2x speed region
+	 * halves it, and near a cut the export pulls audio across the junction while the preview
+	 * only has the active asset. A sync offset shipped here and was removed for exactly that.
+	 */
+	audio: {
+		gainDb: number;
+	};
+	/**
 	 * Per-clip screen crop (fractions of the frame), or null for the identity
 	 * (full-frame) crop. One entry per clip in the same order as `clips`, so a
 	 * clip that owns its own cropRegion is rendered with that crop and a clip
@@ -509,14 +544,28 @@ export function buildSceneDescription(
 	// authored in RAW document time and the compositor matches each frame's SOURCE time.
 	//
 	// Captions join the annotations here rather than getting a bridge of their own: they are text
-	// over the screen layer with the same geometry and the same time base, so the compositor
-	// already knows how to draw them. Skipping this would have left them visible in the DOM
+	// with the same time base drawn through the same rasterizer, so the compositor already knows
+	// how to draw them. Skipping this would have left them visible in the DOM
 	// overlay and absent from the composited pixels — the exact preview/render gap the annotation
 	// work above closed. They are derived on the fly and never stored (see lib/ai-edition/captions).
-	const captionSettings = getCaptionSettings(document);
+	//
+	// What they do NOT share is the reference box: each caption region carries `space: "frame"`,
+	// so the compositor measures it against the output frame while annotations stay on the screen
+	// rect. Subtitles have to sit where the viewer's frame ends, not where the footage does, or
+	// they slide inward the moment padding shrinks the screen rect (issue #396).
+	//
+	// The output aspect is what decides the caption column and the default inset (a
+	// caption 5% off the bottom of a 16:9 export sits under the platform's own chrome
+	// on a 9:16 one). It comes off `pickOutputDims`, hoisted above the webcam block that
+	// used to own it so there is exactly ONE caller — preview and export cannot pick a
+	// different column from each other.
+	const outputDims = pickOutputDims(document, settings.aspectRatio);
+	const captionAspect = outputDims.height > 0 ? outputDims.width / outputDims.height : 16 / 9;
+	const captionSettings = getCaptionSettings(document, captionAspect);
 	const captionRegions = captionCuesToTextRegions(
 		deriveCaptionCues(document, captionSettings, getCaptionTranslations(document)),
 		captionSettings,
+		captionAspect,
 	);
 	const projectedAnnotations = projectRegionsToSource(
 		[
@@ -557,7 +606,7 @@ export function buildSceneDescription(
 	// fait sur la résolution de sortie (= taille du canvas rendu) avec les unités sources du
 	// premier asset visible — la même convention que `pickOutputDims` + SCREEN_SOURCE_SIZE /
 	// WEBCAM_SOURCE_SIZE dans PreviewCanvas — ce qui garde preview/export/natif alignés.
-	const outputDims = pickOutputDims(document, settings.aspectRatio);
+	// (`outputDims` est résolu plus haut, avec le bloc sous-titres qui en dépend aussi.)
 	// ponytail: when the active camera has been probed (real webcam dims cached by
 	// WebcamOverlay's loadedmetadata handler), use them so the box matches the actual
 	// camera aspect. Without this the box defaults to a hardcoded 4:3 (960x720) and the
@@ -610,8 +659,40 @@ export function buildSceneDescription(
 	 * screen squeezed into its half with nothing beside it. `has_webcam` (native) only
 	 * gates the camera's own draw — it cannot give the screen its frame back.
 	 */
-	const layoutForClip = (screenSize: { width: number; height: number }, hasCamera: boolean) => {
-		const preset = hasCamera ? settings.webcamLayoutPreset : "no-webcam";
+	/**
+	 * The camera source SHAPE of a clip, resolved the same way and for the same reasons
+	 * as `screenSourceSizeOf` above: per clip, because two clips need not have been
+	 * recorded with the same camera.
+	 *
+	 * The order matters. `cameraTrack.width/height` comes FIRST because it is the only
+	 * source every caller has: it is in the document, so the export dialog and the CLI
+	 * runner read it exactly as the preview does. `webcamSourceSize` is second, as a
+	 * fresher-than-disk override for the window before the backfill has written the
+	 * dimensions — it is what a mounted <video> just reported, and only the preview can
+	 * ever supply it. The hardcoded 4:3 is last and is now only reached for a document
+	 * that predates the field, opened somewhere with no camera element mounted.
+	 *
+	 * That ordering is the fix: the box used to depend on WHO was asking rather than on
+	 * what was recorded, so a 16:9 camera was framed 16:9 in the preview and 4:3 in the
+	 * export. Everything below reads the same answer now.
+	 */
+	const webcamSourceSizeOf = (clip: AxcutClip) => {
+		const camera = assetById.get(clip.assetId)?.cameraTrack;
+		const source =
+			camera?.width && camera?.height
+				? { width: camera.width, height: camera.height }
+				: (webcamSourceSize ?? { width: 960, height: 720 });
+		return {
+			width: Math.max(1, Math.round(source.width * settings.webcamCropRegion.width)),
+			height: Math.max(1, Math.round(source.height * settings.webcamCropRegion.height)),
+		};
+	};
+	const layoutForClip = (
+		screenSize: { width: number; height: number },
+		hasCamera: boolean,
+		camSize: { width: number; height: number },
+	) => {
+		const preset = resolveWebcamLayoutPreset(settings.webcamLayoutPreset, hasCamera);
 		return computeCompositeLayout({
 			canvasSize: outputDims,
 			maxContentSize: {
@@ -619,7 +700,7 @@ export function buildSceneDescription(
 				height: Math.round(outputDims.height * paddingFit),
 			},
 			screenSize,
-			webcamSize: preset === "no-webcam" ? null : (webcamSourceSize ?? { width: 960, height: 720 }),
+			webcamSize: preset === "no-webcam" ? null : camSize,
 			layoutPreset: preset,
 			webcamSizePreset: settings.webcamSizePreset,
 			webcamPosition: preset === "picture-in-picture" ? settings.webcamPosition : null,
@@ -655,12 +736,18 @@ export function buildSceneDescription(
 	// `for_clip_window` (Rust) selects the entry for the clip being composed, so the
 	// draw path keeps reading a single `layout` and needs no per-clip branch of its own.
 	const layoutByClip = visibleClips.map((clip, index) =>
-		resolvedLayoutOf(layoutForClip(screenSourceSizeOf(clip, index), clipHasCamera(clip))),
+		resolvedLayoutOf(
+			layoutForClip(screenSourceSizeOf(clip, index), clipHasCamera(clip), webcamSourceSizeOf(clip)),
+		),
 	);
 	// Scalar fields stay the FIRST clip's layout: they are the fallback for a payload
 	// without `layoutByClip`, and the value native starts from before any clip is active.
 	const computedLayout = visibleClips[0]
-		? layoutForClip(screenSourceSizeOf(visibleClips[0], 0), clipHasCamera(visibleClips[0]))
+		? layoutForClip(
+				screenSourceSizeOf(visibleClips[0], 0),
+				clipHasCamera(visibleClips[0]),
+				webcamSourceSizeOf(visibleClips[0]),
+			)
 		: null;
 	const webcamRect = computedLayout?.webcamRect
 		? toFrameFractions(computedLayout.webcamRect)
@@ -698,6 +785,7 @@ export function buildSceneDescription(
 				settings.webcamLayoutPreset,
 				settings.webcamReactiveZoom,
 			),
+			webcamCrop: settings.webcamCropRegion,
 			webcamRect,
 			screenRect,
 			screenRadiusFrac: radiusFractionOf(
@@ -729,6 +817,9 @@ export function buildSceneDescription(
 			clickBounce: settings.cursor.clickBounce,
 			clipToBounds: settings.cursor.clipToBounds,
 			theme: settings.cursorTheme,
+		},
+		audio: {
+			gainDb: settings.audioGainDb,
 		},
 		background: parseWallpaper(settings.wallpaper),
 		zoomRegions: projectedZoomRegions.map((region) => ({
@@ -763,13 +854,20 @@ export function buildSceneDescription(
 		annotations: projectedAnnotations
 			.map((region) => {
 				const style = region.style;
+				// Only captions carry a space; annotations must keep emitting the exact same keys
+				// they always have, so the field is omitted rather than sent as null/undefined.
+				const space = (region as { space?: "frame" }).space;
+				// Same treatment, same reason: only captions pin an edge.
+				const verticalAlign = (region as { verticalAlign?: "top" | "bottom" }).verticalAlign;
 				const base = {
 					id: region.id,
 					startSec: region.startMs / 1000,
 					endSec: region.endMs / 1000,
 					clipIndex: region.clipIndex,
 					kind: region.type,
-					// Authored as percentages of the screen rect; the native side wants fractions.
+					...(space ? { space } : {}),
+					// Authored as percentages of the box named by `space` — the screen rect unless
+					// this is a caption; the native side wants fractions either way.
 					x: region.position.x / 100,
 					y: region.position.y / 100,
 					w: region.size.width / 100,
@@ -795,6 +893,7 @@ export function buildSceneDescription(
 							fontStyle: style.fontStyle,
 							textDecoration: style.textDecoration,
 							textAlign: style.textAlign,
+							...(verticalAlign ? { verticalAlign } : {}),
 							animation: style.textAnimation ?? null,
 						},
 					};

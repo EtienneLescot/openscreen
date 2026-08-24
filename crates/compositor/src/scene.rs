@@ -56,6 +56,9 @@ pub struct SceneLayout {
     pub webcam_position: Option<WebcamPosition>,
     /// la webcam rétrécit pendant un zoom actif.
     pub webcam_reactive_zoom: bool,
+    /// User-authored source crop for the camera. Absent keeps the full frame.
+    #[serde(default)]
+    pub webcam_crop: Option<SceneCrop>,
     /// Rect webcam résolu côté app (0..1 fractions du cadre de sortie), en PARITÉ EXACTE avec
     /// `computeCompositeLayout` (TS). Permet à TS et Rust de partager la même source de vérité :
     /// le natif ne dérive PLUS ses propres placements pour PiP/dual-frame/vertical-stack — il
@@ -204,6 +207,12 @@ pub enum SceneBackground {
 /// écran**, pas du cadre de sortie (le calque web reçoit `layout.screenRect` comme conteneur), et
 /// elles ne subissent **pas** le crop de zoom : l'overlay est frère de l'élément qui porte la
 /// transform, donc les annotations restent en place pendant que le contenu zoome dessous.
+///
+/// `space: "frame"` change cette boîte de référence pour le **cadre de sortie**. Seuls les
+/// sous-titres l'envoient : une annotation est posée sur la vidéo visible et doit donc suivre le
+/// rect écran, alors qu'un sous-titre appartient au cadre que le spectateur voit et doit rester
+/// immobile quand le padding rétrécit l'image dessous (issue #396). La clé est absente pour les
+/// annotations, dont la charge utile ne bouge pas d'un octet.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneAnnotation {
@@ -216,6 +225,15 @@ pub struct SceneAnnotation {
     pub end_sec: f64,
     /// "text" | "image" | "figure" | "blur".
     pub kind: String,
+    /// `Some("frame")` = coordonnées rapportées au cadre de sortie ; absent ou toute autre
+    /// valeur = rect écran, le comportement historique.
+    ///
+    /// Volontairement `Option<String>` et non une enum : serde refuse une variante inconnue
+    /// d'une enum unitaire sans `#[serde(other)]`, donc un futur `"space":"safe-area"` ferait
+    /// échouer `Scene::from_json` **en entier** sur un binaire plus ancien. En chaîne, l'inconnu
+    /// retombe simplement sur le rect écran.
+    #[serde(default)]
+    pub space: Option<String>,
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -231,6 +249,22 @@ pub struct SceneAnnotation {
     pub figure: Option<SceneAnnotationFigure>,
     #[serde(default)]
     pub blur: Option<SceneAnnotationBlur>,
+}
+
+impl SceneAnnotation {
+    /// La boîte que `x`/`y`/`w`/`h` — **et** `text.font_size_rel` — mesurent, en fractions de
+    /// sortie. Le cadre de sortie est la cible de rendu, donc `[0, 0, 1, 1]` par construction.
+    ///
+    /// Un seul point de décision, partagé par les trois backends : le rect ET le dénominateur de
+    /// la police doivent basculer ensemble. Mesurer le rect sur le cadre en dimensionnant le texte
+    /// sur le rect écran immobiliserait le sous-titre tout en continuant de rétrécir ses lettres
+    /// avec le curseur de padding.
+    pub fn anchor_rect(&self, screen_dst: [f32; 4]) -> [f32; 4] {
+        match self.space.as_deref() {
+            Some("frame") => [0.0, 0.0, 1.0, 1.0],
+            _ => screen_dst,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -251,6 +285,18 @@ pub struct SceneAnnotationText {
     pub font_style: String,
     pub text_decoration: String,
     pub text_align: String,
+    /// Quelle arête du bloc de texte est épinglée à sa boîte : `"top"` / `"center"`
+    /// / `"bottom"`. Absent = `"center"`, le comportement historique — les
+    /// annotations n'émettent jamais la clé et ne bougent donc pas d'un pixel.
+    /// Les sous-titres l'émettent pour que l'arête ancrée tienne quand le texte
+    /// gagne une ligne (un bloc centré voit ses deux arêtes se déplacer).
+    ///
+    /// `Option<String>` et pas une enum, pour la même raison que `space` : serde
+    /// rejette une variante d'unité inconnue, donc une valeur future ferait
+    /// échouer `Scene::from_json` *en entier* sur un binaire plus ancien, au lieu
+    /// de coûter un seul sous-titre mal placé.
+    #[serde(default)]
+    pub vertical_align: Option<String>,
     #[serde(default)]
     pub animation: Option<String>,
 }
@@ -385,6 +431,19 @@ pub struct SceneCrop {
     pub height: f32,
 }
 
+/// Audio finishing. Deliberately limited to a linear gain — the one operation the editor
+/// preview can apply identically to the source file it plays. See `audio::finish_audio`
+/// before adding a field here; a sync offset was tried and removed.
+///
+/// The field carries `#[serde(default)]`: a payload from a build that predates it must
+/// degrade to "that stage is neutral", not fail the whole scene.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneAudio {
+    #[serde(default)]
+    pub gain_db: f32,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneOutput {
@@ -413,6 +472,9 @@ pub struct Scene {
     #[serde(default)]
     pub camera_fullscreen_regions: Vec<SceneCameraFullscreenRegion>,
     pub cursor: SceneCursor,
+    /// Global audio finishing. Default keeps old scene payloads bit-for-bit compatible.
+    #[serde(default)]
+    pub audio: SceneAudio,
     /// Crop écran par clip, dans le même ordre que `clips` (`cropByClip` côté TS).
     #[serde(default)]
     pub crop_by_clip: Vec<Option<SceneCrop>>,
@@ -615,6 +677,55 @@ mod annotation_tests {
         assert_eq!(text.text_align, "center");
         assert_eq!(text.animation.as_deref(), Some("fade"));
         assert!(ann.figure.is_none() && ann.blur.is_none());
+    }
+
+    /// Le rect écran arbitraire des tests d'ancrage : décalé ET rétréci, comme un
+    /// écran que le padding a rentré dans le cadre.
+    const PADDED_SCREEN: [f32; 4] = [0.1, 0.1, 0.8, 0.8];
+
+    fn annotation_with_space(space: &str) -> SceneAnnotation {
+        let json = scene_json(&format!(
+            r##"[{{"id":"a","startSec":0.0,"endSec":1.0,"kind":"text",{space}"x":0.25,"y":0.5,"w":0.4,"h":0.1,"zIndex":0}}]"##
+        ));
+        Scene::from_json(&json)
+            .expect("parse annotation")
+            .annotations
+            .into_iter()
+            .next()
+            .expect("une annotation")
+    }
+
+    #[test]
+    fn an_annotation_without_a_space_still_measures_against_the_screen_rect() {
+        // Le champ est arrivé après coup : tout payload existant — et toute annotation,
+        // qui n'en envoie jamais — doit garder l'ancrage historique.
+        let ann = annotation_with_space("");
+        assert!(ann.space.is_none());
+        assert_eq!(ann.anchor_rect(PADDED_SCREEN), PADDED_SCREEN);
+    }
+
+    #[test]
+    fn a_frame_space_annotation_measures_against_the_output_frame() {
+        // C'est tout l'objet de l'issue #396 : le sous-titre ne bouge pas quand le
+        // padding rentre l'écran, parce qu'il ne mesure plus l'écran.
+        let ann = annotation_with_space(r#""space":"frame","#);
+        assert_eq!(ann.space.as_deref(), Some("frame"));
+        assert_eq!(ann.anchor_rect(PADDED_SCREEN), [0.0, 0.0, 1.0, 1.0]);
+        // Et il tombe au même endroit quel que soit le rect écran.
+        assert_eq!(ann.anchor_rect([0.3, 0.3, 0.4, 0.4]), ann.anchor_rect(PADDED_SCREEN));
+    }
+
+    #[test]
+    fn an_unknown_space_falls_back_instead_of_failing_the_whole_scene() {
+        // La raison du `Option<String>` : serde refuserait une variante inconnue d'une
+        // enum unitaire et ferait échouer `from_json` EN ENTIER, donc un binaire plus
+        // ancien perdrait la scène complète pour un mot qu'il ne connaît pas.
+        let ann = annotation_with_space(r#""space":"safe-area","#);
+        assert_eq!(ann.anchor_rect(PADDED_SCREEN), PADDED_SCREEN);
+        // Un null explicite doit passer par la même porte.
+        let nulled = annotation_with_space(r#""space":null,"#);
+        assert!(nulled.space.is_none());
+        assert_eq!(nulled.anchor_rect(PADDED_SCREEN), PADDED_SCREEN);
     }
 
     #[test]

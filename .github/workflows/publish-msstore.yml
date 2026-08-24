@@ -159,6 +159,17 @@ jobs:
 
       - name: Configure Microsoft Store CLI
         uses: microsoft/microsoft-store-apppublisher@v1.1
+        # PINNED, and it has to stay pinned. The action defaults to `latest`, and
+        # msstore-cli v0.4.0 (published 2026-08-18, the first release since v0.3.9
+        # in January) ships an Azure SDK client whose `ClientOptions.Retry.NetworkTimeout`
+        # is 0:00:00 — every blob upload is cancelled the instant it starts. The CLI
+        # reports that as "Error while uploading the application package.", so the
+        # submission is created and configured and then dies at "Uploading Bundle to
+        # Azure blob: 0%", six instant retries later. v1.9.6 hit it three times in a
+        # row; the same package and account had submitted fine on v0.3.9 three days
+        # earlier. Unpin only against a CLI release that fixes the timeout.
+        with:
+          version: v0.3.9
 
       - name: Submit the package to the Store
         id: submit
@@ -193,7 +204,10 @@ jobs:
           # `-i, --inputDirectory`, and rejects the `--inputFile` that Microsoft
           # Learn documents. The v1.9.5 dry run is what caught that.
           # Not $args: that is a PowerShell automatic variable.
-          $cmdArgs = @('publish', '.', '--inputDirectory', $pkg.Directory.FullName, '--appId', $env:PRODUCT_ID)
+          # -v is not decoration: without it the CLI reports upload failures as the
+          # bare line 'Error while uploading the application package.' with no status
+          # code, no URL and no body, which is what made v1.9.6 undiagnosable.
+          $cmdArgs = @('publish', '.', '--inputDirectory', $pkg.Directory.FullName, '--appId', $env:PRODUCT_ID, '-v')
           if ($env:DRY_RUN -eq 'true') {
             # Leaves the submission in draft instead of sending it to
             # certification: the only way to test this path without shipping.

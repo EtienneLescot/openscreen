@@ -62,6 +62,12 @@ fn webcam_seek_time(screen_source_time_sec: f64, webcam_offset_sec: f64) -> f64 
 struct PrefetchedClip {
     sdec: Decoder,
     wdec: Decoder,
+    /// `wdec` est-il la VRAIE caméra, ou le remplaçant écran (pas de caméra déclarée, ou
+    /// déclarée et illisible) ? Voyage avec la paire de décodeurs parce que c'est d'ELLE que
+    /// la réponse dépend, pas de la scène : deux clips de la même timeline peuvent avoir l'un
+    /// une caméra qui s'ouvre et l'autre un fichier mort, et le pool (`PooledClip`) réactive
+    /// des paires ouvertes plusieurs bascules plus tôt. Cf. `open_webcam_or_stand_in`.
+    webcam_decoder_is_real: bool,
     webcam_offset_sec: f64,
     idx: u32,
     /// Piste curseur du clip à venir, préchargée ici pour la même raison que les décodeurs :
@@ -89,8 +95,15 @@ struct PrefetchedClip {
 /// valide plutôt qu'un `Option` à dérouler sur tout le chemin chaud, et rien ne le dessine
 /// puisque la composition ne pose une vignette que si le document déclare une caméra.
 ///
-/// Avec une caméra déclarée dont le fichier ne s'ouvre pas, c'est l'inverse : la vignette
-/// EST dessinée et affiche l'écran. Ce cas-là méritait une trace, et n'en avait aucune.
+/// Avec une caméra déclarée dont le fichier ne s'ouvre pas, le chemin, lui, reste parfaitement
+/// plausible : `webcam_is_real` répond vrai, la vignette était donc dessinée — sur le
+/// remplaçant, c'est-à-dire l'enregistrement d'écran dupliqué dans son propre coin. Vu en vrai
+/// avec un `.mp4` webcam de 0 octet, laissé non finalisé par le helper de capture natif.
+///
+/// D'où le `bool` rendu à côté du décodeur : « ce que je te rends est-il VRAIMENT la caméra ? ».
+/// Seule l'ouverture peut répondre — aucune inspection du chemin ne sait qu'un fichier est mort
+/// — et c'est cette réponse, et pas le chemin, qui décide de dessiner la vignette (voir
+/// `should_draw_webcam`).
 ///
 /// ponytail: on garde le remplaçant plutôt que de passer `wdec` en `Option<Decoder>`, ce qui
 /// toucherait 22 sites dont le pool de décodeurs et la boucle de composition `unsafe`. À faire
@@ -100,19 +113,33 @@ unsafe fn open_webcam_or_stand_in(
     screen_path: &str,
     webcam_path: &str,
     gpu: &Gpu,
-) -> Result<Decoder> {
+) -> Result<(Decoder, bool)> {
     if !webcam_is_real(webcam_path, screen_path) {
-        return Decoder::open(screen_path, gpu);
+        return Ok((Decoder::open(screen_path, gpu)?, false));
     }
     match Decoder::open(webcam_path, gpu) {
-        Ok(d) => Ok(d),
+        Ok(d) => Ok((d, true)),
         Err(e) => {
             eprintln!(
-                "WARNING: caméra déclarée mais illisible ({webcam_path}) : {e}. La vignette caméra affichera l'enregistrement d'écran ; le média est à relier."
+                "WARNING: caméra déclarée mais illisible ({webcam_path}) : {e}. La vignette caméra ne sera pas dessinée ; le média est à relier."
             );
-            Decoder::open(screen_path, gpu)
+            Ok((Decoder::open(screen_path, gpu)?, false))
         }
     }
+}
+
+/// Faut-il dessiner la vignette caméra ? Il faut les DEUX moitiés :
+///
+///   - le document déclare une caméra — `webcam_is_real`, un test de chemins ;
+///   - et son décodeur s'est vraiment ouvert — `decoder_is_real`, ce que seul
+///     `open_webcam_or_stand_in` sait, transporté jusqu'ici par `PrefetchedClip`/`Player`.
+///
+/// Le test de chemins seul ne suffit pas : il a répondu « vraie caméra » pour un `.mp4` webcam
+/// de 0 octet (fichier non finalisé par le helper de capture), la vignette a été dessinée, et
+/// le décodeur derrière elle était le remplaçant écran — l'utilisateur voyait son propre
+/// enregistrement d'écran répliqué dans le petit rectangle caméra.
+fn should_draw_webcam(webcam_path: &str, screen_path: &str, decoder_is_real: bool) -> bool {
+    webcam_is_real(webcam_path, screen_path) && decoder_is_real
 }
 
 unsafe fn open_and_seek_clip(
@@ -124,7 +151,7 @@ unsafe fn open_and_seek_clip(
 ) -> Result<PrefetchedClip> {
     let source_time_sec = source_time_sec.max(0.0);
     let mut sdec = Decoder::open(screen_path, gpu)?;
-    let mut wdec = open_webcam_or_stand_in(screen_path, webcam_path, gpu)?;
+    let (mut wdec, webcam_decoder_is_real) = open_webcam_or_stand_in(screen_path, webcam_path, gpu)?;
     let sf = sdec.seek_to(source_time_sec)?;
     let mut wf = wdec.seek_to(webcam_seek_time(source_time_sec, webcam_offset_sec))?;
     if wf.is_null() {
@@ -135,7 +162,7 @@ unsafe fn open_and_seek_clip(
     }
     let idx = (source_time_sec * sdec.fps()).round().max(0.0) as u32;
     let cursor_track = CursorTrack::load(&format!("{screen_path}.cursor.json"), 0.0, 24.0 * 3600.0).ok();
-    Ok(PrefetchedClip { sdec, wdec, webcam_offset_sec, idx, cursor_track })
+    Ok(PrefetchedClip { sdec, wdec, webcam_decoder_is_real, webcam_offset_sec, idx, cursor_track })
 }
 
 /// Nombre de paires de décodeurs INACTIVES gardées ouvertes en plus de la paire active.
@@ -253,6 +280,10 @@ pub struct Player {
     sdec: Decoder,
     wdec: Decoder,
     gpu: Gpu,
+    /// Même question que `PrefetchedClip::webcam_decoder_is_real`, pour la paire ACTIVE :
+    /// `wdec` est-il la caméra ou le remplaçant écran ? Mis à jour à chaque bascule de clip
+    /// (`swap_active`), lu par la boucle de rendu pour décider de dessiner la vignette.
+    webcam_decoder_is_real: bool,
     webcam_offset_sec: f64,
     has_current_frame: bool,
     use_current_on_next_step: bool,
@@ -261,7 +292,7 @@ pub struct Player {
 
 impl Player {
     pub unsafe fn open(screen: &str, webcam: &str, gpu: &Gpu) -> Result<Player> {
-        let wdec = open_webcam_or_stand_in(screen, webcam, gpu)?;
+        let (wdec, webcam_decoder_is_real) = open_webcam_or_stand_in(screen, webcam, gpu)?;
         Ok(Player {
             sdec: Decoder::open(screen, gpu)?,
             wdec,
@@ -271,6 +302,7 @@ impl Player {
                 feature_level: gpu.feature_level,
                 backend: gpu.backend,
             },
+            webcam_decoder_is_real,
             webcam_offset_sec: 0.0,
             has_current_frame: false,
             use_current_on_next_step: false,
@@ -348,11 +380,16 @@ impl Player {
         let outgoing = PrefetchedClip {
             sdec: std::mem::replace(&mut self.sdec, incoming.sdec),
             wdec: std::mem::replace(&mut self.wdec, incoming.wdec),
+            // Suit son décodeur dans les deux sens : la paire sortante emporte sa réponse vers
+            // le pool (elle sera réactivée sans réouverture, donc sans personne pour la
+            // recalculer), l'entrante impose la sienne au player.
+            webcam_decoder_is_real: self.webcam_decoder_is_real,
             webcam_offset_sec: self.webcam_offset_sec,
             idx: self.idx,
             // Le curseur est re-dérivé du chemin à la réactivation ; inutile de le trimballer.
             cursor_track: None,
         };
+        self.webcam_decoder_is_real = incoming.webcam_decoder_is_real;
         self.webcam_offset_sec = incoming.webcam_offset_sec;
         self.idx = incoming.idx;
         self.has_current_frame = true;
@@ -370,6 +407,14 @@ impl Player {
         source_time_sec: f64,
     ) -> Result<PrefetchedClip> {
         open_and_seek_clip(screen, webcam, webcam_offset_sec, source_time_sec, &self.gpu)
+    }
+
+    /// Le décodeur webcam ACTIF est-il la vraie caméra ? `false` quand c'est le remplaçant
+    /// écran — aucune caméra déclarée, ou une caméra déclarée dont le fichier ne s'ouvre pas.
+    /// La boucle de rendu en a besoin parce que la seule autre source d'information dont elle
+    /// dispose, le chemin webcam du clip, ment dans le second cas (cf. `should_draw_webcam`).
+    pub fn webcam_decoder_is_real(&self) -> bool {
+        self.webcam_decoder_is_real
     }
 
     /// Temps source courant du décodeur écran — utilisé par `render_thread` pour détecter le
@@ -1457,8 +1502,16 @@ unsafe fn render_thread(
         cfg.mblur_n = ip.mblur_taps;
         cfg.cursor = ip.cursor_show;
         // A clip with no camera must not draw the PiP box — the decoder behind it is the
-        // screen video, so drawing it duplicates the recording into its own corner.
-        let has_real_webcam = webcam_is_real(&active_webcam_path, &active_screen_path);
+        // screen video, so drawing it duplicates the recording into its own corner. The
+        // paths alone cannot answer that: a declared camera whose file will not open (the
+        // 0-byte MP4 an unfinalized capture leaves behind) keeps a perfectly plausible
+        // path, and the decoder behind its box is the screen fallback just the same. So
+        // ask the player what it actually opened.
+        let has_real_webcam = should_draw_webcam(
+            &active_webcam_path,
+            &active_screen_path,
+            player.webcam_decoder_is_real(),
+        );
         comp.set_live_params(LiveParams {
             bg_color: ip.bg_color,
             shadow_scale: ip.shadow_scale,
@@ -1966,6 +2019,37 @@ mod tests {
     #[test]
     fn a_clip_with_a_camera_draws_it() {
         assert!(webcam_is_real("/rec/recording-1-webcam.webm", "/rec/recording-1.mp4"));
+    }
+
+    #[test]
+    fn a_camera_whose_file_would_not_open_draws_nothing() {
+        // Reproduced on a real machine: the native capture helper left a 0-byte webcam
+        // MP4, so `Decoder::open` failed and the webcam decoder fell back to the SCREEN
+        // file — while the path stayed as plausible as any other, which is why the string
+        // test still says "real camera" on the very same input.
+        assert!(webcam_is_real("/rec/recording-1-webcam.mp4", "/rec/recording-1.mp4"));
+        assert!(!should_draw_webcam(
+            "/rec/recording-1-webcam.mp4",
+            "/rec/recording-1.mp4",
+            false,
+        ));
+    }
+
+    #[test]
+    fn a_camera_that_did_open_is_drawn() {
+        assert!(should_draw_webcam(
+            "/rec/recording-1-webcam.webm",
+            "/rec/recording-1.mp4",
+            true,
+        ));
+    }
+
+    #[test]
+    fn a_clip_without_a_camera_draws_nothing_however_well_its_decoder_opened() {
+        // The stand-in decoder always opens — it IS the screen file — so the path test
+        // remains the half of the answer that catches "this clip has no camera at all".
+        assert!(!should_draw_webcam("", "/rec/recording-1.mp4", true));
+        assert!(!should_draw_webcam("/rec/recording-1.mp4", "/rec/recording-1.mp4", true));
     }
 
     // --- transport handed to an export and back -------------------------------

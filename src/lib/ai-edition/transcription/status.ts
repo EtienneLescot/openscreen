@@ -41,6 +41,32 @@ export function progressFraction(progress: TranscriptionProgress | undefined): n
 }
 
 /**
+ * Turn the engine's RTF (wall-clock / audio, whisper.cpp's convention, lower is
+ * faster) into the figure a reader can act on: "× real-time", where 2.1 means
+ * 2.1 seconds of audio transcribed per second of work.
+ *
+ * Null whenever nothing usable was reported — a helper binary older than the
+ * `timing` field sends none at all — so the UI shows no figure rather than a
+ * confident "0.0×".
+ */
+export function realtimeSpeed(rtf: number | undefined): number | null {
+	if (rtf === undefined || !Number.isFinite(rtf) || rtf <= 0) return null;
+	return 1 / rtf;
+}
+
+/**
+ * True when the run is on the CPU path rather than a GPU one.
+ *
+ * Worth its own predicate because it is the one backend value that changes what
+ * the user should expect: the same helper on the GPU is ~2x faster (median
+ * 2.07x, tools/stt-eval/whispercpp-dtw-poc/REPORT.md 5.3), and every route onto
+ * the CPU path is a silent fallback.
+ */
+export function isCpuBackend(backend: string | undefined): boolean {
+	return backend === "whispercpp-cpu";
+}
+
+/**
  * A media that has no audio track (or one Whisper cannot read) will fail the
  * same way on every attempt, so that verdict is worth remembering: it is
  * persisted on the asset and stops the auto pass from re-extracting the audio
@@ -94,6 +120,14 @@ export interface AssetTranscriptionView {
 	phase?: TranscriptionPhase;
 	progress?: TranscriptionProgress;
 	failure?: TranscriptionFailure;
+	/**
+	 * Backend the running job is actually using, once a chunk has reported one.
+	 * Only meaningful while `status === "running"` — it describes a run in
+	 * flight, not the transcript a finished run left behind.
+	 */
+	backend?: string;
+	/** Real-time factor for the run so far; pair with `realtimeSpeed()` to display. */
+	rtf?: number;
 }
 
 /** In-flight (or last-failed) state of one asset's job. Mirrors the store entry. */
@@ -102,6 +136,8 @@ export interface TranscriptionJobLike {
 	phase?: TranscriptionPhase;
 	progress?: TranscriptionProgress;
 	failure?: TranscriptionFailure;
+	backend?: string;
+	rtf?: number;
 }
 
 export function findAssetTranscript(
@@ -144,7 +180,14 @@ export function deriveAssetStatus(input: {
 }): AssetTranscriptionView {
 	const { assetId, job, transcript, persistedFailure } = input;
 	if (job && job.status !== "failed") {
-		return { assetId, status: job.status, phase: job.phase, progress: job.progress };
+		return {
+			assetId,
+			status: job.status,
+			phase: job.phase,
+			progress: job.progress,
+			backend: job.backend,
+			rtf: job.rtf,
+		};
 	}
 	if (transcript) {
 		return {

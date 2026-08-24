@@ -18,6 +18,7 @@
 		"edit": "تعديل",
 		"view": "عرض",
 		"window": "نافذة",
+		"help": "مساعدة",
 		"quit": "خروج",
 		"stopRecording": "إيقاف التسجيل",
 		"undo": "تراجع",
@@ -39,7 +40,8 @@
 		"services": "خدمات",
 		"hide": "إخفاء OpenScreen",
 		"hideOthers": "إخفاء الآخرين",
-		"unhide": "إظهار الكل"
+		"unhide": "إظهار الكل",
+		"saveDiagnostics": "حفظ التشخيصات"
 	},
 	"updates": {
 		"available": "يتوفر OpenScreen {{latestVersion}}. الإصدار المثبت هو {{currentVersion}}.",

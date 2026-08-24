@@ -40,7 +40,7 @@
 		"deleteRegion": "Delete Trim Region"
 	},
 	"layout": {
-		"title": "Layout",
+		"title": "Camera layout",
 		"preset": "Preset",
 		"selectPreset": "Select preset",
 		"pictureInPicture": "Picture in Picture",
@@ -49,6 +49,10 @@
 		"noWebcam": "No Webcam",
 		"webcamShape": "Camera Shape",
 		"webcamSize": "Webcam Size",
+		"webcamFraming": "Webcam crop",
+		"webcamCropZoom": "Zoom",
+		"webcamCropX": "Pan horizontally",
+		"webcamCropY": "Pan vertically",
 		"mirrorWebcam": "Mirror Webcam",
 		"reactiveWebcam": "Shrink on Zoom",
 		"reactiveWebcamDescription": "Camera smoothly shrinks while the video is zoomed in, so it stays out of the way.",
@@ -61,6 +65,7 @@
 		"chromaSmoothness": "Smoothness",
 		"chromaSpill": "Spill Removal",
 		"help": "How the webcam is composed with the screen: picture-in-picture, vertical stack, dual frame, mask shape, size, and mirroring.",
+		"helpNoWebcam": "This project has no camera, so the layout controls are off and the preset reads “No Webcam”. Your saved layout is kept for when a camera is added.",
 		"shapes": {
 			"rectangle": "Rect",
 			"circle": "Circle",
@@ -68,8 +73,14 @@
 			"rounded": "Rounded"
 		}
 	},
+	"audio": {
+		"title": "Audio",
+		"help": "Adjust the audio output level. It applies identically in the preview and the export.",
+		"outputGain": "Output level",
+		"reset": "Reset audio"
+	},
 	"effects": {
-		"title": "Video Effects",
+		"title": "Composition",
 		"blurBg": "Blur BG",
 		"motionBlur": "Motion Blur",
 		"off": "off",
@@ -77,6 +88,14 @@
 		"shadow": "Shadow",
 		"roundness": "Roundness",
 		"padding": "Padding",
+		"frame": "Frame",
+		"format": "Format",
+		"formatOriginal": "Original",
+		"fitClip": "Fit",
+		"fitClipOne": "{{count}} clip",
+		"fitClipFew": "{{count}} clips",
+		"fitClipMany": "{{count}} clips",
+		"motion": "Motion",
 		"help": "Frame styling for the recording: background blur, drop shadow, motion blur, corner radius, and padding around the video."
 	},
 	"background": {
@@ -294,14 +313,17 @@
 		"backgroundColor": "Background color",
 		"backgroundOpacity": "Opacity",
 		"position": "Position",
-		"positionTop": "Top",
-		"positionMiddle": "Middle",
-		"positionBottom": "Bottom",
+		"anchorBottom": "Bottom",
+		"anchorTop": "Top",
+		"anchorHintBottom": "Long captions grow upward — the bottom edge stays put.",
+		"anchorHintTop": "Long captions grow downward — the top edge stays put.",
+		"distanceFromBottom": "Distance from bottom",
+		"distanceFromTop": "Distance from top",
+		"distanceFromLeft": "Distance from left",
+		"distanceFromRight": "Distance from right",
 		"alignLeft": "Left",
 		"alignCenter": "Center",
 		"alignRight": "Right",
-		"verticalOffset": "Offset",
-		"width": "Width",
 		"lineLength": "Line length",
 		"minWords": "Min words per line",
 		"maxWords": "Max words per line"

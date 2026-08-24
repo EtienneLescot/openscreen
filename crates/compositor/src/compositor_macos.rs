@@ -977,14 +977,19 @@ impl Compositor {
     }
 
 
-    /// Annotations : calque le plus haut, ancré sur `screen_dst` — le conteneur que reçoit
-    /// l'overlay web. Port de `compositor_windows::draw_annotations`.
+    /// Annotations : calque le plus haut, ancré sur `s_ann` — le rect écran SANS ZOOM, le
+    /// conteneur que reçoit l'overlay web. Port de `compositor_windows::draw_annotations`.
+    ///
+    /// Le paramètre s'appelle `s_ann` et pas `screen_dst` parce que c'est le seul rect
+    /// correct : lui passer `s_dst` fait dériver et grossir les sous-titres sous un zoom
+    /// (issue #179, puis #397 sur Linux). L'arithmétique elle-même vit dans
+    /// `frame_geometry::annotation_dst_in`, partagée par les trois backends.
     unsafe fn draw_annotations(
         &self,
         cmd: &metal::CommandBufferRef,
         scene: Option<&Scene>,
         t: f32,
-        screen_dst: [f32; 4],
+        s_ann: [f32; 4],
     ) -> Result<()> {
         let Some(scene) = scene else { return Ok(()) };
         if scene.annotations.is_empty() {
@@ -1018,12 +1023,10 @@ impl Compositor {
             if !visible(a) {
                 continue;
             }
-            let dst = [
-                screen_dst[0] + a.x * screen_dst[2],
-                screen_dst[1] + a.y * screen_dst[3],
-                a.w * screen_dst[2],
-                a.h * screen_dst[3],
-            ];
+            // `anchor` et non `s_ann` : un sous-titre (`space: "frame"`) se mesure sur le
+            // cadre de sortie. Le dénominateur de la police plus bas lit le MÊME `anchor`.
+            let anchor = a.anchor_rect(s_ann);
+            let dst = crate::frame_geometry::annotation_dst_in(anchor, a.x, a.y, a.w, a.h);
             let quad_px = [dst[2] * rw, dst[3] * rh];
             if quad_px[0] <= 0.0 || quad_px[1] <= 0.0 {
                 continue;
@@ -1138,12 +1141,15 @@ impl Compositor {
                         color: parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
                         background: parse_hex(&text.background_color)
                             .unwrap_or([0.0, 0.0, 0.0, 0.0]),
-                        font_size_px: text.font_size_rel * (screen_dst[3] * rh),
+                        font_size_px: text.font_size_rel * (anchor[3] * rh),
                         font_family: text.font_family.clone(),
                         bold: text.font_weight == "bold",
                         italic: text.font_style == "italic",
                         underline: text.text_decoration == "underline",
                         align: text.text_align.clone(),
+                        // Absent = "center", le comportement historique : les
+                        // annotations ne changent pas d'un pixel.
+                        valign: text.vertical_align.clone().unwrap_or_default(),
                         box_px: [quad_px[0].round() as u32, quad_px[1].round() as u32],
                     };
                     let key = spec.cache_key();
@@ -1602,9 +1608,10 @@ impl Compositor {
         // --- caméra : ombre PiP puis vidéo ---
         let enc = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_main)?;
         if let (true, Some((wy, wuv))) = (lp.has_webcam, webcam_tex.as_ref()) {
-            let (cu0, cv0, cu1, cv1) = crate::frame_geometry::cover_crop_uv(
+            let [cu0, cv0, cu1, cv1] = crate::frame_geometry::webcam_source_rect(
                 [wcw, wch],
                 [wtw as f32, wth as f32],
+                scene_ref.as_ref().and_then(|scene| scene.layout.webcam_crop),
                 g.w_px[0] / g.w_px[1].max(0.0001),
             );
             let (u0, u1) = if lp.webcam_mirror { (cu1, cu0) } else { (cu0, cu1) };

@@ -112,6 +112,78 @@ DirectShowWebcamCapture::~DirectShowWebcamCapture() {
     delete impl_;
 }
 
+bool DirectShowWebcamCapture::buildGraph(const CLSID& sourceClsid, const GUID* preferredSubtype) {
+    // Every attempt starts from empty filters. A RenderStream that fails can
+    // leave pins connected behind it, and retrying on top of that half-built
+    // graph is how you get a second failure that says nothing about the format.
+    impl_->mediaControl.Reset();
+    impl_->nullRenderer.Reset();
+    impl_->sampleGrabber.Reset();
+    impl_->sampleGrabberFilter.Reset();
+    impl_->captureFilter.Reset();
+    impl_->captureGraph.Reset();
+    impl_->graph.Reset();
+
+    if (!succeeded(CoCreateInstance(sourceClsid, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&impl_->captureFilter)),
+                   "CoCreateInstance(DirectShow webcam filter)")) {
+        return false;
+    }
+    if (!succeeded(CoCreateInstance(CLSID_FilterGraph, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&impl_->graph)),
+                   "CoCreateInstance(FilterGraph)")) {
+        return false;
+    }
+    if (!succeeded(CoCreateInstance(CLSID_CaptureGraphBuilder2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&impl_->captureGraph)),
+                   "CoCreateInstance(CaptureGraphBuilder2)")) {
+        return false;
+    }
+    if (!succeeded(impl_->captureGraph->SetFiltergraph(impl_->graph.Get()), "SetFiltergraph(DirectShow webcam)")) {
+        return false;
+    }
+    if (!succeeded(impl_->graph->AddFilter(impl_->captureFilter.Get(), L"OpenScreen Webcam Source"),
+                   "AddFilter(DirectShow webcam source)")) {
+        return false;
+    }
+
+    if (!succeeded(CoCreateInstance(CLSID_SampleGrabberLocal, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&impl_->sampleGrabberFilter)),
+                   "CoCreateInstance(SampleGrabber)")) {
+        return false;
+    }
+    if (!succeeded(impl_->sampleGrabberFilter.As(&impl_->sampleGrabber), "QueryInterface(ISampleGrabber)")) {
+        return false;
+    }
+
+    AM_MEDIA_TYPE requestedType{};
+    requestedType.majortype = MEDIATYPE_Video;
+    requestedType.formattype = FORMAT_VideoInfo;
+    if (preferredSubtype) {
+        requestedType.subtype = *preferredSubtype;
+    }
+    if (!succeeded(impl_->sampleGrabber->SetMediaType(&requestedType), "SetMediaType(DirectShow video)")) {
+        return false;
+    }
+
+    if (!succeeded(impl_->graph->AddFilter(impl_->sampleGrabberFilter.Get(), L"OpenScreen Webcam Sample Grabber"),
+                   "AddFilter(SampleGrabber)")) {
+        return false;
+    }
+    if (!succeeded(CoCreateInstance(CLSID_NullRendererLocal, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&impl_->nullRenderer)),
+                   "CoCreateInstance(NullRenderer)")) {
+        return false;
+    }
+    if (!succeeded(impl_->graph->AddFilter(impl_->nullRenderer.Get(), L"OpenScreen Webcam Null Renderer"),
+                   "AddFilter(NullRenderer)")) {
+        return false;
+    }
+
+    return succeeded(impl_->captureGraph->RenderStream(
+                         &PIN_CATEGORY_CAPTURE,
+                         &MEDIATYPE_Video,
+                         impl_->captureFilter.Get(),
+                         impl_->sampleGrabberFilter.Get(),
+                         impl_->nullRenderer.Get()),
+                     "RenderStream(DirectShow webcam)");
+}
+
 bool DirectShowWebcamCapture::initialize(
     const std::wstring& deviceId,
     const std::wstring& deviceName,
@@ -145,64 +217,48 @@ bool DirectShowWebcamCapture::initialize(
     }
     selectedDeviceName_ = deviceName.empty() ? directShowClsid : deviceName;
 
-    if (!succeeded(CoCreateInstance(selectedClsid, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&impl_->captureFilter)),
-                   "CoCreateInstance(DirectShow webcam filter)")) {
+    // The camera's own format first, a forced RGB32 conversion only if we cannot
+    // read it.
+    //
+    // Order matters, and not for style. Leaving the grabber unconstrained lets
+    // intelligent connect hand through the source's native output, which is what
+    // every camera that works today relies on — asking for RGB32 up front made
+    // OBS Virtual Camera connect as RGB32 and then deliver no frames at all, a
+    // straight regression. But this class can only unpack YUY2, NV12 and RGB32,
+    // so a camera speaking anything else used to be rejected after the graph was
+    // already built, and the recording simply had no webcam. NVIDIA Broadcast is
+    // exactly that: absent from Media Foundation, so it can only arrive here, and
+    // it connects with a subtype this file cannot read
+    // (getopenscreen/openscreen#387). Naming a concrete subtype on the retry is
+    // what makes DirectShow insert a colour converter for it.
+    if (!buildGraph(selectedClsid, nullptr)) {
         return false;
     }
-    if (!succeeded(CoCreateInstance(CLSID_FilterGraph, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&impl_->graph)),
-                   "CoCreateInstance(FilterGraph)")) {
-        return false;
+    if (!resolveConnectedFormat(requestedWidth, requestedHeight, false)) {
+        std::cerr << "WARNING: DirectShow webcam speaks a format this build cannot unpack; "
+                     "asking for RGB32 so the graph converts it"
+                  << std::endl;
+        if (!buildGraph(selectedClsid, &MEDIASUBTYPE_RGB32)) {
+            return false;
+        }
+        if (!resolveConnectedFormat(requestedWidth, requestedHeight, true)) {
+            return false;
+        }
     }
-    if (!succeeded(CoCreateInstance(CLSID_CaptureGraphBuilder2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&impl_->captureGraph)),
-                   "CoCreateInstance(CaptureGraphBuilder2)")) {
-        return false;
-    }
-    if (!succeeded(impl_->captureGraph->SetFiltergraph(impl_->graph.Get()), "SetFiltergraph(DirectShow webcam)")) {
-        return false;
-    }
-    if (!succeeded(impl_->graph->AddFilter(impl_->captureFilter.Get(), L"OpenScreen Webcam Source"),
-                   "AddFilter(DirectShow webcam source)")) {
+
+    impl_->sampleGrabber->SetBufferSamples(TRUE);
+    impl_->sampleGrabber->SetOneShot(FALSE);
+    if (!succeeded(impl_->graph.As(&impl_->mediaControl), "QueryInterface(IMediaControl)")) {
         return false;
     }
 
-    if (!succeeded(CoCreateInstance(CLSID_SampleGrabberLocal, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&impl_->sampleGrabberFilter)),
-                   "CoCreateInstance(SampleGrabber)")) {
-        return false;
-    }
-    if (!succeeded(impl_->sampleGrabberFilter.As(&impl_->sampleGrabber), "QueryInterface(ISampleGrabber)")) {
-        return false;
-    }
+    return true;
+}
 
-    AM_MEDIA_TYPE requestedType{};
-    requestedType.majortype = MEDIATYPE_Video;
-    requestedType.formattype = FORMAT_VideoInfo;
-    if (!succeeded(impl_->sampleGrabber->SetMediaType(&requestedType), "SetMediaType(DirectShow video)")) {
-        return false;
-    }
-
-    if (!succeeded(impl_->graph->AddFilter(impl_->sampleGrabberFilter.Get(), L"OpenScreen Webcam Sample Grabber"),
-                   "AddFilter(SampleGrabber)")) {
-        return false;
-    }
-    if (!succeeded(CoCreateInstance(CLSID_NullRendererLocal, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&impl_->nullRenderer)),
-                   "CoCreateInstance(NullRenderer)")) {
-        return false;
-    }
-    if (!succeeded(impl_->graph->AddFilter(impl_->nullRenderer.Get(), L"OpenScreen Webcam Null Renderer"),
-                   "AddFilter(NullRenderer)")) {
-        return false;
-    }
-
-    if (!succeeded(impl_->captureGraph->RenderStream(
-            &PIN_CATEGORY_CAPTURE,
-            &MEDIATYPE_Video,
-            impl_->captureFilter.Get(),
-            impl_->sampleGrabberFilter.Get(),
-            impl_->nullRenderer.Get()),
-            "RenderStream(DirectShow webcam)")) {
-        return false;
-    }
-
+bool DirectShowWebcamCapture::resolveConnectedFormat(
+    int requestedWidth,
+    int requestedHeight,
+    bool reportUnsupported) {
     AM_MEDIA_TYPE connectedType{};
     if (!succeeded(impl_->sampleGrabber->GetConnectedMediaType(&connectedType), "GetConnectedMediaType(DirectShow webcam)")) {
         return false;
@@ -214,8 +270,13 @@ bool DirectShowWebcamCapture::initialize(
     } else if (connectedType.subtype == MEDIASUBTYPE_RGB32) {
         pixelFormat_ = PixelFormat::Bgra;
     } else {
-        std::cerr << "ERROR: Unsupported DirectShow webcam media subtype "
-                  << guidToString(connectedType.subtype) << std::endl;
+        // Silent on the first pass: the caller answers an unreadable format by
+        // rebuilding the graph with a conversion, and an ERROR line for a case
+        // that is about to be handled reads like a failure that never happened.
+        if (reportUnsupported) {
+            std::cerr << "ERROR: Unsupported DirectShow webcam media subtype "
+                      << guidToString(connectedType.subtype) << std::endl;
+        }
         freeMediaType(connectedType);
         return false;
     }
@@ -240,12 +301,6 @@ bool DirectShowWebcamCapture::initialize(
     }
     if (sourceStride_ <= 0) {
         sourceStride_ = pixelFormat_ == PixelFormat::Bgra ? width_ * 4 : ((width_ + 3) / 4) * 4;
-    }
-
-    impl_->sampleGrabber->SetBufferSamples(TRUE);
-    impl_->sampleGrabber->SetOneShot(FALSE);
-    if (!succeeded(impl_->graph.As(&impl_->mediaControl), "QueryInterface(IMediaControl)")) {
-        return false;
     }
 
     return true;

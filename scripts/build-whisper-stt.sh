@@ -9,9 +9,8 @@
 # See technical-documentation/architecture/transcription-and-captions.md
 #
 # Local use:
-#   bash scripts/build-whisper-stt.sh                # default backend for host
-#   ENABLE_CUDA=ON bash scripts/build-whisper-stt.sh # also build CUDA variant
-#   bash scripts/build-whisper-stt.sh --clean        # wipe build cache first
+#   bash scripts/build-whisper-stt.sh         # default backend for host
+#   bash scripts/build-whisper-stt.sh --clean # wipe build cache first
 #
 # The default backend per host:
 #   macOS arm64  -> Metal
@@ -36,20 +35,17 @@ fi
 readonly BUILD_ROOT
 
 CLEAN=0
-CUDA_ENABLED="${ENABLE_CUDA:-OFF}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean) CLEAN=1; shift ;;
-    --cuda)  CUDA_ENABLED=ON; shift ;;
     -h|--help)
       cat <<-EOF
-		Usage: $0 [--clean] [--cuda]
+		Usage: $0 [--clean]
 		Builds whisper-stt-server and stages it under
 		\`electron/native/bin/<os>-<arch>/\`.
 
 		--clean   Wipe the build cache before configuring.
-		--cuda    Also build a CUDA variant (requires nvcc on PATH).
 		EOF
       exit 0
       ;;
@@ -172,17 +168,6 @@ build_variant() {
     bin_name="${bin_name}.exe"
   fi
 
-  # If this is the primary (non-CUDA) variant, install it under the plain name.
-  # CUDA is kept as a side-by-side variant with a -cuda suffix.
-  local out_bin_name="${bin_name}"
-  if [[ "${variant_name}" == "cuda" ]]; then
-    if [[ "${OS_ARCH}" == win32-* ]]; then
-      out_bin_name="whisper-stt-server-cuda.exe"
-    else
-      out_bin_name="whisper-stt-server-cuda"
-    fi
-  fi
-
   # CMake generator-specific output locations: Ninja drops the binary at the
   # build root and libraries under bin/; MSBuild (Visual Studio on Windows)
   # puts Release/ configurations under ${build_dir}/Release/ and bin/Release/.
@@ -203,7 +188,7 @@ build_variant() {
     echo "FATAL: could not find whisper-stt-server binary in ${build_dir}" >&2
     exit 1
   fi
-  cp "${built_exe}" "${OUT_DIR}/${out_bin_name}"
+  cp "${built_exe}" "${OUT_DIR}/${bin_name}"
 
   # Stage any shared libraries / backend sidecars that CMake produced.
   # Copy everything that looks like a ggml/whisper shared library, plus any
@@ -217,7 +202,7 @@ build_variant() {
   # @rpath/libggml.0.dylib and dies in dyld before main(). The `lib` prefix and
   # the `.so.<N>` version suffixes are what the globs below add.
   #
-  # -a preserves the symlink farm (libggml.dylib -> libggml.0.dylib ->
+  # -P preserves the symlink farm (libggml.dylib -> libggml.0.dylib ->
   # libggml.0.15.1.dylib); plain `cp` dereferences each one into a full copy of
   # the same payload, which tripled the staged size for no benefit.
   local found_libs=0
@@ -237,7 +222,13 @@ libggml*.dylib|libwhisper*.dylib|libparakeet*.dylib|\
 libggml*.so|libggml*.so.*|libwhisper*.so|libwhisper*.so.*|\
 libparakeet*.so|libparakeet*.so.*|\
 *.metal)
-              cp -a "${f}" "${OUT_DIR}/"
+              # The output directory may contain dereferenced regular files from a
+              # downloaded release artifact. Remove the exact destination first so
+              # cp can recreate this build's symlink farm without following an old
+              # regular-file/symlink mix. -P preserves links without -a's macOS
+              # chflags pass, which can itself report ELOOP while replacing a link.
+              rm -f "${OUT_DIR}/${f##*/}"
+              cp -P "${f}" "${OUT_DIR}/"
               found_libs=1
               ;;
           esac
@@ -250,7 +241,7 @@ libparakeet*.so|libparakeet*.so.*|\
   # never read, so a staging glob that matched nothing — which is precisely what
   # happened on macOS and Linux — still exited 0 and produced a green build.
   if [[ "${found_libs}" -eq 0 ]]; then
-    echo "FATAL: staged no shared libraries alongside ${out_bin_name}." >&2
+    echo "FATAL: staged no shared libraries alongside ${bin_name}." >&2
     echo "       Searched: ${search_dirs[*]}" >&2
     echo "       The helper links ggml/whisper as shared libraries; without them" >&2
     echo "       it cannot start. Check the sidecar glob in this script." >&2
@@ -288,9 +279,9 @@ libparakeet*.so|libparakeet*.so.*|\
   # patchelf is needed: these binaries already carry RUNPATH=$ORIGIN.
   if [[ "${OS_ARCH}" == linux-* ]]; then
     local gomp
-    gomp="$(ldd "${OUT_DIR}/${out_bin_name}" 2>/dev/null | awk '/libgomp\.so\.1/ {print $3; exit}')"
+    gomp="$(ldd "${OUT_DIR}/${bin_name}" 2>/dev/null | awk '/libgomp\.so\.1/ {print $3; exit}')"
     if [[ -z "${gomp}" || ! -f "${gomp}" ]]; then
-      echo "FATAL: libgomp.so.1 is not resolvable for ${out_bin_name}." >&2
+      echo "FATAL: libgomp.so.1 is not resolvable for ${bin_name}." >&2
       echo "       Install it (libgomp1 on Debian/Ubuntu, libgomp on Fedora/Arch)." >&2
       echo "       Without it the AppImage ships an STT stack that cannot load," >&2
       echo "       which is silent until a user tries to transcribe." >&2
@@ -302,12 +293,12 @@ libparakeet*.so|libparakeet*.so.*|\
     fi
   fi
 
-  echo "[whisper-stt] built ${variant_name} -> ${OUT_DIR}/${out_bin_name}"
+  echo "[whisper-stt] built ${variant_name} -> ${OUT_DIR}/${bin_name}"
   ls -la "${OUT_DIR}"
 }
 
 # ---------------------------------------------------------------------------
-# Primary variant (Metal/Vulkan/CPU depending on host).
+# The one build: Metal/Vulkan/CPU depending on host.
 # ---------------------------------------------------------------------------
 DEFAULT_FLAG="$(backend_flag_for_host)"
 BUILD_FLAGS=()
@@ -317,17 +308,5 @@ fi
 # See the comment in build_variant() re: bash 3.2 + `set -u` + empty arrays
 # (macOS x64/CPU has no DEFAULT_FLAG, so BUILD_FLAGS is genuinely empty here).
 build_variant "default" ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"}
-
-# ---------------------------------------------------------------------------
-# Optional CUDA variant. Kept as a side-by-side binary for hosts that want
-# maximum NVIDIA performance; the default Vulkan build already covers NVIDIA.
-# ---------------------------------------------------------------------------
-if [[ "${CUDA_ENABLED}" == "ON" ]]; then
-  if ! command -v nvcc >/dev/null 2>&1; then
-    echo "Skipping CUDA variant: nvcc not on PATH" >&2
-  else
-    build_variant "cuda" "-DOSC_ENABLE_CUDA=ON"
-  fi
-fi
 
 echo "[whisper-stt] done. Binaries under: ${OUT_DIR}"

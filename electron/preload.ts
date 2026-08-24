@@ -80,6 +80,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	setHudOverlayIgnoreMouseEvents: (ignore: boolean) => {
 		ipcRenderer.send("hud-overlay-ignore-mouse-events", ignore);
 	},
+	onHudOverlayCursor: (callback: (x: number, y: number) => void) => {
+		const listener = (_e: Electron.IpcRendererEvent, x: number, y: number) => callback(x, y);
+		ipcRenderer.on("hud-overlay-cursor", listener);
+		return () => ipcRenderer.removeListener("hud-overlay-cursor", listener);
+	},
 	beginHudOverlayDrag: () => {
 		ipcRenderer.send("hud-overlay-drag-start");
 	},
@@ -349,6 +354,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.on("menu-save-project-as", listener);
 		return () => ipcRenderer.removeListener("menu-save-project-as", listener);
 	},
+	// The Edit menu's Undo/Redo. On macOS this is the ONLY way Cmd+Z reaches the
+	// renderer: AppKit matches the menu's key equivalent before the key event is
+	// delivered to the web contents, so the document-level keydown handler never
+	// runs. See `electron/edit-menu.ts`.
+	onMenuUndo: (callback: () => void) => {
+		const listener = () => callback();
+		ipcRenderer.on("menu-undo", listener);
+		return () => ipcRenderer.removeListener("menu-undo", listener);
+	},
+	onMenuRedo: (callback: () => void) => {
+		const listener = () => callback();
+		ipcRenderer.on("menu-redo", listener);
+		return () => ipcRenderer.removeListener("menu-redo", listener);
+	},
 	quitApp: () => {
 		ipcRenderer.send("app-quit");
 	},
@@ -356,6 +375,25 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.send("set-titlebar-overlay", color, symbolColor);
 	},
 	getPlatform: () => PLATFORM,
+	/** App identity for the HUD's settings panel: the running version, and whether this copy
+	 *  may offer an update check at all — a Store/Flathub/Snap/Nix install may not, see
+	 *  electron/install-channel.ts. */
+	getAppInfo: () =>
+		ipcRenderer.invoke("get-app-info") as Promise<{
+			version: string;
+			canCheckForUpdates: boolean;
+		}>,
+	/** Resolves once the check has a verdict. The dialogs that verdict leads to — download,
+	 *  restart — are the main process's conversation, not the caller's. */
+	checkForUpdates: () => ipcRenderer.invoke("check-for-updates") as Promise<void>,
+	/** Opens the main process's About box (or the native panel on macOS). Resolves as soon as
+	 *  the box is up, NOT when it is dismissed — there is no verdict to wait for, unlike
+	 *  `checkForUpdates` above. */
+	showAbout: () => ipcRenderer.invoke("show-about") as Promise<void>,
+	/** The full update veto, asked fresh. `getAppInfo().canCheckForUpdates` answers only the
+	 *  permanent half; this one also answers "not mid-take", so it is only correct for a caller
+	 *  that asks at the moment it shows the affordance. */
+	canCheckForUpdatesNow: () => ipcRenderer.invoke("can-check-for-updates-now") as Promise<boolean>,
 	revealInFolder: (filePath: string) => {
 		return ipcRenderer.invoke("reveal-in-folder", filePath);
 	},

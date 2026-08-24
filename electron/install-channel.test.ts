@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	classifyInstall,
 	type InstallProbe,
+	offersUpdateCheck,
 	ownsItsUpdates,
 	platformOwnsUpdates,
 } from "./install-channel";
@@ -131,6 +132,52 @@ describe("platformOwnsUpdates", () => {
 		] as const;
 		for (const channel of all) {
 			expect(ownsItsUpdates(channel) && platformOwnsUpdates(channel)).toBe(false);
+		}
+	});
+});
+
+// The rule every update affordance keys off. Both vetoes are pinned here because the surfaces
+// that enforce them — the app menu, the Help menu, the tray, the HUD and the IPC handler — are
+// built in main.ts, which has no test file: this is the only place the matrix is checked.
+describe("offersUpdateCheck", () => {
+	const PACKAGE_MANAGED = ["store", "flatpak", "snap", "nix"] as const;
+	const SELF_MANAGED = [
+		"nsis",
+		"dmg",
+		"appimage",
+		"deb",
+		"rpm",
+		"pacman",
+		"dev",
+		"unknown",
+	] as const;
+
+	it("offers nothing at all where a package manager owns the update", () => {
+		for (const channel of PACKAGE_MANAGED) {
+			expect(offersUpdateCheck(channel, { recording: false })).toBe(false);
+		}
+	});
+
+	it("offers the check on a copy that can update itself", () => {
+		for (const channel of SELF_MANAGED) {
+			expect(offersUpdateCheck(channel, { recording: true })).toBe(false);
+			expect(offersUpdateCheck(channel, { recording: false })).toBe(true);
+		}
+	});
+
+	// An update must never interrupt a take. The tray used to enforce this structurally — its
+	// recording menu holds nothing but "Stop Recording" — but the app and Help menus are built
+	// once, so the veto has to live in the rule rather than in one surface's template.
+	it("withdraws the check for the length of a recording", () => {
+		expect(offersUpdateCheck("nsis", { recording: true })).toBe(false);
+		expect(offersUpdateCheck("dmg", { recording: true })).toBe(false);
+	});
+
+	// A package-managed copy is never offered the check, recording or not — the two vetoes are
+	// independent, and neither one re-enables the other.
+	it("keeps the package-manager veto while recording", () => {
+		for (const channel of PACKAGE_MANAGED) {
+			expect(offersUpdateCheck(channel, { recording: true })).toBe(false);
 		}
 	});
 });

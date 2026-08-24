@@ -43,6 +43,8 @@
 		"permissionDenied": "録画の権限が拒否されました。画面録画を許可してください。",
 		"cameraDisconnected": "ウェブカメラが切断されました。",
 		"cameraNotFound": "カメラが見つかりません。",
+		"cameraCaptureUnavailable": "カメラを開けませんでした。カメラなしで録画します。",
+		"microphoneDefaulted": "選択したマイクを特定できませんでした。既定の入力を録音します。",
 		"accessibilityAllowAndRetry": "OpenScreenにアクセシビリティアクセスを許可してから、もう一度録画を押してカウントダウンを開始してください。",
 		"selectSource": "録画するソースを選択してください"
 	},
@@ -85,7 +87,6 @@
 		"switchToLightTheme": "ライトテーマに切り替え",
 		"switchToDarkTheme": "ダークテーマに切り替え",
 		"toggleTheme": "テーマを切り替え",
-		"settings": "設定",
 		"export": "エクスポート",
 		"renameProject": "プロジェクト名を変更",
 		"noProject": "プロジェクトなし",
@@ -132,6 +133,8 @@
 		"emptyHint": "まだメディアがありません — 録画をインポートして開始してください。",
 		"importMedia": "メディアをインポート",
 		"added": "{{label}} を追加しました",
+		"addToTimeline": "タイムラインに追加",
+		"addedToTimeline": "{{label}} をタイムラインに追加しました",
 		"sourceTranscript": "ソースの文字起こし",
 		"close": "閉じる",
 		"transcriptReady": "文字起こし完了",
@@ -146,6 +149,7 @@
 		"transcribingEllipsis": "文字起こし中…",
 		"pendingTranscription": "文字起こし待機中",
 		"transcriptionFailed": "文字起こしに失敗しました",
+		"cpuBackendHint": "CPU で実行中 — GPU より約 2 倍低速です",
 		"noTranscript": "文字起こしなし",
 		"generating": "生成中",
 		"generationFailed": "生成に失敗しました",
@@ -235,6 +239,8 @@
 		"selectModelFailed": "モデルを選択できませんでした",
 		"providerSettings": "プロバイダー設定…",
 		"applyEditsFailed": "エージェントの編集を適用できませんでした",
+		"agentEditConflict": "エージェントの処理中にプロジェクトが変更されたため、編集は適用されませんでした。",
+		"applyAnyway": "それでも適用",
 		"chatFailed": "チャットに失敗しました",
 		"rewindFailed": "巻き戻しに失敗しました",
 		"rewoundSuccess": "そのメッセージの先頭まで巻き戻しました",
@@ -281,7 +287,7 @@
 		"sendTitle": "送信（Enter）",
 		"send": "送信",
 		"rewindConfirmTitle": "ここまで巻き戻しますか？",
-		"rewindConfirmBody": "この時点以降のエージェントの編集とやり取りは元に戻されます。プロジェクト、会話、エージェントの状態が復元されます。",
+		"rewindConfirmBody": "この時点以降のエージェントの編集とやり取りは元に戻されます。プロジェクト、会話、エージェントの状態が復元されます。それ以降にあなたが行った編集も置き換えられます。",
 		"rewindConfirm": "巻き戻す",
 		"configureModel": "AIモデルを設定",
 		"historyDialog": {
@@ -361,7 +367,13 @@
 	},
 	"preview": {
 		"videoPreview": "動画プレビュー",
-		"webcamPreview": "ウェブカメラのプレビュー（ドラッグで位置変更）"
+		"webcamPreview": "ウェブカメラのプレビュー（ドラッグで位置変更）",
+		"mediaError": {
+			"title": "プレビューを停止しました",
+			"description": "動画をデコードできませんでした。ファイルが破損しているか、まだ書き込み中か、プロジェクトが参照している場所にない可能性があります。プロジェクト自体は損なわれていません。",
+			"retry": "再試行",
+			"detail": "詳細: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "注釈",

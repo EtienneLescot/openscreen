@@ -23,7 +23,12 @@ import {
 } from "@/lib/captioning/annotationsFromCaptions";
 import type { CaptionSegment } from "@/lib/captioning/transcribe";
 import type { AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
-import { type CaptionSettings, captionBackgroundCss, captionBandRect } from "./settings";
+import {
+	type CaptionAnchorV,
+	type CaptionSettings,
+	captionBackgroundCss,
+	captionBoxRect,
+} from "./settings";
 import { type CaptionTranslations, captionTranslationUnits } from "./translations";
 
 /** One on-screen caption line, in whichever time base the producer documented. */
@@ -232,6 +237,25 @@ export function captionCueAt(cues: CaptionCue[], timeMs: number): CaptionCue | n
 }
 
 /**
+ * A caption's region, which is an `AnnotationRegion` measured against a different box.
+ *
+ * The `space` marker is why this type exists instead of a field on `AnnotationRegion`:
+ * an annotation is authored on top of the visible video and must keep tracking the
+ * screen rect, while a caption belongs to the output frame. Widening the shared type
+ * would also put a frame-space band — whose `y` legitimately goes negative when it
+ * overhangs the frame edge — through `annotationRegionSchema`, which bounds position
+ * to 0..100. Captions are never stored, so they never meet that schema.
+ */
+export type CaptionTextRegion = AnnotationRegion & {
+	space: "frame";
+	/** Which edge of the drawn block the compositor pins to the region's box. Carried
+	 *  here rather than on `AnnotationTextStyle` for the same reason as `space`: an
+	 *  annotation must keep rendering centred, and widening the shared style would put
+	 *  the key in every stored annotation's payload. */
+	verticalAlign: CaptionAnchorV;
+};
+
+/**
  * Cues as text annotation regions, so the export renderer draws captions through
  * the exact same text path as annotations (wrapping, background plate,
  * alignment) instead of a second, subtly-different implementation.
@@ -242,9 +266,15 @@ export function captionCueAt(cues: CaptionCue[], timeMs: number): CaptionCue | n
 export function captionCuesToTextRegions(
 	cues: CaptionCue[],
 	settings: CaptionSettings,
-): AnnotationRegion[] {
-	const rect = captionBandRect(settings);
+	aspectValue: number,
+): CaptionTextRegion[] {
+	const rect = captionBoxRect(settings, aspectValue);
 	return cues.map((cue, index) => ({
+		space: "frame" as const,
+		// The edge the compositor pins the drawn block to inside `size`. Without it the
+		// rasterizers centre the block — which is what made a caption drift vertically
+		// every time its text wrapped to another line.
+		verticalAlign: rect.verticalAlign,
 		id: cue.id,
 		startMs: cue.startMs,
 		endMs: cue.endMs,
@@ -260,7 +290,10 @@ export function captionCuesToTextRegions(
 			fontWeight: settings.fontWeight,
 			fontStyle: "normal" as const,
 			textDecoration: "none" as const,
-			textAlign: settings.textAlign,
+			// One horizontal control, not two: `anchorH` picks which edge of the block is
+			// pinned to the column, and the rasterizers' plate maths already snaps the
+			// plate onto that edge (`text_linux.rs` `plate_x`, and its two mirrors).
+			textAlign: settings.anchorH,
 			textAnimation: "none" as const,
 		},
 		zIndex: CAPTION_Z_INDEX_BASE + index,

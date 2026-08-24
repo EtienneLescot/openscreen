@@ -43,6 +43,8 @@
 		"permissionDenied": "녹화 권한이 거부되었습니다. 화면 녹화를 허용해 주세요.",
 		"cameraDisconnected": "웹캠 연결이 끊어졌습니다.",
 		"cameraNotFound": "카메라를 찾을 수 없습니다.",
+		"cameraCaptureUnavailable": "카메라를 열 수 없습니다. 카메라 없이 녹화합니다.",
+		"microphoneDefaulted": "선택한 마이크를 확인할 수 없습니다. 기본 입력을 녹음합니다.",
 		"accessibilityAllowAndRetry": "OpenScreen의 손쉬운 사용 접근을 허용한 다음, 카운트다운을 시작하려면 다시 녹화를 누르세요.",
 		"selectSource": "녹화할 소스를 선택해 주세요"
 	},
@@ -85,7 +87,6 @@
 		"switchToLightTheme": "라이트 테마로 전환",
 		"switchToDarkTheme": "다크 테마로 전환",
 		"toggleTheme": "테마 전환",
-		"settings": "설정",
 		"export": "내보내기",
 		"renameProject": "프로젝트 이름 변경",
 		"noProject": "프로젝트 없음",
@@ -132,6 +133,8 @@
 		"emptyHint": "아직 미디어가 없습니다 — 녹화 파일을 가져와서 시작하세요.",
 		"importMedia": "미디어 가져오기",
 		"added": "{{label}} 추가됨",
+		"addToTimeline": "타임라인에 추가",
+		"addedToTimeline": "{{label}}이(가) 타임라인에 추가됨",
 		"sourceTranscript": "소스 대본",
 		"close": "닫기",
 		"transcriptReady": "대본 준비 완료",
@@ -146,6 +149,7 @@
 		"transcribingEllipsis": "받아쓰는 중…",
 		"pendingTranscription": "받아쓰기 대기 중",
 		"transcriptionFailed": "받아쓰기 실패",
+		"cpuBackendHint": "CPU에서 실행 중 — GPU보다 약 2배 느립니다",
 		"noTranscript": "대본 없음",
 		"generating": "생성 중",
 		"generationFailed": "생성 실패",
@@ -235,6 +239,8 @@
 		"selectModelFailed": "모델을 선택할 수 없습니다",
 		"providerSettings": "제공업체 설정…",
 		"applyEditsFailed": "에이전트의 편집을 적용할 수 없습니다",
+		"agentEditConflict": "에이전트가 작업하는 동안 프로젝트가 변경되어 편집 내용이 적용되지 않았습니다.",
+		"applyAnyway": "그래도 적용",
 		"chatFailed": "채팅 실패",
 		"rewindFailed": "되감기 실패",
 		"rewoundSuccess": "해당 메시지 시작 지점으로 되감았습니다",
@@ -281,7 +287,7 @@
 		"sendTitle": "보내기 (Enter)",
 		"send": "보내기",
 		"rewindConfirmTitle": "여기로 되감을까요?",
-		"rewindConfirmBody": "이 시점 이후의 에이전트 편집과 이후 대화 턴이 롤백됩니다. 프로젝트, 대화, 에이전트 상태가 복원됩니다.",
+		"rewindConfirmBody": "이 시점 이후의 에이전트 편집과 이후 대화 턴이 롤백됩니다. 프로젝트, 대화, 에이전트 상태가 복원됩니다. 그 이후에 직접 한 편집도 함께 대체됩니다.",
 		"rewindConfirm": "되감기",
 		"configureModel": "AI 모델 구성",
 		"historyDialog": {
@@ -361,7 +367,13 @@
 	},
 	"preview": {
 		"videoPreview": "영상 미리보기",
-		"webcamPreview": "웹캠 미리보기 (끌어서 위치 변경)"
+		"webcamPreview": "웹캠 미리보기 (끌어서 위치 변경)",
+		"mediaError": {
+			"title": "미리보기가 중단되었습니다",
+			"description": "영상을 디코딩할 수 없습니다. 파일이 손상되었거나, 아직 저장 중이거나, 프로젝트가 기대한 위치에 없을 수 있습니다. 프로젝트 자체는 그대로입니다.",
+			"retry": "다시 시도",
+			"detail": "세부 정보: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "주석",

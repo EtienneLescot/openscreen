@@ -30,7 +30,7 @@
 //! décodeurs, symétrique.
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio,
+    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_audio,
     stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
 };
 use crate::compositor::Compositor;
@@ -1076,6 +1076,7 @@ pub fn run_composited_multi(
     // exactement le bug de troncature en slow-motion que la doc de `walk_composited_timeline`
     // raconte avoir déjà coûté une fois.
     let scene = comp.scene_snapshot();
+    let audio_settings = scene.as_ref().map(|scene| scene.audio).unwrap_or_default();
     frames = unsafe {
         crate::timeline_walk::walk_composited_timeline(
             clips,
@@ -1130,7 +1131,10 @@ pub fn run_composited_multi(
         // d'autant, sinon la piste dérive pour tous les suivants.
         let declared_audio: Vec<bool> = clips.iter().map(|clip| clip.has_audio).collect();
         let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
-        audio_encoder.encode(&assemble_concatenated_pcm(&clip_pcm, &plan), octx)?;
+        audio_encoder.encode(
+            &finish_audio(assemble_concatenated_pcm(&clip_pcm, &plan), audio_settings),
+            octx,
+        )?;
 
         crate::ffi::averr(
             crate::ffi::av_write_trailer(octx),

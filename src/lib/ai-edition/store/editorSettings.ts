@@ -43,6 +43,46 @@ import type { AxcutDocument } from "../schema";
 // for the same reason (their canonical types live in lib/wallpaper and
 // lib/cursor/cursorThemes as the source of truth).
 
+/** Output gain bound, shared by the slider, this store and `finish_audio` (Rust).
+ *
+ *  A linear gain is the one audio setting that behaves identically on the preview's source
+ *  file and on the export's assembled timeline, which is why it is the only one left. A sync
+ *  offset was tried and removed: the preview seeks in SOURCE time while the export shifts the
+ *  stretched, concatenated timeline, so the same value meant different delays under a speed
+ *  region, and near a cut the export pulls audio across the junction while the preview cannot. */
+export const AUDIO_GAIN_DB_LIMIT = 12;
+
+/** dB to the linear scalar every side of the boundary multiplies by.
+ *
+ *  Exported rather than written out three times. `finish_audio` applies
+ *  `10f32.powf(gain_db / 20.0)` per sample; the preview feeds this to a `GainNode`; the
+ *  timeline waveform scales its bars by it. The claim those three make together — that what
+ *  you see is what you hear is what you export — only holds while they are the same number,
+ *  and a hand-copied `10 ** (dB / 20)` is exactly how that stops being true. */
+export function audioGainScalar(gainDb: number): number {
+	return 10 ** (gainDb / 20);
+}
+
+/**
+ * Where the webcam crop window sits inside the room its zoom leaves, 0..1 per axis:
+ * 0 hard against one edge, 1 against the other, 0.5 centred.
+ *
+ * Stored because the rect cannot hold it. At 100% zoom the crop IS the frame, so `x` and `y`
+ * are necessarily 0 and the pan they used to be read back from is gone — which meant a trip
+ * down to 100% and back erased the framing the user had set. Expressed as a fraction of the
+ * available room, the pan survives every zoom, including the one where it does not apply.
+ *
+ * This never leaves the app. `webcamCropRegion` remains the only thing the scene carries to
+ * the compositor, so the preview and the export see exactly what they saw before.
+ */
+export interface CropPan {
+	x: number;
+	y: number;
+}
+
+/** Centred: the crop window sits in the middle of whatever room the zoom leaves. */
+const DEFAULT_CROP_PAN: CropPan = { x: 0.5, y: 0.5 };
+
 export interface EditorSettingsSnapshot {
 	wallpaper: string;
 	aspectRatio: AspectRatio;
@@ -59,6 +99,11 @@ export interface EditorSettingsSnapshot {
 	webcamSizePreset: WebcamSizePreset;
 	webcamPosition: WebcamPosition | null;
 	webcamChromaKey: WebcamChromaKeySettings;
+	webcamCropRegion: CropRegion;
+	/** Where the crop window sits in the room the zoom leaves it, 0..1 per axis.
+	 *  Authoritative: `webcamCropRegion.x/y` are rebuilt from it on read. */
+	webcamCropPan: CropPan;
+	audioGainDb: number;
 	cursor: CursorVisualSettings;
 	cursorShow: boolean;
 	cursorTheme: string;
@@ -86,6 +131,9 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	webcamSizePreset: DEFAULT_WEBCAM_SIZE_PRESET,
 	webcamPosition: DEFAULT_WEBCAM_POSITION,
 	webcamChromaKey: DEFAULT_WEBCAM_CHROMA_KEY,
+	webcamCropRegion: DEFAULT_CROP_REGION,
+	webcamCropPan: DEFAULT_CROP_PAN,
+	audioGainDb: 0,
 	cursor: {
 		size: DEFAULT_CURSOR_SIZE,
 		smoothing: DEFAULT_CURSOR_SMOOTHING,
@@ -114,6 +162,9 @@ interface LegacyShape {
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: WebcamPosition | null;
 	webcamChromaKey?: WebcamChromaKeySettings;
+	webcamCropRegion?: CropRegion;
+	webcamCropPan?: CropPan;
+	audioGainDb?: number;
 	cursorSize?: number;
 	cursorSmoothing?: number;
 	cursorMotionBlur?: number;
@@ -150,6 +201,19 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 		clickBounce: num(legacy?.cursorClickBounce, DEFAULT_EDITOR_SETTINGS.cursor.clickBounce),
 		clipToBounds: bool(legacy?.cursorClipToBounds, DEFAULT_EDITOR_SETTINGS.cursor.clipToBounds),
 	};
+
+	// The pan is authoritative and the rect's offset is rebuilt from it, so the two cannot
+	// drift apart — on disk, or in a patch that wrote one and not the other. Only the SIZE
+	// survives from the stored rect; `pan * (1 - size)` is a position that cannot leave the
+	// frame, which is why nothing here clamps it.
+	const storedCrop = normaliseCropRegion(legacy?.webcamCropRegion);
+	const webcamCropPan = normaliseCropPan(legacy?.webcamCropPan, storedCrop);
+	const webcamCrop: CropRegion = {
+		...storedCrop,
+		x: webcamCropPan.x * (1 - storedCrop.width),
+		y: webcamCropPan.y * (1 - storedCrop.height),
+	};
+
 	return {
 		wallpaper: str(legacy?.wallpaper, DEFAULT_EDITOR_SETTINGS.wallpaper),
 		aspectRatio: legacy?.aspectRatio ?? DEFAULT_EDITOR_SETTINGS.aspectRatio,
@@ -172,6 +236,15 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 		// `passthrough()` envelope, so a hand-edited project (or one written by an
 		// older build) can hold anything at all under this key.
 		webcamChromaKey: normaliseChromaKeySettings(legacy?.webcamChromaKey),
+		webcamCropRegion: webcamCrop,
+		webcamCropPan: webcamCropPan,
+		// Same bound the slider offers and the native `finish_audio` clamps to. Two
+		// different ranges for one value is how a project ends up exporting a gain the
+		// UI cannot display.
+		audioGainDb: Math.min(
+			AUDIO_GAIN_DB_LIMIT,
+			Math.max(-AUDIO_GAIN_DB_LIMIT, num(legacy?.audioGainDb, 0)),
+		),
 		cursor,
 		cursorShow: bool(legacy?.cursorShow, DEFAULT_EDITOR_SETTINGS.cursorShow),
 		cursorTheme: str(legacy?.cursorTheme, DEFAULT_EDITOR_SETTINGS.cursorTheme),
@@ -195,6 +268,9 @@ export interface EditorSettingsPatch {
 	webcamPosition?: WebcamPosition | null;
 	/** Partial: merged onto the stored key, so a toggle doesn't reset the colour. */
 	webcamChromaKey?: Partial<WebcamChromaKeySettings>;
+	webcamCropRegion?: CropRegion;
+	webcamCropPan?: CropPan;
+	audioGainDb?: number;
 	cursor?: Partial<CursorVisualSettings> & { theme?: string; show?: boolean };
 	autoFocusAll?: boolean;
 }
@@ -254,4 +330,50 @@ function normaliseWebcamPosition(value: unknown): WebcamPosition | null {
 		cx: Math.min(1, Math.max(0, cxRaw)),
 		cy: Math.min(1, Math.max(0, cyRaw)),
 	};
+}
+
+const MIN_CROP_SIZE = 0.01;
+
+/**
+ * Recovers the pan of a crop rect authored before the pan was stored.
+ *
+ * `x / (1 - width)` is the expression the pane used to derive the slider's value from the
+ * rect on every render, and it has to stay that expression: every project on disk today has
+ * a rect and no pan, so anything else here would silently reframe them on first open. A
+ * full-frame crop has no room to sit in, so it reports centred — the one case where the
+ * answer is arbitrary, and the one case where nothing depends on it.
+ */
+function panOfCropRegion(crop: CropRegion): CropPan {
+	// Guarded at 1 and not at some epsilon below it: the zoom slider is integer percent, so
+	// the smallest window short of full frame is 100/101 and leaves ~0.0099 of room — a
+	// perfectly ordinary divisor that a wider guard would throw away as if it were centred.
+	// `normaliseCropRegion` keeps `x + width <= 1`, so the quotient is in range by
+	// construction; the clamp is for a hand-edited document that got there another way.
+	const axis = (offset: number, size: number) =>
+		size >= 1 ? 0.5 : Math.min(1, Math.max(0, offset / (1 - size)));
+	return { x: axis(crop.x, crop.width), y: axis(crop.y, crop.height) };
+}
+
+function normaliseCropPan(value: unknown, crop: CropRegion): CropPan {
+	if (!value || typeof value !== "object") return panOfCropRegion(crop);
+	const candidate = value as Record<string, unknown>;
+	const fallback = panOfCropRegion(crop);
+	return {
+		x: isNumber(candidate.x) ? Math.min(1, Math.max(0, candidate.x)) : fallback.x,
+		y: isNumber(candidate.y) ? Math.min(1, Math.max(0, candidate.y)) : fallback.y,
+	};
+}
+
+function normaliseCropRegion(value: unknown): CropRegion {
+	if (!value || typeof value !== "object") return DEFAULT_CROP_REGION;
+	const candidate = value as Record<string, unknown>;
+	const x = isNumber(candidate.x) ? Math.min(1 - MIN_CROP_SIZE, Math.max(0, candidate.x)) : 0;
+	const y = isNumber(candidate.y) ? Math.min(1 - MIN_CROP_SIZE, Math.max(0, candidate.y)) : 0;
+	const width = isNumber(candidate.width)
+		? Math.min(1 - x, Math.max(MIN_CROP_SIZE, candidate.width))
+		: 1 - x;
+	const height = isNumber(candidate.height)
+		? Math.min(1 - y, Math.max(MIN_CROP_SIZE, candidate.height))
+		: 1 - y;
+	return { x, y, width, height };
 }

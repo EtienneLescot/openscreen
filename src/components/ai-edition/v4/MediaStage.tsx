@@ -1,14 +1,18 @@
 import { ArrowDown, Film, Plus, RotateCw, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useScopedT } from "@/contexts/I18nContext";
-import type { AxcutAsset } from "@/lib/ai-edition/schema";
+import { useI18n, useScopedT } from "@/contexts/I18nContext";
+import type { AxcutAsset, TranscriptLanguageCode } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
 	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { formatSeconds } from "@/lib/ai-edition/timeline/format";
+import {
+	languageLabel,
+	sortedLanguageOptions,
+} from "@/lib/ai-edition/transcription/languageLabels";
 import type {
 	AssetTranscriptionStatus,
 	AssetTranscriptionView,
@@ -33,8 +37,23 @@ function basename(path: string): string {
 	return path.split(/[\\/]/).pop() ?? path;
 }
 
-export function MediaStage() {
+export async function addSelectedAssetToTimeline(
+	selected: Pick<AxcutAsset, "id" | "label" | "originalPath"> | null,
+	onAddToTimeline: (assetId: string) => Promise<void>,
+	onSuccess: (label: string) => void,
+): Promise<void> {
+	if (!selected) return;
+	await onAddToTimeline(selected.id);
+	onSuccess(selected.label || basename(selected.originalPath));
+}
+
+export function MediaStage({
+	onAddToTimeline,
+}: {
+	onAddToTimeline: (assetId: string) => Promise<void>;
+}) {
 	const t = useScopedT("editor");
+	const { locale } = useI18n();
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
@@ -48,7 +67,11 @@ export function MediaStage() {
 	const [busy, setBusy] = useState(false);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [detailOpen, setDetailOpen] = useState(false);
-	const [lang, setLang] = useState("auto");
+	const [lang, setLang] = useState<TranscriptLanguageCode>("auto");
+	const regenLanguageOptions = useMemo(
+		() => sortedLanguageOptions(locale, t("mediaStage.auto")),
+		[locale, t],
+	);
 
 	const assets = document?.assets ?? [];
 	const filtered = useMemo(
@@ -93,6 +116,12 @@ export function MediaStage() {
 	const openDetail = (asset: AxcutAsset) => {
 		setSelectedId(asset.id);
 		setDetailOpen(true);
+	};
+
+	const addSelectedToTimeline = () => {
+		void addSelectedAssetToTimeline(selected, onAddToTimeline, (label) => {
+			toast.success(t("mediaStage.addedToTimeline", { label }));
+		}).catch(() => undefined);
 	};
 
 	return (
@@ -234,7 +263,7 @@ export function MediaStage() {
 								style={{
 									fontSize: 12,
 									color: "var(--muted)",
-									marginBottom: 16,
+									marginBottom: 10,
 									whiteSpace: "nowrap",
 									overflow: "hidden",
 									textOverflow: "ellipsis",
@@ -242,6 +271,29 @@ export function MediaStage() {
 							>
 								{selected.label || basename(selected.originalPath)}
 							</div>
+							<button
+								type="button"
+								onClick={addSelectedToTimeline}
+								style={{
+									width: "100%",
+									height: 36,
+									display: "inline-flex",
+									alignItems: "center",
+									justifyContent: "center",
+									gap: 7,
+									marginBottom: 16,
+									borderRadius: 9,
+									border: "1px solid var(--accent)",
+									background: "var(--accent)",
+									color: "var(--accent-on)",
+									fontSize: 12.5,
+									fontWeight: 650,
+									cursor: "pointer",
+								}}
+							>
+								<Plus size={14} />
+								{t("mediaStage.addToTimeline")}
+							</button>
 
 							<div style={{ marginBottom: 16 }}>
 								<span
@@ -292,7 +344,9 @@ export function MediaStage() {
 											fontWeight: 600,
 										}}
 									>
-										{t("mediaStage.detectedLanguage", { language: transcript.language })}
+										{t("mediaStage.detectedLanguage", {
+											language: languageLabel(transcript.language, locale),
+										})}
 									</span>
 								) : null}
 							</div>
@@ -329,7 +383,7 @@ export function MediaStage() {
 								<div style={{ display: "flex", gap: 8 }}>
 									<select
 										value={lang}
-										onChange={(e) => setLang(e.target.value)}
+										onChange={(e) => setLang(e.target.value as TranscriptLanguageCode)}
 										style={{
 											flex: 1,
 											minWidth: 0,
@@ -344,10 +398,11 @@ export function MediaStage() {
 											outline: "none",
 										}}
 									>
-										<option value="auto">{t("mediaStage.auto")}</option>
-										<option value="en">English</option>
-										<option value="fr">Français</option>
-										<option value="es">Español</option>
+										{regenLanguageOptions.map(({ code, label }) => (
+											<option key={code} value={code}>
+												{label}
+											</option>
+										))}
 									</select>
 									<button
 										type="button"

@@ -374,66 +374,104 @@ bool AudioMixer::pop(std::vector<BYTE>& queue, std::vector<BYTE>& chunk, size_t 
     return copiedBytes > 0;
 }
 
+/**
+ * Emits one mixed chunk every `chunkFrames`, for as long as the timeline runs.
+ *
+ * On the clock, and not on the data. Timestamps here are derived from
+ * `emittedFrames_`, so the output timeline only means anything if a chunk goes
+ * out for every chunk of real time -- and it used to `continue` whenever both
+ * queues were empty, leaving `emittedFrames_` where it was. WASAPI loopback
+ * delivers nothing at all while nothing is playing, so a recording that begins
+ * in silence emitted nothing, and the first sound to play landed at timestamp
+ * zero. Measured: a sound played four seconds in was heard from the start, and
+ * the audio track came out two seconds shorter than the take.
+ *
+ * A working microphone hid this, because it streams continuously and kept the
+ * queue non-empty -- which is why a microphone failing at the OS level appeared
+ * to cause a system-audio desync it merely stopped concealing
+ * (getopenscreen/openscreen#406).
+ *
+ * `audioClockStart` is anchored so that `emittedFrames_` always describes the
+ * time elapsed since the timeline began; re-deriving it on resume is what lets a
+ * pause interrupt the clock without shifting everything recorded after it.
+ */
 void AudioMixer::mixLoop() {
     const uint32_t chunkFrames = std::max<uint32_t>(1, format_.sampleRate / 100);
     const size_t chunkBytes = static_cast<size_t>(chunkFrames) * format_.blockAlign;
     std::vector<BYTE> mixedChunk;
     std::vector<BYTE> sourceChunk;
     std::chrono::steady_clock::time_point audioClockStart;
-    bool audioClockStarted = false;
+    bool audioClockAnchored = false;
+
+    const auto framesToDuration = [&](uint64_t frames) {
+        return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(static_cast<double>(frames) / format_.sampleRate));
+    };
 
     while (true) {
         {
             std::unique_lock lock(mutex_);
             cv_.wait_for(lock, std::chrono::milliseconds(20), [&] {
-                const bool hasSystem = !includeSystem_ || systemQueue_.size() >= chunkBytes;
-                const bool hasMicrophone = !includeMicrophone_ || microphoneQueue_.size() >= chunkBytes;
-                const bool hasAnySource = !systemQueue_.empty() || !microphoneQueue_.empty();
-                return stopRequested_.load() ||
-                    (timelineStarted_ && !paused_ && (hasSystem || hasMicrophone) && hasAnySource);
+                return stopRequested_.load() || (timelineStarted_ && !paused_);
             });
 
             if (stopRequested_) {
                 break;
             }
             if (!timelineStarted_ || paused_) {
+                // A pause stops the clock rather than resetting it: the anchor is
+                // re-derived from `emittedFrames_` on resume, so what follows keeps
+                // the position it would have had.
+                audioClockAnchored = false;
                 continue;
-            }
-
-            const bool hasAnyQueuedAudio = !systemQueue_.empty() || !microphoneQueue_.empty();
-            if (!hasAnyQueuedAudio) {
-                continue;
-            }
-
-            mixedChunk.assign(chunkBytes, 0);
-            if (includeSystem_) {
-                pop(systemQueue_, sourceChunk, chunkBytes);
-                mixAudioInPlace(mixedChunk, sourceChunk.data(), static_cast<DWORD>(sourceChunk.size()), format_);
-            }
-            if (includeMicrophone_) {
-                pop(microphoneQueue_, sourceChunk, chunkBytes);
-                mixAudioInPlace(mixedChunk, sourceChunk.data(), static_cast<DWORD>(sourceChunk.size()), format_);
             }
         }
 
-        if (!audioClockStarted) {
-            audioClockStart = std::chrono::steady_clock::now();
-            audioClockStarted = true;
+        const auto now = std::chrono::steady_clock::now();
+        if (!audioClockAnchored) {
+            audioClockStart = now - framesToDuration(emittedFrames_);
+            audioClockAnchored = true;
         }
 
-        const int64_t timestampHns =
-            static_cast<int64_t>((emittedFrames_ * HnsPerSecond) / format_.sampleRate);
-        const int64_t durationHns =
-            static_cast<int64_t>((static_cast<uint64_t>(chunkFrames) * HnsPerSecond) / format_.sampleRate);
-        if (!output_(mixedChunk.data(), static_cast<DWORD>(mixedChunk.size()), timestampHns, durationHns)) {
-            stopRequested_ = true;
+        // How much of the timeline real time has covered. Emitting up to here --
+        // from the queues where they have data, from silence where they do not --
+        // is what keeps the audio clock pinned to the take rather than to whether
+        // anything happened to be playing.
+        const auto elapsed = std::chrono::duration<double>(now - audioClockStart).count();
+        const uint64_t targetFrames = static_cast<uint64_t>(elapsed * format_.sampleRate);
+
+        while (emittedFrames_ + chunkFrames <= targetFrames) {
+            {
+                std::scoped_lock lock(mutex_);
+                if (stopRequested_ || !timelineStarted_ || paused_) {
+                    break;
+                }
+                mixedChunk.assign(chunkBytes, 0);
+                if (includeSystem_) {
+                    pop(systemQueue_, sourceChunk, chunkBytes);
+                    mixAudioInPlace(mixedChunk, sourceChunk.data(), static_cast<DWORD>(sourceChunk.size()), format_);
+                }
+                if (includeMicrophone_) {
+                    pop(microphoneQueue_, sourceChunk, chunkBytes);
+                    mixAudioInPlace(mixedChunk, sourceChunk.data(), static_cast<DWORD>(sourceChunk.size()), format_);
+                }
+            }
+
+            const int64_t timestampHns =
+                static_cast<int64_t>((emittedFrames_ * HnsPerSecond) / format_.sampleRate);
+            const int64_t durationHns =
+                static_cast<int64_t>((static_cast<uint64_t>(chunkFrames) * HnsPerSecond) / format_.sampleRate);
+            if (!output_(mixedChunk.data(), static_cast<DWORD>(mixedChunk.size()), timestampHns, durationHns)) {
+                stopRequested_ = true;
+                break;
+            }
+            emittedFrames_ += chunkFrames;
+        }
+
+        if (stopRequested_) {
             break;
         }
-        emittedFrames_ += chunkFrames;
 
-        const auto nextDeadline = audioClockStart +
-            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<double>(static_cast<double>(emittedFrames_) / format_.sampleRate));
-        std::this_thread::sleep_until(nextDeadline);
+        std::this_thread::sleep_until(audioClockStart + framesToDuration(emittedFrames_ + chunkFrames));
     }
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CameraFullscreenRegion, ZoomFocus } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import type {
@@ -12,6 +12,7 @@ import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import { EditorEmptyState } from "./EditorEmptyState";
 import styles from "./NewEditorShell.module.css";
 import { PreviewCanvas } from "./PreviewCanvas";
+import { PreviewErrorCard } from "./PreviewErrorCard";
 import type { VideoSource } from "./VirtualPreview";
 
 type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
@@ -86,8 +87,10 @@ export function Preview({
 	// later moved or deleted, or one left behind when its clip was removed — and
 	// handing the asset list straight to the canvas made `videoSources[0]` (the
 	// source VirtualPreview mounts first) that dead asset: its <video> errored,
-	// latched the failure flag below, and collapsed the WHOLE preview to the
-	// empty state while every clip on the timeline was perfectly playable.
+	// and the whole preview collapsed to the empty state while every clip on the
+	// timeline was perfectly playable. (A media error no longer collapses
+	// anything — see below — but mounting an asset nothing references is still
+	// the wrong source to put the decode clock on.)
 	// Ordered by timeline position, so the first source mounted is the one the
 	// playhead actually needs at 0:00.
 	// The fallback is load-bearing: the first clip of a fresh import is minted
@@ -104,30 +107,64 @@ export function Preview({
 		return referenced.length > 0 ? referenced : videoSources;
 	}, [clips, videoSources]);
 
-	// ponytail: when the <video> fails to load (e.g. a truncated recording
-	// from a bad MediaRecorder capture), swap to the empty state so the user
-	// can import a different file instead of staring at a broken preview.
-	// Tracked PER SOURCE rather than as one global latch: with several clips on
-	// the timeline, a single dead asset must not blank a preview the other clips
-	// can still render — VirtualPreview already shows its own "could not be
-	// loaded" overlay for whichever source failed. Only when every source the
-	// timeline uses is dead is there nothing left to show.
-	// Resets when the set of preview sources changes (asset paths).
-	const [failedSourceIds, setFailedSourceIds] = useState<string[]>([]);
+	// ponytail: a media failure used to fall through to `EditorEmptyState`, and
+	// that is issue #395: ONE `error` event on the hidden <video> — including the
+	// MEDIA_ERR_ABORTED every cross-asset clip boundary produces by design —
+	// latched an id into a list that nothing short of a remount could clear, and
+	// the editor told a user whose project was perfectly intact to "add a video to
+	// get started". Ctrl+R or a trip through the Rec/Media stage was the only way
+	// back, because both unmount this component.
+	//
+	// Two things replace it. VirtualPreview now classifies the error and reloads
+	// the source itself, so a transient decode/network blip never reaches here at
+	// all. What does reach here is a source that gave up after those retries, and
+	// it is shown as a card OVER the still-mounted canvas — which goes on painting
+	// the last good frame, because the pixels come from the native compositor and
+	// the <video> is only a decode clock (see PreviewCanvas's header comment). The
+	// empty state is left answering exactly one question: is there anything in
+	// this project to show?
+	//
+	// One failure slot rather than a set: only ever ONE source is mounted
+	// (VirtualPreview indexes into `videoSources`), so the failure being reported
+	// is always the one the playhead needs, and any source reporting healthy means
+	// the mounted one is.
+	const [failure, setFailure] = useState<{ assetId: string; detail: string } | null>(null);
+	const [retryToken, setRetryToken] = useState(0);
+	// Dropped only when the FAILED asset itself leaves the timeline — not
+	// whenever the source list changes shape. Appending a replacement recording
+	// (which is the advice the card gives) grows the list without touching the
+	// dead <video>: it is not remounted, nothing re-fires `error`, and clearing
+	// here would take the card and its Retry button away from a stage that is
+	// still frozen. A same-id source whose URL changed does re-run the load
+	// algorithm, and the resulting recovery clears the failure on its own.
 	const sourceKey = previewSources.map((source) => `${source.id}::${source.src}`).join("|");
-	const previousSourceKeyRef = useRef<string | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the source list's identity, read through previewSources
 	useEffect(() => {
-		if (previousSourceKeyRef.current !== sourceKey) {
-			previousSourceKeyRef.current = sourceKey;
-			setFailedSourceIds([]);
-		}
+		setFailure((prev) =>
+			prev && !previewSources.some((source) => source.id === prev.assetId) ? null : prev,
+		);
 	}, [sourceKey]);
-	const handleVideoError = useCallback((assetId: string) => {
-		setFailedSourceIds((prev) => (prev.includes(assetId) ? prev : [...prev, assetId]));
+	const handleVideoError = useCallback((assetId: string, detail: string) => {
+		setFailure({ assetId, detail });
 	}, []);
-	const allSourcesFailed =
-		previewSources.length > 0 &&
-		previewSources.every((source) => failedSourceIds.includes(source.id));
+	// The reported asset id is deliberately ignored. Exactly one source is mounted
+	// at a time (`videoSources[sourceIndex]` in VirtualPreview), and it is always
+	// the one the playhead needs — so ANY source reporting healthy means the stage
+	// is showing a real picture, whichever asset it belongs to. Matching the id
+	// against the failed one instead would keep "Preview stopped" pinned over a
+	// clip that is playing perfectly, until the user happened to scrub back to the
+	// dead one: a card outliving its failure, which is the latch of #395 again in
+	// a quieter form. Moving back onto the dead asset remounts it and earns a
+	// fresh retry cycle, so the card returns on its own if it should.
+	// Fires on every canplay, so on every seek: `setFailure(null)` against an
+	// already-null state is a React bail-out, and the healthy path costs nothing.
+	const handleVideoRecovered = useCallback(() => {
+		setFailure((prev) => (prev === null ? prev : null));
+	}, []);
+	const handleRetry = useCallback(() => {
+		setFailure(null);
+		setRetryToken((token) => token + 1);
+	}, []);
 
 	return (
 		<section
@@ -137,32 +174,41 @@ export function Preview({
 			data-current-time-sec={currentTimeSec.toFixed(3)}
 			data-is-playing={playing ? "true" : "false"}
 		>
-			{hasProject && hasAsset && previewSources.length > 0 && !allSourcesFailed ? (
-				<PreviewCanvas
-					videoSources={previewSources}
-					clips={clips}
-					zoomRegions={zoomRegions}
-					speedRegions={speedRegions}
-					cameraFullscreenRegions={cameraFullscreenRegions}
-					trimRanges={trimRanges}
-					selectedZoomRegionId={selectedZoomRegionId}
-					onZoomFocusChange={onZoomFocusChange}
-					onZoomFocusCommit={onZoomFocusCommit}
-					annotationRegions={annotationRegions}
-					selectedAnnotationId={selectedAnnotationId}
-					onSelectAnnotation={onSelectAnnotation}
-					onAnnotationPositionChange={onAnnotationPositionChange}
-					onAnnotationSizeChange={onAnnotationSizeChange}
-					onAnnotationBlurDataChange={onAnnotationBlurDataChange}
-					onAnnotationCommit={onAnnotationCommit}
-					seekTarget={seekTarget}
-					onTimeChange={onTimeChange}
-					onSeek={onSeek}
-					onLoadedMetadata={onLoadedMetadata}
-					onVideoElement={onVideoElement}
-					currentTimeSec={currentTimeSec}
-					onVideoError={handleVideoError}
-				/>
+			{hasProject && hasAsset && previewSources.length > 0 ? (
+				<>
+					<PreviewCanvas
+						videoSources={previewSources}
+						clips={clips}
+						zoomRegions={zoomRegions}
+						speedRegions={speedRegions}
+						cameraFullscreenRegions={cameraFullscreenRegions}
+						trimRanges={trimRanges}
+						selectedZoomRegionId={selectedZoomRegionId}
+						onZoomFocusChange={onZoomFocusChange}
+						onZoomFocusCommit={onZoomFocusCommit}
+						annotationRegions={annotationRegions}
+						selectedAnnotationId={selectedAnnotationId}
+						onSelectAnnotation={onSelectAnnotation}
+						onAnnotationPositionChange={onAnnotationPositionChange}
+						onAnnotationSizeChange={onAnnotationSizeChange}
+						onAnnotationBlurDataChange={onAnnotationBlurDataChange}
+						onAnnotationCommit={onAnnotationCommit}
+						seekTarget={seekTarget}
+						onTimeChange={onTimeChange}
+						onSeek={onSeek}
+						onLoadedMetadata={onLoadedMetadata}
+						onVideoElement={onVideoElement}
+						currentTimeSec={currentTimeSec}
+						onVideoError={handleVideoError}
+						onVideoRecovered={handleVideoRecovered}
+						retryToken={retryToken}
+					/>
+					{/* Sibling of the canvas, inside `.previewWrap` (already
+					    position: relative) — NOT inside VirtualPreview's `.videoFrame`,
+					    which carries the live zoom transform and would translate the
+					    Retry button off the stage at high zoom. */}
+					{failure ? <PreviewErrorCard detail={failure.detail} onRetry={handleRetry} /> : null}
+				</>
 			) : (
 				<EditorEmptyState hasProject={hasProject} />
 			)}

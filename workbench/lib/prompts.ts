@@ -1,81 +1,65 @@
 // ponytail: prompts and tool-surface constants, kept apart from the scenarios
-// so a wording change is one edit and so the wizard prompt stays byte-identical
-// to production.
+// so a wording change is one edit and so the wizard prompt is stated once, with
+// its provenance, rather than paraphrased per scenario.
+
+import { OPENSCREEN_TOOL_NAMES, PHANTOM_TOOL_NAMES } from "../../electron/ai-edition/agent-tools";
 
 /**
- * VERBATIM copy of `AI_ENHANCE_PROMPT` from
- * `src/components/ai-edition/v4/V4Timeline.tsx:57-58` — the string the
- * Auto-enhance button sends through the prompt bus into the same `runChat`.
- * A workbench that paraphrases it measures a prompt the product never sends.
+ * The Auto-enhance prompt the wizard scenarios send. It is NOT the string the
+ * button sends any more: `src/components/ai-edition/v4/V4Timeline.tsx:77`
+ * narrowed to cuts only in `7e6439ad`, because the model places zooms from what
+ * the transcript SAYS rather than from where the pointer WAS — on a real 66s
+ * screencast, 7 of its 9 focus points missed the cursor in their own window.
+ *
+ * This copy stays WIDE on purpose. That same commit names `real-wizard-enhance`
+ * as the scenario that would show the model can read the track and justify
+ * re-widening the product, and no scenario can measure zoom placement under a
+ * prompt that never asks for a zoom: `dsl.zoom.placement` (weight 3) opens with
+ * `fail("aucun zoom émis")`. The `wizard-enhance` pair scores the D1 fabricated
+ * focus and D2 multiplier tells the same way — under the narrow prompt those
+ * checks go green without anything having been fixed.
+ *
+ * So the divergence is deliberate, but it IS a divergence: re-narrowing this
+ * string means reworking the zoom checks in all three scenarios and re-recording
+ * their baselines, which is why it is not a one-line edit.
+ *
+ * ponytail: this said "VERBATIM copy … the string the Auto-enhance button sends"
+ * from `7e6439ad` until now, pointing at `V4Timeline.tsx:57-58` where the
+ * constant no longer lives. Nothing said so — `npm run wb` is not part of CI.
  */
 export const AI_ENHANCE_PROMPT =
 	"Automatically enhance this recording: (1) add smart zoom-ins on the moments where the cursor dwells or interacts with the UI, each focused on the cursor's location; and (2) cut the dead time — long pauses, silences, and idle stretches where nothing happens — to keep the pacing tight and natural. Apply the edits directly to the timeline.";
 
-/** The 19 tools OpenScreen builds in `deep-agent/service.ts` (`buildTools`).
- * `moveClip` reordering a clip had NO tool while the system prompt promised one,
- * which is what pushed the model onto `replaceTimeline` (D-DESTRUCT).
- * `getCursorTrack` is the newest: the app records pointer telemetry and loads it
- * in the compositor, but NOTHING carried a single sample to the model, so asked
- * what cursor data the project held it had to answer from nothing (D-TELEM).
- *
- * ponytail: the name is `getCursorTrack`, not `getCursorTrack` — the tool
- * returns the TRACK (positions over time) and no longer the stillness detector's
- * digest, and this list said otherwise for a while. That is not a cosmetic
- * drift: a scenario check written as `calls("getCursorTrack").length > 0`
- * counts a call LangChain refused, so `cursor-question` and `cursor-blind` both
- * scored 1.0 on turns where nothing was ever read. Every name here is frozen
- * against the real surface by `l1/end-to-end.wb.ts`. */
-export const OPENSCREEN_TOOLS = [
-	"getCurrentDocument",
-	"getTranscript",
-	"getCursorTrack",
-	"addTrim",
-	"setTrim",
-	"setClipRange",
-	"moveClip",
-	"replaceTimeline",
-	"addZoom",
-	"setZoom",
-	"addSpeed",
-	"setSpeed",
-	"addAnnotation",
-	"setAnnotation",
-	"addCameraFullscreen",
-	"setCameraFullscreen",
-	"removeTrim",
-	"removeModifier",
-	"removeClip",
-] as const;
-
 /**
- * The 8 filesystem/todo/sub-agent tools the `deepagents` middlewares used to
- * inject on top of ours. They operated on an in-memory `StateBackend` that is
- * EMPTY, and the model was not told so — the mechanical cause of D1: asked
- * about cursor telemetry, the model ran `ls`/`glob` against that sandbox and
- * reported, in good faith, that the project contains no pointer-tracking data.
+ * The tools OpenScreen builds in `deep-agent/service.ts` (`buildTools`), and the
+ * filesystem/todo/sub-agent tools that must never appear beside them again.
  *
- * The surface is gone (`deep-agent/service.ts` now calls LangChain's
- * `createAgent` with our own tools and our prompt alone), so this list changed
- * meaning rather than becoming dead: it is now the list of names that must
- * NEVER appear on the wire again. A call to one of them is no longer the model
- * using a tool it was handed — it is the model hallucinating a filesystem it
- * was never offered, which is a rarer but still exact D1 tell. `l1` freezes the
- * surface directly; the scenarios keep scoring the calls.
+ * Both are RE-EXPORTS, not copies. The bench used to keep its own hand-written
+ * pair, and both went stale without anything noticing: the tool roster sat at 19
+ * from the day it was written while the agent grew to 21 (`addTrims`/`addZooms`),
+ * and the phantom list was missing `execute`, so `isPhantomTool` could not flag
+ * the one middleware tool a sandbox backend would have re-introduced. Nothing
+ * caught either, because `npm run wb` is not part of CI — the bench was checking
+ * the product against a surface the product had outgrown.
+ *
+ * `agent-tools.ts` is the right home for them: it already owns
+ * `MUTATING_TOOL_NAMES` and runs on zod plus pure document helpers, so importing
+ * it costs L0 nothing (four L0 files already pull `executeAgentTool` from it).
+ * Importing `deep-agent/service.ts` instead would drag LangChain down here.
+ *
+ * What keeps the roster honest is `deep-agent/service.test.ts`, which asserts it
+ * equals `buildTools(...).map(t => t.name)` — and that suite runs in CI. A tool
+ * added without updating the roster now fails the build rather than a bench
+ * nobody runs.
  */
-export const PHANTOM_TOOLS = [
-	"write_todos",
-	"ls",
-	"read_file",
-	"write_file",
-	"edit_file",
-	"glob",
-	"grep",
-	"task",
-] as const;
+export const OPENSCREEN_TOOLS = OPENSCREEN_TOOL_NAMES;
+export const PHANTOM_TOOLS = PHANTOM_TOOL_NAMES;
 
-/** Exactly our 19, and nothing else. A change here means the agent's context
- * changed shape — which is the one thing a report cannot be compared across. */
-export const EXPECTED_TOOL_COUNT = OPENSCREEN_TOOLS.length;
+/** Our whole surface, and nothing else. A change here means the agent's context
+ * changed shape — which is the one thing a report cannot be compared across, so
+ * `fingerprintOf` records the wire's own `toolNames`/`toolsSha256` in every
+ * report rather than trusting this to have been noticed. */
+export const EXPECTED_TOOL_COUNT = OPENSCREEN_TOOL_NAMES.length;
 
 const PHANTOM_SET: ReadonlySet<string> = new Set<string>(PHANTOM_TOOLS);
 

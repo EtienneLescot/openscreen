@@ -39,11 +39,13 @@ export const DEFAULT_BUDGET_TOKENS = 80_000;
 export function estimateHistoryTokens(messages: AiEditionChatMessage[]): number {
 	let chars = 0;
 	for (const m of messages) {
-		// 4 chars per token + 4 tokens per message overhead (rough).
+		// Content only. `chat-service` maps the history to `{role, content}` before it
+		// sends it, so a message's tool-call names and summaries never reach the model --
+		// billing them here inflated the pill with text nobody pays for. The two
+		// compaction comparisons are unaffected: both sides were counted the same way.
 		chars += m.content.length;
-		for (const tc of m.toolCalls ?? [])
-			chars += (tc.name?.length ?? 0) + (tc.summary?.length ?? 0) + 16;
 	}
+	// 4 chars per token (rough).
 	return Math.ceil(chars / CHARS_PER_TOKEN);
 }
 

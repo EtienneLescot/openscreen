@@ -171,8 +171,9 @@ fn compose_linux_ecran_tilte() {
     cfg.shadow = false;
     let (w, h, upright, tilted) = unsafe {
         let sf = dec.seek_to(1.0).expect("Decoder::seek_to");
-        // `frame` = 90 -> source_t = 3 s, au coeur de la region [0, 6] : la rampe
-        // d'entree est finie, la rotation est a pleine force.
+        // `frame` = 90 -> source_t = 90 / 60 = 1,5 s (`FPS` vaut 60 en dur dans
+        // `frame_geometry`, ce n'est pas le `fps` de la scene), dans la region [0, 6] et
+        // au-dela de la rampe d'entree : la rotation est a pleine force.
         let render = |json: String| {
             let scene = Scene::from_json(&json).expect("scene json");
             // Le padding transite par les live_params, pas la scene brute.
@@ -1262,8 +1263,15 @@ fn compose_linux_sans_camera_ne_dessine_pas_de_vignette() {
 /// Scene de base des tests d'annotation : fond uni, pas d'effets, une liste
 /// d'annotations injectee telle quelle.
 fn annotation_scene(annotations: &str) -> String {
+    annotation_scene_with_zoom("", annotations)
+}
+
+/// La meme, avec une liste de regions de zoom injectee telle quelle. Le zoom est
+/// ce qui separe le rect d'ancrage des annotations (`s_ann`) de la boite ecran
+/// (`s_dst`) : sans lui les deux coincident et rien ne peut le mesurer.
+fn annotation_scene_with_zoom(zoom_regions: &str, annotations: &str) -> String {
     format!(
-        r##"{{"clips":[],"layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0.1,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0}},"background":{{"kind":"color","color":"#00ff00"}},"zoomRegions":[],"annotations":[{annotations}],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":30}}}}"##
+        r##"{{"clips":[],"layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0.1,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0}},"background":{{"kind":"color","color":"#00ff00"}},"zoomRegions":[{zoom_regions}],"annotations":[{annotations}],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":30}}}}"##
     )
 }
 
@@ -1622,4 +1630,121 @@ fn compose_linux_animation_texte() {
         "le texte n'est pas revele progressivement : bord droit {half_right} a mi-course \
          contre {full_right} a la fin"
     );
+}
+
+/// Une caption ne bouge ni ne grossit quand le contenu zoome ou s'incline.
+///
+/// C'est le contrat de `SceneAnnotation` — l'overlay de la preview est FRERE de
+/// l'element qui porte la transform, donc les sous-titres tiennent en place
+/// pendant que la video zoome dessous — et c'est celui que ce backend violait :
+/// il ancrait les annotations sur `s_dst`, la boite ecran, au lieu de `s_ann`.
+/// Windows et macOS avaient ete corriges a l'issue #179, Linux non. Le natif
+/// etant la SEULE source de pixels de l'apercu (le DOM ne peint que la poignee
+/// de selection, cf. `AnnotationOverlay.tsx`), la derive se voyait des l'edition
+/// sur cette plateforme, pas seulement a l'export.
+///
+/// La bande porte un fond OPAQUE : son empreinte est un RECT PLEIN et non la
+/// silhouette des glyphes, donc la boite englobante mesure une geometrie de
+/// placement et pas ce que la video montre dessous. Ce rect est la plaque du
+/// rasteriseur (`glyphs.plate`), serree sur les lignes posees — pas la boite
+/// 0.92x0.22 de l'annotation : peu importe ici, la plaque est une fonction
+/// deterministe de `dst` et de `font_size_px`, tous deux ancres sur `s_ann`.
+/// Chaque rendu est diffe contre son propre rendu sans annotation, sinon le
+/// changement du calque video sous le zoom dominerait la mesure.
+///
+/// La rotation compte autant que le zoom : un preset iso/left/right est une
+/// propriete de region de zoom, donc l'incliner amenait la boite avec lui — et
+/// les sous-titres partaient avec elle sans pour autant suivre le plan incline.
+#[test]
+fn compose_linux_annotation_ancree_hors_zoom() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux annotation hors zoom: opt-in. Skip.");
+        return;
+    }
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
+
+    // UN SEUL `seek_to`, comme `compose_linux_ecran_tilte` : les six rendus partagent
+    // la meme AVFrame, donc le decodeur ne peut pas introduire une difference qu'on
+    // prendrait pour un deplacement de la bande.
+    let sf = unsafe { screen.seek_to(1.0).expect("seek") };
+
+    let render = |zoom: &str, annotations: &str| -> Vec<u8> {
+        let parsed =
+            Scene::from_json(&annotation_scene_with_zoom(zoom, annotations)).expect("scene json");
+        comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
+        comp.set_scene(Some(parsed));
+        // C'est CET override qui fixe le temps echantillonne, pas le 3e argument de
+        // `compose_frame` : `plan_frame` lit `timeline_t_override.unwrap_or(frame / FPS)`,
+        // et `FPS` y vaut 60 en dur (pas le `fps` de la scene). t = 3 s tombe au coeur
+        // de la region [0, 6], rampe d'entree finie, zoom et rotation a pleine force.
+        comp.set_timeline_time(Some(3.0));
+        unsafe {
+            comp.compose_frame(sf, sf, 90.0, &Cfg::c8()).expect("compose_frame");
+            comp.readback_direct().expect("readback").2
+        }
+    };
+
+    let zoom = |rotation: &str| {
+        format!(
+            r##"{{"id":"z1","clipIndex":0,"startSec":0,"endSec":6,"scale":2.5,"focusX":0.5,"focusY":0.3,"focusMode":"manual","rotation":{rotation}}}"##
+        )
+    };
+    // Bande basse pleine largeur, comme une vraie caption : hors du centre, donc
+    // un ancrage qui suivrait le zoom la deplacerait ET la ferait deborder.
+    const BAND: &str = r##"{"id":"c1","kind":"text","x":0.04,"y":0.74,"w":0.92,"h":0.22,"startSec":0,"endSec":10,"zIndex":1,"text":{"content":"Sous-titre","color":"#ffffff","backgroundColor":"#e0245e","fontSizeRel":0.09,"fontFamily":"","fontWeight":"bold","fontStyle":"normal","textDecoration":"none","textAlign":"center"}}"##;
+
+    let (z, tilt) = (zoom("null"), zoom(r#""iso""#));
+    let bare_plain = render("", "");
+    let with_plain = render("", BAND);
+    let bare_zoom = render(&z, "");
+    let with_zoom = render(&z, BAND);
+    let bare_tilt = render(&tilt, "");
+    let with_tilt = render(&tilt, BAND);
+
+    let band_bbox = |bare: &[u8], with: &[u8], label: &str| {
+        let px = changed_pixels(bare, with);
+        // C'est CE garde-fou qui saute en premier quand le bug est present : ancree sur
+        // `s_dst`, la bande part a y ~= 840 px dans un cadre de 540 et sort du champ, donc
+        // elle ne change plus aucun pixel au lieu de se decaler de quelques-uns.
+        assert!(
+            px.len() > 500,
+            "bande absente ({} px changes) — {label} : sortie du cadre, donc ancree sur \
+             `s_dst` au lieu de `s_ann`",
+            px.len()
+        );
+        bbox(&px, W)
+    };
+    let plain = band_bbox(&bare_plain, &with_plain, "sans zoom");
+    let zoomed = band_bbox(&bare_zoom, &with_zoom, "avec zoom");
+    let tilted = band_bbox(&bare_tilt, &with_tilt, "avec rotation 3D");
+
+    // Garde-fou : le zoom doit vraiment agir sur l'image, sinon les egalites
+    // ci-dessous seraient vraies pour la mauvaise raison.
+    let moved = changed_pixels(&bare_plain, &bare_zoom);
+    assert!(
+        moved.len() > 10_000,
+        "le zoom n'a change que {} px — la scene zoomee n'est pas appliquee",
+        moved.len()
+    );
+
+    // 2 px de tolerance pour l'antialiasing du bord de la plaque. L'erreur visee est
+    // d'un tout autre ordre : sous zoom 2.5 la bande ancree sur `s_dst` descend de
+    // ~450 px et grossit d'autant, donc en pratique elle quitte le cadre et c'est le
+    // garde-fou « bande absente » ci-dessus qui tranche. Cette boucle attrape le reste :
+    // un ancrage qui deriverait sans sortir du champ.
+    for (name, got) in [("zoom", zoomed), ("rotation 3D", tilted)] {
+        let d = [
+            got.0.abs_diff(plain.0),
+            got.1.abs_diff(plain.1),
+            got.2.abs_diff(plain.2),
+            got.3.abs_diff(plain.3),
+        ];
+        assert!(
+            d.iter().all(|&v| v <= 2),
+            "la bande a suivi le {name} : {got:?} contre {plain:?} sans — \
+             les annotations sont ancrees sur `s_dst` au lieu de `s_ann`"
+        );
+    }
 }

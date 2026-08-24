@@ -18,6 +18,7 @@
 		"edit": "編集",
 		"view": "表示",
 		"window": "ウィンドウ",
+		"help": "ヘルプ",
 		"quit": "終了",
 		"stopRecording": "録画を停止",
 		"undo": "元に戻す",
@@ -39,7 +40,8 @@
 		"services": "サービス",
 		"hide": "OpenScreenを隠す",
 		"hideOthers": "ほかを隠す",
-		"unhide": "すべて表示"
+		"unhide": "すべて表示",
+		"saveDiagnostics": "診断情報を保存"
 	},
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} を利用できます。現在のバージョンは {{currentVersion}} です。",

@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { captionCuesToTextRegions, deriveCaptionCues } from "./cues";
+import type { CaptionSettings } from "./settings";
 import {
 	captionBackgroundCss,
-	captionBandRect,
+	captionBoxRect,
+	captionSafeColumn,
 	DEFAULT_CAPTION_SETTINGS,
+	defaultCaptionInsetX,
+	defaultCaptionInsetY,
 	getCaptionSettings,
 	patchCaptionSettings,
 } from "./settings";
@@ -90,6 +94,18 @@ function doc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 }
 
 const ON = { ...DEFAULT_CAPTION_SETTINGS, enabled: true };
+const LANDSCAPE = 16 / 9;
+const PORTRAIT = 9 / 16;
+
+/** Where the DRAWN block's edges land, given the box and the edge it is pinned to.
+ *  The renderers put the block flush against the anchored edge of the box, so this
+ *  is the same arithmetic the rasterizers do — expressed once, here, so the tests
+ *  assert the thing the viewer sees rather than the box it lives in. */
+function drawnEdges(settings: typeof ON, aspect: number, blockHeightPct: number) {
+	const box = captionBoxRect(settings, aspect);
+	const top = box.verticalAlign === "bottom" ? box.y + box.height - blockHeightPct : box.y;
+	return { top, bottom: top + blockHeightPct };
+}
 
 describe("caption settings", () => {
 	it("defaults to hidden so an existing project doesn't sprout captions on upgrade", () => {
@@ -97,8 +113,8 @@ describe("caption settings", () => {
 	});
 
 	it("round-trips a patch through the legacyEditor envelope", () => {
-		const next = patchCaptionSettings(doc(), { enabled: true, fontSize: 44, offsetY: -10 });
-		expect(getCaptionSettings(next)).toMatchObject({ enabled: true, fontSize: 44, offsetY: -10 });
+		const next = patchCaptionSettings(doc(), { enabled: true, fontSize: 44, insetY: 12 });
+		expect(getCaptionSettings(next)).toMatchObject({ enabled: true, fontSize: 44, insetY: 12 });
 	});
 
 	it("keeps an explicit null language instead of falling back to the default", () => {
@@ -114,18 +130,195 @@ describe("caption settings", () => {
 		expect(getCaptionSettings(next)).toMatchObject({ minWordsPerLine: 3, maxWordsPerLine: 9 });
 	});
 
-	it("keeps the band inside the frame however far the offset is pushed", () => {
-		const rect = captionBandRect({ ...ON, verticalPosition: "bottom", offsetY: 45 });
-		expect(rect.y + rect.height).toBeLessThanOrEqual(100);
-		const top = captionBandRect({ ...ON, verticalPosition: "top", offsetY: -45 });
-		expect(top.y).toBeGreaterThanOrEqual(0);
-	});
-
 	it("folds the opacity into the background colour, and reports 'transparent' when off", () => {
 		expect(
 			captionBackgroundCss({ ...ON, backgroundColor: "#10b981", backgroundOpacity: 0.5 }),
 		).toBe("rgba(16, 185, 129, 0.5)");
 		expect(captionBackgroundCss({ ...ON, backgroundEnabled: false })).toBe("transparent");
+	});
+});
+
+describe("caption anchoring", () => {
+	// THE invariant of the redesign, asserted as a property rather than as numbers.
+	// The old model placed a fixed 22% band and let each renderer centre the ink in it,
+	// so the drawn block's edges moved with the font size, the background, the wrap —
+	// which is why widening the band shifted the caption vertically and why the offset
+	// had to be a signed number clamped against an estimate.
+	it("pins the anchored edge for every font size, background state and inset", () => {
+		for (const anchorV of ["bottom", "top"] as const) {
+			for (const insetY of [0, 0.5, 5, 12.5, 33.3, 50]) {
+				for (const fontSize of [12, 48, 120, 200]) {
+					for (const backgroundEnabled of [true, false]) {
+						const settings = { ...ON, anchorV, insetY, fontSize, backgroundEnabled };
+						const box = captionBoxRect(settings, LANDSCAPE);
+						const pinned = anchorV === "bottom" ? box.y + box.height : box.y;
+						expect(pinned).toBeCloseTo(anchorV === "bottom" ? 100 - insetY : insetY, 6);
+						// And the box itself never leaves the frame, so there is no overhang to
+						// compensate for and no negative `y` for the schema to reject.
+						expect(box.y).toBeGreaterThanOrEqual(-1e-9);
+						expect(box.y + box.height).toBeLessThanOrEqual(100 + 1e-9);
+					}
+				}
+			}
+		}
+	});
+
+	it("holds the anchored edge still while the block grows — the complaint this fixes", () => {
+		// One line vs three, same settings: the anchored edge must not move. Under the
+		// old geometry the block was centred, so BOTH edges moved and the subtitle
+		// visibly drifted whenever its text wrapped.
+		const bottom = { ...ON, anchorV: "bottom" as const, insetY: 5 };
+		expect(drawnEdges(bottom, LANDSCAPE, 6).bottom).toBeCloseTo(
+			drawnEdges(bottom, LANDSCAPE, 18).bottom,
+			6,
+		);
+		const top = { ...ON, anchorV: "top" as const, insetY: 5 };
+		expect(drawnEdges(top, LANDSCAPE, 6).top).toBeCloseTo(drawnEdges(top, LANDSCAPE, 18).top, 6);
+	});
+
+	it("tells the compositor which edge to pin", () => {
+		expect(captionBoxRect({ ...ON, anchorV: "bottom" }, LANDSCAPE).verticalAlign).toBe("bottom");
+		expect(captionBoxRect({ ...ON, anchorV: "top" }, LANDSCAPE).verticalAlign).toBe("top");
+	});
+
+	it("keeps the vertical placement independent of everything on the other axis", () => {
+		// The old `width` slider moved the caption vertically, because a narrower band
+		// wrapped more, and more lines grew a centred block in both directions.
+		const base = { ...ON, anchorV: "bottom" as const, insetY: 8 };
+		const pinned = (s: typeof base) => {
+			const b = captionBoxRect(s, LANDSCAPE);
+			return b.y + b.height;
+		};
+		expect(pinned({ ...base, anchorH: "left", insetX: 0 })).toBeCloseTo(pinned(base), 6);
+		expect(pinned({ ...base, anchorH: "right", insetX: 25 })).toBeCloseTo(pinned(base), 6);
+	});
+});
+
+describe("caption horizontal anchoring", () => {
+	it("pins the named edge, and centres between the column when asked to", () => {
+		const column = captionSafeColumn(LANDSCAPE);
+
+		const left = captionBoxRect({ ...ON, anchorH: "left", insetX: 4 }, LANDSCAPE);
+		expect(left.x).toBeCloseTo(4, 6);
+
+		const right = captionBoxRect({ ...ON, anchorH: "right", insetX: 4 }, LANDSCAPE);
+		expect(right.x + right.width).toBeCloseTo(96, 6);
+
+		const centre = captionBoxRect({ ...ON, anchorH: "center" }, LANDSCAPE);
+		expect(centre.x).toBeCloseTo((100 - column.width) / 2, 6);
+		expect(centre.width).toBeCloseTo(column.width, 6);
+	});
+
+	it("ignores insetX entirely when centred — there is no edge to measure from", () => {
+		const a = captionBoxRect({ ...ON, anchorH: "center", insetX: 0 }, LANDSCAPE);
+		const b = captionBoxRect({ ...ON, anchorH: "center", insetX: 25 }, LANDSCAPE);
+		expect(a).toEqual(b);
+	});
+
+	it("narrows the box rather than pushing it off-frame", () => {
+		// A 90%-wide portrait column pushed 25% in would otherwise end at 115%.
+		const box = captionBoxRect({ ...ON, anchorH: "left", insetX: 25 }, PORTRAIT);
+		expect(box.x + box.width).toBeLessThanOrEqual(100 + 1e-9);
+		expect(box.width).toBeCloseTo(75, 6);
+	});
+});
+
+describe("caption safe column", () => {
+	it("follows the BBC line-length table, and stays inside title-safe", () => {
+		expect(captionSafeColumn(LANDSCAPE)).toEqual({ x: 16, width: 68 });
+		expect(captionSafeColumn(PORTRAIT)).toEqual({ x: 5, width: 90 });
+		for (const aspect of [LANDSCAPE, 1, PORTRAIT]) {
+			const c = captionSafeColumn(aspect);
+			expect(c.x + c.width).toBeCloseTo(100 - c.x, 6);
+		}
+	});
+
+	it("defaults a vertical export well clear of the platform chrome", () => {
+		// The landscape values are eyeballed against the editor's default padding; the
+		// portrait one answers a different question — TikTok/Reels/Shorts draw their own
+		// chrome over the bottom eighth of a 9:16 export, so the same 1.5% would put the
+		// caption behind a UI.
+		expect(defaultCaptionInsetY(LANDSCAPE)).toBe(1.5);
+		expect(defaultCaptionInsetX(LANDSCAPE)).toBe(10);
+		expect(defaultCaptionInsetY(PORTRAIT)).toBeGreaterThan(10);
+	});
+});
+
+describe("migrating a pre-anchor document", () => {
+	// The rule is reproduce the PIXELS, not the fields: the old band was a fixed 22%
+	// box with the ink centred in it, so where the caption was drawn is recoverable,
+	// and the nearer edge becomes the anchor. A migrated project must not visibly move.
+	const legacy = (captions: Record<string, unknown>) =>
+		getCaptionSettings(
+			doc({ legacyEditor: { captions: { enabled: true, ...captions } } } as Partial<AxcutDocument>),
+			LANDSCAPE,
+		);
+
+	it("keeps a default bottom caption at the bottom", () => {
+		const s = legacy({ verticalPosition: "bottom", offsetY: 0 });
+		expect(s.anchorV).toBe("bottom");
+		// The old band sat at y=75 and its ink — 48px × (2 lines × 1.4em + 0.2em of
+		// plate) = 13.33% of frame height — was centred in the 22% box, so the drawn
+		// block ended at 92.67%. The migrated inset must reproduce exactly that edge.
+		expect(s.insetY).toBeCloseTo(7.333, 2);
+	});
+
+	it("flips the anchor for a caption that had been dragged to the top", () => {
+		const s = legacy({ verticalPosition: "bottom", offsetY: -79.333 });
+		expect(s.anchorV).toBe("top");
+		expect(s.insetY).toBeCloseTo(0, 1);
+	});
+
+	it("keeps a top caption at the top", () => {
+		const s = legacy({ verticalPosition: "top", offsetY: 0 });
+		expect(s.anchorV).toBe("top");
+	});
+
+	it("maps the old band+textAlign pair onto the single horizontal anchor", () => {
+		expect(legacy({ width: 80, offsetX: 0, textAlign: "center" }).anchorH).toBe("center");
+		expect(legacy({ width: 40, offsetX: -30, textAlign: "left" }).anchorH).toBe("left");
+		expect(legacy({ width: 40, offsetX: 30, textAlign: "right" }).anchorH).toBe("right");
+	});
+
+	it("reproduces the horizontal distance too, instead of snapping to the frame edge", () => {
+		// The old band's own left edge, not 0: `width: 40` centres its anchor at 30, so
+		// an offset of −25 put the band at 5% — and that is where the caption must stay.
+		const left = legacy({ width: 40, offsetX: -25, textAlign: "left" });
+		expect(left.anchorH).toBe("left");
+		expect(left.insetX).toBeCloseTo(5, 6);
+
+		// Mirrored: the band ends at 95%, so the distance from the right edge is 5%.
+		const right = legacy({ width: 40, offsetX: 25, textAlign: "right" });
+		expect(right.anchorH).toBe("right");
+		expect(right.insetX).toBeCloseTo(5, 6);
+	});
+
+	it("lets a stored anchor win, so the migration runs once and then stays out of the way", () => {
+		const s = legacy({ verticalPosition: "top", offsetY: 0, anchorV: "bottom", insetY: 9 });
+		expect(s.anchorV).toBe("bottom");
+		expect(s.insetY).toBe(9);
+	});
+
+	it("gives a document with no caption settings the aspect-appropriate default", () => {
+		expect(getCaptionSettings(doc(), LANDSCAPE).insetY).toBe(1.5);
+		expect(getCaptionSettings(doc(), LANDSCAPE).insetX).toBe(10);
+		expect(getCaptionSettings(doc(), PORTRAIT).insetY).toBe(12.5);
+	});
+
+	it("freezes the PORTRAIT defaults on the first write to a vertical project", () => {
+		// The first patch is what materialises the defaults into the document, so it
+		// has to know the aspect too. Patching without it stored the landscape inset
+		// into a 9:16 project and the stored value then won for good — putting the
+		// caption under the platform's own chrome, the exact failure the
+		// aspect-derived default exists to prevent.
+		const first = patchCaptionSettings(doc(), { enabled: true }, PORTRAIT);
+		const stored = (first.legacyEditor as { captions: CaptionSettings }).captions;
+		expect(stored.insetY).toBe(12.5);
+		expect(stored.insetX).toBe(defaultCaptionInsetX(PORTRAIT));
+
+		// And it stays: a later patch reads what is stored rather than re-deriving.
+		const later = patchCaptionSettings(first, { fontSize: 60 }, PORTRAIT);
+		expect(getCaptionSettings(later, PORTRAIT).insetY).toBe(12.5);
 	});
 });
 
@@ -233,7 +426,7 @@ describe("deriveCaptionCues", () => {
 
 describe("captionCuesToTextRegions", () => {
 	it("emits plain text regions with no annotationSource marker", () => {
-		const regions = captionCuesToTextRegions(deriveCaptionCues(doc(), ON, {}), ON);
+		const regions = captionCuesToTextRegions(deriveCaptionCues(doc(), ON, {}), ON, LANDSCAPE);
 		expect(regions.length).toBeGreaterThan(0);
 		for (const region of regions) {
 			expect(region.type).toBe("text");
@@ -247,16 +440,34 @@ describe("captionCuesToTextRegions", () => {
 			...ON,
 			color: "#fde047",
 			fontSize: 40,
-			textAlign: "left" as const,
+			anchorH: "left" as const,
 			backgroundEnabled: false,
 		};
-		const [region] = captionCuesToTextRegions(deriveCaptionCues(doc(), settings, {}), settings);
+		const [region] = captionCuesToTextRegions(
+			deriveCaptionCues(doc(), settings, {}),
+			settings,
+			LANDSCAPE,
+		);
 		expect(region.style).toMatchObject({
 			color: "#fde047",
 			fontSize: 40,
+			// One horizontal control: the anchor IS the text alignment the rasterizer gets.
 			textAlign: "left",
 			backgroundColor: "transparent",
 		});
+	});
+
+	it("tells the compositor which edge to pin, on every region", () => {
+		// Without this the rasterizers centre the block in the box, which is the whole
+		// bug: the caption would drift vertically every time its text wrapped.
+		const settings = { ...ON, anchorV: "top" as const };
+		const regions = captionCuesToTextRegions(
+			deriveCaptionCues(doc(), settings, {}),
+			settings,
+			LANDSCAPE,
+		);
+		expect(regions.length).toBeGreaterThan(0);
+		for (const region of regions) expect(region.verticalAlign).toBe("top");
 	});
 });
 

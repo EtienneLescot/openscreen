@@ -21,6 +21,10 @@ const noop = () => {};
 
 function renderTopBar(projectTitle: string | null) {
 	const onRename = vi.fn();
+	const onShowAbout = vi.fn();
+	const onCheckForUpdates = vi.fn();
+	const onOpenSettings = vi.fn();
+	const onOpenProviderSettings = vi.fn();
 	render(
 		<EditorTopBar
 			mode="edit"
@@ -34,13 +38,29 @@ function renderTopBar(projectTitle: string | null) {
 				newProject: noop,
 				save: noop,
 				export: noop,
-				openSettings: noop,
+				openSettings: onOpenSettings,
 				renameProject: onRename,
 				toggleChat: noop,
+				openProviderSettings: onOpenProviderSettings,
+				showAbout: onShowAbout,
+				checkForUpdates: onCheckForUpdates,
 			}}
 		/>,
 	);
-	return { onRename };
+	return { onRename, onShowAbout, onCheckForUpdates, onOpenSettings, onOpenProviderSettings };
+}
+
+/** The menu reads two separate channels, and they answer different questions: `getAppInfo` for
+ *  the version, `canCheckForUpdatesNow` for the full update veto (see EditorTopBar). Neither
+ *  exists in jsdom. Returns the cleanup so a stub cannot leak into the next test. */
+function stubElectronAPI(info: { version: string; canCheckForUpdates: boolean }) {
+	(window as unknown as { electronAPI?: unknown }).electronAPI = {
+		getAppInfo: () => Promise.resolve(info),
+		canCheckForUpdatesNow: () => Promise.resolve(info.canCheckForUpdates),
+	};
+	return () => {
+		(window as unknown as { electronAPI?: unknown }).electronAPI = undefined;
+	};
 }
 
 describe("ProjectNameField (issue #180)", () => {
@@ -119,5 +139,101 @@ describe("ProjectNameField (issue #180)", () => {
 		// indirectly via the inline-style rule we removed: the pre-fix button
 		// had `all: unset`; if any element still has it, the regression is back.
 		expect(button.getAttribute("style") ?? "").not.toMatch(/all\s*:\s*unset/);
+	});
+});
+
+describe("AppMenu", () => {
+	it("hangs the menu on the brand rather than adding a control to the bar", () => {
+		renderTopBar("Demo Project");
+		const trigger = screen.getByRole("button", { name: /OpenScreen/ });
+		expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+		expect(trigger).toHaveAttribute("aria-expanded", "false");
+		// The whole point of the wordmark-as-trigger: no menu until asked for.
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+	});
+
+	it("keeps the trigger a real button, which is the only thing that makes it clickable", () => {
+		// `.topbar button, .topbar input, .topbar select` is the ENTIRE no-drag opt-out in
+		// EditorShellV4.module.css. A brand rendered as a <span> or a <div role="button"> sits
+		// on the window-drag region and the OS eats the click — the #180 failure, one control
+		// over. Same reason `all: unset` is banned here.
+		renderTopBar("Demo Project");
+		const trigger = screen.getByRole("button", { name: /OpenScreen/ });
+		expect(trigger.tagName).toBe("BUTTON");
+		expect(trigger.getAttribute("style") ?? "").not.toMatch(/all\s*:\s*unset/);
+	});
+
+	it("opens on click and offers shortcuts, AI settings and about", () => {
+		renderTopBar("Demo Project");
+		fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
+		expect(screen.getByRole("menu")).toBeInTheDocument();
+		// Exact names: the translator echoes keys, and both settings rows are labelled with a
+		// `…title` key, so a /title/ match would hit two items and pin neither.
+		expect(screen.getByRole("menuitem", { name: "title" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "providerSettings.title" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /actions\.about/ })).toBeInTheDocument();
+	});
+
+	// Issue #420: the AI dialog used to be openable only from the chat panel, which mounts in
+	// Edit mode with the panel expanded. The row is unconditional here — its dialog is mounted
+	// in App.tsx, above every mode — so the menu does not lie in Media and Rec.
+	it("opens the AI settings dialog and closes behind itself", () => {
+		const { onOpenProviderSettings, onOpenSettings } = renderTopBar("Demo Project");
+		fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "providerSettings.title" }));
+		expect(onOpenProviderSettings).toHaveBeenCalledTimes(1);
+		// Distinct from the shortcuts row above it, which is the dialog it would be confused with.
+		expect(onOpenSettings).not.toHaveBeenCalled();
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+	});
+
+	it("routes About to the main process and closes behind itself", () => {
+		const { onShowAbout } = renderTopBar("Demo Project");
+		fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
+		fireEvent.click(screen.getByRole("menuitem", { name: /actions\.about/ }));
+		expect(onShowAbout).toHaveBeenCalledTimes(1);
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+	});
+
+	it("closes on Escape", () => {
+		renderTopBar("Demo Project");
+		fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
+		fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+	});
+
+	it("hides Check for Updates when the install channel owns updates", async () => {
+		// No electronAPI at all in jsdom, which lands on the same branch as a Store/Flathub/Snap
+		// build answering false, and as a check refused mid-take: no item, rather than a button
+		// that silently does nothing.
+		renderTopBar("Demo Project");
+		fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
+		expect(
+			screen.queryByRole("menuitem", { name: /actions\.checkForUpdates/ }),
+		).not.toBeInTheDocument();
+	});
+
+	it("offers Check for Updates where the app owns its own updates", async () => {
+		const restore = stubElectronAPI({ version: "9.9.9", canCheckForUpdates: true });
+		try {
+			const { onCheckForUpdates } = renderTopBar("Demo Project");
+			fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
+			const item = await screen.findByRole("menuitem", { name: /actions\.checkForUpdates/ });
+			fireEvent.click(item);
+			expect(onCheckForUpdates).toHaveBeenCalledTimes(1);
+		} finally {
+			restore();
+		}
+	});
+
+	it("shows the running version on the About row, for pasting into a bug report", async () => {
+		const restore = stubElectronAPI({ version: "9.9.9", canCheckForUpdates: false });
+		try {
+			renderTopBar("Demo Project");
+			fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
+			expect(await screen.findByText("9.9.9")).toBeInTheDocument();
+		} finally {
+			restore();
+		}
 	});
 });

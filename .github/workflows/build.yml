@@ -1128,6 +1128,17 @@ jobs:
       - name: Configure Microsoft Store CLI
         if: steps.store.outputs.enabled == 'true'
         uses: microsoft/microsoft-store-apppublisher@v1.1
+        # PINNED, and it has to stay pinned. The action defaults to `latest`, and
+        # msstore-cli v0.4.0 (published 2026-08-18, the first release since v0.3.9
+        # in January) ships an Azure SDK client whose `ClientOptions.Retry.NetworkTimeout`
+        # is 0:00:00 — every blob upload is cancelled the instant it starts. The CLI
+        # reports that as "Error while uploading the application package.", so the
+        # submission is created and configured and then dies at "Uploading Bundle to
+        # Azure blob: 0%", six instant retries later. v1.9.6 hit it three times in a
+        # row; the same package and account had submitted fine on v0.3.9 three days
+        # earlier. Unpin only against a CLI release that fixes the timeout.
+        with:
+          version: v0.3.9
 
       - name: Submit the package to the Store
         id: submit
@@ -1157,7 +1168,11 @@ jobs:
           # below, which takes the DIRECTORY holding it — the CLI's own usage
           # says `-i, --inputDirectory`, and rejects the `--inputFile` that
           # Microsoft Learn documents. The binary wins.
-          msstore publish . --inputDirectory $appx.Directory.FullName --appId $env:PRODUCT_ID
+          # -v for the same reason as the retry workflow: without it an upload
+          # failure is the bare line "Error while uploading the application package."
+          # with no status code, no URL and no body. This is the path a real release
+          # takes, so it is the path that most needs to be diagnosable.
+          msstore publish . --inputDirectory $appx.Directory.FullName --appId $env:PRODUCT_ID -v
 
       # Report what happened, not what was configured. Keyed off `enabled` alone
       # under always(), this claimed "Submitted to the Store" when `msstore

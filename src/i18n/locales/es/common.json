@@ -18,6 +18,7 @@
 		"edit": "Editar",
 		"view": "Vista",
 		"window": "Ventana",
+		"help": "Ayuda",
 		"quit": "Salir",
 		"stopRecording": "Detener grabación",
 		"undo": "Deshacer",
@@ -39,7 +40,8 @@
 		"services": "Servicios",
 		"hide": "Ocultar OpenScreen",
 		"hideOthers": "Ocultar otros",
-		"unhide": "Mostrar todo"
+		"unhide": "Mostrar todo",
+		"saveDiagnostics": "Guardar diagnósticos"
 	},
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} está disponible. Estás usando {{currentVersion}}.",

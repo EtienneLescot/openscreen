@@ -1,5 +1,4 @@
 import {
-	ChevronDown,
 	Clock,
 	Crosshair,
 	Loader2,
@@ -14,7 +13,6 @@ import {
 	ZoomIn,
 } from "lucide-react";
 import {
-	type CSSProperties,
 	memo,
 	type PointerEvent as ReactPointerEvent,
 	useCallback,
@@ -30,14 +28,15 @@ import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
 import { createId } from "@/lib/ai-edition/document/ids";
-import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
+import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
 	newRegionDurationSec,
@@ -55,7 +54,6 @@ import {
 	buildAutoZoomSuggestionsForClips,
 } from "@/lib/ai-edition/timeline/zoom-suggestions";
 import { nativeBridgeClient } from "@/native/client";
-import { ASPECT_RATIO_PRESETS, getAspectRatioLabel } from "@/utils/aspectRatioUtils";
 import { TransportBar } from "../TransportBar";
 import type { VideoSource } from "../VirtualPreview";
 import styles from "./EditorShellV4.module.css";
@@ -258,11 +256,18 @@ const ClipWaveform = memo(function ClipWaveform({
 	assetDurationSec,
 	sourceStartSec,
 	sourceEndSec,
+	gain,
 }: {
 	videoUrl: string | undefined;
 	assetDurationSec: number | undefined;
 	sourceStartSec: number;
 	sourceEndSec: number;
+	/** Linear output gain — `audioGainScalar(settings.audioGainDb)`, not the dB.
+	 *  Passed in rather than read from the settings store here: this component is
+	 *  memoised per clip, and subscribing each one to the document would re-render
+	 *  every waveform on any edit at all. As a prop it busts the memo on a gain
+	 *  change and on nothing else. */
+	gain: number;
 }) {
 	// The duration is what tells `useAudioPeaks` whether this recording is small
 	// enough to decode whole — the file's byte size does not, on compressed video.
@@ -301,40 +306,34 @@ const ClipWaveform = memo(function ClipWaveform({
 	if (!bars) return null;
 	return (
 		<div aria-hidden className={styles.tlWave}>
-			{bars.map((h, bi) => (
-				<span
-					key={bi}
-					style={{
-						height: `${Math.max(8, Math.round(h * 100))}%`,
-						opacity: (0.5 + h * 0.5).toFixed(2),
-					}}
-				/>
-			))}
+			{bars.map((h, bi) => {
+				// Gain is applied HERE and not inside the memo above, which scans the whole
+				// asset's blocks: a slider drag fires one setLive per pointer move, so this
+				// keeps a tick at `barCount` multiplies instead of re-folding the peaks.
+				//
+				// Clamped because `finish_audio` clamps: it does `(sample * trim).clamp(-1, 1)`
+				// per sample, and this bar is `max|sample|` over its bucket. Gain is positive
+				// and clamping is monotonic, so `clamp(max(|s|) * g)` IS the peak of the gained,
+				// clipped signal — the bar is exact, not an impression. Without the clamp a
+				// 0.5 peak at +12 dB computes `height: 199%` and is merely hidden by the clip's
+				// `overflow`, which draws a signal the export will never write.
+				//
+				// The 8% floor is deliberately NOT scaled: it exists so an empty clip still
+				// reads as a clip, and it is not amplitude.
+				const amplitude = Math.min(1, h * gain);
+				return (
+					<span
+						key={bi}
+						style={{
+							height: `${Math.max(8, Math.round(amplitude * 100))}%`,
+							opacity: (0.5 + amplitude * 0.5).toFixed(2),
+						}}
+					/>
+				);
+			})}
 		</div>
 	);
 });
-
-/** Right-aligned hint on a ratio row. Marks the shapes that are native to the timeline's own
- *  clips, so "Original" annotates a concrete ratio the user can name instead of being a separate
- *  menu entry that resolves to a different shape depending on which clips are loaded. */
-const nativeBadgeStyle: CSSProperties = {
-	marginLeft: "auto",
-	fontSize: 10.5,
-	fontWeight: 500,
-	color: "var(--muted)",
-	whiteSpace: "nowrap",
-};
-
-/** Header for native shapes that match no preset (an ultrawide, an odd capture size) and so
- *  need a row of their own. */
-const aspectSectionLabelStyle: CSSProperties = {
-	padding: "8px 10px 4px",
-	fontSize: 10,
-	fontWeight: 600,
-	letterSpacing: "0.04em",
-	textTransform: "uppercase",
-	color: "var(--muted)",
-};
 
 interface LanePill {
 	id: string;
@@ -361,7 +360,7 @@ export function V4Timeline({
 	tl: TimelineApi;
 	setCurrentTime: (sec: number) => void;
 	variant?: "edit" | "media";
-	onDropAsset?: (assetId: string) => void;
+	onDropAsset?: (assetId: string) => Promise<void>;
 	videoSources?: VideoSource[];
 	playing: boolean;
 	onTogglePlay: () => void;
@@ -372,6 +371,13 @@ export function V4Timeline({
 	onEditClip: (clip: AxcutClip) => void;
 }) {
 	const t = useScopedT("timeline");
+	// The camera lane borrows the Layout pane's "No Webcam" wording when there is no
+	// camera to grow, so the two surfaces say the same thing about the same project.
+	const ts = useScopedT("settings");
+	// Wheel zoom/pan listens on the whole pane (toolbar down through the nav bar),
+	// not just the lanes — a user scrolling over the ruler or the hint labels
+	// expects the same zoom/pan the lanes give, not silence.
+	const panelRef = useRef<HTMLDivElement | null>(null);
 	const tracksRef = useRef<HTMLDivElement | null>(null);
 	// The transformed canvas is the true timeline coordinate frame — clips, pills
 	// and the playhead are all positioned inside it. Time↔x math must measure THIS
@@ -404,21 +410,7 @@ export function V4Timeline({
 		shiftPx: number;
 	} | null>(null);
 	const { settings, set: setSettings } = useEditorSettings();
-	const document = useProjectStore((s) => s.document);
-	// The distinct native shapes of the clips actually on the timeline. "Original" used to be a
-	// single menu entry that silently resolved to whichever clip had the most pixels — so adding
-	// a 4K portrait rush flipped the whole project to portrait with no UI feedback. Enumerating
-	// them instead means the user picks a shape explicitly, and what gets stored is a concrete
-	// "W:H" token that no longer moves when the clip list changes.
-	const nativeFormats = useMemo(() => (document ? collectNativeFormats(document) : []), [document]);
-	// The ORIGINAL section lists every distinct shape actually on the timeline (deduplicated by
-	// ratio), so the user sees what their footage is — including shapes that also happen to match a
-	// preset. A preset row and its matching Original row select the same token; the preset section
-	// stays a pure list of fixed choices, and "which shapes are my clips" lives solely in ORIGINAL
-	// (no more per-preset badge, which split that one answer across two places).
-	const timelineIsMixed = nativeFormats.length > 1;
 
-	const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
 	const [autoEnhanceOpen, setAutoEnhanceOpen] = useState(false);
 	const [autoBusy, setAutoBusy] = useState(false);
 	// The AI cut pass reads the transcript, and the transcript is produced in the
@@ -441,6 +433,12 @@ export function V4Timeline({
 							: t("toolbar.smartCutsNeedsTranscript");
 
 	const clips = tl.clips;
+	// A camera-fullscreen region grows the webcam overlay, so on a project with no webcam
+	// it renders nothing in the preview and nothing in the export. `addCameraFullscreen`
+	// refuses to write one (see useTimeline) — this makes the control say so before it is
+	// clicked instead of looking like it worked. Same question, same helper as the Layout
+	// pane: is a camera attached anywhere on this timeline?
+	const hasAnyCamera = useMemo(() => hasAnyClipWithCamera(tl.assets, clips), [tl.assets, clips]);
 	const total = useMemo(
 		() =>
 			Math.max(
@@ -821,14 +819,22 @@ export function V4Timeline({
 	// React marks wheel handlers passive by default, so e.preventDefault()
 	// there silently no-ops and the browser/OS still intercepts Ctrl+wheel as
 	// a page-zoom gesture.
+	// Listens on the whole panel (ref below) so the ruler, the hint labels and
+	// the nav bar all zoom/pan too — only .tlTracks scrolls natively, but the
+	// gesture shouldn't be confined to wherever that scroll happens to live.
+	// The rect stays tracksRef regardless of which descendant the wheel fired
+	// on: ruler + tracks share one horizontal padding (see the width effect
+	// below), so tracksRef reads the same left/width either way, and it's the
+	// one guaranteed to exist whenever showLanes is true.
 	useEffect(() => {
-		const el = tracksRef.current;
-		if (!el) return;
+		const panel = panelRef.current;
+		const tracks = tracksRef.current;
+		if (!panel || !tracks) return;
 		// Media shows no zoom window, so leave the wheel alone there: a zoom with
 		// no control to undo it and no ruler reading to explain it is a trap.
 		if (!showLanes) return;
 		const onWheelNative = (e: WheelEvent) => {
-			const r = el.getBoundingClientRect();
+			const r = tracks.getBoundingClientRect();
 			const viewportPct = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
 			if (e.shiftKey) {
 				e.preventDefault();
@@ -858,8 +864,8 @@ export function V4Timeline({
 			}
 			// Otherwise let the native vertical scroll of .tlTracks run (no preventDefault).
 		};
-		el.addEventListener("wheel", onWheelNative, { passive: false });
-		return () => el.removeEventListener("wheel", onWheelNative);
+		panel.addEventListener("wheel", onWheelNative, { passive: false });
+		return () => panel.removeEventListener("wheel", onWheelNative);
 	}, [showLanes]);
 
 	// Track the tracks' content width for the ruler. .tlTracks and .tlRulerRow
@@ -1059,6 +1065,10 @@ export function V4Timeline({
 				return;
 			}
 			const added = await tl.addZoomsBulk(suggestions);
+			// A failed write returns 0 and has already toasted why. Without this the user
+			// got "Added 0 automatic zooms" stacked on top of "Failed to save project",
+			// with no zoom anywhere -- a success message for something that did not happen.
+			if (added === 0) return;
 			toast.success(
 				t(added === 1 ? "toolbar.addedAutoZoom" : "toolbar.addedAutoZoomPlural", { count: added }),
 			);
@@ -1258,7 +1268,7 @@ export function V4Timeline({
 	};
 
 	return (
-		<div className={styles.tl}>
+		<div className={styles.tl} ref={panelRef}>
 			<div className={styles.tlToolbar}>
 				{showLanes ? (
 					<div className={styles.tlTools} role="toolbar" aria-label={t("toolbar.timelineTools")}>
@@ -1366,75 +1376,12 @@ export function V4Timeline({
 							className={styles.tlToolBtn}
 							title={t("buttons.addCameraFullscreen")}
 							aria-label={t("buttons.addCameraFullscreen")}
+							disabled={!hasAnyCamera}
+							style={!hasAnyCamera ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
 							onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}
 						>
 							<Maximize2 size={15} />
 						</button>
-						<span className={styles.tlToolSep} aria-hidden />
-						<Popover open={aspectMenuOpen} onOpenChange={setAspectMenuOpen}>
-							<PopoverTrigger asChild>
-								<button
-									type="button"
-									className={styles.tlAspect}
-									title={t("toolbar.aspectRatio")}
-									aria-label={t("toolbar.aspectRatio")}
-								>
-									{getAspectRatioLabel(settings.aspectRatio)}
-									<ChevronDown size={10} />
-								</button>
-							</PopoverTrigger>
-							<PopoverContent
-								align="end"
-								sideOffset={6}
-								animated={false}
-								className="w-auto border-0 bg-transparent p-0 shadow-none"
-							>
-								<div
-									className={styles.recMenu}
-									style={{ position: "relative", bottom: "auto", width: 210 }}
-								>
-									{ASPECT_RATIO_PRESETS.map((ratio) => (
-										<button
-											type="button"
-											key={ratio}
-											className={`${styles.recMenuRow}${
-												ratio === settings.aspectRatio ? ` ${styles.active}` : ""
-											}`}
-											onClick={() => {
-												void setSettings({ aspectRatio: ratio });
-												setAspectMenuOpen(false);
-											}}
-										>
-											{ratio}
-										</button>
-									))}
-									{nativeFormats.length > 0 ? (
-										<>
-											<div style={aspectSectionLabelStyle}>{t("toolbar.original")}</div>
-											{nativeFormats.map((format) => (
-												<button
-													type="button"
-													key={format.token}
-													className={`${styles.recMenuRow}${
-														format.token === settings.aspectRatio ? ` ${styles.active}` : ""
-													}`}
-													onClick={() => {
-														void setSettings({ aspectRatio: format.token });
-														setAspectMenuOpen(false);
-													}}
-												>
-													{format.token}
-													<span style={nativeBadgeStyle}>
-														{`${format.width}×${format.height}`}
-														{timelineIsMixed ? ` · ${format.clipCount}` : ""}
-													</span>
-												</button>
-											))}
-										</>
-									) : null}
-								</div>
-							</PopoverContent>
-						</Popover>
 					</div>
 				) : (
 					// Media is an ARRANGING surface: add, remove, reorder. Nothing here
@@ -1527,7 +1474,13 @@ export function V4Timeline({
 								<div className={styles.tlLane}>{renderPills(trimPills, t("hints.pressTrim"))}</div>
 								<div className={styles.tlLane}>{renderPills(zoomPills, t("hints.pressZoom"))}</div>
 								<div className={styles.tlLane}>
-									{renderPills(cameraFullscreenPills, t("hints.pressCameraFullscreen"))}
+									{/* Advertising "Press C" on a project with no webcam invites a keystroke
+									    that `addCameraFullscreen` now refuses (#353). The toolbar button is
+									    already disabled; this keeps the lane from contradicting it. */}
+									{renderPills(
+										cameraFullscreenPills,
+										hasAnyCamera ? t("hints.pressCameraFullscreen") : ts("layout.noWebcam"),
+									)}
 								</div>
 							</>
 						) : null}
@@ -1545,7 +1498,7 @@ export function V4Timeline({
 								e.preventDefault();
 								setDragOver(false);
 								const id = e.dataTransfer.getData(ASSET_MIME);
-								if (id && onDropAsset) onDropAsset(id);
+								if (id && onDropAsset) void onDropAsset(id).catch(() => undefined);
 							}}
 						>
 							{clips.map((c, i) => {
@@ -1607,6 +1560,7 @@ export function V4Timeline({
 											assetDurationSec={asset?.durationSec}
 											sourceStartSec={c.sourceStartSec}
 											sourceEndSec={c.sourceEndSec ?? c.sourceStartSec + dur}
+											gain={audioGainScalar(settings.audioGainDb)}
 										/>
 										<div className={styles.tlClipLabel}>
 											<span

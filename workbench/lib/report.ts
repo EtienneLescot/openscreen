@@ -15,8 +15,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { containsSecret } from "./env";
-import type { RepetitionResult } from "./runner";
-import type { CheckResult } from "./score";
+import type { CheckResult, ScoredRun } from "./score";
 import {
 	formatInterval,
 	formatPercent,
@@ -24,6 +23,7 @@ import {
 	type Proportion,
 	wilson95,
 } from "./stats";
+import type { WireTranscript } from "./wire";
 
 export interface RunFingerprint {
 	/** sha256 of the system message as sent, all blocks concatenated. */
@@ -43,7 +43,18 @@ export interface CheckStat {
 	axis: "behaviour" | "dsl";
 	weight: number;
 	passed: number;
+	/** Répétitions observées, indéterminées comprises. */
 	total: number;
+	/**
+	 * Répétitions restées `indéterminé`.
+	 *
+	 * ponytail: `wilson` est calculé sur `total − indeterminate`, donc une
+	 * abstention RÉTRÉCIT n et l'intervalle s'élargit — la conséquence
+	 * statistique juste, et déjà lisible dans une colonne que le rapport
+	 * imprime. Le compte est quand même écrit à part : un intervalle large se
+	 * confond avec un petit n, et les deux se corrigent différemment.
+	 */
+	indeterminate: number;
 	wilson: Proportion;
 	expected: boolean;
 	/** First distinct evidence strings, capped so a report stays readable. */
@@ -64,6 +75,9 @@ export interface ScenarioReport {
 	passRate: Proportion;
 	failureClasses: Record<string, number>;
 	checks: CheckStat[];
+	/** Axes dont le poids indéterminé dépasse le poids tranché sur au moins une
+	 *  répétition : leur taux n'est pas une mesure de l'axe. */
+	unmeasuredAxes: string[];
 	msMean: number;
 }
 
@@ -87,13 +101,22 @@ function gitInfo(): { sha: string; dirty: boolean } {
 	}
 }
 
+/**
+ * `wire` est celui de la PREMIÈRE répétition — l'empreinte est la même sur
+ * toutes, c'est la définition d'une empreinte. Le paramètre est le transcript
+ * lui-même et non la liste des répétitions, parce que la passe du juge
+ * (`wb:judge`) n'a pas de répétitions : elle relit des tours sur disque, dont
+ * l'empreinte a été écrite avec eux.
+ */
 export function fingerprintOf(options: {
-	results: RepetitionResult[];
+	wire:
+		| Pick<WireTranscript, "systemSha256" | "systemChars" | "toolsSha256" | "toolNames">
+		| undefined;
 	model: string;
 	overlayId?: string | null;
 	reps: number;
 }): RunFingerprint {
-	const wire = options.results[0]?.run.wire;
+	const wire = options.wire;
 	const git = gitInfo();
 	return {
 		systemSha256: wire?.systemSha256 ?? "unknown",
@@ -110,12 +133,18 @@ export function fingerprintOf(options: {
 
 const MAX_EVIDENCE = 3;
 
+/**
+ * `results` n'est typé que sur `scored` : c'est tout ce que ce résumé lit, et
+ * l'écrire ainsi laisse la passe du juge — qui reconstruit un `ScoredRun` depuis
+ * un tour sur disque et n'a ni `run` ni `context` à offrir — passer par ici
+ * plutôt que par une seconde implémentation qui divergerait.
+ */
 export function summarizeScenario(options: {
 	scenarioId: string;
 	title: string;
 	tags: string[];
 	gate: number;
-	results: RepetitionResult[];
+	results: Array<{ scored: ScoredRun }>;
 }): ScenarioReport {
 	const { results } = options;
 	const n = results.length;
@@ -127,11 +156,13 @@ export function summarizeScenario(options: {
 			weight: result.weight,
 			passed: 0,
 			total: 0,
+			indeterminate: 0,
 			wilson: wilson95(0, 0),
 			expected: false,
 			evidence: [],
 		};
 		entry.total += 1;
+		if (result.indeterminate) entry.indeterminate += 1;
 		if (result.ok) entry.passed += 1;
 		if (result.expected) entry.expected = true;
 		if (result.evidence && entry.evidence.length < MAX_EVIDENCE) {
@@ -143,7 +174,12 @@ export function summarizeScenario(options: {
 		for (const check of result.scored.behaviour.results) register("behaviour", check);
 		for (const check of result.scored.dsl.results) register("dsl", check);
 	}
-	for (const entry of stats.values()) entry.wilson = wilson95(entry.passed, entry.total);
+	// Sur les répétitions TRANCHÉES. Un check indéterminé deux fois sur trois est
+	// un 1/1, pas un 1/3 : l'intervalle doit dire « une seule observation », pas
+	// « deux échecs ».
+	for (const entry of stats.values()) {
+		entry.wilson = wilson95(entry.passed, entry.total - entry.indeterminate);
+	}
 
 	const failureClasses: Record<string, number> = {};
 	for (const result of results) {
@@ -171,6 +207,14 @@ export function summarizeScenario(options: {
 		passRate: wilson95(passes, n),
 		failureClasses,
 		checks: [...stats.values()].sort((a, b) => a.id.localeCompare(b.id)),
+		unmeasuredAxes: [
+			...new Set(
+				results.flatMap((r) => [
+					...(r.scored.behaviour.measured ? [] : ["comportement"]),
+					...(r.scored.dsl.measured ? [] : ["DSL"]),
+				]),
+			),
+		],
 		msMean: mean(results.map((r) => r.scored.ms)),
 	};
 }
@@ -234,13 +278,36 @@ export function renderMarkdown(report: WorkbenchReport): string {
 			.join(" · ");
 		lines.push(`classes de tour : ${classes}`);
 		lines.push("");
-		lines.push("| check | axe | poids | k/n | Wilson 95% | statut |");
-		lines.push("| --- | --- | --- | --- | --- | --- |");
+		if (scenario.unmeasuredAxes.length > 0) {
+			// ponytail: au-dessus du tableau, jamais en note de bas de page. Le taux
+			// d'un axe majoritairement indéterminé n'est pas un résultat faible,
+			// c'est l'absence de résultat, et le lire comme un chiffre est
+			// précisément l'erreur que le troisième verdict existe pour empêcher.
+			lines.push(
+				`> **Axe non mesuré : ${scenario.unmeasuredAxes.join(", ")}.** Le poids indéterminé ` +
+					"y dépasse le poids tranché — le taux affiché ne porte que sur les checks tranchés " +
+					"et la porte ne peut pas être déclarée passée.",
+			);
+			lines.push("");
+		}
+		lines.push("| check | axe | poids | k/n | indét. | Wilson 95% | statut |");
+		lines.push("| --- | --- | --- | --- | --- | --- | --- |");
 		for (const check of scenario.checks) {
-			const status = check.passed === check.total ? "ok" : check.expected ? "connu" : "ÉCHEC";
+			const decided = check.total - check.indeterminate;
+			const status =
+				decided === 0
+					? "INDÉTERMINÉ"
+					: check.passed === decided
+						? check.indeterminate > 0
+							? "ok (partiel)"
+							: "ok"
+						: check.expected
+							? "connu"
+							: "ÉCHEC";
 			lines.push(
 				`| \`${check.id}\` | ${check.axis} | ${check.weight} | ` +
-					`${check.passed}/${check.total} | ${formatInterval(check.wilson)} | ${status} |`,
+					`${check.passed}/${decided} | ${check.indeterminate} | ` +
+					`${formatInterval(check.wilson)} | ${status} |`,
 			);
 		}
 		lines.push("");

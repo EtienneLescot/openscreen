@@ -18,6 +18,10 @@ export interface TranscribeStatus {
 	phase: "extracting-audio" | "loading-model" | "transcribing";
 	completedSec?: number;
 	totalSec?: number;
+	/** Backend the helper bound for this run; `"whispercpp-cpu"` is the slow path. */
+	backend?: string;
+	/** Real-time factor for the run so far — wall-clock / audio, lower is faster. */
+	rtf?: number;
 }
 
 export interface TranscribeAssetOptions {
@@ -63,6 +67,11 @@ export async function transcribeAsset(
 				phase: status.phase === "model" ? "loading-model" : "transcribing",
 				completedSec: status.completedSec,
 				totalSec: status.totalSec,
+				// Which device is doing the work, and how fast. The main process is the
+				// only place that knows either, and a silent CPU fallback is exactly the
+				// case a user cannot otherwise diagnose.
+				backend: status.backend,
+				rtf: status.rtf,
 			}),
 	});
 

@@ -42,6 +42,7 @@ let shimSelectedSource: ShimDesktopSource | null = null;
 type ShimRecordingPrefs = {
 	micEnabled: boolean;
 	micDeviceId: string | null;
+	micDeviceName: string | null;
 	camEnabled: boolean;
 	camDeviceId: string | null;
 	systemAudioEnabled: boolean;
@@ -51,6 +52,7 @@ const recordingPrefsStorageKey = "browser-shim-recording-prefs";
 let shimRecordingPrefs: ShimRecordingPrefs = {
 	micEnabled: false,
 	micDeviceId: null,
+	micDeviceName: null,
 	camEnabled: false,
 	camDeviceId: null,
 	systemAudioEnabled: false,
@@ -122,6 +124,15 @@ function createShimElectronAPI() {
 		onRequestSaveBeforeClose: () => () => undefined,
 		loadProjectFileFromPath: () => Promise.resolve({ success: false, canceled: true }),
 		getPathForFile: () => "",
+		// Browser mode has no main process to ask, and no installer that could update it. A
+		// version still has to come back or the HUD's About block never renders at all.
+		getAppInfo: () => Promise.resolve({ version: "0.0.0-browser", canCheckForUpdates: false }),
+		checkForUpdates: () => Promise.resolve(),
+		// No main process means no native message box to open. Resolving silently keeps the app
+		// menu clickable in browser mode instead of rejecting into the item's onClick.
+		showAbout: () => Promise.resolve(),
+		// No installer in browser mode, so nothing may ever be checked.
+		canCheckForUpdatesNow: () => Promise.resolve(false),
 		getSources: () => Promise.resolve(SHIM_SOURCES),
 		selectSource: (source: ShimDesktopSource) => {
 			shimSelectedSource = source;

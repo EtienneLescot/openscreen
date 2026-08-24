@@ -144,6 +144,24 @@ export function resolveWebcamReactiveZoom(
 	return Boolean(enabled) && supportsWebcamReactiveZoom(preset);
 }
 
+/**
+ * Effective layout preset: the stored setting, gated by whether there is a camera to lay
+ * out at all. Without one the answer is `no-webcam` whatever the panel holds — hiding
+ * just the webcam slot is not enough, because the block presets size the SCREEN off the
+ * block and would leave it squeezed into half an empty canvas. One rule shared by the
+ * settings panel, the preview and the native scene, so the three cannot drift.
+ *
+ * `hasCamera` is the caller's question to answer, and they do not all ask it the same
+ * way on purpose: the preview and the scene resolve it per clip, while the settings
+ * panel asks whether the project has any camera at all.
+ */
+export function resolveWebcamLayoutPreset(
+	preset: WebcamLayoutPreset | undefined,
+	hasCamera: boolean,
+): WebcamLayoutPreset {
+	return hasCamera ? (preset ?? "picture-in-picture") : "no-webcam";
+}
+
 export interface WebcamCompositeLayout {
 	screenRect: RenderRect;
 	webcamRect: StyledRenderRect | null;

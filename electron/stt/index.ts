@@ -5,6 +5,7 @@ import { ensureModels, modelPaths } from "./modelManager";
 import type {
 	SttPhraseSegment,
 	SttStatusEvent,
+	SttTiming,
 	SttTranscribeRequest,
 	SttTranscribeResponse,
 	SttWordSegment,
@@ -61,6 +62,26 @@ function cancelledError(): Error {
 	return error;
 }
 
+/**
+ * One transcription's cost, in both of the conventions this repo uses.
+ *
+ * whisper.cpp and the POC report measure RTF — wall-clock divided by audio, so
+ * LOWER is faster — while the figure that means something to a reader is its
+ * reciprocal ("2.1x real-time"). Printing both lets a log line be compared
+ * against tools/stt-eval/whispercpp-dtw-poc/REPORT.md 5 without arithmetic.
+ *
+ * ASCII "x" rather than the report's "×" glyph: these lines are read in a
+ * Windows console and in the diagnostics dump, neither of which is reliably
+ * UTF-8.
+ */
+function formatTiming(timing: SttTiming): string {
+	const speed = timing.rtf > 0 ? 1 / timing.rtf : 0;
+	return (
+		`${timing.audioSec.toFixed(1)}s audio in ${timing.elapsedSec.toFixed(1)}s ` +
+		`(${timing.rtf.toFixed(2)} rtf, ${speed.toFixed(1)}x real-time)`
+	);
+}
+
 export interface SttManagerInitOptions {
 	statusSink?: (event: SttStatusEvent) => void;
 	/** Override the models cache directory; defaults to `app.getPath("userData") + "/stt-models"`. */
@@ -69,6 +90,7 @@ export interface SttManagerInitOptions {
 
 export class SttManager {
 	private readonly server = new WhisperServerManager();
+	private shuttingDown = false;
 	private modelsBaseDir: string | null = null;
 	private readonly statusSinks = new Set<(event: SttStatusEvent) => void>();
 	private initPromise: Promise<void> | null = null;
@@ -119,10 +141,11 @@ export class SttManager {
 	 * means the second caller just awaits the same completion.
 	 */
 	init(options: SttManagerInitOptions = {}): Promise<void> {
+		if (this.shuttingDown) return Promise.reject(cancelledError());
 		if (options.statusSink) this.addStatusSink(options.statusSink);
 		if (options.modelsBaseDir) this.modelsBaseDir = options.modelsBaseDir;
 		if (!this.initPromise) {
-			// A REJECTED init must not be cached. `prepare()` downloads a 253 MB
+			// A REJECTED init must not be cached. `prepare()` downloads a 264 MB
 			// model on first run, and caching its rejection meant one dropped
 			// connection poisoned the whole app session: every later transcription
 			// — including the retry the UI offers, and every remaining asset in the
@@ -158,10 +181,20 @@ export class SttManager {
 				});
 			},
 		});
+		if (this.shuttingDown) throw cancelledError();
 
 		const paths = modelPaths(modelsDir);
 		this.modelPath = paths.whisper;
-		await this.server.start({ modelPath: paths.whisper });
+		try {
+			await this.server.start({ modelPath: paths.whisper });
+		} catch (error) {
+			if (this.shuttingDown) throw cancelledError();
+			throw error;
+		}
+		if (this.shuttingDown) {
+			await this.server.shutdown();
+			throw cancelledError();
+		}
 		this.emit({ phase: "transcribe" });
 	}
 
@@ -186,14 +219,17 @@ export class SttManager {
 	): Promise<Awaited<ReturnType<WhisperServerManager["transcribe"]>>> {
 		let lastError: unknown;
 		for (let attempt = 1; attempt <= CHUNK_ATTEMPTS; attempt++) {
+			if (this.shuttingDown) throw cancelledError();
 			try {
 				return await this.server.transcribe({ samples, language });
 			} catch (error) {
 				lastError = error;
+				if (this.shuttingDown) throw cancelledError();
 				if (attempt === CHUNK_ATTEMPTS) break;
 				if (this.modelPath) {
 					await this.server.start({ modelPath: this.modelPath }).catch(() => undefined);
 				}
+				if (this.shuttingDown) throw cancelledError();
 				await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
 			}
 		}
@@ -213,6 +249,14 @@ export class SttManager {
 		const wordSegments: SttWordSegment[] = [];
 		let detectedLanguage: string | null = null;
 		let backend = this.server.status.backend ?? "whispercpp-cpu";
+		// Summed, not averaged: chunks differ in length, so the mean of the
+		// per-chunk RTFs is not the RTF of the run.
+		let elapsedSec = 0;
+		let audioSec = 0;
+		let timedChunks = 0;
+		let untimedChunks = 0;
+		// The CPU verdict is worth saying once per run, not once per chunk.
+		let warnedCpu = false;
 		// Only the first chunk auto-detects; every later chunk is forced onto the
 		// language it resolved, so whisper cannot flip mid-recording on a chunk
 		// that opens with a proper noun or a silence and "transcribe" the rest as
@@ -244,6 +288,7 @@ export class SttManager {
 				req.samples.subarray(chunk.startSample, chunk.endSample),
 				language,
 			).catch((error) => {
+				if (error instanceof Error && error.name === "AbortError") throw error;
 				// Say where it died. Without this the user gets "Transcription
 				// failed" for a 30-minute recording with no hint that 18 of those
 				// minutes were fine and the helper fell over at one specific spot.
@@ -259,6 +304,7 @@ export class SttManager {
 					{ cause: error },
 				);
 			});
+			if (this.shuttingDown || this.cancelEpoch !== epoch) throw cancelledError();
 			// Chunk-relative timestamps → absolute, the only thing every consumer
 			// (captions, transcript editor, trims) reads.
 			for (const segment of result.segments) {
@@ -281,38 +327,110 @@ export class SttManager {
 				if (!language) language = detectedLanguage;
 			}
 			backend = result.backend ?? backend;
+			if (result.timing) {
+				elapsedSec += result.timing.elapsedSec;
+				audioSec += result.timing.audioSec;
+				timedChunks++;
+			} else {
+				untimedChunks++;
+			}
+			const runRtf = audioSec > 0 ? elapsedSec / audioSec : undefined;
+			// Through `console.*` on purpose: that is what the main-process ring
+			// buffer wraps (electron/diagnostics/main-log-buffer.ts), so these lines
+			// reach "Save Diagnostics". The helper's own stderr is forwarded with
+			// `process.stderr.write` in whisperServer.ts and never lands there.
+			console.info(
+				`[stt] chunk ${index + 1}/${chunks.length} on ${backend}: ` +
+					(result.timing
+						? formatTiming(result.timing)
+						: "no timing reported (staged helper binary pre-dates the field)"),
+			);
+			// Falling back to CPU is silent on both sides — the helper retries
+			// without GPU when init returns null, and this process can relaunch the
+			// helper with `--cpu` — and it costs about half the throughput. A user
+			// staring at a transcription that takes twice as long has, without this,
+			// nothing anywhere telling them why.
+			if (!warnedCpu && backend === "whispercpp-cpu") {
+				warnedCpu = true;
+				console.warn(
+					"[stt] running on CPU - no GPU backend was bound. Expect roughly half " +
+						"the throughput of the Vulkan/Metal path (median 2.07x on the reference " +
+						"machine, tools/stt-eval/whispercpp-dtw-poc/REPORT.md 5.3).",
+				);
+			}
 			this.emit({
 				phase: "transcribe",
 				completedSec: chunk.endSample / SAMPLE_RATE,
 				totalSec,
+				backend,
+				rtf: runRtf,
 			});
 		}
 
+		// A total has to cover everything it claims to total. Let one chunk go
+		// unmeasured and these sums describe a SHORTER recording than the one that
+		// was actually transcribed — under a field documented as covering every
+		// chunk. So an incomplete run reports no timing rather than partial timing.
+		//
+		// The per-chunk `rtf` emitted above is deliberately not held to this: it is
+		// a RATIO, not a total, and stays honest over whatever subset reported.
+		const timing: SttTiming | undefined =
+			timedChunks > 0 && untimedChunks === 0 && audioSec > 0
+				? { elapsedSec, audioSec, rtf: elapsedSec / audioSec }
+				: undefined;
+		console.info(
+			`[stt] done on ${backend}: ${chunks.length} chunk(s), ` +
+				(timing
+					? formatTiming(timing)
+					: untimedChunks === chunks.length
+						? "no timing reported"
+						: `timing incomplete (${untimedChunks}/${chunks.length} chunks unmeasured)`),
+		);
 		return {
 			segments,
 			wordSegments,
 			detectedLanguage: detectedLanguage ?? language ?? "auto",
 			backend,
+			timing,
 		};
 	}
 
 	/** Best-effort shutdown; safe to call from `before-quit` hooks. */
 	async shutdown(): Promise<void> {
-		await this.server.stop();
+		if (this.shuttingDown) return;
+		this.shuttingDown = true;
+		this.cancelEpoch++;
+		await this.server.shutdown();
 	}
 }
 
 let singleton: SttManager | null = null;
+let sttShuttingDown = false;
 
 /** Lazy singleton for the IPC layer; processes one transcription at a time. */
 export function getSttManager(): SttManager {
+	if (sttShuttingDown) throw cancelledError();
 	if (!singleton) singleton = new SttManager();
 	return singleton;
+}
+
+/**
+ * Stop and release the lazy singleton without creating one just to quit.
+ *
+ * Electron's GUI lifecycle awaits this from a guarded `before-quit` handler;
+ * clearing the slot first also makes repeated quit events idempotent.
+ */
+export async function shutdownStt(): Promise<void> {
+	sttShuttingDown = true;
+	const manager = singleton;
+	await manager?.shutdown();
+	singleton = null;
 }
 
 /** Reset the singleton — for tests. */
 export function _resetSttManagerForTests(): void {
 	singleton = null;
+	sttShuttingDown = false;
 }
 
 /**

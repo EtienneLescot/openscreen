@@ -12,27 +12,43 @@ vi.mock("@/native/client", () => ({
 }));
 
 // Stand-in for the real canvas (native compositor, editor settings, a live
-// <video>): it only has to report WHICH sources it was handed and let a test
-// fire the load failure for one of them, which is the entire contract Preview
-// owns.
+// <video>): it only has to report WHICH sources it was handed, let a test fire
+// the terminal failure and the recovery for one of them, and show what retry
+// token it was given — which is the entire contract Preview owns.
 vi.mock("./PreviewCanvas", () => ({
 	PreviewCanvas: ({
 		videoSources,
 		onVideoError,
+		onVideoRecovered,
+		retryToken,
 	}: {
 		videoSources: VideoSource[];
-		onVideoError?: (assetId: string) => void;
+		onVideoError?: (assetId: string, detail: string) => void;
+		onVideoRecovered?: (assetId: string) => void;
+		retryToken?: number;
 	}) => (
-		<div data-testid="preview-canvas" data-sources={videoSources.map((s) => s.id).join(",")}>
+		<div
+			data-testid="preview-canvas"
+			data-sources={videoSources.map((s) => s.id).join(",")}
+			data-retry-token={retryToken}
+		>
 			{videoSources.map((source) => (
-				<button
-					key={source.id}
-					type="button"
-					data-testid={`fail-${source.id}`}
-					onClick={() => onVideoError?.(source.id)}
-				>
-					{source.src}
-				</button>
+				<div key={source.id}>
+					<button
+						type="button"
+						data-testid={`fail-${source.id}`}
+						onClick={() => onVideoError?.(source.id, "MEDIA_ERR_DECODE (3)")}
+					>
+						{source.src}
+					</button>
+					<button
+						type="button"
+						data-testid={`recover-${source.id}`}
+						onClick={() => onVideoRecovered?.(source.id)}
+					>
+						recover
+					</button>
+				</div>
 			))}
 		</div>
 	),
@@ -56,13 +72,13 @@ function source(id: string): VideoSource {
 	return { id, src: `file:///tmp/${id}.mp4`, label: id };
 }
 
-function renderPreview(props: {
+function previewProps(props: {
 	videoSources: VideoSource[];
 	clips: AxcutClip[];
 	hasAsset?: boolean;
 	hasProject?: boolean;
 }) {
-	return render(
+	return (
 		<I18nProvider>
 			<Preview
 				hasProject={props.hasProject ?? true}
@@ -76,12 +92,21 @@ function renderPreview(props: {
 				onVideoElement={vi.fn()}
 				playing={false}
 			/>
-		</I18nProvider>,
+		</I18nProvider>
 	);
+}
+
+function renderPreview(props: Parameters<typeof previewProps>[0]) {
+	return render(previewProps(props));
 }
 
 const canvas = () => screen.queryByTestId("preview-canvas");
 const emptyState = () => screen.queryByText(/add a video to get started/i);
+const errorCard = () => screen.queryByTestId("preview-error-card");
+const click = (testId: string) =>
+	act(() => {
+		fireEvent.click(screen.getByTestId(testId));
+	});
 
 describe("Preview follows the timeline, not the asset list", () => {
 	afterEach(() => {
@@ -103,42 +128,6 @@ describe("Preview follows the timeline, not the asset list", () => {
 		expect(canvas()).toBeInTheDocument();
 		expect(canvas()).toHaveAttribute("data-sources", "valid");
 		expect(emptyState()).not.toBeInTheDocument();
-	});
-
-	// The dead asset can't even report a failure now, but should one arrive for a
-	// source that is no longer used, it must not blank a preview built from other
-	// sources entirely.
-	it("keeps rendering when the unreferenced asset is the only broken one", () => {
-		const { rerender } = renderPreview({
-			videoSources: [source("dangling")],
-			clips: [],
-		});
-		// No clips yet → fallback to every asset, so the dead one does mount and fail.
-		act(() => {
-			fireEvent.click(screen.getByTestId("fail-dangling"));
-		});
-		expect(emptyState()).toBeInTheDocument();
-
-		// A clip lands on a healthy asset: the preview is driven by that clip now,
-		// and the earlier failure of an asset nothing references is irrelevant.
-		rerender(
-			<I18nProvider>
-				<Preview
-					hasProject={true}
-					hasAsset={true}
-					videoSources={[source("dangling"), source("valid")]}
-					clips={[clip("clip_a", "valid", 0, 24.7)]}
-					seekTarget={null}
-					onTimeChange={vi.fn()}
-					onSeek={vi.fn()}
-					onLoadedMetadata={vi.fn()}
-					onVideoElement={vi.fn()}
-					playing={false}
-				/>
-			</I18nProvider>,
-		);
-
-		expect(canvas()).toHaveAttribute("data-sources", "valid");
 	});
 
 	// Mounting index 0 is VirtualPreview's own starting point, so the source list
@@ -173,85 +162,164 @@ describe("Preview follows the timeline, not the asset list", () => {
 
 		expect(canvas()).toHaveAttribute("data-sources", "fresh_import");
 	});
+
+	// A clip landing on a healthy asset takes over the preview regardless of what
+	// happened to the asset that was mounted before it.
+	it("switches to the asset a new clip references", () => {
+		const { rerender } = renderPreview({ videoSources: [source("dangling")], clips: [] });
+		click("fail-dangling");
+
+		rerender(
+			previewProps({
+				videoSources: [source("dangling"), source("valid")],
+				clips: [clip("clip_a", "valid", 0, 24.7)],
+			}),
+		);
+
+		expect(canvas()).toHaveAttribute("data-sources", "valid");
+	});
 });
 
-describe("Preview still degrades to the empty state on a real failure", () => {
+// Issue #395. Every test below used to assert the opposite — that a media
+// failure collapsed the stage to the import screen. The intent was right (say
+// something, offer a way out); the verdict was wrong, because the failure is
+// recoverable, the project is intact, and the native canvas is still painting.
+describe("Preview keeps the stage when the media fails", () => {
 	afterEach(() => {
 		cleanup();
 		vi.clearAllMocks();
 	});
 
-	// The documented intent this fix must not regress: a truncated recording from
-	// a bad MediaRecorder capture is referenced by a clip, fails to load, and the
-	// user gets the import affordance rather than a broken preview.
-	it("shows the empty state when the clip's own asset fails to load", () => {
+	it("shows a retry card over the canvas instead of the empty state", () => {
 		renderPreview({
 			videoSources: [source("truncated")],
 			clips: [clip("clip_a", "truncated", 0, 60)],
 		});
+
+		click("fail-truncated");
+
 		expect(canvas()).toBeInTheDocument();
-
-		act(() => {
-			fireEvent.click(screen.getByTestId("fail-truncated"));
-		});
-
-		expect(canvas()).not.toBeInTheDocument();
-		expect(emptyState()).toBeInTheDocument();
+		expect(errorCard()).toBeInTheDocument();
+		expect(emptyState()).not.toBeInTheDocument();
 	});
 
-	// Per-source, not a global latch: one dead asset among several used by the
-	// timeline leaves the rest renderable (VirtualPreview draws its own overlay
-	// over the source that failed).
-	it("survives one broken source among several the timeline uses", () => {
+	// The MediaError code is the one thing that makes a user's report actionable;
+	// it used to be discarded entirely.
+	it("puts the media error on the card", () => {
+		renderPreview({ videoSources: [source("truncated")], clips: [] });
+		click("fail-truncated");
+
+		expect(errorCard()).toHaveTextContent("MEDIA_ERR_DECODE (3)");
+	});
+
+	// The whole point of the fix: a dead source is not a dead editor, and the
+	// stage must stay mounted no matter how many sources report failure.
+	it("keeps the canvas when every source the timeline uses fails", () => {
 		renderPreview({
 			videoSources: [source("broken"), source("healthy")],
 			clips: [clip("clip_a", "broken", 0, 10), clip("clip_b", "healthy", 10, 20)],
 		});
 
-		act(() => {
-			fireEvent.click(screen.getByTestId("fail-broken"));
-		});
-		expect(canvas()).toBeInTheDocument();
+		click("fail-broken");
+		click("fail-healthy");
 
-		// …and only collapses once nothing is left to render.
-		act(() => {
-			fireEvent.click(screen.getByTestId("fail-healthy"));
-		});
-		expect(canvas()).not.toBeInTheDocument();
-		expect(emptyState()).toBeInTheDocument();
+		expect(canvas()).toBeInTheDocument();
+		expect(emptyState()).not.toBeInTheDocument();
 	});
 
-	// The reset that made the old latch bearable: swapping the media out has to
-	// clear the recorded failures, or the empty state would outlive the file that
-	// caused it.
-	it("clears recorded failures when the source set changes", () => {
+	// Self-healing: VirtualPreview reports a decoded frame, so the card must go —
+	// otherwise it outlives its own failure, which is the latch again in a
+	// quieter form.
+	it("drops the card when the source decodes again", () => {
+		renderPreview({ videoSources: [source("flaky")], clips: [] });
+
+		click("fail-flaky");
+		expect(errorCard()).toBeInTheDocument();
+
+		click("recover-flaky");
+		expect(errorCard()).not.toBeInTheDocument();
+	});
+
+	// …including when the healthy report comes from a DIFFERENT asset. Only one
+	// source is mounted at a time, so that report means the playhead has moved
+	// onto a clip that plays — and a "Preview stopped" card over a picture that
+	// is visibly fine is the #395 latch again, quieter. Scrubbing back onto the
+	// dead asset remounts it and brings the card back on its own.
+	it("drops the card when the playhead moves onto a healthy asset", () => {
+		renderPreview({
+			videoSources: [source("moved"), source("fresh")],
+			clips: [clip("clip_a", "moved", 0, 10), clip("clip_b", "fresh", 10, 20)],
+		});
+
+		click("fail-moved");
+		expect(errorCard()).toBeInTheDocument();
+
+		click("recover-fresh");
+		expect(errorCard()).not.toBeInTheDocument();
+		expect(canvas()).toBeInTheDocument();
+	});
+
+	it("bumps the retry token and clears the card when the user retries", () => {
+		renderPreview({ videoSources: [source("truncated")], clips: [] });
+		expect(canvas()).toHaveAttribute("data-retry-token", "0");
+
+		click("fail-truncated");
+		act(() => {
+			fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+		});
+
+		expect(canvas()).toHaveAttribute("data-retry-token", "1");
+		expect(errorCard()).not.toBeInTheDocument();
+	});
+
+	// Taking the card's own advice — import a replacement — grows the source list
+	// without touching the dead <video>: it is not remounted, nothing re-fires
+	// `error`, and dropping the card here would leave a frozen stage with no
+	// explanation and no Retry button.
+	it("keeps the card when an unrelated source joins the timeline", () => {
+		const { rerender } = renderPreview({
+			videoSources: [source("moved")],
+			clips: [clip("clip_a", "moved", 0, 60)],
+		});
+		click("fail-moved");
+		expect(errorCard()).toBeInTheDocument();
+
+		rerender(
+			previewProps({
+				videoSources: [source("moved"), source("fresh")],
+				clips: [clip("clip_a", "moved", 0, 60), clip("clip_b", "fresh", 60, 90)],
+			}),
+		);
+
+		expect(errorCard()).toBeInTheDocument();
+	});
+
+	// Swapping the media out has to clear the failure, or the card would outlive
+	// the file that caused it.
+	it("clears the failure when the failed asset leaves the timeline", () => {
 		const { rerender } = renderPreview({
 			videoSources: [source("truncated")],
 			clips: [clip("clip_a", "truncated", 0, 60)],
 		});
-		act(() => {
-			fireEvent.click(screen.getByTestId("fail-truncated"));
-		});
-		expect(emptyState()).toBeInTheDocument();
+		click("fail-truncated");
+		expect(errorCard()).toBeInTheDocument();
 
 		rerender(
-			<I18nProvider>
-				<Preview
-					hasProject={true}
-					hasAsset={true}
-					videoSources={[source("replacement")]}
-					clips={[clip("clip_a", "replacement", 0, 60)]}
-					seekTarget={null}
-					onTimeChange={vi.fn()}
-					onSeek={vi.fn()}
-					onLoadedMetadata={vi.fn()}
-					onVideoElement={vi.fn()}
-					playing={false}
-				/>
-			</I18nProvider>,
+			previewProps({
+				videoSources: [source("replacement")],
+				clips: [clip("clip_a", "replacement", 0, 60)],
+			}),
 		);
 
 		expect(canvas()).toHaveAttribute("data-sources", "replacement");
+		expect(errorCard()).not.toBeInTheDocument();
+	});
+});
+
+describe("Preview shows the empty state only when there is nothing to show", () => {
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
 	});
 
 	it("shows the empty state when the project has no asset at all", () => {
@@ -259,5 +327,34 @@ describe("Preview still degrades to the empty state on a real failure", () => {
 
 		expect(canvas()).not.toBeInTheDocument();
 		expect(emptyState()).toBeInTheDocument();
+	});
+
+	it("shows the empty state when the project has no usable source", () => {
+		renderPreview({ videoSources: [], clips: [] });
+
+		expect(canvas()).not.toBeInTheDocument();
+		expect(emptyState()).toBeInTheDocument();
+	});
+
+	it("shows the empty state when there is no project", () => {
+		renderPreview({ videoSources: [], clips: [], hasProject: false, hasAsset: false });
+
+		expect(emptyState()).not.toBeInTheDocument();
+		expect(screen.getByText(/no project open/i)).toBeInTheDocument();
+	});
+
+	// The guard for #395 itself: no failure, however reported, may reach the
+	// branch that tells a user with media loaded that they have none.
+	it("never reaches the empty state while the project has media", () => {
+		renderPreview({
+			videoSources: [source("a"), source("b")],
+			clips: [clip("clip_a", "a", 0, 10), clip("clip_b", "b", 10, 20)],
+		});
+
+		for (const id of ["a", "b"]) {
+			click(`fail-${id}`);
+			expect(emptyState()).not.toBeInTheDocument();
+			expect(canvas()).toBeInTheDocument();
+		}
 	});
 });

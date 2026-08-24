@@ -1,15 +1,26 @@
-/* Marketing landing page — always dark, styled after the OpenScreen Design System hero. */
+/* Marketing landing page. Both themes — every colour here is an --os-* token,
+   which swaps under [data-theme="light"]; nothing may be a literal. */
 
 .hero,
-.visualSection,
 .features,
 .quickStart {
 	background: var(--os-bg);
 	color: var(--os-fg);
 }
 
+/* A full screen, as the design has it: the recreation is meant to begin only
+   once the hero has been scrolled past. */
 .hero {
-	padding: 88px 28px 0;
+	position: relative;
+	/* One screen, navbar included. At a flat 100vh the hero is 60px taller than
+	   the viewport it is meant to fill, so its bottom edge — and the scroll hint
+	   pinned to it — sat below the fold, which is the one place an edge marker
+	   must not be. */
+	min-height: calc(100vh - var(--ifm-navbar-height, 60px));
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 88px 28px 56px;
 	text-align: center;
 	background: radial-gradient(ellipse 60% 40% at 50% 0%, var(--os-accent-wash), transparent 60%), var(--os-bg);
 }
@@ -30,6 +41,15 @@
 	font-size: 0.8rem;
 	font-weight: 600;
 	margin-bottom: 22px;
+}
+
+/* --os-accent clears 4.5:1 against --os-bg, but the pill is not --os-bg: its own
+   --os-accent-soft tint composites to rgb(224,237,234) and takes the label down
+   to 4.28:1 at 12.8px/600, the one place on the page where accent text sits on
+   an accent-tinted surface. Light only — --os-brand-lo measures 4.45:1 on the
+   dark pill, so unscoped this would trade the failure rather than fix it. */
+:global([data-theme="light"]) .badge {
+	color: var(--os-brand-lo);
 }
 
 .title {
@@ -85,15 +105,21 @@
 	transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
+/* The glow is derived from the accent rather than written as a literal: the old
+   rgba(16,185,129,.25) was the *dark* accent, and it shipped unchanged into the
+   light theme. Foreground is --os-bg, not #fff — white on the light-theme accent
+   measures 3.76:1, which is a Level AA failure on the page's main call to
+   action. Against --os-bg the same button measures 7.81:1 dark and 4.96:1 light:
+   AA in both, AAA in one. */
 .primaryCta {
 	background: var(--os-accent);
-	color: #fff;
-	box-shadow: 0 8px 24px rgba(16, 185, 129, 0.25);
+	color: var(--os-bg);
+	box-shadow: 0 8px 24px var(--os-accent-ring);
 }
 
 .primaryCta:hover {
 	transform: translateY(-2px);
-	color: #fff;
+	color: var(--os-bg);
 }
 
 .secondaryCta {
@@ -108,603 +134,120 @@
 	color: var(--os-fg-2);
 }
 
-.note {
-	margin: 22px auto 0;
-	max-width: 460px;
-	font-size: 12.5px;
-	color: var(--os-meta);
-	line-height: 1.5;
-}
-
-.note strong {
-	color: var(--os-muted);
-}
-
-/* ---- product visual ---- */
-
-.visualSection {
-	padding: 48px 28px 100px;
-	display: flex;
-	justify-content: center;
-}
-
-.visual {
-	width: 100%;
-	max-width: 1040px;
-	border-radius: 16px;
-	background: var(--os-surface-1);
-	border: 1px solid var(--os-border);
-	box-shadow: var(--os-elev-pop);
-	overflow: hidden;
-}
-
-.visualTopbar {
-	display: flex;
-	align-items: center;
-	gap: 0.75rem;
-	height: 44px;
-	padding: 0 1rem;
-	border-bottom: 1px solid var(--os-border-soft);
-	background: var(--os-surface);
-}
-
-.dots {
-	display: flex;
-	gap: 6px;
-}
-
-.dot {
-	width: 9px;
-	height: 9px;
-	border-radius: 50%;
-	background: var(--os-surface-3);
-}
-
-.divider {
-	width: 1px;
-	height: 16px;
-	background: var(--os-border);
-}
-
-.segmented {
-	display: flex;
-	gap: 2px;
-	padding: 2px;
-	border-radius: 8px;
-	background: var(--os-surface-2);
-	font-size: 11px;
-	color: var(--os-muted);
-}
-
-.segmented span {
-	padding: 3px 10px;
-	border-radius: 6px;
-}
-
-.segmentedActive {
-	background: var(--os-surface-hi, var(--os-surface-3));
-	color: var(--os-fg-emphasis);
-}
-
-.savedIndicator {
-	margin-left: auto;
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	font-family: var(--ifm-font-family-monospace);
-	font-size: 10.5px;
-	color: var(--os-muted);
-}
-
-.savedDot {
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: var(--os-accent);
-	box-shadow: 0 0 0 3px var(--os-accent-soft);
-}
-
-.visualBody {
-	display: grid;
-	grid-template-columns: 260px 1fr;
-	min-height: 340px;
-}
-
-/* Stacked, the mock has to read top-down: the editor is the product and the
-   agent panel is the sub-plot, so the stage goes first and the panel's right
-   border becomes the rule between them. Ordered in CSS rather than in the
-   markup so the desktop grid keeps its natural sidebar-then-stage source order. */
-@media (max-width: 780px) {
-	.visualBody {
-		grid-template-columns: 1fr;
-		min-height: 0;
-	}
-
-	.stage {
-		order: 1;
-	}
-
-	.agentPanel {
-		order: 2;
-		border-right: none;
-		border-top: 1px solid var(--os-border);
-	}
-}
-
-.agentPanel {
-	border-right: 1px solid var(--os-border);
-	background: var(--os-surface);
-	padding: 16px 16px 14px;
-	display: flex;
-	flex-direction: column;
-	gap: 14px;
-}
-
-.agentHeader {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	font-size: 12.5px;
-	font-weight: 600;
-	color: var(--os-fg-emphasis);
-}
-
-.contextBadge {
-	font-size: 10.5px;
-	font-weight: 500;
-	color: var(--os-muted);
-	padding: 2px 7px;
-	border-radius: 999px;
-	background: var(--os-surface-2);
-}
-
-.chatBubbleUser,
-.chatBubbleAssistant {
-	border-radius: 11px;
-	padding: 9px 11px;
-	font-size: 12.5px;
-	line-height: 1.5;
-}
-
-.chatBubbleUser {
-	background: var(--os-surface-2);
-	color: var(--os-fg-2);
-}
-
-.chatBubbleAssistant {
-	background: var(--os-accent-wash);
-	border: 1px solid var(--os-accent-border);
-	color: var(--os-fg-2);
-}
-
-.chatMeta {
-	font-size: 10px;
-	color: var(--os-muted);
-	margin-bottom: 3px;
-}
-
-.chipRow {
-	margin-top: auto;
-	display: flex;
-	gap: 6px;
-	flex-wrap: wrap;
-}
-
-.chip {
-	padding: 5px 10px;
-	border-radius: 999px;
-	background: var(--os-surface-2);
-	border: 1px solid var(--os-border);
-	font-size: 11.5px;
-	color: var(--os-fg-2);
-}
-
-.stage {
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-}
-
-.stageFrame {
-	flex: 1;
-	position: relative;
-	background: radial-gradient(ellipse 68% 60% at 50% 38%, var(--os-surface-2) 0%, var(--os-bg) 70%);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 28px;
-	min-height: 220px;
-}
-
-.stagePreview {
-	position: relative;
-	width: 100%;
-	max-width: 420px;
-	aspect-ratio: 16 / 9;
-	border-radius: 12px;
-	background: radial-gradient(ellipse at 50% 34%, #e6e8ea 0%, #b7bbc2 34%, #676d78 68%, #14161c 100%);
-	box-shadow: 0 30px 70px -24px rgba(0, 0, 0, 0.7);
-}
-
-.timeBadge {
-	position: absolute;
-	top: 10px;
-	left: 10px;
-	padding: 3px 7px;
-	border-radius: 7px;
-	background: rgba(8, 10, 13, 0.5);
-	color: #fff;
-	font-family: var(--ifm-font-family-monospace);
-	font-size: 10px;
-}
-
-.transport {
-	position: absolute;
-	left: 50%;
-	bottom: 14px;
-	transform: translateX(-50%);
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	padding: 7px 10px;
-	border-radius: 13px;
-	background: var(--os-surface-1);
-	border: 1px solid var(--os-border);
-	box-shadow: var(--os-elev-card);
-	color: var(--os-muted);
-}
-
-.playButton {
-	width: 30px;
-	height: 30px;
-	display: grid;
-	place-items: center;
-	border-radius: 10px;
-	background: var(--os-accent);
-	color: #fff;
-}
-
-/* nowrap: the transport floats over the preview, and a wrapped timecode
-   doubles its height into a slab covering half the frame on a phone. */
-.transportTime {
-	font-family: var(--ifm-font-family-monospace);
-	font-size: 11px;
-	color: var(--os-fg);
-	margin-left: 4px;
-	white-space: nowrap;
-}
-
-.meta {
-	color: var(--os-meta);
-}
-
-.muted {
-	color: var(--os-muted);
-}
-
-.timeline {
-	border-top: 1px solid var(--os-border);
-	background: var(--os-surface);
-	padding: 12px 16px 14px;
-}
-
-.timelineRuler {
-	display: flex;
-	justify-content: space-between;
-	margin-bottom: 6px;
-	font-family: var(--ifm-font-family-monospace);
-	font-size: 9.5px;
-	color: var(--os-meta);
-}
-
-.timelineTrack {
-	position: relative;
-	height: 20px;
-	margin-bottom: 5px;
-	border-radius: 6px;
-	background: var(--os-surface-1);
-}
-
-.pill {
-	position: absolute;
-	top: 1px;
-	bottom: 1px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	border-radius: 5px;
-	font-family: var(--ifm-font-family-monospace);
-	font-size: 9.5px;
-	font-weight: 600;
-	white-space: nowrap;
-	padding: 0 6px;
-}
-
-.pillAccent {
-	background: var(--os-accent-soft);
-	color: var(--os-accent);
-	border: 1px solid var(--os-accent-border);
-}
-
-.pillAnnotation {
-	background: var(--os-annotation-wash);
-	color: var(--os-annotation);
-	border: 1px solid rgba(251, 191, 36, 0.3);
-}
-
-.pillDanger {
-	background: var(--os-danger-soft);
-	color: var(--os-danger);
-	border: 1px solid rgba(248, 113, 113, 0.3);
-}
-
-.pillSpeed {
-	background: var(--os-speed-wash);
-	color: var(--os-speed);
-	border: 1px solid rgba(251, 146, 60, 0.3);
-}
-
-.clipRow {
-	display: flex;
-	gap: 6px;
-	height: 40px;
-}
-
-.clipActive {
-	flex: 1;
-	border-radius: 9px;
-	border: 1.5px solid var(--os-accent);
-	background: var(--os-surface-1);
-}
-
-.clip {
-	flex: 1;
-	border-radius: 9px;
-	border: 1px solid var(--os-border);
-	background: var(--os-surface-1);
-}
-
 /* ---- shared section chrome ---- */
 
 .sectionKicker {
 	font-family: var(--ifm-font-family-monospace);
 	font-size: 11px;
-	letter-spacing: 0.08em;
+	font-weight: 600;
+	letter-spacing: 0.16em;
 	color: var(--os-accent);
 	text-transform: uppercase;
 }
 
 .sectionTitle {
-	margin: 10px 0 0 !important;
-	font-size: clamp(26px, 3vw, 32px);
-	font-weight: 700 !important;
-	letter-spacing: -0.02em;
+	margin: 14px 0 0 !important;
+	font-size: clamp(24px, 2.8vw, 32px);
+	font-weight: 750 !important;
+	letter-spacing: -0.025em;
 	color: var(--os-fg-emphasis) !important;
 }
 
-.sectionTitleSm {
-	composes: sectionTitle;
-	font-size: clamp(24px, 2.6vw, 28px);
-}
-
-/* ---- features / bento ---- */
+/* ---- coda ----
+   Three claims that are not events: a licence, an absence of network traffic, a
+   list of platforms. Everything that *is* an event — the editor, the recorder,
+   the captions, the agent — is demonstrated above, so these three are set as
+   columns of prose rather than as cards: a card is a container for a thing, and
+   there is no thing here, only a sentence. The rules between them are the only
+   chrome, and they are what makes three paragraphs read as one list. */
 
 .features {
-	padding: 0 28px 96px;
+	padding: 140px 28px 0;
 }
 
 .featuresInner {
-	max-width: 1040px;
+	max-width: 1080px;
 	margin: 0 auto;
 	text-align: center;
 }
 
-.bento {
-	margin-top: 2.5rem;
+.trio {
+	margin-top: 52px;
 	display: grid;
-	grid-template-columns: repeat(6, 1fr);
-	grid-template-areas:
-		"large large large large ai ai"
-		"large large large large native native"
-		"free free captions captions captions captions";
-	gap: 0.875rem;
+	grid-template-columns: repeat(3, 1fr);
 	text-align: left;
 }
 
-@media (max-width: 900px) {
-	.bento {
-		grid-template-columns: 1fr;
-		grid-template-areas: none;
-	}
-
-	.card {
-		grid-area: auto !important;
-	}
+.trioItem {
+	padding: 6px 38px;
+	border-left: 1px solid var(--os-border-soft);
 }
 
-.card {
-	border-radius: 14px;
-	border: 1px solid var(--os-border);
-	background: var(--os-surface-1);
-	box-shadow: var(--os-elev-card);
-	padding: 22px;
+/* The first column's rule would be a rule against nothing, and its text has to
+   line up with the heading above it, so it keeps the gutter and loses the edge.
+   The last one only loses the gutter. */
+.trioItem:first-child {
+	padding-left: 0;
+	border-left: none;
 }
 
-.card h3 {
-	margin: 0;
-	font-size: 15px;
-	font-weight: 600;
-	color: var(--os-fg-emphasis);
-	letter-spacing: -0.01em;
+.trioItem:last-child {
+	padding-right: 0;
 }
 
-.card p {
-	margin: 0;
-	font-size: 12.5px;
-	line-height: 1.55;
-	color: var(--os-fg-2);
-}
-
-.bentoLarge {
-	grid-area: large;
-	display: flex;
-	flex-direction: column;
-	gap: 16px;
-	padding: 26px;
-}
-
-.bentoLarge h3 {
-	font-size: 16px;
-}
-
-.bentoLarge p {
-	font-size: 13.5px;
-	max-width: 480px;
-}
-
-.miniTimeline {
-	flex: 1;
-	min-height: 64px;
-	display: flex;
-	flex-direction: column;
-	justify-content: center;
-	gap: 10px;
-}
-
-.miniClipsRow {
-	display: flex;
-	gap: 3px;
-	height: 40px;
-}
-
-.miniClip {
-	position: relative;
-	min-width: 0;
-	border-radius: 10px;
-	border: 1.5px solid var(--os-border);
-	background: var(--os-surface-1);
-	overflow: hidden;
-	box-shadow: inset 0 1px 6px rgba(255, 255, 255, 0.06);
-}
-
-.miniWaveform {
-	position: absolute;
-	inset: 0;
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 1.5px;
-	padding: 0 7px;
-}
-
-.miniWaveform span {
-	flex: 1 1 0;
-	min-width: 1px;
-	max-width: 2.5px;
-	background: var(--os-accent);
-	opacity: 0.7;
-	border-radius: 2px;
-}
-
-.miniTrack {
-	position: relative;
-	height: 22px;
-	border-radius: 7px;
-	background: var(--os-surface-2);
-}
-
-.miniRegion {
-	position: absolute;
-	top: 3px;
-	bottom: 3px;
-	border-radius: 4px;
-}
-
-.cardHeader {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-}
-
-.cardHeader h3 {
-	margin: 0;
-}
-
-.cardPills {
-	display: flex;
-	gap: 6px;
-	margin-top: auto;
-}
-
-.pillStatic {
-	padding: 3px 9px;
-	border-radius: 999px;
-	font-size: 11px;
-	font-weight: 600;
-}
-
-.bentoAi {
-	grid-area: ai;
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-}
-
-.bentoNative {
-	grid-area: native;
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-}
-
-.bentoFree {
-	grid-area: free;
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-}
-
-.bentoCaptions {
-	grid-area: captions;
-	display: flex;
-	align-items: center;
-	gap: 16px;
-}
-
-.bentoCaptions h3 {
-	margin: 0 0 4px;
-}
-
-.iconBadge {
-	width: 34px;
-	height: 34px;
-	flex-shrink: 0;
-	border-radius: 9px;
-	background: var(--os-accent-soft);
-	display: grid;
-	place-items: center;
+.trioTick {
 	color: var(--os-accent);
+}
+
+.trioItem h3 {
+	margin: 16px 0 0;
+	font-size: 16.5px;
+	font-weight: 650;
+	letter-spacing: -0.015em;
+	color: var(--os-fg-emphasis);
+}
+
+.trioItem p {
+	margin: 10px 0 0;
+	font-size: 13.5px;
+	line-height: 1.75;
+	color: var(--os-fg);
+	text-wrap: pretty;
+}
+
+@media (max-width: 900px) {
+	.trio {
+		grid-template-columns: 1fr;
+		gap: 34px;
+	}
+
+	/* Stacked, a left rule points down the page instead of between the columns
+	   it was separating. */
+	.trioItem,
+	.trioItem:first-child {
+		padding: 0;
+		border-left: none;
+	}
 }
 
 /* ---- quick start ---- */
 
 .quickStart {
-	padding: 0 28px 100px;
+	padding: 140px 28px 100px;
 	display: flex;
 	justify-content: center;
 }
 
 .quickStartInner {
 	width: 100%;
-	max-width: 1040px;
+	max-width: 1080px;
 	text-align: center;
 }
 
-/* Same three-column rhythm as .platformStripInner below, so the two sections
-   line up. Grid items stretch, which is what keeps the three panes equal
-   height even though only two of them carry a command. */
+/* Grid items stretch, which is what keeps the three panes equal height even
+   though only two of them carry a command. */
 .installGrid {
-	margin-top: 26px;
+	margin-top: 52px;
 	display: grid;
 	grid-template-columns: repeat(3, 1fr);
 	gap: 0.875rem;
@@ -724,7 +267,7 @@
 	border: 1px solid var(--os-border-soft);
 	font-family: var(--ifm-font-family-monospace);
 	font-size: 10.5px;
-	color: var(--os-meta);
+	color: var(--os-muted);
 }
 
 /* Windows has no command to run. Styling the line as prose rather than as
@@ -771,8 +314,12 @@
 	white-space: pre-wrap;
 }
 
-/* Second half of each pane: what the platform actually gives you. Was its own
-   three-card strip below; folded in here so the page has one row, not two. */
+/* Colours the `#` comment lines inside the three install panes. */
+.meta {
+	color: var(--os-muted);
+}
+
+/* Second half of each pane: what the platform actually gives you. */
 .paneFoot {
 	margin: 0;
 	padding: 0.875rem 1rem;
@@ -787,9 +334,11 @@
 }
 
 .quickStartNote {
-	margin: 22px 0 0;
+	margin: 30px auto 0;
+	max-width: 700px;
 	font-size: 12.5px;
-	color: var(--os-meta);
+	line-height: 1.7;
+	color: var(--os-muted);
 }
 
 .quickStartNote a {
@@ -807,51 +356,93 @@
 }
 
 /* ---- phone ----
-   The 28px section gutter is a third of the width of a small phone; every
-   inner padding here is scaled to give the mock and the cards room to breathe
-   rather than to change their design. */
+   The 28px section gutter is a third of the width of a small phone. */
 
 @media (max-width: 600px) {
 	.hero {
 		padding: 64px 20px 0;
 	}
 
-	.visualSection {
-		padding: 32px 16px 72px;
-	}
-
 	.features {
-		padding: 0 20px 72px;
+		padding: 96px 20px 0;
 	}
 
 	.quickStart {
-		padding: 0 20px 76px;
-	}
-
-	.agentPanel {
-		padding: 14px;
-		gap: 12px;
-	}
-
-	.stageFrame {
-		padding: 16px;
-		min-height: 0;
-	}
-
-	.transport {
-		gap: 6px;
-		bottom: 10px;
-		padding: 6px 8px;
-	}
-
-	.timeline {
-		padding: 10px 12px 12px;
-	}
-
-	/* The icon is centred against a three-line paragraph on desktop; on a phone
-	   the same text runs to seven lines and leaves the badge stranded mid-card. */
-	.bentoCaptions {
-		align-items: flex-start;
+		padding: 96px 20px 76px;
 	}
 }
 
+
+/* ---- hero, v4 ---- */
+
+.badgeRow {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	margin: 0 0 16px;
+}
+
+.badgeNew {
+	display: inline-flex;
+	align-items: center;
+	padding: 3px 10px;
+	border-radius: 999px;
+	background: var(--os-accent);
+	/* --os-bg, not a literal near-black: the accent swaps under
+	   [data-theme="light"] and a fixed foreground therefore sits on two
+	   different greens. #04110b measured 7.59:1 on the dark accent and 3.75:1 on
+	   the light one — an AA failure at this size. Against --os-bg the same label
+	   is 7.81:1 and 4.96:1, which is the CTA's solution and the CTA's reason. */
+	color: var(--os-bg);
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 10.5px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+}
+
+.badgeText {
+	font-size: 13.5px;
+	color: var(--os-fg-2);
+}
+
+/* Pinned to the bottom of the first screen, where an edge belongs, rather than
+   trailing the copy as one more paragraph. No media gate any more: it used to
+   carry a claim that was only true where the driver runs, and "there is more
+   below" is true everywhere. */
+.scrollHint {
+	position: absolute;
+	left: 50%;
+	/* 81px, the design's own offset. At 34 it clung to the edge with a void
+	   above it; this reads as the bottom of a screen rather than as the bottom
+	   of the window. */
+	bottom: 81px;
+	transform: translateX(-50%);
+	margin: 0;
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--os-fg-2);
+	animation: os-scroll-nudge 2.4s var(--ifm-transition-timing-default, ease-in-out) infinite;
+}
+
+/* The design's nudge: four pixels, slowly, which is enough to read as "keep
+   going" and little enough not to nag. */
+@keyframes os-scroll-nudge {
+	0%,
+	100% {
+		transform: translateX(-50%) translateY(0);
+	}
+
+	50% {
+		transform: translateX(-50%) translateY(4px);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.scrollHint {
+		animation: none;
+	}
+}

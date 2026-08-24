@@ -2,8 +2,13 @@ import { ArrowLeft, Check, Film, Loader2, MessageSquare, Plus, Search, X } from 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
+import { useEditorDialogActions, useEditorDialogSection } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
-import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
+import type { AxcutAsset } from "@/lib/ai-edition/schema";
+import {
+	applyAgentDocumentIfCurrent,
+	runAgentTurn,
+} from "@/lib/ai-edition/store/agentDocumentApply";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
@@ -27,11 +32,10 @@ import {
 } from "../../../electron/ai-edition/provider-registry";
 import { ChatWelcome } from "./ChatWelcome";
 import { canSendChat } from "./chatAvailability";
-import { computeBudget } from "./chatBudget";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
-import { ProviderSettings } from "./ProviderSettings";
 import { TranscriptionStatusDot } from "./TranscriptionStatus";
+import { useChatBudget } from "./useChatBudget";
 
 export type LeftTab = "chat" | "media";
 
@@ -733,7 +737,12 @@ function ChatStripPanel() {
 	const [input, setInput] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [llmConfig, setLlmConfig] = useState<AiEditionLlmConfig | null>(null);
-	const [settingsOpen, setSettingsOpen] = useState(false);
+	// The dialog itself is mounted in App.tsx so the app menu can reach it from every mode
+	// (issue #420); this panel only asks for it to be opened, and watches it close.
+	const dialogSection = useEditorDialogSection();
+	const { openDialog } = useEditorDialogActions();
+	const providerSettingsOpen = dialogSection === "providers";
+	const openProviderSettings = useCallback(() => openDialog("providers"), [openDialog]);
 	const [chatsOpen, setChatsOpen] = useState(false);
 	const [sessions, setSessions] = useState<
 		Array<{ id: string; title: string; messageCount: number; createdAt: string }>
@@ -805,9 +814,13 @@ function ChatStripPanel() {
 		}
 	}, []);
 
+	// On mount, and again every time the provider dialog closes. Connecting a provider there is
+	// what makes the composer usable here and what fills the model pill, and the dialog no
+	// longer hangs off this component, so there is no onClose to do it from. "Not open" covers
+	// both events at once, which is why there is no ref here watching for the falling edge.
 	useEffect(() => {
-		void refreshLlm();
-	}, [refreshLlm]);
+		if (!providerSettingsOpen) void refreshLlm();
+	}, [providerSettingsOpen, refreshLlm]);
 
 	// ponytail: subscribe to streamed chat events so the reasoning trace (and
 	// any future streaming text deltas) lands live instead of arriving all at
@@ -869,16 +882,6 @@ function ChatStripPanel() {
 		scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
 	});
 
-	// Apply a document returned by the agent (tool batch or undo). setDocument
-	// pushes the previous doc to the local undo stack (Cmd+Z also works), then
-	// saveDocument persists it to disk.
-	const applyAgentDocument = useCallback(async (doc: unknown) => {
-		const parsed = ensureDocument(doc);
-		const store = useProjectStore.getState();
-		store.setDocument(parsed);
-		await store.saveDocument(parsed);
-	}, []);
-
 	const send = async (overrideText?: string) => {
 		const text = (overrideText ?? input).trim();
 		if (!projectId || !text || busy) return;
@@ -887,7 +890,7 @@ function ChatStripPanel() {
 		// but Auto-enhance calls send() directly and Enter can slip through.
 		if (!canChat) {
 			toast.error(t("chat.composerDisabledNoProvider"));
-			setSettingsOpen(true);
+			openProviderSettings();
 			return;
 		}
 		setInput("");
@@ -928,21 +931,49 @@ function ChatStripPanel() {
 			thinkingRunSessionRef.current = sessionId;
 			// Send the current document snapshot so the agent can run edit tools
 			// against it (P1). Falls back to text-only chat when no doc is open.
-			const documentSnapshot = useProjectStore.getState().document ?? undefined;
-			const result = await nativeBridgeClient.aiEdition.chatRun(
-				projectId,
-				sessionId,
-				text,
-				documentSnapshot,
+			// `runAgentTurn` reads the document AND the revision it is at from one snapshot
+			// before the turn starts, so a manual edit landing while the agent works is
+			// detectable when its answer comes back.
+			const { result, applyDocument } = await runAgentTurn((documentSnapshot) =>
+				nativeBridgeClient.aiEdition.chatRun(projectId, sessionId, text, documentSnapshot),
 			);
 			const assistant = result.assistantMessage;
 			if (result.success && assistant) {
 				if (result.document) {
-					try {
-						await applyAgentDocument(result.document);
-					} catch (err) {
-						toast.error(t("chat.applyEditsFailed"), {
-							description: err instanceof Error ? err.message : String(err),
+					const applyEdits = async (options?: { ignoreConflict?: boolean }) => {
+						try {
+							return await applyDocument(options);
+						} catch (err) {
+							// Only `ensureDocument` still throws here -- the agent handed back
+							// something that is not a document. A failed WRITE does not reach this:
+							// the store reports it itself and `applyDocument` answers "save-failed".
+							toast.error(t("chat.applyEditsFailed"), {
+								description: err instanceof Error ? err.message : String(err),
+							});
+							return "malformed" as const;
+						}
+					};
+					const applyResult = await applyEdits();
+					if (applyResult === "save-failed") {
+						// The store has already said WHY the write failed, with the native error.
+						// This says what it COST, without a description so the two do not repeat
+						// each other: the assistant's "done, I removed 14 silences" renders either
+						// way, so a bare save error next to it leaves the two unconnected.
+						toast.error(t("chat.applyEditsFailed"));
+					} else if (applyResult === "conflict") {
+						// The turn is not lost, it is just not automatically applied: the document
+						// is still in hand and the assistant's reply is about to be rendered as if
+						// the edits had landed. The thing that usually moves `revision` here is a
+						// background transcription finishing, not the user -- so dropping the whole
+						// turn on the floor and blaming "the project changed" costs them a minute
+						// of waiting and their tokens for something they never did. Let them take
+						// it. No auto-dismiss: it is the only way back to this document.
+						toast.warning(t("chat.agentEditConflict"), {
+							duration: Number.POSITIVE_INFINITY,
+							action: {
+								label: t("chat.applyAnyway"),
+								onClick: () => void applyEdits({ ignoreConflict: true }),
+							},
 						});
 					}
 				}
@@ -1019,7 +1050,9 @@ function ChatStripPanel() {
 					return;
 				}
 				const doc = (result as { document?: unknown }).document;
-				if (doc) await applyAgentDocument(doc);
+				// No `expectedRevision`: a rewind REPLACES whatever is live, which is what the
+				// confirmation dialog now says out loud -- including any manual edit made since.
+				if (doc) await applyAgentDocumentIfCurrent(doc);
 				setMessages(
 					result.messages.map((m) => ({
 						id: m.id,
@@ -1040,7 +1073,7 @@ function ChatStripPanel() {
 				setRewindFor(null);
 			}
 		},
-		[projectId, activeSessionId, applyAgentDocument, t],
+		[projectId, activeSessionId, t],
 	);
 
 	useEffect(() => {
@@ -1119,7 +1152,7 @@ function ChatStripPanel() {
 		// full settings modal (the "providers" screen) instead of toggling a
 		// popover that would render empty.
 		if (!llmConfig) {
-			setSettingsOpen(true);
+			openProviderSettings();
 			return;
 		}
 		setModelPopoverOpen((wasOpen) => {
@@ -1139,12 +1172,14 @@ function ChatStripPanel() {
 			}
 			return !wasOpen;
 		});
-	}, [llmConfig]);
+	}, [llmConfig, openProviderSettings]);
 
-	// Real context usage — feeds the badge in the chat strip and gates the
-	// auto-compact heuristic on the main side. Recomputed on every messages
-	// change so the % tracks the live history.
-	const budget = computeBudget(messages);
+	// Prefer the main process's estimate of the windowed history it actually sends, so
+	// manual compaction can shrink this meter while the complete transcript remains
+	// visible. The renderer estimate is only shown until the first answer arrives --
+	// including in web builds, where the shim answers with its own transcript estimate
+	// rather than leaving the fallback in place.
+	const budget = useChatBudget({ projectId, sessionId: activeSessionId, messages });
 
 	const [compactNowPending, setCompactNowPending] = useState(false);
 	const compactNow = useCallback(async () => {
@@ -1307,7 +1342,7 @@ function ChatStripPanel() {
 								type="button"
 								title={t("chat.aiSettings")}
 								aria-label={t("chat.aiSettings")}
-								onClick={() => setSettingsOpen(true)}
+								onClick={openProviderSettings}
 							>
 								<svg
 									width={14}
@@ -1506,7 +1541,7 @@ function ChatStripPanel() {
 
 			<div className={styles.panelBody} ref={scrollRef}>
 				{!canChat && messages.length === 0 ? (
-					<ChatWelcome onOpenProviderSettings={() => setSettingsOpen(true)} />
+					<ChatWelcome onOpenProviderSettings={openProviderSettings} />
 				) : messages.length === 0 ? (
 					<p
 						style={{
@@ -1827,7 +1862,7 @@ function ChatStripPanel() {
 							connectedProviders={connectedProviders ?? []}
 							onClose={() => setModelPopoverOpen(false)}
 							onConfigChange={() => void refreshLlm()}
-							onOpenFullSettings={() => setSettingsOpen(true)}
+							onOpenFullSettings={openProviderSettings}
 						/>
 					) : null}
 					<button
@@ -1854,13 +1889,6 @@ function ChatStripPanel() {
 					</button>
 				</div>
 			</div>
-			<ProviderSettings
-				open={settingsOpen}
-				onClose={() => {
-					setSettingsOpen(false);
-					void refreshLlm();
-				}}
-			/>
 			<ChatHistoryModal
 				open={chatsOpen}
 				onClose={() => setChatsOpen(false)}
@@ -1924,7 +1952,7 @@ function ChatStripPanel() {
 										background: "var(--accent)",
 										border: "1px solid var(--accent)",
 										borderRadius: "var(--r-sm)",
-										color: "var(--bg)",
+										color: "var(--accent-on)",
 										font: "500 12px var(--font-body)",
 										cursor: "pointer",
 									}}

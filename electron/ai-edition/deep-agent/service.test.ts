@@ -27,7 +27,12 @@ import {
 	ZOOM_DEPTH_LEGEND,
 	ZOOM_DEPTH_SCALES,
 } from "../../../src/lib/ai-edition/timeline/zoom-scale";
-import { executeAgentTool, isMutatingTool } from "../agent-tools";
+import {
+	executeAgentTool,
+	isMutatingTool,
+	OPENSCREEN_TOOL_NAMES,
+	PHANTOM_TOOL_NAMES,
+} from "../agent-tools";
 import {
 	anthropicCachingMiddleware,
 	buildSystemPrompt,
@@ -37,45 +42,13 @@ import {
 	TOOL_DESCRIPTIONS,
 } from "./service";
 
-const OPENSCREEN_TOOLS = [
-	"getCurrentDocument",
-	"getTranscript",
-	"getCursorTrack",
-	"addTrim",
-	"addTrims",
-	"setTrim",
-	"setClipRange",
-	"moveClip",
-	"replaceTimeline",
-	"addZoom",
-	"addZooms",
-	"setZoom",
-	"addSpeed",
-	"setSpeed",
-	"addAnnotation",
-	"setAnnotation",
-	"addCameraFullscreen",
-	"setCameraFullscreen",
-	"removeTrim",
-	"removeModifier",
-	"removeClip",
-];
-
-/** The tools `createDeepAgent` used to add. None of them may ever be built here
- * again: `execute` is in the middleware's list too and only disappeared at
- * runtime because the default backend is not a sandbox, so it is listed as
- * well — a sandbox backend would have made it a 26th tool. */
-const PHANTOM_TOOLS = [
-	"ls",
-	"read_file",
-	"write_file",
-	"edit_file",
-	"glob",
-	"grep",
-	"execute",
-	"write_todos",
-	"task",
-];
+// Both rosters used to be re-typed here, and a third time in the workbench. This
+// file is the one that runs in CI, so its copy stayed right and the bench's went
+// stale at 19 tools — asserting a surface the product had outgrown. One list now,
+// in `agent-tools.ts`; this suite is what pins it to what `buildTools` actually
+// builds, and the bench reads the same array.
+const OPENSCREEN_TOOLS: readonly string[] = OPENSCREEN_TOOL_NAMES;
+const PHANTOM_TOOLS: readonly string[] = PHANTOM_TOOL_NAMES;
 
 /** Valid arguments for every tool, chosen so the executor's verdict is split
  * across the table: some succeed, some are refused for an unknown id, and
@@ -105,8 +78,20 @@ const ARGS: Record<string, unknown> = {
 	removeClip: { clipId: "clip_1" },
 };
 
+/** ponytail: the fixture starts from a FIXED instant. `createEmptyDocument` reads
+ *  the wall clock when a caller hands it no `createdAt`, so two documents built by
+ *  two calls carry different `createdAt`/`updatedAt` whenever the calls straddle a
+ *  millisecond — which is what made an assertion over in `agent-tools.test.ts` fail
+ *  a PR that touched none of it. Nothing here compares two documents yet; pinning is
+ *  what keeps the one that does from being a coin flip on a loaded runner. */
+const FIXTURE_CREATED_AT = "2026-01-01T00:00:00.000Z";
+
 function fixtureDocument(): AxcutDocument {
-	const base = createEmptyDocument({ title: "Test", projectId: "proj_1" });
+	const base = createEmptyDocument({
+		title: "Test",
+		projectId: "proj_1",
+		createdAt: FIXTURE_CREATED_AT,
+	});
 	return documentSchema.parse({
 		...base,
 		project: { ...base.project, primaryAssetId: "asset_1" },
@@ -191,7 +176,9 @@ function toolsFor(document: AxcutDocument) {
 }
 
 describe("the tool surface handed to the model", () => {
-	it("is exactly OpenScreen's 21 tools", () => {
+	// No count in the title: the number moved twice without either copy of the
+	// roster following, and a title is the one place a stale number cannot fail.
+	it("is exactly the tools OpenScreen declares, in that order", () => {
 		const { tools } = toolsFor(fixtureDocument());
 		expect(tools.map((t) => t.name)).toEqual(OPENSCREEN_TOOLS);
 	});
@@ -419,7 +406,7 @@ describe("the prompt when the user has turned project edits off", () => {
 });
 
 describe("the tools when the user has turned project edits off", () => {
-	it("still builds all 21 — the model has to be able to NAME the edit", () => {
+	it("still builds every one — the model has to be able to NAME the edit", () => {
 		const { sink } = recordingSink();
 		const tools: BuiltTool[] = buildTools({ current: fixtureDocument() }, sink, false);
 		expect(tools.map((t) => t.name)).toEqual(OPENSCREEN_TOOLS);
@@ -599,5 +586,69 @@ describe("cursor telemetry reaches the model", () => {
 		expect(SYSTEM_PROMPT).toMatch(/hasCursorTelemetry/);
 		expect(TOOL_DESCRIPTIONS.getCursorTrack).toMatch(/no-sidecar/);
 		expect(TOOL_DESCRIPTIONS.getCursorTrack).toMatch(/unavailable/);
+	});
+});
+
+// ─── The zoom writes answer for their focus too ─────────────────────────────
+//
+// `executeAgentTool` is synchronous, so a sidecar read has to happen out here,
+// in the wrapper, before the executor runs. It used to happen for exactly one
+// tool — which is why a zoom could name a focus and no layer, from the schema
+// down to the stored region, was ever in a position to say what was actually at
+// that point of the frame.
+describe("a zoom write is measured against the recorded track", () => {
+	it("reads the track for a zoom, and not for a tool with no focus to answer for", async () => {
+		const asked: string[] = [];
+		const runtime = {
+			cursor: {
+				read: async ({ assetId }: { assetId: string }) => {
+					asked.push(assetId);
+					return { status: "ok" as const, assetId, samples: SAMPLES };
+				},
+			},
+		};
+		const { sink } = recordingSink();
+		const tools: BuiltTool[] = buildTools({ current: fixtureDocument() }, sink, true, runtime);
+		const zoom = tools.find((t) => t.name === "addZoom");
+		const trim = tools.find((t) => t.name === "addTrim");
+		if (!zoom || !trim) throw new Error("addZoom / addTrim are not built");
+
+		// The pointer sits at (0.8, 0.25) across this span while the call aims at
+		// the opposite corner: the write still lands, and the difference is on the
+		// page instead of nowhere.
+		const payload = JSON.parse(
+			String(await zoom.invoke({ startSec: 4, endSec: 5.6, focus: { cx: 0.1, cy: 0.9 } })),
+		);
+		expect(payload.cursorAnchor).toMatchObject({
+			available: true,
+			focus: { cx: 0.1, cy: 0.9 },
+			cursor: { cx: 0.8, cy: 0.25 },
+		});
+		// No assetId is passed by a zoom write, so the wrapper resolves the primary
+		// asset — the same resolution the executor then reports against.
+		expect(asked).toEqual(["asset_1"]);
+
+		// A trim has no focus and nothing to check: it must not pay for the read.
+		await trim.invoke({ startSec: 1, endSec: 2 });
+		expect(asked).toEqual(["asset_1"]);
+	});
+});
+
+describe("what the descriptions say about a zoom's focus", () => {
+	it("offers the measurement without turning it into an instruction", () => {
+		expect(TOOL_DESCRIPTIONS.addZoom).toMatch(/cursorAnchor/);
+		expect(TOOL_DESCRIPTIONS.addZoom).toMatch(/measurement, not a correction/);
+		// The absence rule, spelled out in the tool that will most often omit the
+		// field: a runtime that could not read a track has said nothing about the
+		// recording, and the prose is the only thing standing between that silence
+		// and a model reporting it as a finding.
+		expect(TOOL_DESCRIPTIONS.addZoom).toMatch(/never that the recording has none/);
+
+		// …and NOT a rule about where to zoom. A description telling the model to
+		// put its focus on the pointer would swap its reading of the recording for
+		// a heuristic and cap it there — the same trade the tool layer refuses when
+		// it hands over a track instead of a list of moments.
+		expect(TOOL_DESCRIPTIONS.addZoom).not.toMatch(/focus (?:should|must|has to|needs to)/i);
+		expect(SYSTEM_PROMPT).not.toMatch(/cursorAnchor/);
 	});
 });

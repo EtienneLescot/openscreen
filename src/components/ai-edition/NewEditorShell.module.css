@@ -594,7 +594,7 @@
 	padding: var(--sp-3) var(--sp-4);
 	border-radius: var(--r-sm);
 	background: var(--primary, #34B27B);
-	color: #fff;
+	color: var(--accent-on);
 	border: none;
 	font-weight: 500;
 	font-size: 0.875rem;
@@ -642,6 +642,74 @@
 .previewEmptyDragHintIcon {
 	width: 12px;
 	height: 12px;
+}
+
+/* ─── preview media failure (PreviewErrorCard) ──────────────────── */
+/* Overlays the stage instead of replacing it: the native compositor is still
+   painting the last composed frame underneath, and leaving that frame visible is
+   what tells the user their project is fine (issue #395). Translucent, not
+   opaque, for the same reason. */
+.previewFailure {
+	position: absolute;
+	inset: 0;
+	z-index: 3;
+	display: grid;
+	place-items: center;
+	padding: var(--sp-4);
+	background: rgba(9, 9, 11, 0.72);
+	backdrop-filter: blur(2px);
+	/* The scrim is a fixed dark surface in BOTH themes, so the text on it must
+	   not follow the document theme. Light is the default (useTheme.ts), and
+	   there --fg-2 is #334155 — near-black on near-black. Pinned here rather
+	   than as a var() fallback per rule: --muted-foreground is always defined
+	   (design-tokens.css), so a fallback would never have fired. */
+	--fg-2: #f3f5f8;
+	--muted-foreground: rgba(255, 255, 255, 0.78);
+}
+.previewFailureCard {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--sp-3);
+	max-width: min(38ch, 100%);
+	text-align: center;
+}
+.previewFailureIconRing {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 40px;
+	height: 40px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.05);
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+.previewFailureIcon {
+	width: 20px;
+	height: 20px;
+	color: var(--muted-foreground);
+}
+.previewFailureTitle {
+	margin: 0;
+	font-size: 1.05rem;
+	font-weight: 600;
+	color: var(--fg-2);
+}
+.previewFailureDescription {
+	margin: 0;
+	font-size: 0.875rem;
+	line-height: 1.5;
+	color: var(--muted-foreground);
+}
+/* Selectable: it exists to be copied into a bug report, so it stays legible
+   rather than fading to decoration. */
+.previewFailureDetail {
+	margin: 0;
+	font-size: 0.6875rem;
+	font-family: var(--font-mono, ui-monospace, monospace);
+	color: rgba(255, 255, 255, 0.6);
+	user-select: text;
+	word-break: break-word;
 }
 .previewEmptyDialog {
 	max-width: 24rem;
@@ -919,6 +987,99 @@
 	color: var(--fg-2);
 	margin: 4px var(--sp-4) 8px;
 }
+/* ─── action menu (a button's list of things it could do) ─────── */
+/* Sits where a Toggle would; reads as the current value, not as on/off. */
+.rowAction {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 5px 8px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg);
+	color: var(--fg-2);
+	font: 500 var(--fs-app-sm)/1 var(--font-body);
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+	transition: border-color 150ms ease, color 150ms ease;
+}
+.rowAction:hover:not(:disabled) { border-color: var(--brand); color: var(--fg); }
+.rowAction:disabled { cursor: default; opacity: 0.5; }
+.actionMenu {
+	min-width: 216px;
+	padding: 6px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface-1);
+	box-shadow: var(--elev-pop);
+	/* Ten shapes must cost no more room than two. */
+	max-height: min(var(--radix-popover-content-available-height, 60vh), 320px);
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+.actionMenuRow {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 8px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--fg);
+	cursor: pointer;
+	text-align: left;
+}
+.actionMenuRow:hover { background: var(--surface-2); }
+.actionMenuRow.isActive { background: color-mix(in oklab, var(--brand), transparent 82%); }
+/* Separates the fixed presets from the shapes this timeline actually holds. */
+.actionMenuGroup {
+	padding: 8px 8px 4px;
+	font: 600 10px/1 var(--font-body);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+/* Resolution leads: it is the thing a user recognises about their own footage. */
+.actionMenuMain { font: 600 12.5px var(--font-display); font-variant-numeric: tabular-nums; }
+/* The ratio token second, for whoever does read them — `64:27` means nothing alone. */
+.actionMenuMeta { font: 400 11px var(--font-body); color: var(--muted); }
+.actionMenuCount {
+	margin-left: auto;
+	font: 500 11px var(--font-body);
+	font-variant-numeric: tabular-nums;
+	color: var(--meta);
+}
+
+/* A section title that carries an action on its right. */
+.sectionHead {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin: 4px var(--sp-4) 8px;
+}
+.sectionHead .sectionLabel { margin: 0; }
+/* Deliberately quieter than the settings it overwrites: it is reached on purpose, not
+   stumbled into, and it must not read as a fifth control in the group. */
+.sectionAction {
+	padding: 3px 8px;
+	border: 1px solid transparent;
+	border-radius: 999px;
+	background: var(--surface-2);
+	color: var(--muted);
+	font: 500 var(--fs-app-sm)/1.4 var(--font-body);
+	white-space: nowrap;
+	cursor: pointer;
+	transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+.sectionAction:hover:not(:disabled) {
+	border-color: var(--brand);
+	background: var(--bg);
+	color: var(--fg);
+}
+.sectionAction:disabled { cursor: default; opacity: 0.45; }
 .uploadBtn {
 	display: flex;
 	align-items: center;
@@ -980,6 +1141,54 @@
 .bgThumb.isActive {
 	border-color: var(--brand);
 	box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand), transparent 70%);
+}
+
+/* ─── background picker (collapsed trigger + floating panel) ───── */
+/* The trigger paints the CURRENT background as its own surface, so the pane shows what is
+   selected without spending the ~300px the inline swatch grid used to cost. */
+.bgTrigger {
+	display: flex;
+	align-items: flex-end;
+	justify-content: flex-end;
+	height: 52px;
+	margin: 0 var(--sp-4) 12px;
+	padding: 6px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-2);
+	cursor: pointer;
+	overflow: hidden;
+	transition: border-color 150ms ease;
+}
+.bgTrigger:hover { border-color: var(--brand); }
+/* Sits ON an arbitrary photo, so it carries its own ground rather than trusting contrast. */
+.bgTriggerChip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 3px 7px;
+	border-radius: 999px;
+	background: color-mix(in oklab, var(--bg), transparent 10%);
+	color: var(--fg);
+	font: 500 var(--fs-app-sm)/1 var(--font-body);
+}
+.bgPopover {
+	width: 300px;
+	padding-top: 4px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface-1);
+	box-shadow: var(--elev-pop);
+	/* Radix measures the room actually left below the trigger and publishes it here, so the
+	   picker uses the screen it has instead of a number guessed at authoring time. The second
+	   term is the tallest it ever needs: the gradient tab is ~640px (tabs + preset grid + the
+	   240px-wide editor, whose wheel is square). A fixed 460px cap cut that editor in half and
+	   read as "the gradient panel is gone" — the content was there, below the fold, behind a
+	   scroll nobody could see. Beyond 680px there is nothing left to reveal. */
+	max-height: min(var(--radix-popover-content-available-height, 80vh), 680px);
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
 }
 
 /* ─── toggle (switch) ──────────────────────────────────────────── */
@@ -2024,6 +2233,26 @@
 .dangerBtn:hover {
   background: color-mix(in srgb, var(--danger) 22%, transparent);
   color: var(--danger);
+}
+
+.secondaryBtn {
+  margin: 4px var(--sp-4) 12px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font: 500 12px/1 var(--font-body);
+  cursor: pointer;
+}
+.secondaryBtn:hover {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+.secondaryBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .authPanel {

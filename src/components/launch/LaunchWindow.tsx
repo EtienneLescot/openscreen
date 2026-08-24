@@ -62,6 +62,9 @@ function getAvailableScreenHeight(): number {
 /** Launches the floating recording HUD and its recorder controls. */
 export function LaunchWindow() {
 	const t = useScopedT("launch");
+	// The update-check label is shared with the app menu and the tray, which read it from
+	// `common`. A second copy under `launch` drifted from it in en and ar before it ever shipped.
+	const tCommon = useScopedT("common");
 	const {
 		locale,
 		setLocale,
@@ -91,6 +94,7 @@ export function LaunchWindow() {
 		setMicrophoneEnabled,
 		microphoneDeviceId,
 		setMicrophoneDeviceId,
+		microphoneDeviceName,
 		setMicrophoneDeviceName,
 		systemAudioEnabled,
 		setSystemAudioEnabled,
@@ -118,6 +122,14 @@ export function LaunchWindow() {
 	);
 	const [supportsCursorModeToggle, setSupportsCursorModeToggle] = useState(false);
 	const [isLinuxHud, setIsLinuxHud] = useState(false);
+	// The running version, and whether this copy may offer an update check at all — a
+	// Store/Flathub/Snap/Nix install is kept current by its package manager and is offered
+	// nothing (electron/install-channel.ts). Asked once: neither answer changes while the app
+	// runs, and the HUD is rebuilt for every recording anyway.
+	const [appInfo, setAppInfo] = useState<{ version: string; canCheckForUpdates: boolean } | null>(
+		null,
+	);
+	const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false);
 	/**
 	 * Narrower than [`isLinuxHud`] on purpose: without the helper the recorder
 	 * falls back to Chromium's capture, which DOES take a source id, so the
@@ -141,20 +153,30 @@ export function LaunchWindow() {
 	// on its very first frame, and that `webcamDeviceId` is already the default
 	// device when the button is clicked — so enabling the camera acquires the
 	// right stream once instead of acquiring the default and then re-acquiring.
+	//
+	// Passing `webcamDeviceId` as the preferred device is what keeps the pick the
+	// user made in the editor's Rec stage: this window is destroyed and rebuilt
+	// for every recording, so the enumeration default would otherwise revert the
+	// camera to whatever the OS lists first on each take.
 	const {
 		devices: cameraDevices,
+		selectedDevice: selectedCamera,
 		selectedDeviceId: selectedCameraId,
 		setSelectedDeviceId: setSelectedCameraId,
 		isLoading: isCameraDevicesLoading,
 		error: cameraDevicesError,
-	} = useCameraDevices(true);
+	} = useCameraDevices(true, webcamDeviceId);
 	// The microphone list stays lazy: enumerating it asks for mic permission,
 	// which would light the OS "in use" indicator just for opening the HUD.
 	const {
 		devices: micDevices,
 		selectedDeviceId: selectedMicId,
 		setSelectedDeviceId: setSelectedMicId,
-	} = useMicrophoneDevices(microphoneEnabled || isDeviceSettingsOpen);
+	} = useMicrophoneDevices(
+		microphoneEnabled || isDeviceSettingsOpen,
+		microphoneDeviceId,
+		microphoneDeviceName,
+	);
 
 	useEffect(() => {
 		if (selectedMicId && selectedMicId !== "default") {
@@ -163,12 +185,18 @@ export function LaunchWindow() {
 		}
 	}, [selectedMicId, micDevices, setMicrophoneDeviceId, setMicrophoneDeviceName]);
 
+	// Keyed on the chosen device's own fields, never on the `cameraDevices` array.
+	// That array is rebuilt on every `devicechange`, and mirroring the selection
+	// back on each rebuild put this effect in a tug-of-war with the preference
+	// adoption inside `useCameraDevices`: the two wrote each other's value on
+	// every commit and the HUD spun without ever settling.
+	const selectedCameraLabel = selectedCamera?.label;
 	useEffect(() => {
 		if (selectedCameraId) {
 			setWebcamDeviceId(selectedCameraId);
-			setWebcamDeviceName(cameraDevices.find((d) => d.deviceId === selectedCameraId)?.label);
+			setWebcamDeviceName(selectedCameraLabel);
 		}
-	}, [selectedCameraId, cameraDevices, setWebcamDeviceId, setWebcamDeviceName]);
+	}, [selectedCameraId, selectedCameraLabel, setWebcamDeviceId, setWebcamDeviceName]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -214,6 +242,38 @@ export function LaunchWindow() {
 	}, []);
 
 	useEffect(() => {
+		const getAppInfo = window.electronAPI?.getAppInfo;
+		if (!getAppInfo) return;
+		let cancelled = false;
+		getAppInfo()
+			.then((info) => {
+				if (!cancelled) setAppInfo(info);
+			})
+			.catch((error) => {
+				// Leaves the About block out entirely rather than showing "Version undefined".
+				console.warn("Failed to read app info:", error);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	const handleCheckForUpdates = useCallback(() => {
+		const checkForUpdates = window.electronAPI?.checkForUpdates;
+		if (!checkForUpdates) return;
+		setIsCheckingForUpdates(true);
+		// Resolves on the verdict, not on the dialogs it leads to — the main process owns
+		// those, and a download the user approves must not leave this button spinning.
+		checkForUpdates()
+			.catch((error) => {
+				console.error("Update check failed:", error);
+			})
+			.finally(() => {
+				setIsCheckingForUpdates(false);
+			});
+	}, []);
+
+	useEffect(() => {
 		if (!import.meta.env.DEV) {
 			return;
 		}
@@ -224,7 +284,7 @@ export function LaunchWindow() {
 	}, []);
 
 	// One dismiss handler for both floating surfaces — they're mutually exclusive,
-	// so a single pointerdown/Escape listener covers the pair instead of two.
+	// so a single pointerdown/Escape/blur listener covers the pair instead of two.
 	const closePopovers = useCallback(() => {
 		setIsDeviceSettingsOpen(false);
 		setIsLanguageMenuOpen(false);
@@ -251,10 +311,21 @@ export function LaunchWindow() {
 
 		window.addEventListener("pointerdown", handlePointerDown);
 		window.addEventListener("keydown", handleEscape);
+		// The third dismiss path, and the one that made issue #435: the HUD's native
+		// window is only 904x698, so a click anywhere else on screen reaches this
+		// renderer as nothing at all — no pointerdown to hit-test — while still taking
+		// keyboard focus away. Escape is then undeliverable here, and the popover was
+		// stuck open until the trigger was found again. `blur` is the one signal that
+		// crosses, so it closes the pair; after this the "popover open in a window
+		// that has no focus" state simply doesn't exist. Bubble phase on purpose:
+		// element blur doesn't bubble, so this only ever fires for the window itself
+		// and never when focus moves between the menu's own buttons.
+		window.addEventListener("blur", closePopovers);
 
 		return () => {
 			window.removeEventListener("pointerdown", handlePointerDown);
 			window.removeEventListener("keydown", handleEscape);
+			window.removeEventListener("blur", closePopovers);
 		};
 	}, [closePopovers, isPopoverOpen]);
 
@@ -408,7 +479,13 @@ export function LaunchWindow() {
 	useEffect(() => {
 		setHudMouseEventsEnabled(false);
 		return () => {
-			window.electronAPI?.setHudOverlayIgnoreMouseEvents?.(false);
+			// Through the wrapper, not the bridge under it: the wrapper owns
+			// `hudIgnoreMouseEventsRef`, and a raw send here leaves that mirror
+			// describing a state the main process has already left. The next run
+			// then dedupes against a mirror that is wrong and sends nothing — under
+			// StrictMode that is every mount, so the click-through path quietly
+			// stops being exercised on the machine it is developed on.
+			setHudMouseEventsEnabled(true);
 		};
 	}, [setHudMouseEventsEnabled]);
 
@@ -419,6 +496,25 @@ export function LaunchWindow() {
 	useEffect(() => {
 		setHudMouseEventsEnabled(isPopoverOpen);
 	}, [isPopoverOpen, setHudMouseEventsEnabled]);
+
+	// The way back out of click-through. Every other route below — pointerenter and
+	// pointerdown on the bar, pointermove on the root — needs an event this document
+	// stops receiving the moment the window goes input-transparent, which is what left
+	// the HUD painted and permanently dead in #266 and again in #385. So the main
+	// process samples the OS cursor and pushes it here instead, and the hit test is the
+	// one `handleRootPointerMove` already runs, against the same layout: elementFromPoint
+	// honours pointer-events, so a point over the transparent reserve resolves to the
+	// root and correctly stays click-through.
+	//
+	// Only ever turns click-through OFF. Turning it back on is the DOM handlers' job,
+	// and they are reliable by then — the window is receiving real input again.
+	useEffect(() => {
+		return window.electronAPI?.onHudOverlayCursor?.((x, y) => {
+			if (document.elementFromPoint(x, y)?.closest("[data-hud-interactive='true']")) {
+				setHudMouseEventsEnabled(true);
+			}
+		});
+	}, [setHudMouseEventsEnabled]);
 
 	const defaultSourceName = t("sourceSelector.defaultSourceName");
 	const [selectedSource, setSelectedSource] = useState(defaultSourceName);
@@ -609,10 +705,36 @@ export function LaunchWindow() {
 		setMicrophoneEnabled(!microphoneEnabled);
 	}, [controlsLocked, microphoneEnabled, setMicrophoneEnabled]);
 
+	/**
+	 * Write a camera choice back to the main-process recording prefs.
+	 *
+	 * The HUD used to be a reader of that SSOT and never a writer, while being
+	 * destroyed and rebuilt for every recording — so a camera picked here lived
+	 * exactly as long as one take, and the editor's Rec stage kept showing the
+	 * previous device. Best-effort on purpose: failing to persist a preference
+	 * must not stop a recording.
+	 */
+	const persistRecordingPrefs = useCallback(
+		(patch: {
+			camEnabled?: boolean;
+			camDeviceId?: string;
+			micDeviceId?: string;
+			micDeviceName?: string;
+		}) => {
+			void window.electronAPI?.setRecordingPrefs?.(patch).catch((error) => {
+				console.warn("Failed to persist the device preference:", error);
+			});
+		},
+		[],
+	);
+
 	const toggleWebcam = useCallback(() => {
 		if (controlsLocked) return;
-		void setWebcamEnabled(!webcamEnabled);
-	}, [controlsLocked, setWebcamEnabled, webcamEnabled]);
+		const next = !webcamEnabled;
+		void setWebcamEnabled(next).then((ok) => {
+			if (ok) persistRecordingPrefs({ camEnabled: next });
+		});
+	}, [controlsLocked, persistRecordingPrefs, setWebcamEnabled, webcamEnabled]);
 
 	// Selecting a device never switches it on. If the device is already live the
 	// recorder re-acquires on the id change; if it isn't, this just records which
@@ -622,8 +744,9 @@ export function LaunchWindow() {
 			setSelectedMicId(device.deviceId);
 			setMicrophoneDeviceId(device.deviceId);
 			setMicrophoneDeviceName(device.label);
+			persistRecordingPrefs({ micDeviceId: device.deviceId, micDeviceName: device.label });
 		},
-		[setMicrophoneDeviceId, setMicrophoneDeviceName, setSelectedMicId],
+		[persistRecordingPrefs, setMicrophoneDeviceId, setMicrophoneDeviceName, setSelectedMicId],
 	);
 
 	const handleSelectCameraDevice = useCallback(
@@ -631,8 +754,9 @@ export function LaunchWindow() {
 			setSelectedCameraId(device.deviceId);
 			setWebcamDeviceId(device.deviceId);
 			setWebcamDeviceName(device.label);
+			persistRecordingPrefs({ camDeviceId: device.deviceId });
 		},
-		[setSelectedCameraId, setWebcamDeviceId, setWebcamDeviceName],
+		[persistRecordingPrefs, setSelectedCameraId, setWebcamDeviceId, setWebcamDeviceName],
 	);
 
 	const toggleDeviceSettings = useCallback(() => {
@@ -773,9 +897,14 @@ export function LaunchWindow() {
 			cameraUnavailable: t("webcam.unavailable"),
 			preview: t("deviceSettings.preview"),
 			previewUnavailable: t("deviceSettings.previewUnavailable"),
+			about: t("deviceSettings.about"),
+			checkForUpdates: tCommon("actions.checkForUpdates"),
+			checkingForUpdates: t("deviceSettings.checkingForUpdates"),
 		}),
-		[t],
+		[t, tCommon],
 	);
+
+	const versionLabel = appInfo ? t("deviceSettings.version", { version: appInfo.version }) : null;
 
 	const hasNotices = Boolean(systemLocaleSuggestion) || softwareEncoderFallbackNoticeVisible;
 
@@ -973,8 +1102,16 @@ export function LaunchWindow() {
 								cameraLoading={isCameraDevicesLoading}
 								cameraError={cameraDevicesError}
 								labels={deviceSettingsLabels}
+								versionLabel={versionLabel}
+								// `canCheckForUpdates` is the install channel's answer, fixed for the
+								// process. The recording veto is applied here because the gear is
+								// disabled mid-take but a panel already open stays mounted, and the
+								// main process refuses the check then — an offered button would be dead.
+								canCheckForUpdates={(appInfo?.canCheckForUpdates ?? false) && !recording}
+								checkingForUpdates={isCheckingForUpdates}
 								onSelectMic={handleSelectMicDevice}
 								onSelectCamera={handleSelectCameraDevice}
+								onCheckForUpdates={handleCheckForUpdates}
 								onClose={closeDeviceSettings}
 								panelRef={setPopoverEl}
 							/>

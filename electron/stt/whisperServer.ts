@@ -8,7 +8,12 @@ import type { Readable } from "node:stream";
 
 import { resolveBinaryPath } from "./gpuDetector";
 import { snapWordBoundariesToAudio } from "./snapWordBoundaries";
-import type { SttBackend, SttPhraseSegment, SttWordSegment } from "./transcriptionContract";
+import type {
+	SttBackend,
+	SttPhraseSegment,
+	SttTiming,
+	SttWordSegment,
+} from "./transcriptionContract";
 import { cleanupWav, writeSamplesAsWav } from "./wav";
 
 /** whisper.cpp helper is stdio-shaped: stdin ignored, stdout/stderr captured. */
@@ -88,20 +93,34 @@ interface WhisperJsonSegment {
 	words?: WhisperJsonWord[];
 }
 
+/**
+ * The helper's `timing` block, in its own snake_case wire spelling. Every field
+ * is optional and may arrive as a string for the same reason the segment bounds
+ * may (see `toSec`): nothing on the wire is guaranteed by a schema.
+ */
+interface WhisperJsonTiming {
+	elapsed_s?: number | string;
+	audio_s?: number | string;
+	rtf?: number | string;
+}
+
 interface WhisperJsonResponse {
 	segments?: WhisperJsonSegment[];
 	language?: string;
 	detected_language?: string;
 	backend?: string;
+	timing?: WhisperJsonTiming;
 }
 
 export class WhisperServerManager {
 	private process: WhisperChild | null = null;
+	private shuttingDown = false;
 	private port: number | null = null;
 	private backend: SttBackend | null = null;
 	private lastError: string | null = null;
 	private startedAtMs: number | null = null;
 	private inFlight: Promise<unknown> = Promise.resolve();
+	private starting: Promise<{ port: number; backend: SttBackend }> | null = null;
 
 	/** Buffered stderr from the helper; surfaced on shutdown + poll failures. */
 	private stderrTail = "";
@@ -127,22 +146,54 @@ export class WhisperServerManager {
 	}
 
 	/** Check the server's HTTP root for a 200; resolves once responsive. */
-	private static async pollUntilReady(baseUrl: string, timeoutMs = 30_000): Promise<void> {
+	private static async pollUntilReady(
+		baseUrl: string,
+		timeoutMs = 30_000,
+		shouldContinue: () => boolean = () => true,
+	): Promise<void> {
 		const deadline = Date.now() + timeoutMs;
 		while (Date.now() < deadline) {
+			if (!shouldContinue()) throw new Error("whisper-stt-server exited before readiness");
+			const controller = new AbortController();
+			const probeTimeout = setTimeout(
+				() => controller.abort(),
+				Math.min(2_000, Math.max(1, deadline - Date.now())),
+			);
 			try {
-				const res = await fetch(baseUrl, { method: "GET" });
+				const res = await fetch(baseUrl, { method: "GET", signal: controller.signal });
 				if (res.ok) return;
 			} catch {
 				// not up yet
+			} finally {
+				clearTimeout(probeTimeout);
 			}
+			if (!shouldContinue()) throw new Error("whisper-stt-server exited before readiness");
 			await new Promise((resolve) => setTimeout(resolve, 250));
 		}
 		throw new Error(`whisper-stt-server at ${baseUrl} did not respond within ${timeoutMs}ms`);
 	}
 
-	private recordError(message: string): void {
+	/**
+	 * Record a failure on `lastError`, and — unless `log` says otherwise — put it
+	 * in the main-process log.
+	 *
+	 * ponytail: to the log, not only to the field. `lastError` is read by the
+	 * `status` getter, which nothing on the transcribe path calls, so a missing or
+	 * non-executable helper used to leave no trace anywhere in the main process
+	 * and the only way to find out was to instrument the code. The renderer does
+	 * toast the failure; a packaged build still needs a line someone can point at
+	 * in a bug report.
+	 *
+	 * `log: false` exists because a death during startup reaches this method
+	 * TWICE — once from the `exit` listener, once from the startup catch that the
+	 * same exit rejects. Both writes are wanted (the second message is the more
+	 * specific of the two, and it is what `status` should end up holding), but two
+	 * differently-worded lines for one event is the kind of noise that makes a
+	 * reader doubt the log rather than trust it.
+	 */
+	private recordError(message: string, { log = true }: { log?: boolean } = {}): void {
 		this.lastError = message;
+		if (log) console.error(`[stt] ${message}`);
 	}
 
 	/** True when a process is alive and a model is loaded. */
@@ -163,6 +214,19 @@ export class WhisperServerManager {
 	 * the cold-start cost twice.
 	 */
 	async start(options: WhisperServerStartOptions): Promise<{ port: number; backend: SttBackend }> {
+		if (this.starting) return this.starting;
+		this.starting = this.startImpl(options).finally(() => {
+			this.starting = null;
+		});
+		return this.starting;
+	}
+
+	private async startImpl(
+		options: WhisperServerStartOptions,
+	): Promise<{ port: number; backend: SttBackend }> {
+		if (this.shuttingDown) {
+			throw new Error("whisper-stt-server manager is shutting down");
+		}
 		if (this.process && this.port) {
 			return { port: this.port, backend: this.backend ?? options.backend ?? "whispercpp-cpu" };
 		}
@@ -170,7 +234,8 @@ export class WhisperServerManager {
 		const resolved = options.binaryPath
 			? { path: options.binaryPath, backend: options.backend ?? "whispercpp-cpu" }
 			: await resolveBinaryPath();
-		if (!resolved.path) {
+		const binaryPath = resolved.path;
+		if (!binaryPath) {
 			const message =
 				"whisper-stt-server binary not found; build it via scripts/build-whisper-stt.sh";
 			this.recordError(message);
@@ -178,12 +243,12 @@ export class WhisperServerManager {
 		}
 		try {
 			if (process.platform !== "win32") {
-				await access(resolved.path, fsConstants.X_OK);
-			} else if (!existsSync(resolved.path)) {
+				await access(binaryPath, fsConstants.X_OK);
+			} else if (!existsSync(binaryPath)) {
 				throw new Error("not found");
 			}
 		} catch {
-			const message = `whisper-stt-server binary at ${resolved.path} is not executable`;
+			const message = `whisper-stt-server binary at ${binaryPath} is not executable`;
 			this.recordError(message);
 			throw new Error(message);
 		}
@@ -191,10 +256,12 @@ export class WhisperServerManager {
 			throw new Error(`Whisper GGML model not found at ${options.modelPath}`);
 		}
 
-		const port = await WhisperServerManager.pickFreePort();
-		const child = spawn(
-			resolved.path,
-			[
+		const launch = async (forceCpu: boolean): Promise<{ port: number; backend: SttBackend }> => {
+			const port = await WhisperServerManager.pickFreePort();
+			if (this.shuttingDown) {
+				throw new Error("whisper-stt-server manager is shutting down");
+			}
+			const args = [
 				"--model",
 				options.modelPath,
 				"--port",
@@ -203,50 +270,109 @@ export class WhisperServerManager {
 				"127.0.0.1",
 				"--threads",
 				String(Math.max(1, os.cpus().length)),
-			],
-			{ stdio: ["ignore", "pipe", "pipe"] },
-		);
+			];
+			if (forceCpu) args.push("--cpu");
+			const child = spawn(binaryPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+			const activeBackend: SttBackend = forceCpu ? "whispercpp-cpu" : resolved.backend;
 
-		this.process = child;
-		this.port = port;
-		this.backend = resolved.backend;
-		this.startedAtMs = Date.now();
-		this.stderrTail = "";
-		this.lastError = null;
+			this.process = child;
+			this.port = port;
+			this.backend = activeBackend;
+			this.startedAtMs = Date.now();
+			this.stderrTail = "";
+			this.lastError = null;
 
-		child.stdout?.on("data", (chunk: Buffer) => {
-			process.stdout.write(`[whisper-stt-server] ${chunk.toString()}`);
-		});
+			child.stdout?.on("data", (chunk: Buffer) => {
+				process.stdout.write(`[whisper-stt-server] ${chunk.toString()}`);
+			});
 
-		child.stderr.on("data", (chunk: Buffer) => {
-			const text = chunk.toString();
-			process.stderr.write(`[whisper-stt-server] ${text}`);
-			this.stderrTail = (this.stderrTail + text).slice(-this.stderrTailMax);
-		});
-		child.once("exit", (code) => {
-			if (this.process === child) {
-				const reason =
-					code === null
-						? "exited without code"
-						: `exited with code ${code}; stderr=${this.stderrTail.slice(-512)}`;
-				this.recordError(reason);
-				this.process = null;
-				this.port = null;
-				this.startedAtMs = null;
+			child.stderr.on("data", (chunk: Buffer) => {
+				const text = chunk.toString();
+				process.stderr.write(`[whisper-stt-server] ${text}`);
+				this.stderrTail = (this.stderrTail + text).slice(-this.stderrTailMax);
+			});
+			child.once("exit", (code) => {
+				if (this.process === child) {
+					const reason =
+						code === null
+							? "exited without code"
+							: `exited with code ${code}; stderr=${this.stderrTail.slice(-512)}`;
+					this.recordError(reason);
+					this.process = null;
+					this.port = null;
+					this.startedAtMs = null;
+				}
+			});
+			child.once("error", (err) => {
+				// ponytail: the same shape as the `exit` listener above, and for the same
+				// reason. A spawn error reaches the startup catch by the same route — the
+				// `exitedBeforeReady` race rejects on `error` too — so without clearing
+				// the startup state here, that catch cannot tell this failure has already
+				// been reported and logs it a second time in different words. Clearing is
+				// also just true: a child that never spawned is not a helper that is up,
+				// and `status` said it was.
+				if (this.process === child) {
+					this.recordError(`spawn error: ${err.message}`);
+					this.process = null;
+					this.port = null;
+					this.startedAtMs = null;
+				}
+			});
+
+			const exitedBeforeReady = new Promise<never>((_, reject) => {
+				child.once("exit", (code) => {
+					reject(
+						new Error(
+							`whisper-stt-server exited during startup (${code ?? "no code"}); ` +
+								`stderr=${this.stderrTail.slice(-512)}`,
+						),
+					);
+				});
+				child.once("error", reject);
+			});
+			try {
+				await Promise.race([
+					WhisperServerManager.pollUntilReady(
+						`http://127.0.0.1:${port}`,
+						30_000,
+						() => this.process === child,
+					),
+					exitedBeforeReady,
+				]);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				// ponytail: read BEFORE `stop()`, which nulls it either way. The `exit`
+				// listener clears `this.process` as it records, so `!== child` here means
+				// the death has already been logged and this catch is the second voice on
+				// it. A readiness TIMEOUT leaves the child in place and is logged from
+				// here, which is the only place that sees it at all.
+				const alreadyLogged = this.process !== child;
+				await this.stop();
+				this.recordError(message, { log: !alreadyLogged });
+				throw new Error(message);
 			}
-		});
-		child.once("error", (err) => {
-			this.recordError(`spawn error: ${err.message}`);
-		});
+			return { port, backend: activeBackend };
+		};
 
-		const baseUrl = `http://127.0.0.1:${port}`;
 		try {
-			await WhisperServerManager.pollUntilReady(baseUrl);
+			return await launch(false);
 		} catch (err) {
-			await this.stop();
-			throw err instanceof Error ? err : new Error(String(err));
+			const startupLog = `${err instanceof Error ? err.message : String(err)} ${this.stderrTail}`;
+			const startupLines = startupLog.split(/\r?\n/);
+			const mentionsGpuBackend = startupLines.some((line) =>
+				/(?:ggml_(?:metal|vulkan|cuda)|gpu)/i.test(line),
+			);
+			const mentionsStartupFailure = startupLines.some((line) =>
+				/(?:fail|error|allocat)/i.test(line),
+			);
+			const gpuStartupFailed =
+				resolved.backend !== "whispercpp-cpu" && mentionsGpuBackend && mentionsStartupFailure;
+			if (!gpuStartupFailed) throw err;
+			process.stderr.write(
+				"[whisper-stt-server] GPU startup failed; retrying with CPU inference\n",
+			);
+			return launch(true);
 		}
-		return { port, backend: resolved.backend };
 	}
 
 	/** Send SIGTERM and wait for the helper to exit. Resolves even if it was already down. */
@@ -272,6 +398,12 @@ export class WhisperServerManager {
 		} catch {
 			child.kill("SIGKILL");
 		}
+	}
+
+	/** Permanently prevent respawn, then stop the currently owned helper. */
+	async shutdown(): Promise<void> {
+		this.shuttingDown = true;
+		await this.stop();
 	}
 
 	private baseUrl(): string {
@@ -367,12 +499,44 @@ export class WhisperServerManager {
 		return Number.isFinite(n) ? n : fallback;
 	}
 
+	/**
+	 * Read the helper's `timing` block, or null when it is missing or unusable.
+	 *
+	 * Null rather than zeroes: a helper binary built before the field existed
+	 * simply omits it, and callers have to be able to tell that apart from a
+	 * transcription that genuinely took no time — one is "we don't know", the
+	 * other would be a bug worth showing.
+	 *
+	 * `rtf` is recomputed from the two durations whenever the helper didn't send
+	 * a usable one. It is derived data, and a NaN surviving this far would reach
+	 * the UI as "NaN x real-time".
+	 *
+	 * Durations no clock could have produced are treated as a junk block, not as
+	 * a slow one: `steady_clock` cannot run backwards, and a chunk holding no
+	 * audio has nothing to measure. Rejecting them here is what keeps a bad value
+	 * out of `SttManager`'s run totals, where it would quietly distort the figure
+	 * the whole recording is reported against.
+	 */
+	private toTiming(raw: WhisperJsonTiming | undefined): SttTiming | null {
+		if (!raw || typeof raw !== "object") return null;
+		const elapsedSec = this.toSec(raw.elapsed_s, Number.NaN);
+		const audioSec = this.toSec(raw.audio_s, Number.NaN);
+		if (!Number.isFinite(elapsedSec) || elapsedSec < 0) return null;
+		// Also the divisor below, so this doubles as the divide-by-zero guard.
+		if (!Number.isFinite(audioSec) || audioSec <= 0) return null;
+		const reported = this.toSec(raw.rtf, Number.NaN);
+		const rtf = Number.isFinite(reported) && reported > 0 ? reported : elapsedSec / audioSec;
+		return { elapsedSec, audioSec, rtf };
+	}
+
 	/** Run one transcription; serializes concurrent callers. */
 	async transcribe(opts: { samples: Float32Array; language?: string }): Promise<{
 		segments: SttPhraseSegment[];
 		wordSegments: SttWordSegment[];
 		detectedLanguage: string;
 		backend: SttBackend;
+		/** Null when the helper reported no usable `timing` block. */
+		timing: SttTiming | null;
 	}> {
 		const task = this.inFlight.then(() => this.transcribeImpl(opts));
 		this.inFlight = task.catch(() => undefined);
@@ -384,6 +548,7 @@ export class WhisperServerManager {
 		wordSegments: SttWordSegment[];
 		detectedLanguage: string;
 		backend: SttBackend;
+		timing: SttTiming | null;
 	}> {
 		const wavPath = await writeSamplesAsWav(opts.samples);
 		try {
@@ -416,7 +581,8 @@ export class WhisperServerManager {
 			);
 			const detectedLanguage = json.detected_language ?? json.language ?? "auto";
 			const backend = this.toBackend(json.backend);
-			return { segments, wordSegments, detectedLanguage, backend };
+			const timing = this.toTiming(json.timing);
+			return { segments, wordSegments, detectedLanguage, backend, timing };
 		} finally {
 			await cleanupWav(wavPath);
 		}

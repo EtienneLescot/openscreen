@@ -27,19 +27,21 @@ describe("estimateHistoryTokens", () => {
 		expect(tokens).toBe(100);
 	});
 
-	it("adds 4 tokens per tool call", () => {
-		const base = estimateHistoryTokens([msg("user", "hi")]);
+	it("does not bill tool calls, which are never sent", () => {
+		// `chat-service` maps the history to `{role, content}` before handing it to the
+		// provider, so a message's tool-call names and summaries are rendered in the
+		// chat and then dropped. Counting them inflated the context pill with text
+		// nobody pays for.
 		const withTool = estimateHistoryTokens([
 			{
 				id: "a",
 				role: "assistant",
-				content: "done",
+				content: "x".repeat(400),
 				createdAt: "2026-01-01T00:00:00.000Z",
-				toolCalls: [{ name: "addTrim", summary: "skip 5-8s" }],
+				toolCalls: [{ name: "addTrim", summary: "y".repeat(400) }],
 			},
 		]);
-		// tool adds roughly: 16 + 4-chars-per-token of name+summary
-		expect(withTool).toBeGreaterThan(base);
+		expect(withTool).toBe(100);
 	});
 });
 

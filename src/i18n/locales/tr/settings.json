@@ -40,7 +40,7 @@
 		"deleteRegion": "Kırpma Bölgesini Sil"
 	},
 	"layout": {
-		"title": "Düzen",
+		"title": "Kamera düzeni",
 		"preset": "Ön Ayar",
 		"selectPreset": "Ön ayar seçin",
 		"pictureInPicture": "Resim İçinde Resim",
@@ -53,6 +53,11 @@
 		"reactiveWebcam": "Yakınlaştırınca küçült",
 		"reactiveWebcamDescription": "Video yakınlaştırıldığında kamera yumuşakça küçülür, böylece yoldan çekilir.",
 		"help": "Web kamerasının ekranla birleştirilme biçimi: resim içinde resim, dikey yığın, çift çerçeve, maske şekli, boyut ve aynalama.",
+		"helpNoWebcam": "Bu projede kamera yok; bu yüzden yerleşim denetimleri kapalı ve ön ayar “Web kamerası yok” gösteriyor. Kaydettiğiniz yerleşim, bir kamera eklediğinizde kullanılmak üzere korunur.",
+		"webcamFraming": "Webcam kadrajı",
+		"webcamCropZoom": "Kırpma yakınlaştırması",
+		"webcamCropX": "Yatay kaydırma",
+		"webcamCropY": "Dikey kaydırma",
 		"shapes": {
 			"rectangle": "Dikdörtgen",
 			"circle": "Daire",
@@ -61,13 +66,21 @@
 		}
 	},
 	"effects": {
-		"title": "Video Efektleri",
+		"title": "Kompozisyon",
 		"blurBg": "Arka Planı Bulanıklaştır",
 		"motionBlur": "Hareket Bulanıklığı",
 		"off": "kapalı",
 		"shadow": "Gölge",
 		"roundness": "Yuvarlaklık",
 		"padding": "Dolgu",
+		"frame": "Çerçeve",
+		"format": "Biçim",
+		"formatOriginal": "Orijinal",
+		"fitClip": "Sığdır",
+		"fitClipOne": "{{count}} klip",
+		"fitClipFew": "{{count}} klip",
+		"fitClipMany": "{{count}} klip",
+		"motion": "Hareket",
 		"on": "açık",
 		"help": "Kayıt çerçevesinin biçimi: arka plan bulanıklığı, gölge, hareket bulanıklığı, köşe yuvarlaklığı ve videonun çevresindeki boşluk."
 	},
@@ -286,16 +299,25 @@
 		"backgroundColor": "Arka plan rengi",
 		"backgroundOpacity": "Saydamlık",
 		"position": "Konum",
-		"positionTop": "Üst",
-		"positionMiddle": "Orta",
-		"positionBottom": "Alt",
+		"anchorBottom": "Alt",
+		"anchorTop": "Üst",
+		"anchorHintBottom": "Uzun altyazılar yukarı doğru büyür — alt kenar yerinde kalır.",
+		"anchorHintTop": "Uzun altyazılar aşağı doğru büyür — üst kenar yerinde kalır.",
+		"distanceFromBottom": "Alttan uzaklık",
+		"distanceFromTop": "Üstten uzaklık",
+		"distanceFromLeft": "Soldan uzaklık",
+		"distanceFromRight": "Sağdan uzaklık",
 		"alignLeft": "Sol",
 		"alignCenter": "Orta",
 		"alignRight": "Sağ",
-		"verticalOffset": "Kaydırma",
-		"width": "Genişlik",
 		"lineLength": "Satır uzunluğu",
 		"minWords": "Satır başına en az kelime",
 		"maxWords": "Satır başına en çok kelime"
+	},
+	"audio": {
+		"title": "Ses",
+		"outputGain": "Çıkış seviyesi",
+		"reset": "Sesi sıfırla",
+		"help": "Ses çıkış seviyesini ayarlayın. Önizlemede ve dışa aktarmada aynı şekilde uygulanır."
 	}
 }

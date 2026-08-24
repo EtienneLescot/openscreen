@@ -15,7 +15,7 @@ keywords:
 
 # Welcome to OpenScreen
 
-OpenScreen is a **free, open-source screen recorder and editor**. It uses native capture APIs (ScreenCaptureKit on macOS, Windows Graphics Capture on Windows) for low-overhead recording, and composites both the live preview and the final export on the GPU through a native Rust + Direct3D 11 renderer — one path, so what you see in the editor is what comes out of the export.
+OpenScreen is a **free, open-source screen recorder and editor**. It uses native capture APIs (ScreenCaptureKit on macOS, Windows Graphics Capture on Windows) for low-overhead recording, and composites both the live preview and the final export on the GPU through a native Rust renderer (Direct3D 11 on Windows, Metal on macOS, wgpu on Linux) — one path, so what you see in the editor is what comes out of the export.
 
 :::warning
 OpenScreen is **not production-grade**. The project is in active development and rough edges are expected.
@@ -31,7 +31,7 @@ OpenScreen is **not production-grade**. The project is in active development and
 - [Export](./export.md) to MP4 (720p/1080p/source, H.264 or H.265) or animated GIF.
 
 :::note
-Recording, editing, transcription, captions, and export all work fully offline with no account. AI chat editing and caption translation are the only features that talk to a network — and only once you connect a provider yourself.
+Recording, editing, transcription, captions, and export all work offline with no account. The one exception is the first transcription you ever run, which downloads its Whisper model (~264 MB) once — after that, transcription is offline too. AI chat editing and caption translation are the only features that keep talking to a network, and only once you connect a provider yourself.
 :::
 
 ## Project facts

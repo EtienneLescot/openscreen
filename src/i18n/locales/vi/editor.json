@@ -42,6 +42,8 @@
 		"cameraDenied": "Quyền truy cập máy ảnh bị từ chối. Sẽ tiếp tục ghi hình không có webcam.",
 		"cameraDisconnected": "Webcam bị ngắt kết nối.",
 		"cameraNotFound": "Không tìm thấy máy ảnh.",
+		"cameraCaptureUnavailable": "Không thể mở máy ảnh. Đang ghi mà không có máy ảnh.",
+		"microphoneDefaulted": "Không xác định được micrô đã chọn. Đang ghi từ đầu vào mặc định.",
 		"permissionDenied": "Quyền ghi hình bị từ chối. Vui lòng cho phép ghi màn hình.",
 		"accessibilityAllowAndRetry": "Cho phép OpenScreen truy cập Trợ năng, sau đó nhấn ghi lại để bắt đầu đếm ngược.",
 		"selectSource": "Vui lòng chọn một nguồn để ghi"
@@ -85,7 +87,6 @@
 		"switchToLightTheme": "Chuyển sang giao diện sáng",
 		"switchToDarkTheme": "Chuyển sang giao diện tối",
 		"toggleTheme": "Đổi giao diện",
-		"settings": "Cài đặt",
 		"export": "Xuất",
 		"renameProject": "Đổi tên dự án",
 		"noProject": "Không có dự án",
@@ -132,6 +133,8 @@
 		"emptyHint": "Chưa có media nào — nhập một bản ghi để bắt đầu.",
 		"importMedia": "Nhập media",
 		"added": "Đã thêm {{label}}",
+		"addToTimeline": "Thêm vào dòng thời gian",
+		"addedToTimeline": "Đã thêm {{label}} vào dòng thời gian",
 		"sourceTranscript": "Bản ghi lời thoại nguồn",
 		"close": "Đóng",
 		"transcriptReady": "Bản ghi lời thoại đã sẵn sàng",
@@ -146,6 +149,7 @@
 		"transcribingEllipsis": "Đang phiên âm…",
 		"pendingTranscription": "Đang chờ phiên âm",
 		"transcriptionFailed": "Phiên âm thất bại",
+		"cpuBackendHint": "Đang chạy trên CPU — chậm hơn khoảng 2× so với GPU",
 		"noTranscript": "Không có bản ghi lời thoại",
 		"generating": "Đang tạo",
 		"generationFailed": "Tạo thất bại",
@@ -235,6 +239,8 @@
 		"selectModelFailed": "Không thể chọn mô hình",
 		"providerSettings": "Cài đặt nhà cung cấp…",
 		"applyEditsFailed": "Không thể áp dụng chỉnh sửa của tác nhân",
+		"agentEditConflict": "Các chỉnh sửa của tác nhân không được áp dụng vì dự án đã thay đổi trong lúc xử lý.",
+		"applyAnyway": "Vẫn áp dụng",
 		"chatFailed": "Trò chuyện thất bại",
 		"rewindFailed": "Tua lại thất bại",
 		"rewoundSuccess": "Đã tua lại đến đầu tin nhắn đó",
@@ -281,7 +287,7 @@
 		"sendTitle": "Gửi (Enter)",
 		"send": "Gửi",
 		"rewindConfirmTitle": "Tua lại đến đây?",
-		"rewindConfirmBody": "Các chỉnh sửa của tác nhân và các lượt tiếp theo sau điểm này sẽ được khôi phục lại. Dự án, cuộc trò chuyện và trạng thái tác nhân sẽ được khôi phục.",
+		"rewindConfirmBody": "Các chỉnh sửa của tác nhân và các lượt tiếp theo sau điểm này sẽ được khôi phục lại. Dự án, cuộc trò chuyện và trạng thái tác nhân sẽ được khôi phục. Các chỉnh sửa bạn đã thực hiện từ lúc đó cũng sẽ bị thay thế.",
 		"rewindConfirm": "Tua lại",
 		"configureModel": "Cấu hình mô hình AI",
 		"historyDialog": {
@@ -361,7 +367,13 @@
 	},
 	"preview": {
 		"videoPreview": "Xem trước video",
-		"webcamPreview": "Xem trước webcam (kéo để đổi vị trí)"
+		"webcamPreview": "Xem trước webcam (kéo để đổi vị trí)",
+		"mediaError": {
+			"title": "Xem trước đã dừng",
+			"description": "Không thể giải mã video. Tệp có thể đã hỏng, vẫn đang được ghi, hoặc không còn ở nơi dự án mong đợi — dự án của bạn vẫn nguyên vẹn.",
+			"retry": "Thử lại",
+			"detail": "Chi tiết: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "Chú thích",

@@ -57,12 +57,17 @@
 	--os-fg: #3a3f47;
 	--os-muted: #6b7280;
 	--os-meta: #98a0aa;
-	--os-accent: #0d9668;
-	--os-brand-lo: #0b7f59;
-	--os-accent-soft: rgba(13, 150, 104, 0.11);
-	--os-accent-wash: rgba(13, 150, 104, 0.06);
-	--os-accent-border: rgba(13, 150, 104, 0.25);
-	--os-accent-ring: rgba(13, 150, 104, 0.28);
+	/* Darkened from #0d9668. The design system's light accent measures 3.63:1
+	   against --os-bg, which is a Level AA failure twice over: as inline 12.5px
+	   text (`xattr`, `sudo` in the install panes), and — it being the same pair
+	   of colours either way round — as the fill under the --os-bg label of both
+	   Download buttons. #0a7d57 measures 4.96:1, at the same hue. */
+	--os-accent: #0a7d57;
+	--os-brand-lo: #086b4a;
+	--os-accent-soft: rgba(10, 125, 87, 0.11);
+	--os-accent-wash: rgba(10, 125, 87, 0.06);
+	--os-accent-border: rgba(10, 125, 87, 0.25);
+	--os-accent-ring: rgba(10, 125, 87, 0.28);
 	--os-danger: #dc2626;
 	--os-danger-soft: rgba(220, 38, 38, 0.11);
 	--os-annotation: #b45309;
@@ -141,6 +146,40 @@
 
 body {
 	background: var(--os-bg);
+}
+
+/* ---- focus and scrolling ----
+   The site shipped no authored focus style at all: Infima defines `:focus` only
+   for `.close`, so every link, button and in-page anchor fell back to whatever
+   the engine draws — which on the dark theme is a thin blue ring nobody can see
+   against #080a0d. `:focus` is repeated because `:focus-visible` is Safari 15.4,
+   and the two rules are separate so an engine that fails to parse the second
+   still applies the first. */
+
+:root {
+	/* Nothing compensated for the 60px sticky navbar, so every anchor jump on
+	   the site parked its target underneath the bar. */
+	scroll-padding-top: 76px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	html {
+		scroll-behavior: smooth;
+	}
+}
+
+:focus {
+	outline: 2px solid var(--os-accent);
+	outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+	outline: none;
+}
+
+:focus-visible {
+	outline: 2px solid var(--os-accent);
+	outline-offset: 2px;
 }
 
 /* ---- navbar ----
@@ -274,7 +313,7 @@ body {
 	padding: 7px 14px !important;
 	border-radius: 9px;
 	background: var(--os-accent);
-	color: #fff !important;
+	color: var(--os-bg) !important;
 	font-size: 12.5px;
 	font-weight: 600;
 }

@@ -114,6 +114,33 @@ describe("compaction", () => {
 		expect(usage?.usedTokens).toBeLessThan(40_000);
 	});
 
+	it("measures the WINDOW the model is sent, not the whole post-compaction list", async () => {
+		// The model gets `MODEL_HISTORY_WINDOW` (20) messages, not everything after the
+		// compaction boundary. Measuring the wider list made the pill report roughly
+		// double on a long session, and made pressing Compact halve the number while
+		// what actually reaches the provider barely moved -- the same class of wrong
+		// number this pill exists to avoid.
+		const session = createSession("proj_window");
+		// 12 turns = 24 messages, so 4 fall outside the window.
+		for (let i = 0; i < 12; i += 1) {
+			await runChat("proj_window", session.id, `${LONG}#${i}`, stubConfig());
+		}
+
+		const transcript = selectSession("proj_window", session.id)?.messages ?? [];
+		expect(transcript).toHaveLength(24);
+		const sentToTheModel = histories.at(-1) ?? [];
+		// The last turn's payload is what the pill has to describe.
+		const sentChars = sentToTheModel.reduce((acc, m) => acc + m.content.length, 0);
+		const transcriptChars = transcript.reduce((acc, m) => acc + m.content.length, 0);
+		expect(sentChars).toBeLessThan(transcriptChars);
+
+		const usage = getSessionContextUsage("proj_window", session.id);
+		// Within one turn of the payload (the pill is read after the reply lands, the
+		// payload was built before it), and nowhere near the whole transcript.
+		expect(usage?.usedTokens).toBeLessThan(Math.ceil(transcriptChars / 4));
+		expect(usage?.usedTokens).toBeGreaterThanOrEqual(Math.ceil(sentChars / 4));
+	});
+
 	it("compacts an ORDINARY conversation — the button is not gated by a budget", async () => {
 		// The same guessed budget gated the manual path: `compactSessionNow`
 		// went through the same heuristic, so below 70% of 80k the button did

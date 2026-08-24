@@ -27,6 +27,26 @@ export type CliCommand = (
 ) & {
 	/** Machine-readable NDJSON output on stdout instead of human progress. */
 	json?: boolean;
+	/**
+	 * Write the machine-readable result here rather than onto stdout.
+	 *
+	 * stdout is correct as it stands -- Chromium logs to stderr, and nothing this
+	 * process runs writes anywhere it should not. What a caller cannot control is
+	 * the wrapper around it. Ubuntu's xvfb-run, which is how a GUI binary gets run
+	 * headlessly in the first place, folds the command's stderr into its stdout;
+	 * under it, `sources --json | jq` sees Chromium's diagnostics ahead of the JSON
+	 * and fails. That is not hypothetical -- it is what the first attempt to script
+	 * this command did.
+	 *
+	 * A named file is a channel no wrapper can redirect into. It also sidesteps
+	 * shell quoting and encoding, which matters more on Windows than on POSIX.
+	 *
+	 * Note the shapes differ, and docs/cli.md says so: stdout carries the payload
+	 * inside the NDJSON `done` envelope because it is one event in a stream, while
+	 * the file carries the bare payload because a file is not a stream. Written on
+	 * success only.
+	 */
+	jsonOutPath?: string;
 };
 
 const SUBCOMMANDS = new Set([
@@ -46,7 +66,7 @@ export const CLI_USAGE = `OpenScreen CLI
 Usage:
   openscreen export <project.openscreen> [options]   Render a project to MP4/GIF
   openscreen record [options]                        Record the screen headlessly
-  openscreen sources [--json]                        List displays, windows and microphones
+  openscreen sources [--json] [-o <file>]            List displays, windows and microphones
   openscreen pack <project.openscreen> --out <dir>   Copy project + media into one portable folder
   openscreen captions <project.openscreen>           Add auto-captions (on-device Whisper) to a project
                      [--min-words <n>] [--max-words <n>]
@@ -87,7 +107,14 @@ or pass --duration.
 
 function takeValue(argv: string[], i: number, flag: string): [string, number] {
 	const next = argv[i + 1];
-	if (next === undefined || next.startsWith("--")) {
+	// "" is rejected alongside a missing value: an unset variable in a wrapper
+	// (`openscreen sources -o "$OUT"`) reaches us as an empty argument, and every
+	// caller here feeds the result to resolvePath, where path.resolve(cwd, "")
+	// returns cwd. That turns a typo into a directory path, which then fails much
+	// later as EISDIR from the write — after the work is done and discarded —
+	// instead of as the parse error the same mistake gets when the value is
+	// omitted entirely.
+	if (next === undefined || next === "" || next.startsWith("--")) {
 		throw new Error(`${flag} requires a value`);
 	}
 	return [next, i + 1];
@@ -131,7 +158,7 @@ export function parseCliArgs(
 	try {
 		if (sub === "export") return parseExport(args.slice(1), cwd);
 		if (sub === "record") return parseRecord(args.slice(1), cwd);
-		if (sub === "sources") return parseSources(args.slice(1));
+		if (sub === "sources") return parseSources(args.slice(1), cwd);
 		if (sub === "pack") return parsePack(args.slice(1), cwd);
 		if (sub === "captions") return parseCaptions(args.slice(1), cwd);
 		return parseInfo(args.slice(1), cwd);
@@ -344,16 +371,22 @@ function parseRecord(args: string[], cwd: string): CliCommand {
 	return request;
 }
 
-function parseSources(args: string[]): CliCommand {
+function parseSources(args: string[], cwd: string): CliCommand {
 	let json = false;
-	for (const arg of args) {
+	let jsonOutPath: string | undefined;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
 		if (arg === "--json") {
 			json = true;
+		} else if (arg === "-o" || arg === "--out") {
+			const [value, next] = takeValue(args, i, arg);
+			jsonOutPath = resolvePath(value, cwd);
+			i = next;
 		} else {
 			throw new Error(`Unknown sources option: ${arg}`);
 		}
 	}
-	return { kind: "sources", json };
+	return { kind: "sources", json, jsonOutPath };
 }
 
 export interface CliPackCommand {

@@ -259,6 +259,60 @@ the decoder swap, awaits `setActiveClip`, and re-reads the live transport *now*
 (not from a captured `isPlaying`) before resuming — so a user pause that lands
 in the middle of a clip transition is honoured, not silently undone.
 
+## When the decode clock fails
+
+The hidden `<video>` is a clock and an audio source, not the picture — the
+pixels come from the native canvas. So its failing is not the preview failing,
+and the invariant since [#395](https://github.com/getopenscreen/openscreen/issues/395)
+is: **a media error can never render `EditorEmptyState`**. That component now
+answers exactly one question — is there anything in this project to show? — and
+`Preview.tsx`'s render condition (`hasProject && hasAsset && previewSources.length > 0`)
+takes no failure input at all.
+
+What replaced it, in two layers:
+
+- **Classify, then reload**
+  ([`mediaError.ts`](../../src/components/ai-edition/mediaError.ts), applied in
+  `VirtualPreview`'s `onError`). `MEDIA_ERR_ABORTED` is ignored outright and
+  never counted: the `<video>` is keyed on `activeSource.id`, so every
+  cross-asset clip boundary remounts it mid-load and Chromium reports exactly
+  that. `MEDIA_ERR_SRC_NOT_SUPPORTED` gets one retry (a recording the capture
+  process is still writing reports as unsupported); everything else — including
+  an `error` event carrying no `MediaError` — rides `RETRY_DELAYS_MS`. The
+  reload is a plain `load()`: re-assigning `src` first would start a second load
+  that aborts the first and emit a spurious abort. The budget is re-armed by
+  **playing past the position the failure happened at** (tracked in the rAF
+  tick). Both obvious alternatives are wrong: never re-arming makes the third
+  transient failure of a long session terminal — #395 with a longer fuse — while
+  re-arming when the reload *completes* is worse still, because
+  `loadedmetadata`/`canplay` prove the header parsed and the decoder is willing,
+  not that the bytes that killed us are readable. A truncated recording re-fires
+  both on every reload, so that version loops at 400 ms forever and never
+  surfaces the card at all.
+- **Resume through the existing path.** The reload queues `pendingSeekRef` and
+  lets `onLoadedMetadata` restore position and playback — the same path a
+  cross-asset seek uses, so the component has one resume path rather than two.
+  The position is resolved **at reload time**, not when the error fired, because
+  the user can scrub during the backoff: it comes from `locateVirtualPosition`
+  against the live playhead, guarded by an `assetId` check (that function
+  answers for whatever clip the playhead is on, which after a boundary advance
+  can belong to a different asset), and falls back to a source time sampled
+  while the decoder was known good. `video.currentTime` is *not* usable here —
+  it reads 0 after `load()`.
+
+While a reload is in flight the rAF tick returns early (`recoveringRef`),
+publishing the clock but taking no decision. This cannot ride on the `v.paused`
+gate the rest of the tick uses: an `error` does not fire `pause`, so a failure
+during playback leaves `paused` false, and the tick would go on making
+trim/boundary decisions against a frozen clock and clobber the queued resume.
+
+Only once the budget is spent does `Preview` hear about it, and it renders
+`PreviewErrorCard` **over** the still-mounted canvas — the last composed frame
+stays visible, which is the evidence the project is intact. The card carries the
+`MediaError` code, because a user's report is otherwise unactionable: the reason
+#395 could only ever be described as "the preview disappeared" is that the code
+was thrown away.
+
 ## Known gaps
 
 - **Live preview is video-only.** `crates/compositor/src/live.rs` (1628 lines) handles only

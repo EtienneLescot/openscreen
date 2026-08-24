@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProjectStore } from "./projectStore";
+import { clearHistory, past, pushHistory } from "./undoStack";
 
 const bridgeMocks = vi.hoisted(() => ({
 	get: vi.fn(),
@@ -297,6 +298,64 @@ describe("useProjectStore", () => {
 		expect(toastMocks.error.mock.calls[0][0]).toContain("video.mp4");
 	});
 
+	// The save boundary. Every write in the app funnels through `saveDocument`, and
+	// almost every caller `void`s it from a click handler, so what this function does
+	// with a failure IS what the user sees.
+	describe("saveDocument reports a failed write instead of rejecting", () => {
+		it("resolves false, tells the user, and leaves the document alone", async () => {
+			useProjectStore.setState({
+				projectId: "proj_test",
+				document: sampleDoc,
+				revision: 3,
+				status: "ready",
+				dirty: true,
+			});
+			bridgeMocks.save.mockResolvedValue({ success: false, error: "EACCES" });
+
+			const edited = { ...sampleDoc, project: { ...sampleDoc.project, title: "Edited" } };
+			await expect(
+				useProjectStore.getState().saveDocument(edited, { history: true }),
+			).resolves.toBe(false);
+
+			expect(toastMocks.error).toHaveBeenCalledWith("Failed to save project", {
+				description: "EACCES",
+			});
+			const state = useProjectStore.getState();
+			expect(state.document?.project.title).toBe("Test");
+			expect(state.revision).toBe(3);
+			// Still dirty: `dirty` is the only input to the beforeunload guard and to
+			// `setHasUnsavedChanges`, so a failed write is the last moment to claim clean.
+			expect(state.dirty).toBe(true);
+		});
+
+		it("never rejects, so a detached caller cannot leak an unhandled rejection", async () => {
+			useProjectStore.setState({ projectId: "proj_test", document: sampleDoc, dirty: true });
+			bridgeMocks.save.mockRejectedValue(new Error("bridge is gone"));
+
+			await expect(
+				useProjectStore.getState().saveDocument(sampleDoc, { history: true }),
+			).resolves.toBe(false);
+			expect(toastMocks.error).toHaveBeenCalledWith("Failed to save project", {
+				description: "bridge is gone",
+			});
+		});
+
+		it("resolves true and commits on success", async () => {
+			const saved = { ...sampleDoc, project: { ...sampleDoc.project, title: "Saved" } };
+			useProjectStore.setState({ projectId: "proj_test", document: sampleDoc, dirty: true });
+			bridgeMocks.save.mockResolvedValue({ success: true, document: saved });
+
+			await expect(useProjectStore.getState().saveDocument(saved, { history: true })).resolves.toBe(
+				true,
+			);
+
+			expect(toastMocks.error).not.toHaveBeenCalled();
+			const state = useProjectStore.getState();
+			expect(state.document?.project.title).toBe("Saved");
+			expect(state.dirty).toBe(false);
+		});
+	});
+
 	it("removeAsset requires a loaded project", async () => {
 		await expect(useProjectStore.getState().removeAsset("asset_x")).rejects.toThrow(
 			"No project loaded",
@@ -318,6 +377,109 @@ describe("useProjectStore", () => {
 			revision: 0,
 			status: "idle",
 			error: null,
+		});
+	});
+
+	it("clear drops the undo history with the project", () => {
+		// Explicit rather than leaning on the `beforeEach`, which reaches this same code.
+		clearHistory();
+		useProjectStore.setState({ projectId: "proj_test", document: sampleDoc });
+		pushHistory({ projectId: "proj_test", doc: sampleDoc });
+		expect(past).toHaveLength(1);
+
+		useProjectStore.getState().clear();
+
+		// Hygiene rather than a restore hazard -- `undo` refuses a snapshot whose
+		// projectId does not match, and there is no projectId left to match. What the
+		// stack was actually holding is up to fifty cloned documents, kept alive until
+		// the next project load.
+		expect(past).toHaveLength(0);
+	});
+
+	it("clear supersedes a save that was already in flight", async () => {
+		// `clear()`'s one production caller deletes the open project. A background save
+		// issued a moment earlier -- a transcript, a duration probe -- used to resolve
+		// after it and reinstall the deleted project's document over the empty state,
+		// with `dirty: false` and a fresh `lastSavedAt` claiming it was on disk.
+		const renamed = { ...sampleDoc, project: { ...sampleDoc.project, title: "Renamed" } };
+		clearHistory();
+		useProjectStore.setState({ projectId: "proj_test", document: sampleDoc, dirty: true });
+		let release: (() => void) | undefined;
+		bridgeMocks.save.mockReturnValue(
+			new Promise((resolve) => {
+				release = () => resolve({ success: true, document: renamed });
+			}),
+		);
+
+		const inFlight = useProjectStore.getState().saveDocument(renamed, { history: true });
+		useProjectStore.getState().clear();
+		release?.();
+
+		await expect(inFlight).resolves.toBe(false);
+		expect(useProjectStore.getState().document).toBeNull();
+		expect(useProjectStore.getState().dirty).toBe(false);
+		// And nothing recorded either: the write that would have pushed the pre-rename
+		// document is the one being dropped.
+		expect(past).toHaveLength(0);
+	});
+	describe("addAsset drops work the user has already moved on from", () => {
+		// `addAsset` awaits the native add, a camera lookup, a dimension probe and a save,
+		// and then writes the store unconditionally. Anything the user does in those gaps
+		// -- deleting the open project, switching to another one -- used to lose to the
+		// write that landed last.
+		function pendingAdd() {
+			let release!: (value: { document: typeof sampleDoc }) => void;
+			bridgeMocks.addAsset.mockReturnValue(
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+			);
+			return { release };
+		}
+
+		beforeEach(() => {
+			// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
+			(window as any).electronAPI = {
+				findRecordingCamera: vi.fn().mockResolvedValue({ success: false }),
+			};
+		});
+
+		it("does not reinstall a deleted project's document", async () => {
+			bridgeMocks.create.mockResolvedValue({ success: true, document: sampleDoc });
+			await useProjectStore.getState().createProject("Test");
+
+			const { release } = pendingAdd();
+			const pending = useProjectStore.getState().addAsset("C:/clip.mp4");
+
+			// The user deletes the project while the add is still in flight.
+			useProjectStore.getState().clear();
+			release({ document: sampleDoc });
+
+			await expect(pending).resolves.toBeNull();
+			expect(useProjectStore.getState().document).toBeNull();
+			expect(useProjectStore.getState().projectId).toBeNull();
+		});
+
+		it("does not drop one project's asset into the project the user switched to", async () => {
+			bridgeMocks.create.mockResolvedValue({ success: true, document: sampleDoc });
+			await useProjectStore.getState().createProject("Test");
+
+			const { release } = pendingAdd();
+			const pending = useProjectStore.getState().addAsset("C:/clip.mp4");
+
+			const other = {
+				...sampleDoc,
+				project: { ...sampleDoc.project, id: "proj_other", title: "Other" },
+			};
+			bridgeMocks.get.mockResolvedValue({ success: true, document: other });
+			await useProjectStore.getState().loadProject("proj_other");
+
+			release({ document: sampleDoc });
+
+			await expect(pending).resolves.toBeNull();
+			// Still the project the user chose, not the one the add was building on.
+			expect(useProjectStore.getState().projectId).toBe("proj_other");
+			expect(useProjectStore.getState().document?.project.id).toBe("proj_other");
 		});
 	});
 });

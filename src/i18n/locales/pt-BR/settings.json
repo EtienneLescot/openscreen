@@ -40,7 +40,7 @@
 		"deleteRegion": "Excluir Região de Recorte"
 	},
 	"layout": {
-		"title": "Layout",
+		"title": "Layout da câmera",
 		"preset": "Predefinição",
 		"selectPreset": "Selecionar predefinição",
 		"pictureInPicture": "Picture in Picture",
@@ -53,6 +53,11 @@
 		"reactiveWebcam": "Encolher ao ampliar",
 		"reactiveWebcamDescription": "A câmera diminui suavemente enquanto o vídeo está ampliado, para não atrapalhar.",
 		"help": "Como a webcam é composta com a tela: picture-in-picture, pilha vertical, quadro duplo, formato da máscara, tamanho e espelhamento.",
+		"helpNoWebcam": "Este projeto não tem câmera, então os controles de layout estão desativados e a predefinição mostra “Sem Webcam”. Seu layout salvo é mantido para quando você adicionar uma câmera.",
+		"webcamFraming": "Enquadramento da webcam",
+		"webcamCropZoom": "Zoom do recorte",
+		"webcamCropX": "Deslocamento horizontal",
+		"webcamCropY": "Deslocamento vertical",
 		"shapes": {
 			"rectangle": "Ret.",
 			"circle": "Círculo",
@@ -61,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "Efeitos de Vídeo",
+		"title": "Composição",
 		"blurBg": "Desfocar Fundo",
 		"motionBlur": "Desfoque de Movimento",
 		"off": "desativado",
@@ -69,6 +74,14 @@
 		"shadow": "Sombra",
 		"roundness": "Arredondamento",
 		"padding": "Espaçamento",
+		"frame": "Moldura",
+		"format": "Formato",
+		"formatOriginal": "Original",
+		"fitClip": "Ajustar",
+		"fitClipOne": "{{count}} clipe",
+		"fitClipFew": "{{count}} clipes",
+		"fitClipMany": "{{count}} clipes",
+		"motion": "Movimento",
 		"help": "Estilo do quadro da gravação: desfoque de fundo, sombra, desfoque de movimento, raio dos cantos e margem em volta do vídeo."
 	},
 	"background": {
@@ -286,16 +299,25 @@
 		"backgroundColor": "Cor do fundo",
 		"backgroundOpacity": "Opacidade",
 		"position": "Posição",
-		"positionTop": "Topo",
-		"positionMiddle": "Meio",
-		"positionBottom": "Base",
+		"anchorBottom": "Base",
+		"anchorTop": "Topo",
+		"anchorHintBottom": "Legendas longas crescem para cima — a borda inferior não se move.",
+		"anchorHintTop": "Legendas longas crescem para baixo — a borda superior não se move.",
+		"distanceFromBottom": "Distância da base",
+		"distanceFromTop": "Distância do topo",
+		"distanceFromLeft": "Distância da esquerda",
+		"distanceFromRight": "Distância da direita",
 		"alignLeft": "Esquerda",
 		"alignCenter": "Centro",
 		"alignRight": "Direita",
-		"verticalOffset": "Deslocamento",
-		"width": "Largura",
 		"lineLength": "Comprimento da linha",
 		"minWords": "Mín. de palavras por linha",
 		"maxWords": "Máx. de palavras por linha"
+	},
+	"audio": {
+		"title": "Áudio",
+		"outputGain": "Nível de saída",
+		"reset": "Redefinir áudio",
+		"help": "Ajuste o nível de saída do áudio. Ele se aplica da mesma forma na prévia e na exportação."
 	}
 }

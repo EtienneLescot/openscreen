@@ -23,6 +23,7 @@ import styles from "./EditorShellV4.module.css";
 interface RecordingPrefsState {
 	micEnabled: boolean;
 	micDeviceId: string | null;
+	micDeviceName: string | null;
 	camEnabled: boolean;
 	camDeviceId: string | null;
 	systemAudioEnabled: boolean;
@@ -32,6 +33,7 @@ interface RecordingPrefsState {
 const DEFAULT_PREFS: RecordingPrefsState = {
 	micEnabled: false,
 	micDeviceId: null,
+	micDeviceName: null,
 	camEnabled: false,
 	camDeviceId: null,
 	systemAudioEnabled: false,
@@ -272,8 +274,16 @@ export function RecStage({
 											className={styles.recSelect}
 											value={prefs.micDeviceId ?? micDevices.selectedDeviceId}
 											onChange={(e) => {
-												micDevices.setSelectedDeviceId(e.target.value);
-												updatePrefs({ micDeviceId: e.target.value });
+												const deviceId = e.target.value;
+												micDevices.setSelectedDeviceId(deviceId);
+												// The label travels with the id: the native Windows
+												// helper selects a microphone by NAME, and records the
+												// Windows default endpoint when it is missing.
+												updatePrefs({
+													micDeviceId: deviceId,
+													micDeviceName:
+														micDevices.devices.find((d) => d.deviceId === deviceId)?.label ?? null,
+												});
 											}}
 										>
 											{micDevices.devices.map((d) => (

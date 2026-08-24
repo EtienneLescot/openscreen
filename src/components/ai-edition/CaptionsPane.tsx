@@ -12,8 +12,12 @@
 import { Captions as CaptionsIcon, Languages, Loader2, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
-import type { CaptionTextAlign, CaptionVerticalPosition } from "@/lib/ai-edition/captions";
-import { untranslatedUnits } from "@/lib/ai-edition/captions";
+import type { CaptionAnchorH, CaptionAnchorV } from "@/lib/ai-edition/captions";
+import {
+	CAPTION_INSET_X_MAX,
+	CAPTION_INSET_Y_MAX,
+	untranslatedUnits,
+} from "@/lib/ai-edition/captions";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useTimelineTranscriptGate,
@@ -166,10 +170,13 @@ export function CaptionsPane() {
 	const clearLegacyCaptionAnnotations = async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		await saveDocument({
-			...doc,
-			annotations: doc.annotations.filter((a) => a.annotationSource !== "auto-caption"),
-		});
+		await saveDocument(
+			{
+				...doc,
+				annotations: doc.annotations.filter((a) => a.annotationSource !== "auto-caption"),
+			},
+			{ history: true },
+		);
 	};
 
 	return (
@@ -182,7 +189,7 @@ export function CaptionsPane() {
 			</header>
 			<div className={styles.paneBody} style={{ padding: 0 }}>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.show")}</span>
+					<span className={styles.label}>{t("captions.show")}</span>
 					<Toggle
 						checked={settings.enabled}
 						disabled={disabled || !hasTranscript}
@@ -275,7 +282,7 @@ export function CaptionsPane() {
 				{/* ── Language ───────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.language")}</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.displayLanguage")}</span>
+					<span className={styles.label}>{t("captions.displayLanguage")}</span>
 					<select
 						value={settings.language ?? ""}
 						disabled={disabled}
@@ -358,7 +365,7 @@ export function CaptionsPane() {
 				{/* ── Text ───────────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.text")}</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.font")}</span>
+					<span className={styles.label}>{t("captions.font")}</span>
 					<select
 						value={settings.fontFamily}
 						disabled={disabled}
@@ -373,7 +380,7 @@ export function CaptionsPane() {
 					</select>
 				</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.bold")}</span>
+					<span className={styles.label}>{t("captions.bold")}</span>
 					<Toggle
 						checked={settings.fontWeight === "bold"}
 						disabled={disabled}
@@ -393,7 +400,7 @@ export function CaptionsPane() {
 					/>
 				</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.textColor")}</span>
+					<span className={styles.label}>{t("captions.textColor")}</span>
 					<ColorField
 						label={t("captions.textColor")}
 						value={settings.color}
@@ -409,7 +416,7 @@ export function CaptionsPane() {
 				    background: the swatch keeps showing the remembered colour while the
 				    plate is off, because that is what turning it back on will draw. */}
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.background")}</span>
+					<span className={styles.label}>{t("captions.background")}</span>
 					<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
 						<ColorField
 							label={t("captions.backgroundColor")}
@@ -441,54 +448,89 @@ export function CaptionsPane() {
 				) : null}
 
 				{/* ── Placement ──────────────────────────────────────────── */}
+				{/* One control per axis, each naming the edge it measures from. The old pane
+				    had four that overlapped: a band width nothing drew, an offset measured
+				    against that invisible band, and a text alignment fighting the offset for
+				    the same visual outcome. */}
 				<div className={styles.sectionLabel}>{t("captions.position")}</div>
-				<Segmented<CaptionVerticalPosition>
-					value={settings.verticalPosition}
+				<Segmented<CaptionAnchorV>
+					value={settings.anchorV}
 					disabled={disabled}
 					options={[
-						{ value: "top", label: t("captions.positionTop") },
-						{ value: "middle", label: t("captions.positionMiddle") },
-						{ value: "bottom", label: t("captions.positionBottom") },
+						{ value: "bottom", label: t("captions.anchorBottom") },
+						{ value: "top", label: t("captions.anchorTop") },
 					]}
-					onChange={(verticalPosition) => void set({ verticalPosition })}
+					// No offset to reset: the inset means the same thing on both anchors, so
+					// flipping mirrors the caption to the same distance from the opposite edge.
+					onChange={(anchorV) => void set({ anchorV })}
 				/>
-				<Segmented<CaptionTextAlign>
-					value={settings.textAlign}
+				<p
+					style={{
+						margin: "6px var(--sp-4) 10px",
+						font: "400 11px/1.5 var(--font-body)",
+						color: "var(--meta)",
+					}}
+				>
+					{settings.anchorV === "bottom"
+						? t("captions.anchorHintBottom")
+						: t("captions.anchorHintTop")}
+				</p>
+				<div className={styles.sliderGrid}>
+					<SliderCell
+						label={
+							settings.anchorV === "bottom"
+								? t("captions.distanceFromBottom")
+								: t("captions.distanceFromTop")
+						}
+						value={settings.insetY}
+						min={0}
+						max={CAPTION_INSET_Y_MAX}
+						step={0.5}
+						decimals={1}
+						suffix="%"
+						disabled={disabled}
+						onChange={(v) => setLive({ insetY: v })}
+						onCommit={() => void commit()}
+					/>
+				</div>
+
+				<Segmented<CaptionAnchorH>
+					value={settings.anchorH}
 					disabled={disabled}
 					options={[
 						{ value: "left", label: t("captions.alignLeft") },
 						{ value: "center", label: t("captions.alignCenter") },
 						{ value: "right", label: t("captions.alignRight") },
 					]}
-					onChange={(textAlign) => void set({ textAlign })}
+					onChange={(anchorH) => void set({ anchorH })}
 				/>
-				<div className={styles.sliderGrid}>
-					<SliderCell
-						label={t("captions.verticalOffset")}
-						value={settings.offsetY}
-						min={-45}
-						max={45}
-						suffix="%"
-						disabled={disabled}
-						onChange={(v) => setLive({ offsetY: v })}
-						onCommit={() => void commit()}
-					/>
-					<SliderCell
-						label={t("captions.width")}
-						value={settings.width}
-						min={20}
-						max={100}
-						suffix="%"
-						disabled={disabled}
-						onChange={(v) => setLive({ width: v })}
-						onCommit={() => void commit()}
-					/>
-				</div>
+				{/* Centre has no edge to measure from, so the control is ABSENT rather than
+				    disabled — a dead slider reads as a bug. */}
+				{settings.anchorH === "center" ? null : (
+					<div className={styles.sliderGrid}>
+						<SliderCell
+							label={
+								settings.anchorH === "left"
+									? t("captions.distanceFromLeft")
+									: t("captions.distanceFromRight")
+							}
+							value={settings.insetX}
+							min={0}
+							max={CAPTION_INSET_X_MAX}
+							step={0.5}
+							decimals={1}
+							suffix="%"
+							disabled={disabled}
+							onChange={(v) => setLive({ insetX: v })}
+							onCommit={() => void commit()}
+						/>
+					</div>
+				)}
 
 				{/* ── Line length ────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.lineLength")}</div>
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.minWords")}</span>
+					<span className={styles.label}>{t("captions.minWords")}</span>
 					<select
 						value={settings.minWordsPerLine}
 						disabled={disabled}
@@ -503,7 +545,7 @@ export function CaptionsPane() {
 					</select>
 				</div>
 				<div className={styles.paneRow} style={{ marginBottom: 16 }}>
-					<span className="label">{t("captions.maxWords")}</span>
+					<span className={styles.label}>{t("captions.maxWords")}</span>
 					<select
 						value={settings.maxWordsPerLine}
 						disabled={disabled}

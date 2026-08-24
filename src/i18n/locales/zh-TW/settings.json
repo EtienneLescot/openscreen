@@ -41,7 +41,7 @@
 		"deleteRegion": "刪除剪輯區域"
 	},
 	"layout": {
-		"title": "版面配置",
+		"title": "攝影機版面",
 		"preset": "預設",
 		"selectPreset": "選擇預設",
 		"pictureInPicture": "子母畫面",
@@ -54,6 +54,11 @@
 		"reactiveWebcam": "縮放時縮小",
 		"reactiveWebcamDescription": "放大影片時鏡頭會平滑縮小，以免遮擋內容。",
 		"help": "攝影機與螢幕的合成方式：子母畫面、垂直堆疊、雙畫面、遮罩形狀、大小與鏡像。",
+		"helpNoWebcam": "此專案沒有攝影機，因此版面配置控制項已停用，預設顯示為「無網路攝影機」。你儲存的版面配置會保留，以便新增攝影機後使用。",
+		"webcamFraming": "攝影機構圖",
+		"webcamCropZoom": "裁切縮放",
+		"webcamCropX": "水平移動",
+		"webcamCropY": "垂直移動",
 		"shapes": {
 			"rectangle": "矩形",
 			"circle": "圓形",
@@ -62,13 +67,21 @@
 		}
 	},
 	"effects": {
-		"title": "影片效果",
+		"title": "畫面合成",
 		"blurBg": "模糊背景",
 		"motionBlur": "動態模糊",
 		"off": "關",
 		"shadow": "陰影",
 		"roundness": "圓角",
 		"padding": "內邊距",
+		"frame": "外框",
+		"format": "格式",
+		"formatOriginal": "原始",
+		"fitClip": "符合",
+		"fitClipOne": "{{count}} 個片段",
+		"fitClipFew": "{{count}} 個片段",
+		"fitClipMany": "{{count}} 個片段",
+		"motion": "動態",
 		"on": "開",
 		"help": "錄製畫面的外框樣式：背景模糊、陰影、動態模糊、圓角半徑，以及影片四周的內距。"
 	},
@@ -287,16 +300,25 @@
 		"backgroundColor": "背景顏色",
 		"backgroundOpacity": "不透明度",
 		"position": "位置",
-		"positionTop": "上",
-		"positionMiddle": "中",
-		"positionBottom": "下",
+		"anchorBottom": "下",
+		"anchorTop": "上",
+		"anchorHintBottom": "較長的字幕會向上延伸——下緣維持不動。",
+		"anchorHintTop": "較長的字幕會向下延伸——上緣維持不動。",
+		"distanceFromBottom": "距下緣",
+		"distanceFromTop": "距上緣",
+		"distanceFromLeft": "距左緣",
+		"distanceFromRight": "距右緣",
 		"alignLeft": "靠左",
 		"alignCenter": "置中",
 		"alignRight": "靠右",
-		"verticalOffset": "位移",
-		"width": "寬度",
 		"lineLength": "行長",
 		"minWords": "每行最少字數",
 		"maxWords": "每行最多字數"
+	},
+	"audio": {
+		"title": "音訊",
+		"outputGain": "輸出音量",
+		"reset": "重設音訊",
+		"help": "調整音訊輸出電平。它在預覽與匯出中的效果完全一致。"
 	}
 }

@@ -8,6 +8,7 @@ import {
 	anchoredToRawSpanSec,
 	anchorRegionsWithDerivedMs,
 	dropPillById,
+	hasCompleteClipAnchor,
 } from "../timeline/timelineMap";
 import { dropTrimPillsByIds, trimAppliesToClip } from "../timeline/trim-mapping";
 import { createId } from "./ids";
@@ -25,17 +26,6 @@ export const PLACEHOLDER_DURATION_SEC = 60;
 
 export function byStart(a: { startSec: number }, b: { startSec: number }): number {
 	return a.startSec - b.startSec;
-}
-
-/** A region is anchored once it states WHERE IN THE SOURCE it lives. Anything missing
- *  a part of `{clipId, sourceStartSec, sourceEndSec}` still relies on its RAW ms.
- *  One definition, so "is this anchored?" can never be asked two different ways. */
-function isAnchored<T extends { clipId?: string; sourceStartSec?: number; sourceEndSec?: number }>(
-	region: T,
-): region is T & { clipId: string; sourceStartSec: number; sourceEndSec: number } {
-	return (
-		!!region.clipId && region.sourceStartSec !== undefined && region.sourceEndSec !== undefined
-	);
 }
 
 export interface Interval {
@@ -245,8 +235,19 @@ function mapAllRegionCollections(
 	fn: (regions: StoredRegion[], prefix: string) => StoredRegion[],
 ): AxcutDocument {
 	const legacy = document.legacyEditor as Record<string, unknown> | null;
-	const speedRegions = legacy?.speedRegions as StoredRegion[] | undefined;
-	const cameraFullscreenRegions = legacy?.cameraFullscreenRegions as StoredRegion[] | undefined;
+	// The envelope is `z.object({}).passthrough()`, so zod validates NOTHING inside it: a
+	// project file whose `speedRegions` is a string loads clean and only detonates here, on
+	// the first clip edit (`regions.filter is not a function` — #356). Guard exactly as
+	// `upgradeV4DocumentToV5` already does, and for the same reason: a non-array is not a
+	// collection we can walk. Treating it as absent leaves it in place via the `...legacy`
+	// spread below, so the rest of the document still edits normally and nothing the user
+	// had is thrown away on our way past it.
+	const speedRegions = Array.isArray(legacy?.speedRegions)
+		? (legacy?.speedRegions as StoredRegion[])
+		: undefined;
+	const cameraFullscreenRegions = Array.isArray(legacy?.cameraFullscreenRegions)
+		? (legacy?.cameraFullscreenRegions as StoredRegion[])
+		: undefined;
 
 	return {
 		...document,
@@ -299,7 +300,7 @@ export function rederiveRegionMs(document: AxcutDocument, clips: AxcutClip[]): A
 	const clipById = new Map(clips.map((c) => [c.id, c]));
 	return mapAllRegionCollections(document, (regions) =>
 		regions.flatMap((region) => {
-			if (!isAnchored(region)) {
+			if (!hasCompleteClipAnchor(region)) {
 				return [region];
 			}
 			const clip = clipById.get(region.clipId);
@@ -426,7 +427,7 @@ export function applyProbedDuration(
 	// and so an already-correct anchor is never re-minted.
 	return mapAllRegionCollections(refreshed, (regions, prefix) =>
 		regions.flatMap((region) =>
-			isAnchored(region)
+			hasCompleteClipAnchor(region)
 				? [region]
 				: (anchorRegionsWithDerivedMs([region], nextClips, () =>
 						createId(prefix),
@@ -507,7 +508,7 @@ function anchoredRegionsOf(document: AxcutDocument): Array<{ id: string; clipId:
 	];
 	return collections
 		.flat()
-		.filter(isAnchored)
+		.filter(hasCompleteClipAnchor)
 		.map((region) => ({ id: region.id, clipId: region.clipId }));
 }
 
@@ -725,16 +726,18 @@ function reconcileRegionsAfterReplace(
 	const clipById = new Map(clips.map((clip) => [clip.id, clip]));
 	return mapAllRegionCollections(document, (regions, prefix) =>
 		regions.flatMap((region) => {
-			if (isAnchored(region) && surviving.has(region.clipId)) {
+			if (hasCompleteClipAnchor(region) && surviving.has(region.clipId)) {
 				const clip = clipById.get(region.clipId);
 				if (clip) return rederiveAnchoredRegion(region, clip, clips);
 			}
 			const reventilated = anchorRegionsWithDerivedMs([region], clips, () =>
 				createId(prefix),
 			) as StoredRegion[];
-			const placed = reventilated.some((next) => isAnchored(next) && surviving.has(next.clipId));
+			const placed = reventilated.some(
+				(next) => hasCompleteClipAnchor(next) && surviving.has(next.clipId),
+			);
 			if (placed) return reventilated;
-			return isAnchored(region) ? [] : reventilated;
+			return hasCompleteClipAnchor(region) ? [] : reventilated;
 		}),
 	);
 }
@@ -935,12 +938,37 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 			trimRanges: document.timeline.trimRanges.filter((t) => t.clipId !== clipId),
 		},
 	};
-	const withoutRemovedRegions = mapAllRegionCollections(next, (regions) =>
-		regions.filter((region) => region.clipId !== clipId),
-	);
-	return newClips.length > 0
-		? rederiveRegionMs(withoutRemovedRegions, newClips)
-		: withoutRemovedRegions;
+	// The asymmetry with the trim filter three lines up is deliberate, and the obvious
+	// "cleanup" that makes the two match reintroduces #249.
+	//
+	// A trim's complete anchor IS a bare `clipId` -- it carries its own `startSec`/
+	// `endSec` in source time (`trimAppliesToClip`), so the clip going away takes the
+	// trim with it. A region carrying only a `clipId` and no source range is NOT
+	// anchored (`hasCompleteClipAnchor`): it is still placed by its RAW ms, so the clip
+	// does not own it and deleting the clip must not delete it.
+	//
+	// The cost of keeping it, stated so it is a decision and not an accident: that
+	// region is now unreachable but immortal. With clips [0-10s] and [10-20s] and a bare
+	// `clipId` zoom at raw 12000-14000ms, deleting the second clip leaves the zoom off
+	// the end of a 10s ruler -- no pill to click, dropped by `projectRegionsToSource`,
+	// and re-emitted by every rederive. Hitting "Restore full timeline" then re-anchors
+	// it from those stale raw ms onto whatever footage now sits at 12-14s. That is the
+	// same treatment fully-unanchored legacy regions already get, and losing the user's
+	// region outright is the worse of the two.
+	//
+	// Only the last-clip case needs the filter spelled out. With survivors,
+	// `rederiveRegionMs` already drops every anchored region whose `clipId` is absent
+	// from the new clips -- a strict superset of "anchored to the one just removed" --
+	// so running both walked all four region collections twice and spread the document
+	// twice per delete. `rederiveRegionMs` bails on an empty clip list (a guard against
+	// a transient wipe deleting everything), which is why the empty case is handled
+	// here rather than left to it.
+	if (newClips.length === 0) {
+		return mapAllRegionCollections(next, (regions) =>
+			regions.filter((region) => !(hasCompleteClipAnchor(region) && region.clipId === clipId)),
+		);
+	}
+	return rederiveRegionMs(next, newClips);
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {

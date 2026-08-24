@@ -40,7 +40,7 @@
 		"deleteRegion": "트림 구간 삭제"
 	},
 	"layout": {
-		"title": "레이아웃",
+		"title": "카메라 레이아웃",
 		"preset": "프리셋",
 		"selectPreset": "프리셋 선택",
 		"pictureInPicture": "화면 속 화면",
@@ -53,6 +53,11 @@
 		"reactiveWebcam": "확대 시 축소",
 		"reactiveWebcamDescription": "확대하는 동안 카메라가 부드럽게 작아져 방해되지 않습니다.",
 		"help": "웹캠과 화면을 합성하는 방식: PIP, 세로 배치, 이중 프레임, 마스크 모양, 크기, 좌우 반전.",
+		"helpNoWebcam": "이 프로젝트에는 카메라가 없어 레이아웃 설정이 비활성화되고 프리셋이 “웹캠 없음”으로 표시됩니다. 저장된 레이아웃은 카메라를 추가할 때를 위해 유지됩니다.",
+		"webcamFraming": "웹캠 구도",
+		"webcamCropZoom": "자르기 확대",
+		"webcamCropX": "가로 이동",
+		"webcamCropY": "세로 이동",
 		"shapes": {
 			"rectangle": "직사각형",
 			"circle": "원형",
@@ -61,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "비디오 효과",
+		"title": "컴포지션",
 		"blurBg": "배경 흐림",
 		"motionBlur": "모션 블러",
 		"off": "끄기",
@@ -69,6 +74,14 @@
 		"shadow": "그림자",
 		"roundness": "모서리 둥글기",
 		"padding": "여백",
+		"frame": "프레임",
+		"format": "형식",
+		"formatOriginal": "원본",
+		"fitClip": "맞추기",
+		"fitClipOne": "{{count}}개 클립",
+		"fitClipFew": "{{count}}개 클립",
+		"fitClipMany": "{{count}}개 클립",
+		"motion": "모션",
 		"help": "녹화 프레임 스타일: 배경 흐림, 그림자, 모션 블러, 모서리 둥글기, 영상 주변 여백."
 	},
 	"background": {
@@ -286,16 +299,25 @@
 		"backgroundColor": "배경 색",
 		"backgroundOpacity": "불투명도",
 		"position": "위치",
-		"positionTop": "위",
-		"positionMiddle": "가운데",
-		"positionBottom": "아래",
+		"anchorBottom": "아래",
+		"anchorTop": "위",
+		"anchorHintBottom": "긴 자막은 위로 늘어납니다 — 아래쪽 가장자리는 그대로입니다.",
+		"anchorHintTop": "긴 자막은 아래로 늘어납니다 — 위쪽 가장자리는 그대로입니다.",
+		"distanceFromBottom": "아래에서의 거리",
+		"distanceFromTop": "위에서의 거리",
+		"distanceFromLeft": "왼쪽에서의 거리",
+		"distanceFromRight": "오른쪽에서의 거리",
 		"alignLeft": "왼쪽",
 		"alignCenter": "가운데",
 		"alignRight": "오른쪽",
-		"verticalOffset": "오프셋",
-		"width": "너비",
 		"lineLength": "줄 길이",
 		"minWords": "줄당 최소 단어 수",
 		"maxWords": "줄당 최대 단어 수"
+	},
+	"audio": {
+		"title": "오디오",
+		"outputGain": "출력 레벨",
+		"reset": "오디오 재설정",
+		"help": "오디오 출력 레벨을 조정합니다. 미리보기와 내보내기에 동일하게 적용됩니다."
 	}
 }

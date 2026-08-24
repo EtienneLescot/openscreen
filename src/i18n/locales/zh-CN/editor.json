@@ -42,6 +42,8 @@
 		"cameraDenied": "摄像头权限被拒绝。录制将继续，但不包含摄像头画面。",
 		"cameraDisconnected": "摄像头已断开连接。",
 		"cameraNotFound": "未找到摄像头。",
+		"cameraCaptureUnavailable": "无法打开摄像头，正在不使用摄像头录制。",
+		"microphoneDefaulted": "无法识别所选麦克风，正在录制默认输入设备。",
 		"permissionDenied": "录屏权限被拒绝。请允许屏幕录制。",
 		"accessibilityAllowAndRetry": "允许 OpenScreen 使用辅助功能权限，然后再次按录制以开始倒计时。",
 		"selectSource": "请选择要录制的源"
@@ -85,7 +87,6 @@
 		"switchToLightTheme": "切换到浅色主题",
 		"switchToDarkTheme": "切换到深色主题",
 		"toggleTheme": "切换主题",
-		"settings": "设置",
 		"export": "导出",
 		"renameProject": "重命名项目",
 		"noProject": "无项目",
@@ -132,6 +133,8 @@
 		"emptyHint": "暂无媒体 — 导入录制内容以开始。",
 		"importMedia": "导入媒体",
 		"added": "已添加 {{label}}",
+		"addToTimeline": "添加到时间线",
+		"addedToTimeline": "已将 {{label}} 添加到时间线",
 		"sourceTranscript": "来源转录文本",
 		"close": "关闭",
 		"transcriptReady": "转录已就绪",
@@ -146,6 +149,7 @@
 		"transcribingEllipsis": "正在转录…",
 		"pendingTranscription": "等待转录",
 		"transcriptionFailed": "转录失败",
+		"cpuBackendHint": "正在使用 CPU 运行 — 比 GPU 慢约 2 倍",
 		"noTranscript": "没有转录文本",
 		"generating": "正在生成",
 		"generationFailed": "生成失败",
@@ -235,6 +239,8 @@
 		"selectModelFailed": "无法选择模型",
 		"providerSettings": "提供方设置…",
 		"applyEditsFailed": "无法应用代理的编辑",
+		"agentEditConflict": "代理工作期间项目已更改，因此未应用代理的编辑。",
+		"applyAnyway": "仍然应用",
 		"chatFailed": "聊天失败",
 		"rewindFailed": "回退失败",
 		"rewoundSuccess": "已回退到该消息的开头",
@@ -281,7 +287,7 @@
 		"sendTitle": "发送（回车）",
 		"send": "发送",
 		"rewindConfirmTitle": "要回退到这里吗？",
-		"rewindConfirmBody": "此时间点之后代理的编辑和后续对话轮次将被回滚。项目、对话和代理状态将被恢复。",
+		"rewindConfirmBody": "此时间点之后代理的编辑和后续对话轮次将被回滚。项目、对话和代理状态将被恢复。你在那之后所做的编辑也会被替换。",
 		"rewindConfirm": "回退",
 		"configureModel": "配置 AI 模型",
 		"historyDialog": {
@@ -361,7 +367,13 @@
 	},
 	"preview": {
 		"videoPreview": "视频预览",
-		"webcamPreview": "摄像头预览（拖动可重新定位）"
+		"webcamPreview": "摄像头预览（拖动可重新定位）",
+		"mediaError": {
+			"title": "预览已停止",
+			"description": "无法解码该视频。文件可能已损坏、仍在写入中，或已不在项目预期的位置——你的项目本身完好无损。",
+			"retry": "重试",
+			"detail": "详细信息：{{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "批注",

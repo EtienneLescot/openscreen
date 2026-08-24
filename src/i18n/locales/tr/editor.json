@@ -35,6 +35,8 @@
 		"permissionDenied": "Kayıt izni reddedildi. Lütfen ekran kaydına izin verin.",
 		"cameraDisconnected": "Webcam bağlantısı kesildi.",
 		"cameraNotFound": "Kamera bulunamadı.",
+		"cameraCaptureUnavailable": "Kamera açılamadı. Kamerasız kaydediliyor.",
+		"microphoneDefaulted": "Seçilen mikrofon belirlenemedi. Varsayılan giriş kaydediliyor.",
 		"accessibilityAllowAndRetry": "OpenScreen için Erişilebilirlik erişimine izin verin, ardından geri sayımı başlatmak için tekrar kayda basın.",
 		"selectSource": "Lütfen kayıt için bir kaynak seçin"
 	},
@@ -85,7 +87,6 @@
 		"switchToLightTheme": "Açık temaya geç",
 		"switchToDarkTheme": "Koyu temaya geç",
 		"toggleTheme": "Temayı değiştir",
-		"settings": "Ayarlar",
 		"export": "Dışa aktar",
 		"renameProject": "Projeyi yeniden adlandır",
 		"noProject": "Proje yok",
@@ -132,6 +133,8 @@
 		"emptyHint": "Henüz medya yok — başlamak için bir kayıt içe aktarın.",
 		"importMedia": "Medya içe aktar",
 		"added": "{{label}} eklendi",
+		"addToTimeline": "Zaman çizelgesine ekle",
+		"addedToTimeline": "{{label}} zaman çizelgesine eklendi",
 		"sourceTranscript": "Kaynak Metin Dökümü",
 		"close": "Kapat",
 		"transcriptReady": "Metin dökümü hazır",
@@ -146,6 +149,7 @@
 		"transcribingEllipsis": "Metne dökülüyor…",
 		"pendingTranscription": "Metne dökme bekliyor",
 		"transcriptionFailed": "Metne dökme başarısız oldu",
+		"cpuBackendHint": "CPU üzerinde çalışıyor — GPU'ya göre yaklaşık 2× daha yavaş",
 		"noTranscript": "Transkript yok",
 		"generating": "Oluşturuluyor",
 		"generationFailed": "Oluşturma başarısız oldu",
@@ -235,6 +239,8 @@
 		"selectModelFailed": "Model seçilemedi",
 		"providerSettings": "Sağlayıcı ayarları…",
 		"applyEditsFailed": "Aracının düzenlemeleri uygulanamadı",
+		"agentEditConflict": "Aracı çalışırken proje değiştiği için düzenlemeleri uygulanmadı.",
+		"applyAnyway": "Yine de uygula",
 		"chatFailed": "Sohbet başarısız oldu",
 		"rewindFailed": "Geri sarma başarısız oldu",
 		"rewoundSuccess": "O mesajın başına geri sarıldı",
@@ -281,7 +287,7 @@
 		"sendTitle": "Gönder (Enter)",
 		"send": "Gönder",
 		"rewindConfirmTitle": "Buraya geri sarılsın mı?",
-		"rewindConfirmBody": "Bu noktadan sonraki aracı düzenlemeleri ve takip eden turlar geri alınacak. Proje, konuşma ve aracı durumu geri yüklenecek.",
+		"rewindConfirmBody": "Bu noktadan sonraki aracı düzenlemeleri ve takip eden turlar geri alınacak. Proje, konuşma ve aracı durumu geri yüklenecek. O zamandan beri yaptığınız düzenlemeler de değiştirilir.",
 		"rewindConfirm": "Geri sar",
 		"configureModel": "Yapay zeka modelini yapılandır",
 		"historyDialog": {
@@ -361,7 +367,13 @@
 	},
 	"preview": {
 		"videoPreview": "Video önizlemesi",
-		"webcamPreview": "Web kamerası önizlemesi (taşımak için sürükleyin)"
+		"webcamPreview": "Web kamerası önizlemesi (taşımak için sürükleyin)",
+		"mediaError": {
+			"title": "Önizleme durdu",
+			"description": "Video çözümlenemedi. Dosya bozulmuş, hâlâ yazılıyor ya da projenin beklediği yerde olmayabilir — projeniz olduğu gibi duruyor.",
+			"retry": "Yeniden dene",
+			"detail": "Ayrıntılar: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "Açıklama",

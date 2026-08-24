@@ -50,6 +50,24 @@ private:
 
     struct Impl;
     void captureLoop();
+    /**
+     * Builds source -> sample grabber -> null renderer and connects it.
+     *
+     * `preferredSubtype` is what the grabber will accept: pass a concrete one
+     * (RGB32) to make DirectShow's intelligent connect insert a colour converter,
+     * or nullptr to accept whatever the camera offers natively. Returns false
+     * without leaving the graph half-built, so the caller can retry with a
+     * different constraint.
+     */
+    bool buildGraph(const CLSID& sourceClsid, const GUID* preferredSubtype);
+    /**
+     * Reads back what the graph actually negotiated and records how to unpack it.
+     *
+     * Returns false for a subtype this class cannot decode, which is a retryable
+     * outcome rather than a failure — `reportUnsupported` is what tells it apart
+     * from the last attempt, whose rejection is worth logging.
+     */
+    bool resolveConnectedFormat(int requestedWidth, int requestedHeight, bool reportUnsupported);
 
     Impl* impl_ = nullptr;
     std::thread thread_;

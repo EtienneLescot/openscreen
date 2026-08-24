@@ -1,4 +1,4 @@
-export type { CaptionCue } from "./cues";
+export type { CaptionCue, CaptionTextRegion } from "./cues";
 export {
 	CAPTION_Z_INDEX_BASE,
 	captionCueAt,
@@ -8,16 +8,21 @@ export {
 	sourceSpanToTimelineSpans,
 } from "./cues";
 export type {
+	CaptionAnchorH,
+	CaptionAnchorV,
+	CaptionBoxRect,
 	CaptionSettings,
 	CaptionSettingsPatch,
-	CaptionTextAlign,
-	CaptionVerticalPosition,
 } from "./settings";
 export {
-	CAPTION_BAND_HEIGHT_PCT,
+	CAPTION_INSET_X_MAX,
+	CAPTION_INSET_Y_MAX,
 	captionBackgroundCss,
-	captionBandRect,
+	captionBoxRect,
+	captionSafeColumn,
 	DEFAULT_CAPTION_SETTINGS,
+	defaultCaptionInsetX,
+	defaultCaptionInsetY,
 	getCaptionSettings,
 	patchCaptionSettings,
 } from "./settings";

@@ -33,17 +33,37 @@ std::wstring readAllocatedString(IMFActivate* activate, REFGUID key) {
     return result;
 }
 
-bool containsInsensitive(const std::wstring& haystack, const std::wstring& needle) {
+/**
+ * Does one of these appear inside the other as WHOLE WORDS?
+ *
+ * Plain containment answered for devices that merely share a spelling: a
+ * requested "Logi" is inside "Logitech", and "Micro" inside "Microphone",
+ * neither of them as a word. Matching on that resolved a camera nobody asked
+ * for -- and resolving one is exactly what stops the request reaching the
+ * DirectShow fallback, where the cameras Media Foundation cannot enumerate live.
+ *
+ * Both sides arrive normalized, so a boundary is the start of the string, its
+ * end, or a space.
+ */
+bool containsAsWords(const std::wstring& haystack, const std::wstring& needle) {
     if (haystack.empty() || needle.empty()) {
         return false;
     }
+    size_t pos = haystack.find(needle);
+    while (pos != std::wstring::npos) {
+        const bool startsOnBoundary = pos == 0 || haystack[pos - 1] == L' ';
+        const size_t after = pos + needle.size();
+        const bool endsOnBoundary = after == haystack.size() || haystack[after] == L' ';
+        if (startsOnBoundary && endsOnBoundary) {
+            return true;
+        }
+        pos = haystack.find(needle, pos + 1);
+    }
+    return false;
+}
 
-    std::wstring lowerHaystack = haystack;
-    std::wstring lowerNeedle = needle;
-    std::transform(lowerHaystack.begin(), lowerHaystack.end(), lowerHaystack.begin(), ::towlower);
-    std::transform(lowerNeedle.begin(), lowerNeedle.end(), lowerNeedle.begin(), ::towlower);
-    return lowerHaystack.find(lowerNeedle) != std::wstring::npos ||
-        lowerNeedle.find(lowerHaystack) != std::wstring::npos;
+bool containsInsensitive(const std::wstring& haystack, const std::wstring& needle) {
+    return containsAsWords(haystack, needle) || containsAsWords(needle, haystack);
 }
 
 std::wstring normalizeDeviceName(const std::wstring& value) {
@@ -67,23 +87,25 @@ std::wstring normalizeDeviceName(const std::wstring& value) {
     return normalized;
 }
 
-std::vector<std::wstring> splitWords(const std::wstring& value) {
-    std::vector<std::wstring> words;
-    size_t start = 0;
-    while (start < value.size()) {
-        const size_t end = value.find(L' ', start);
-        const auto word = value.substr(start, end == std::wstring::npos ? std::wstring::npos : end - start);
-        if (word.size() > 1 && word != L"camera" && word != L"webcam" && word != L"video" && word != L"input") {
-            words.push_back(word);
-        }
-        if (end == std::wstring::npos) {
-            break;
-        }
-        start = end + 1;
-    }
-    return words;
-}
-
+/**
+ * How well a candidate answers a requested name, or 0 for "not this one".
+ *
+ * Only decisive matches count: the names being equal once normalized, or one
+ * containing the other -- which is the ordinary case, since Chromium appends USB
+ * ids to what the driver reports.
+ *
+ * A further tier used to score shared WORDS, to bridge names differing more than
+ * that. It bridged names that were not the same device. "Logi Capture" and
+ * "Logitech StreamCam" share no word, yet "logi" sits inside "logitech" and that
+ * scored high enough to win -- so asking for a camera Media Foundation cannot
+ * enumerate opened a DIFFERENT camera, instead of returning nothing and letting
+ * the DirectShow fallback find the real one (getopenscreen/openscreen#405).
+ *
+ * Returning 0 is what makes that fallback reachable, so it is a real answer
+ * rather than a weak match. Keep this in step with
+ * `electron/recording/deviceNameMatching.ts`, which states the same rules for
+ * the Electron side and carries their unit tests.
+ */
 int deviceMatchScore(
     const std::wstring& candidateName,
     const std::wstring& candidateLink,
@@ -105,16 +127,6 @@ int deviceMatchScore(
         if (containsInsensitive(normalizedLink, normalizedRequestedName)) {
             score = std::max(score, 800);
         }
-
-        int wordScore = 0;
-        for (const auto& word : splitWords(normalizedRequestedName)) {
-            if (normalizedName.find(word) != std::wstring::npos) {
-                wordScore += 100;
-            } else if (normalizedLink.find(word) != std::wstring::npos) {
-                wordScore += 50;
-            }
-        }
-        score = std::max(score, wordScore);
     }
 
     if (!normalizedRequestedId.empty()) {

@@ -40,7 +40,7 @@
 		"deleteRegion": "Elimina regione taglio"
 	},
 	"layout": {
-		"title": "Layout",
+		"title": "Disposizione camera",
 		"preset": "Predefinito",
 		"selectPreset": "Seleziona predefinito",
 		"pictureInPicture": "Immagine nell'immagine",
@@ -53,6 +53,11 @@
 		"reactiveWebcam": "Riduci con lo zoom",
 		"reactiveWebcamDescription": "La webcam si riduce dolcemente durante lo zoom, così non intralcia.",
 		"help": "Come la webcam viene composta con lo schermo: picture-in-picture, pila verticale, doppio riquadro, forma della maschera, dimensione e effetto specchio.",
+		"helpNoWebcam": "Questo progetto non ha una webcam, quindi i controlli di layout sono disattivati e il preset mostra «Nessuna webcam». Il layout salvato viene conservato per quando aggiungerai una webcam.",
+		"webcamFraming": "Inquadratura webcam",
+		"webcamCropZoom": "Zoom ritaglio",
+		"webcamCropX": "Spostamento orizzontale",
+		"webcamCropY": "Spostamento verticale",
 		"shapes": {
 			"rectangle": "Rett.",
 			"circle": "Cerchio",
@@ -61,7 +66,7 @@
 		}
 	},
 	"effects": {
-		"title": "Effetti video",
+		"title": "Composizione",
 		"blurBg": "Sfuma sfondo",
 		"motionBlur": "Sfocatura movimento",
 		"off": "spento",
@@ -69,6 +74,14 @@
 		"shadow": "Ombra",
 		"roundness": "Arrotondamento",
 		"padding": "Spaziatura",
+		"frame": "Cornice",
+		"format": "Formato",
+		"formatOriginal": "Originale",
+		"fitClip": "Adatta",
+		"fitClipOne": "{{count}} clip",
+		"fitClipFew": "{{count}} clip",
+		"fitClipMany": "{{count}} clip",
+		"motion": "Movimento",
 		"help": "Stile della cornice della registrazione: sfocatura dello sfondo, ombra, sfocatura di movimento, raggio degli angoli e margine attorno al video."
 	},
 	"background": {
@@ -286,16 +299,25 @@
 		"backgroundColor": "Colore dello sfondo",
 		"backgroundOpacity": "Opacità",
 		"position": "Posizione",
-		"positionTop": "Alto",
-		"positionMiddle": "Centro",
-		"positionBottom": "Basso",
+		"anchorBottom": "Basso",
+		"anchorTop": "Alto",
+		"anchorHintBottom": "I sottotitoli lunghi crescono verso l'alto: il bordo inferiore non si sposta.",
+		"anchorHintTop": "I sottotitoli lunghi crescono verso il basso: il bordo superiore non si sposta.",
+		"distanceFromBottom": "Distanza dal basso",
+		"distanceFromTop": "Distanza dall'alto",
+		"distanceFromLeft": "Distanza da sinistra",
+		"distanceFromRight": "Distanza da destra",
 		"alignLeft": "Sinistra",
 		"alignCenter": "Centro",
 		"alignRight": "Destra",
-		"verticalOffset": "Scostamento",
-		"width": "Larghezza",
 		"lineLength": "Lunghezza riga",
 		"minWords": "Parole min. per riga",
 		"maxWords": "Parole max. per riga"
+	},
+	"audio": {
+		"title": "Audio",
+		"outputGain": "Livello di uscita",
+		"reset": "Reimposta audio",
+		"help": "Regola il livello di uscita audio. Si applica allo stesso modo nell’anteprima e nell’esportazione."
 	}
 }

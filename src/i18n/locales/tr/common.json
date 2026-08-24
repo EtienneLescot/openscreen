@@ -18,6 +18,7 @@
 		"edit": "Düzenle",
 		"view": "Görünüm",
 		"window": "Pencere",
+		"help": "Yardım",
 		"quit": "Çıkış",
 		"stopRecording": "Kaydı Durdur",
 		"undo": "Geri Al",
@@ -39,7 +40,8 @@
 		"services": "Servisler",
 		"hide": "OpenScreen’i Gizle",
 		"hideOthers": "Diğerlerini Gizle",
-		"unhide": "Tümünü Göster"
+		"unhide": "Tümünü Göster",
+		"saveDiagnostics": "Teşhis Verilerini Kaydet"
 	},
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} kullanılabilir. Mevcut sürümünüz {{currentVersion}}.",

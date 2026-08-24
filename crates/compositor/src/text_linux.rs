@@ -37,6 +37,12 @@ pub struct TextSpec {
     pub underline: bool,
     /// "left" | "center" | "right".
     pub align: String,
+    /// "top" | "center" | "bottom" -- quelle arete du bloc de texte est epinglee
+    /// a la boite. "center" est le comportement historique (et celui des
+    /// annotations, qui reproduisent `alignItems: center` de l'overlay web) ; les
+    /// sous-titres passent "bottom" ou "top" pour que l'arete ancree ne bouge pas
+    /// quand le texte gagne une ligne.
+    pub valign: String,
     /// Taille de la boite en px de sortie.
     pub box_px: [u32; 2],
 }
@@ -61,6 +67,10 @@ impl TextSpec {
         }
         mix(&[self.bold as u8, self.italic as u8, self.underline as u8]);
         mix(self.align.as_bytes());
+        // Juste apres `align`, memes octets et meme position que sur les deux
+        // autres backends : deux specs ne differant que par l'alignement vertical
+        // rendraient sinon les pixels l'une de l'autre depuis le cache.
+        mix(self.valign.as_bytes());
         mix(&self.box_px[0].to_le_bytes());
         mix(&self.box_px[1].to_le_bytes());
         h
@@ -194,7 +204,28 @@ impl TextRasterizer {
             .fold(0.0f32, f32::max);
         // `max(0)` : un texte plus haut que sa boite reste ancre en haut plutot
         // que de sortir par le dessus, ou il serait entierement rogne.
-        let y_offset = (((h as f32) - text_h) * 0.5).max(0.0).round() as i32;
+        //
+        // ANCRAGE. `center` est le comportement historique, et reste celui des
+        // annotations. Les sous-titres epinglent une arete : c'est la seule facon
+        // que l'arete ancree ne bouge pas quand le texte gagne une ligne, parce
+        // qu'un bloc centre voit ses DEUX aretes se deplacer.
+        //
+        // `anchor_pad` reserve la marge de la plaque DU COTE ANCRE. Sans elle, coller
+        // le bloc de texte au bord laisse la plaque poser toute sa marge du cote
+        // oppose et zero du cote ancre : le fond epouse alors le bas des lettres au
+        // pixel pres tout en respirant deux fois trop au-dessus. Ce qui doit toucher
+        // le bord de la boite est la PLAQUE, pas les glyphes — c'est elle que le
+        // viewer voit. Sans plaque, il n'y a rien a reserver.
+        let has_plate = spec.background[3] > 0.0;
+        let anchor_pad = if has_plate { pad_y } else { 0.0 };
+        let slack_y = ((h as f32) - text_h).max(0.0);
+        let y_offset = match spec.valign.as_str() {
+            "top" | "start" => anchor_pad,
+            "bottom" | "end" => slack_y - anchor_pad,
+            _ => slack_y * 0.5,
+        }
+        .clamp(0.0, slack_y)
+        .round() as i32;
 
         // LA PLAQUE EPOUSE LE BLOC, PAS LA BOITE. Miroir de
         // `text_macos::block_layout` (en coordonnees descendantes ici, CoreText
@@ -385,6 +416,7 @@ mod tests {
             italic: false,
             underline: false,
             align: align.to_owned(),
+            valign: "center".to_owned(),
             box_px: [400, 200],
         }
     }
@@ -564,6 +596,97 @@ mod tests {
             (above - below).abs() <= 12,
             "texte non centre verticalement : {above}px au-dessus, {below}px en dessous"
         );
+    }
+
+    #[test]
+    fn the_anchored_edge_holds_still_when_the_text_gains_a_line() {
+        // L'INVARIANT de la refonte du placement des sous-titres, en une
+        // assertion — et celle que l'ancienne architecture ne pouvait pas ecrire.
+        //
+        // Un bloc centre voit ses DEUX aretes bouger quand il grandit : c'est
+        // exactement pourquoi elargir la bande deplacait verticalement le
+        // sous-titre. Ancre en bas, l'arete basse ne doit pas bouger d'un pixel,
+        // que le texte tienne sur une ligne ou en reclame trois.
+        let raster = TextRasterizer::new().expect("rasterizer");
+        let (w, h) = (400usize, 200usize);
+        let long = "un texte assez long pour devoir se replier sur plusieurs lignes";
+
+        // On mesure la PLAQUE, pas le dernier pixel d'encre. La plaque epouse la boite
+        // de lignes posee par cosmic-text : c'est exactement ce que ce code epingle et
+        // ce que le compositeur dessine. Le bas de l'ENCRE, lui, depend des jambages du
+        // contenu — "Hx" n'en a aucun, "replier" en a — donc il descend plus bas a
+        // ancrage identique. Ancrer la boite de lignes plutot que l'encre est le
+        // comportement typographique attendu partout, et c'est la premiere version de
+        // ce test qui avait tort : elle comparait 184 a 199 et appelait ca une derive.
+        let plate_of = |valign: &str, content: &str| {
+            let mut s = spec(content, "center");
+            s.valign = valign.to_owned();
+            let atlas = raster.build_atlas(&s).expect("atlas");
+            let [_, py, _, ph] = atlas.plate;
+            let rows = ink_rows(&atlas.pixels, w, 0, w);
+            assert!(!rows.is_empty(), "aucune encre pour {valign:?}");
+            (py, py + ph, rows[0], *rows.last().unwrap())
+        };
+
+        let (short_top_edge, short_bottom, _, _) = plate_of("bottom", "Hx");
+        let (long_top_edge, long_bottom, _, _) = plate_of("bottom", long);
+        assert!(
+            (short_bottom - long_bottom).abs() < 1.0,
+            "ancrage bas : l'arete basse a bouge de {short_bottom} a {long_bottom} \
+             en passant d'une ligne a plusieurs"
+        );
+
+        // Et le miroir, pour que « haut » ne soit pas juste « pas bas ».
+        let (short_top, _, _, _) = plate_of("top", "Hx");
+        let (long_top, _, _, _) = plate_of("top", long);
+        assert!(
+            (short_top - long_top).abs() < 1.0,
+            "ancrage haut : l'arete haute a bouge de {short_top} a {long_top}"
+        );
+
+        // Le texte long doit vraiment se replier, sinon les deux assertions ci-dessus
+        // passeraient sur deux rendus identiques et ne prouveraient rien.
+        assert!(
+            (long_bottom - long_top_edge) > (short_bottom - short_top_edge) + 1.0,
+            "le texte « long » ne s'est pas replie : le test ne prouve rien"
+        );
+
+        // Les trois ancrages doivent poser la plaque a trois endroits differents,
+        // sinon `valign` n'est pas applique du tout.
+        let (top_y, _, _, _) = plate_of("top", "Hx");
+        let (ctr_y, _, _, _) = plate_of("center", "Hx");
+        let (bot_y, _, _, _) = plate_of("bottom", "Hx");
+        assert!(
+            top_y < ctr_y && ctr_y < bot_y,
+            "les trois ancrages ne se distinguent pas : haut={top_y} centre={ctr_y} bas={bot_y}"
+        );
+
+        // Enfin, l'encre reste dans la plaque qui la porte, et la plaque dans la boite :
+        // c'est ce qui relie la boite mesuree ci-dessus a ce que le viewer voit.
+        //
+        // Tolerance `pad_y`, la meme que `the_plate_hugs_the_text_instead_of_filling_the_box`
+        // plus haut : l'encre est bornee par la boite de LIGNES, et un glyphe peut deborder
+        // legerement la sienne (jambages, accents) sans que rien ne soit casse. C'est
+        // exactement l'hypothese que la premiere version de ce test avait fausse.
+        for valign in ["top", "bottom"] {
+            let (py, pb, ink_top, ink_bottom) = plate_of(valign, long);
+            let (_, pad_y) = crate::text_plate::padding(40.0);
+            assert!(
+                (ink_top as f32) >= py - pad_y && (ink_bottom as f32) <= pb + pad_y,
+                "{valign} : l'encre ({ink_top}..{ink_bottom}) sort de la plaque ({py}..{pb})"
+            );
+            assert!(pb <= (h as f32) + 0.01, "{valign} : la plaque sort de la boite");
+        }
+    }
+
+    #[test]
+    fn the_vertical_anchor_changes_the_cache_key() {
+        // Le piege du cache : la cle est partagee entre plateformes, et deux specs
+        // ne differant que par `valign` rendraient les pixels l'une de l'autre si
+        // le champ n'y entrait pas.
+        let mut bottom = spec("Hx", "center");
+        bottom.valign = "bottom".to_owned();
+        assert_ne!(bottom.cache_key(), spec("Hx", "center").cache_key());
     }
 
     #[test]

@@ -18,6 +18,7 @@
 		"edit": "Редактировать",
 		"view": "Вид",
 		"window": "Окно",
+		"help": "Справка",
 		"quit": "Выход",
 		"stopRecording": "Остановить запись",
 		"undo": "Отменить",
@@ -39,7 +40,8 @@
 		"services": "Сервисы",
 		"hide": "Скрыть OpenScreen",
 		"hideOthers": "Скрыть остальные",
-		"unhide": "Показать все"
+		"unhide": "Показать все",
+		"saveDiagnostics": "Сохранить диагностику"
 	},
 	"updates": {
 		"available": "Доступен OpenScreen {{latestVersion}}. Установлена версия {{currentVersion}}.",

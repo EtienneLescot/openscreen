@@ -40,6 +40,8 @@
 		"cameraDenied": "Accès à la caméra refusé. L'enregistrement continuera sans webcam.",
 		"cameraDisconnected": "Webcam déconnectée.",
 		"cameraNotFound": "Caméra introuvable.",
+		"cameraCaptureUnavailable": "Impossible d'ouvrir la caméra. Enregistrement sans elle.",
+		"microphoneDefaulted": "Micro choisi non identifié. Enregistrement de l'entrée par défaut.",
 		"permissionDenied": "Permission d'enregistrement refusée. Veuillez autoriser l'enregistrement d'écran.",
 		"accessibilityAllowAndRetry": "Autorisez l'accès Accessibilité pour OpenScreen, puis appuyez de nouveau sur enregistrer pour lancer le compte à rebours.",
 		"selectSource": "Veuillez sélectionner une source à enregistrer"
@@ -85,7 +87,6 @@
 		"switchToLightTheme": "Passer au thème clair",
 		"switchToDarkTheme": "Passer au thème sombre",
 		"toggleTheme": "Changer de thème",
-		"settings": "Réglages",
 		"export": "Exporter",
 		"renameProject": "Renommer le projet",
 		"noProject": "Aucun projet",
@@ -132,6 +133,8 @@
 		"emptyHint": "Aucun média pour l'instant — importez un enregistrement pour commencer.",
 		"importMedia": "Importer un média",
 		"added": "{{label}} ajouté",
+		"addToTimeline": "Ajouter à la timeline",
+		"addedToTimeline": "{{label}} ajouté à la timeline",
 		"sourceTranscript": "Transcription de la source",
 		"close": "Fermer",
 		"transcriptReady": "Transcription prête",
@@ -146,6 +149,7 @@
 		"transcribingEllipsis": "Transcription en cours…",
 		"pendingTranscription": "Transcription en attente",
 		"transcriptionFailed": "Échec de la transcription",
+		"cpuBackendHint": "Exécution sur le processeur — environ 2× plus lent que sur le GPU",
 		"noTranscript": "Aucune transcription",
 		"generating": "Génération en cours",
 		"generationFailed": "Échec de la génération",
@@ -235,6 +239,8 @@
 		"selectModelFailed": "Impossible de sélectionner le modèle",
 		"providerSettings": "Réglages du fournisseur…",
 		"applyEditsFailed": "Impossible d'appliquer les modifications de l'agent",
+		"agentEditConflict": "Les modifications de l'agent n'ont pas été appliquées, car le projet a changé pendant son travail.",
+		"applyAnyway": "Appliquer quand même",
 		"chatFailed": "Échec du chat",
 		"rewindFailed": "Échec du retour en arrière",
 		"rewoundSuccess": "Retour au début de ce message effectué",
@@ -281,7 +287,7 @@
 		"sendTitle": "Envoyer (Entrée)",
 		"send": "Envoyer",
 		"rewindConfirmTitle": "Revenir ici ?",
-		"rewindConfirmBody": "Les modifications de l'agent et les échanges suivants après ce point seront annulés. Le projet, la conversation et l'état de l'agent seront restaurés.",
+		"rewindConfirmBody": "Les modifications de l'agent et les échanges suivants après ce point seront annulés. Le projet, la conversation et l'état de l'agent seront restaurés. Les modifications que vous avez faites depuis seront elles aussi remplacées.",
 		"rewindConfirm": "Revenir en arrière",
 		"configureModel": "Configurer le modèle d'IA",
 		"historyDialog": {
@@ -361,7 +367,13 @@
 	},
 	"preview": {
 		"videoPreview": "Aperçu vidéo",
-		"webcamPreview": "Aperçu webcam (glisser pour repositionner)"
+		"webcamPreview": "Aperçu webcam (glisser pour repositionner)",
+		"mediaError": {
+			"title": "Aperçu interrompu",
+			"description": "La vidéo n'a pas pu être décodée. Le fichier est peut-être endommagé, en cours d'écriture, ou plus à l'emplacement attendu — votre projet, lui, est intact.",
+			"retry": "Réessayer",
+			"detail": "Détails : {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "Annotation",

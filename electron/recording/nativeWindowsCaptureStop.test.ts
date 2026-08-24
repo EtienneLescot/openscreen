@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
+	readMicrophoneDefaulted,
 	readStoppedPath,
+	readWebcamFormat,
+	readWebcamUnavailable,
 	terminateNativeWindowsCapture,
 	waitForNativeWindowsCaptureStop,
 } from "./nativeWindowsCaptureStop";
@@ -76,6 +79,100 @@ describe("readStoppedPath", () => {
 		expect(readStoppedPath("Recording started\n[stop-timing] step=microphone elapsed_ms=0\n")).toBe(
 			null,
 		);
+	});
+});
+
+describe("readWebcamUnavailable", () => {
+	it("sees the helper giving up on the camera", () => {
+		const output =
+			'{"event":"ready","schemaVersion":2}\n' +
+			"WARNING: Failed to initialize native webcam capture; continuing without webcam\n" +
+			'{"event":"warning","code":"webcam-unavailable","message":"Failed to initialize native webcam capture"}\n' +
+			"Recording started\n";
+		expect(readWebcamUnavailable(output)).toBe(true);
+	});
+
+	it("is false for a run whose camera worked", () => {
+		const output =
+			'{"event":"webcam-format","schemaVersion":2,"width":1920,"height":1080,"fps":30,"deviceName":"Camera (NVIDIA Broadcast)"}\n' +
+			"Recording started\n";
+		expect(readWebcamUnavailable(output)).toBe(false);
+	});
+});
+
+describe("readMicrophoneDefaulted", () => {
+	// The helper keys the event on the OUTCOME — it ended up on the default input
+	// — not on which lookup failed, so both routes to that fallback land here.
+	it("sees the fallback when no microphone name was supplied", () => {
+		const output =
+			'{"event":"warning","code":"microphone-defaulted","message":"The requested microphone could not be resolved; capturing the default input"}\n' +
+			"Recording started\n";
+		expect(readMicrophoneDefaulted(output)).toBe(true);
+	});
+
+	it("sees it when a supplied name matched no endpoint", () => {
+		const output =
+			"WARNING: Could not resolve microphone by name; using default capture endpoint\n" +
+			'{"event":"warning","code":"microphone-defaulted","message":"The requested microphone could not be resolved; capturing the default input"}\n';
+		expect(readMicrophoneDefaulted(output)).toBe(true);
+	});
+
+	it("is false when the requested microphone was found", () => {
+		const output =
+			'{"event":"audio-format","schemaVersion":2,"microphone":true,"microphoneDeviceName":"Microphone (Logitech PRO X)"}\n';
+		expect(readMicrophoneDefaulted(output)).toBe(false);
+	});
+});
+
+describe("readWebcamFormat", () => {
+	it("reads the negotiated camera format", () => {
+		const output =
+			'{"event":"webcam-format","schemaVersion":2,"width":1920,"height":1080,"fps":30,"deviceName":"Camera (NVIDIA Broadcast)"}\n';
+		expect(readWebcamFormat(output)).toMatchObject({
+			width: 1920,
+			height: 1080,
+			deviceName: "Camera (NVIDIA Broadcast)",
+		});
+	});
+
+	// Captured verbatim from a real run: the helper's stderr diagnostic and its
+	// stdout event land in the same drained chunk, with no newline between them.
+	// Parsing that line whole throws, which used to read as "no camera at all".
+	it("reads the event even when stderr is glued onto the front of it", () => {
+		const output =
+			"INFO: DirectShow webcam connected subtype NV12 720x1280 " +
+			'stride=2880{"event":"webcam-format","schemaVersion":2,"width":720,"height":1280,"fps":30,"deviceName":"OBS Virtual Camera"}\n';
+		expect(readWebcamFormat(output)).toMatchObject({
+			width: 720,
+			height: 1280,
+			deviceName: "OBS Virtual Camera",
+		});
+	});
+
+	// A friendly name is free text from the driver, so it can contain the very
+	// character that used to end the slice. Cutting the object there dropped a
+	// camera that was working perfectly.
+	it("reads a device name that contains a closing brace", () => {
+		const output =
+			'{"event":"webcam-format","schemaVersion":2,"width":1280,"height":720,"fps":30,"deviceName":"Camera } Studio"}\n';
+		expect(readWebcamFormat(output)).toMatchObject({
+			width: 1280,
+			deviceName: "Camera } Studio",
+		});
+	});
+
+	it("reads a device name whose escaped quote precedes a brace", () => {
+		const output =
+			'{"event":"webcam-format","schemaVersion":2,"width":640,"height":480,"fps":30,"deviceName":"Cam \\"X\\" } 2"}\n';
+		expect(readWebcamFormat(output)).toMatchObject({ deviceName: 'Cam "X" } 2' });
+	});
+
+	it("is null when the object is cut off mid-way", () => {
+		expect(readWebcamFormat('{"event":"webcam-format","width":1280')).toBe(null);
+	});
+
+	it("is null when the helper never announced a camera", () => {
+		expect(readWebcamFormat("Recording started\n")).toBe(null);
 	});
 });
 

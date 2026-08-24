@@ -284,6 +284,56 @@ jobs:
           cd crates
           cargo build -p compositor-view-napi --release
 
+  # The macOS capture helper had NO job on any pull request — not a build, not a test.
+  # `build.yml` compiles it, and build.yml triggers only on `push: tags: v*` or
+  # workflow_dispatch, so a Swift file that did not compile surfaced when someone cut a
+  # release rather than when they pushed it. That is the same gap `rust-windows-compositor-
+  # check` above was added to close for the Windows compositor.
+  #
+  # `swift test`, not just `swift build`, and the difference is the reason this job exists
+  # at all. PR #343 changed how audio is placed on the recording timeline and shipped 301
+  # lines of Swift tests beside the change; not one of them ever ran, because no workflow
+  # invoked `swift test` and nothing under `electron/native/screencapturekit/Tests` was
+  # executed on any pull request. A change to recording timing that no measurement can
+  # contradict is not one to merge into a shipped capture path, so the measurement runs here.
+  #
+  # `AudioTrackMixerTests` needs no screen, no display server and no TCC grant: the mixer
+  # takes its sink and its clock as parameters, so the tests drive it with a collecting sink
+  # and a hand-moved clock. That is what makes "does a sound land where it happened"
+  # answerable on a headless runner. The other half of that question — the one that needs a
+  # real display, a real tap and a real speaker — is `npm run test:sck-audio-timeline:mac`,
+  # which cannot run here and is run by hand.
+  #
+  # `macos-latest`, matching `build.yml`'s arm64 leg — NOT `macos-14` like the compositor job
+  # above, and the difference is load bearing. A gate has to compile with the toolchain that
+  # actually ships the binary, or it fails on code that is fine and passes on code that is not.
+  # This job was written as `macos-14` by copying the job above and failed immediately:
+  # `ScreenCaptureRecorder.swift` has carried a trailing comma in an argument list since long
+  # before this change, which is Swift 6.1 syntax (SE-0439), and the macos-14 image is on Swift
+  # 5.10. Nothing was wrong with the file — every release builds it — the gate was just pointed
+  # at an older compiler than the one that builds releases. `swift --version` is printed for
+  # exactly that reason: when this job disagrees with `build.yml`, the toolchain is the first
+  # thing to check.
+  #
+  # NB the package still declares `swift-tools-version: 5.9`, which that trailing comma now
+  # contradicts. Left alone here rather than fixed in passing: it is pre-existing, unrelated to
+  # the audio timeline, and "which Swift does the helper actually require" deserves its own
+  # decision rather than being settled as a side effect of adding CI.
+  #
+  # The release build runs too, because the executable targets are not covered by the test
+  # target and `-c release` is what `build:native:mac` actually produces.
+  swift-macos-helper:
+    name: Swift test (macOS capture helper)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Show toolchain
+        run: swift --version
+      - name: swift test (capture core)
+        run: swift test --package-path electron/native/screencapturekit
+      - name: swift build (release, both helpers)
+        run: swift build -c release --package-path electron/native/screencapturekit
+
   semantic-pr:
     name: Validate PR title (semantic)
     runs-on: ubuntu-latest

@@ -6,8 +6,6 @@
 		"cancelRecording": "録画をキャンセル",
 		"pauseRecording": "録画を一時停止",
 		"resumeRecording": "録画を再開",
-		"openVideoFile": "動画ファイルを開く",
-		"openProject": "プロジェクトを開く",
 		"useVerticalTray": "縦型トレイを使用",
 		"useHorizontalTray": "横型トレイを使用",
 		"openStudio": "スタジオを開く",
@@ -93,6 +91,9 @@
 		"micHint": "マイクをテストするには話してください",
 		"noMicrophones": "マイクが見つかりません",
 		"preview": "プレビュー",
-		"previewUnavailable": "プレビューを利用できません"
+		"previewUnavailable": "プレビューを利用できません",
+		"about": "情報",
+		"version": "バージョン {{version}}",
+		"checkingForUpdates": "確認中…"
 	}
 }

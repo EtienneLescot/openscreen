@@ -296,6 +296,23 @@ pub(crate) fn cover_crop_uv(visible: [f32; 2], tex: [f32; 2], box_ar: f32) -> (f
     let [u0, v0, u1, v1] = cover_uv_rect(full, tex, box_ar);
     (u0, v0, u1, v1)
 }
+
+/// Camera equivalent of the screen crop pipeline: apply the user crop first, then a centred
+/// cover-crop inside that authored window so arbitrary layout slots never stretch the image.
+pub(crate) fn webcam_source_rect(
+    visible: [f32; 2],
+    tex: [f32; 2],
+    crop: Option<SceneCrop>,
+    box_ar: f32,
+) -> [f32; 4] {
+    let u_max = visible[0].max(1.0) / tex[0].max(1.0);
+    let v_max = visible[1].max(1.0) / tex[1].max(1.0);
+    cover_uv_rect(
+        screen_source_rect(u_max, v_max, crop, 1.0, [0.5, 0.5]),
+        tex,
+        box_ar,
+    )
+}
 /// Rétrécit un rect SOURCE déjà exprimé en UV (`[u0, v0, u1, v1]`) autour de son
 /// centre pour qu'il porte le ratio `box_ar` une fois rapporté aux pixels de la
 /// texture. C'est la forme générale de `object-fit: cover`, et LA primitive qui
@@ -854,6 +871,44 @@ pub struct FrameGeometry {
     pub shape_fade: f32,
 }
 
+/// Rect de destination d'une annotation dans un rect d'ancrage, en fractions de la sortie.
+///
+/// `anchor` est TOUJOURS `s_ann`, le rect écran sans le zoom — jamais `s_dst`. Les deux
+/// coïncident sans zoom, ce qui rend l'erreur invisible sur la moitié des scènes ; sous
+/// zoom, `s_dst` grandit et emmène annotations et sous-titres avec lui, alors que le
+/// contrat de `SceneAnnotation` les veut « deliberately NOT affected by the zoom crop ».
+///
+/// Version libre plutôt que méthode : Windows déstructure `FrameGeometry` dès l'entrée de
+/// `compose_frame`, donc il n'a plus de `&self` à offrir quand il dessine les annotations.
+/// Les trois backends partagent malgré tout CETTE arithmétique-ci — le bug est reparu sur
+/// Linux après avoir été corrigé sur Windows et macOS (issue #179) parce que chacun en
+/// gardait sa copie.
+///
+/// Attention : le choix du rect passé en `anchor` reste, lui, au call site des backends
+/// Metal et D3D (leur `draw_annotations` prend le rect en paramètre). Seul Linux part
+/// directement de `FrameGeometry`. Passer `s_dst` ici reste donc possible sur deux
+/// backends sur trois — d'où le nom du paramètre côté appelants, et les tests.
+pub fn annotation_dst_in(anchor: [f32; 4], x: f32, y: f32, w: f32, h: f32) -> [f32; 4] {
+    [anchor[0] + x * anchor[2], anchor[1] + y * anchor[3], w * anchor[2], h * anchor[3]]
+}
+
+impl FrameGeometry {
+    /// `annotation_dst_in` appliqué à `s_ann`, pour les backends qui tiennent la géométrie
+    /// entière — c'est-à-dire ceux qui n'ont aucune raison de choisir un rect.
+    pub fn annotation_dst(&self, x: f32, y: f32, w: f32, h: f32) -> [f32; 4] {
+        annotation_dst_in(self.s_ann, x, y, w, h)
+    }
+
+    /// Hauteur en px du rect d'ancrage des annotations, pour `rh` px de sortie.
+    ///
+    /// `font_size_rel` est une fraction de cette hauteur (cf. `annotationScale.ts`) :
+    /// la prendre sur `s_dst` ferait grossir le texte avec le zoom, exactement comme
+    /// `annotation_dst` le déplacerait.
+    pub fn annotation_anchor_h_px(&self, rh: f32) -> f32 {
+        self.s_ann[3] * rh
+    }
+}
+
 /// Où va chaque calque, pour une frame — sans toucher au GPU.
 ///
 /// C'est la première moitié de `compose_frame`, mot pour mot : 353 lignes qui ne
@@ -1402,10 +1457,11 @@ mod tests {
         }
     }
 
-    /// La même scène, avec une région de zoom active à `t = 1.5 s`.
-    fn zoomed_golden_scene() -> Scene {
-        Scene::from_json(
-            r##"{
+    /// Le JSON de la scène zoomée, brut : `tilted_golden_scene` n'en change QUE la
+    /// rotation, et le faire par substitution garantit que les deux scènes ne diffèrent
+    /// pas ailleurs sans qu'on s'en aperçoive.
+    fn zoomed_golden_scene_json() -> &'static str {
+        r##"{
             "clips":[{"screenPath":"/s.mp4","webcamPath":"/w.mp4","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":true}],
             "layout":{"preset":"picture-in-picture","webcamSize":0.44,"webcamShape":"circle","webcamMirror":false,
                       "webcamPosition":{"cx":0.8577,"cy":0.8159},"webcamReactiveZoom":false},
@@ -1415,9 +1471,12 @@ mod tests {
             "cursor":{"show":true,"size":7.76,"smoothing":0,"motionBlur":0.35,"clickBounce":1,"clipToBounds":false,"theme":"default"},
             "cropByClip":[{"x":0,"y":0,"width":0.61,"height":0.61}],
             "output":{"width":1170,"height":658,"fps":60}
-        }"##,
-        )
-        .expect("zoomed golden scene")
+        }"##
+    }
+
+    /// La même scène, avec une région de zoom active à `t = 1.5 s`.
+    fn zoomed_golden_scene() -> Scene {
+        Scene::from_json(zoomed_golden_scene_json()).expect("zoomed golden scene")
     }
 
     /// L'ancre des annotations ne bouge PAS avec le zoom, alors que la boîte écran, si.
@@ -1448,6 +1507,87 @@ mod tests {
         // Et sans zoom, l'ancre EST la boîte écran : `s_ann` ne doit pas devenir un rect
         // parallèle qui dériverait de `s_dst` pour d'autres raisons (padding, cover, crop).
         assert_eq!(a.s_ann, a.s_dst, "sans zoom, ancre et boîte écran coïncident");
+    }
+
+    /// La même scène, zoomée ET inclinée par un préset de rotation 3D.
+    fn tilted_golden_scene() -> Scene {
+        Scene::from_json(
+            &zoomed_golden_scene_json().replace(r#""rotation":"none""#, r#""rotation":"iso""#),
+        )
+        .expect("tilted golden scene")
+    }
+
+    /// Le rect et la taille de police d'une annotation ne bougent ni sous le zoom ni sous
+    /// une rotation 3D.
+    ///
+    /// `the_annotation_anchor_ignores_the_zoom` prouve que `plan_frame` **calcule** la
+    /// bonne ancre ; il ne dit rien de ce que le backend en fait. Linux, lui, refaisait
+    /// l'arithmétique contre `s_dst` — donc sous-titres qui grossissent et dérivent, sur
+    /// la seule plateforme qui n'avait pas été corrigée. Ce test porte sur les fonctions
+    /// que les backends appellent maintenant, pas sur le champ brut : la méthode côté
+    /// Linux ET `annotation_dst_in`, par où passent Metal et D3D.
+    ///
+    /// Ce qu'il ne couvre toujours PAS : le choix du rect au call site de Metal et D3D,
+    /// qui prennent leur ancre en paramètre. Ce niveau-là n'est vérifiable qu'en rendant
+    /// des pixels — c'est `compose_linux_annotation_ancree_hors_zoom`, opt-in.
+    ///
+    /// La rotation compte autant que le zoom : un préset iso/left/right est une propriété
+    /// de région de zoom, donc l'incliner amenait aussi la boîte — et les sous-titres
+    /// partaient avec elle, sans pour autant suivre le plan incliné. Les deux symptômes,
+    /// une seule cause.
+    #[test]
+    fn the_annotation_rect_and_font_ignore_zoom_and_rotation() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let rh = 658.0;
+        // Un rect d'annotation quelconque, décentré : au centre, un rect qui suivrait le
+        // zoom garderait le même centre et la moitié de l'erreur passerait inaperçue.
+        let (x, y, w, h) = (0.04, 0.78, 0.92, 0.22);
+
+        let plain = plan_frame(&golden_input(&golden_scene(), &cfg));
+        let zoomed = plan_frame(&golden_input(&zoomed_golden_scene(), &cfg));
+        let tilted = plan_frame(&golden_input(&tilted_golden_scene(), &cfg));
+
+        // Le garde-fou : sans lui, un `plan_frame` qui cesserait d'appliquer le zoom
+        // rendrait les assertions suivantes vraies pour la mauvaise raison.
+        assert_ne!(
+            plain.s_dst, zoomed.s_dst,
+            "le zoom doit agir sur la boîte écran — sinon ce test ne prouve rien"
+        );
+        assert!(
+            !crate::regions::is_identity_rotation(tilted.zoom_rotation),
+            "le préset iso doit produire une rotation — sinon ce test ne prouve rien"
+        );
+
+        let expected = plain.annotation_dst(x, y, w, h);
+        for (name, g) in [("zoom", &zoomed), ("rotation 3D", &tilted)] {
+            let got = g.annotation_dst(x, y, w, h);
+            assert_eq!(
+                got, expected,
+                "le rect de l'annotation a suivi le {name} : {got:?} au lieu de {expected:?}"
+            );
+            assert_eq!(
+                g.annotation_anchor_h_px(rh),
+                plain.annotation_anchor_h_px(rh),
+                "la taille de police a suivi le {name}"
+            );
+            // Metal et D3D n'appellent pas la méthode : ils passent leur rect d'ancrage à
+            // `annotation_dst_in`. Les deux chemins doivent rendre le MÊME rect, sinon le
+            // « corrigé sur une plateforme seulement » recommence par le bas.
+            assert_eq!(
+                annotation_dst_in(g.s_ann, x, y, w, h),
+                got,
+                "le chemin des backends Metal/D3D diverge de la méthode sous le {name}"
+            );
+            // Et le garde-fou qui donne un sens aux deux précédents : nourrie avec `s_dst`,
+            // la même fonction rend un rect DIFFÉRENT. Sans ça, un `annotation_dst_in`
+            // devenu constant satisferait tout ce qui précède.
+            assert_ne!(
+                annotation_dst_in(g.s_dst, x, y, w, h),
+                expected,
+                "sous le {name}, ancrer sur `s_dst` devrait déplacer le rect — \
+                 si les deux coïncident, ce test ne prouve plus rien"
+            );
+        }
     }
 
     /// **Le golden iso-render.**
@@ -1925,5 +2065,23 @@ mod tests {
         let (su0, _, su1, _) = cover_crop_uv([960.0, 720.0], tex, 1.0);
         assert!((su0 - (960.0 - 720.0) * 0.5 / tex[0]).abs() < 1e-6);
         assert!((su1 - (960.0 + 720.0) * 0.5 / tex[0]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn webcam_crop_identity_keeps_the_full_visible_frame() {
+        let uv = webcam_source_rect([1280.0, 720.0], [2048.0, 1024.0], None, 16.0 / 9.0);
+        assert_rect(uv, [0.0, 0.0, 1280.0 / 2048.0, 720.0 / 1024.0]);
+    }
+
+    #[test]
+    fn webcam_crop_applies_authored_zoom_and_pan_before_layout_cover() {
+        let crop = SceneCrop {
+            x: 0.25,
+            y: 0.20,
+            width: 0.50,
+            height: 0.60,
+        };
+        let uv = webcam_source_rect([100.0, 100.0], [100.0, 100.0], Some(crop), 0.50 / 0.60);
+        assert_rect(uv, [0.25, 0.20, 0.75, 0.80]);
     }
 }

@@ -38,6 +38,13 @@ export interface SttRendererStatus {
 	phase: SttRendererStatusPhase;
 	completedSec?: number;
 	totalSec?: number;
+	/**
+	 * Backend the helper actually bound (`"whispercpp-cpu"` when the GPU path was
+	 * not taken). Reported per chunk during `"transcribe"`.
+	 */
+	backend?: string;
+	/** Real-time factor for the run so far — wall-clock / audio, lower is faster. */
+	rtf?: number;
 }
 
 interface RendererSttApi {

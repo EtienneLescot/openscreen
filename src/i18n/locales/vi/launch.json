@@ -6,8 +6,6 @@
 		"cancelRecording": "Hủy ghi hình",
 		"pauseRecording": "Tạm dừng ghi hình",
 		"resumeRecording": "Tiếp tục ghi hình",
-		"openVideoFile": "Mở tệp video",
-		"openProject": "Mở dự án",
 		"useVerticalTray": "Dùng khay dọc",
 		"useHorizontalTray": "Dùng khay ngang",
 		"openStudio": "Mở Studio",
@@ -93,6 +91,9 @@
 		"micHint": "Hãy nói để kiểm tra micrô",
 		"noMicrophones": "Không tìm thấy micrô",
 		"preview": "Xem trước",
-		"previewUnavailable": "Không thể xem trước"
+		"previewUnavailable": "Không thể xem trước",
+		"about": "Giới thiệu",
+		"version": "Phiên bản {{version}}",
+		"checkingForUpdates": "Đang kiểm tra…"
 	}
 }

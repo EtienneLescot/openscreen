@@ -18,6 +18,7 @@
 		"edit": "编辑",
 		"view": "视图",
 		"window": "窗口",
+		"help": "帮助",
 		"quit": "退出",
 		"stopRecording": "停止录制",
 		"undo": "撤销",
@@ -39,7 +40,8 @@
 		"services": "服务",
 		"hide": "隐藏 OpenScreen",
 		"hideOthers": "隐藏其他",
-		"unhide": "显示全部"
+		"unhide": "显示全部",
+		"saveDiagnostics": "保存诊断信息"
 	},
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} 已发布。当前版本为 {{currentVersion}}。",

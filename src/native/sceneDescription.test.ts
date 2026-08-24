@@ -760,6 +760,40 @@ describe("buildSceneDescription.cropByClip", () => {
 	});
 });
 
+// --- audio -----------------------------------------------------------------
+
+describe("buildSceneDescription.audio", () => {
+	// The editor claims "what you hear is what you export". That only holds while this
+	// payload carries nothing the preview cannot reproduce on the raw source file it
+	// plays — which is a linear gain, and nothing else. These tests exist so a future
+	// stage with state (a filter, a compressor), one measured over the assembled
+	// programme (a loudness normaliser), or one expressed in timeline time (a sync
+	// offset — this shipped once and was removed) cannot be added here unnoticed.
+	it("carries the authored gain through to the native payload", () => {
+		const doc = makeDoc({ legacyEditor: { audioGainDb: 4.5 } });
+		expect(buildSceneDescription(doc).audio).toEqual({ gainDb: 4.5 });
+	});
+
+	it("defaults to a no-op for a project that predates the control", () => {
+		expect(buildSceneDescription(makeDoc()).audio).toEqual({ gainDb: 0 });
+	});
+
+	it("exposes only the gain", () => {
+		// Guards the parity contract itself, not a value: an extra key here means the
+		// export applies something the preview does not.
+		expect(Object.keys(buildSceneDescription(makeDoc()).audio)).toEqual(["gainDb"]);
+	});
+
+	it("clamps to the range the slider offers, so the UI can always display it", () => {
+		expect(buildSceneDescription(makeDoc({ legacyEditor: { audioGainDb: -99 } })).audio).toEqual({
+			gainDb: -12,
+		});
+		expect(buildSceneDescription(makeDoc({ legacyEditor: { audioGainDb: 99 } })).audio).toEqual({
+			gainDb: 12,
+		});
+	});
+});
+
 // --- settings mapping ------------------------------------------------------
 
 describe("buildSceneDescription.settings mapping", () => {
@@ -935,6 +969,56 @@ describe("buildSceneDescription.settings mapping", () => {
 		const pixelWidth = rect!.width * scene.output.width;
 		const pixelHeight = rect!.height * scene.output.height;
 		expect(pixelWidth / pixelHeight).toBeCloseTo(4 / 3, 1);
+	});
+
+	it("lays the camera box out from the camera's own dimensions, with no second argument", () => {
+		// The parity claim, and the reason `cameraTrack` carries dimensions at all.
+		//
+		// The case above passes a cameraTrack WITHOUT dimensions and gets 4:3 — the fallback,
+		// which is correct for a document written before the field existed. This one carries
+		// them, and must get 16:9 from the ARGUMENT-FREE call, because that is the call every
+		// export makes: `ExportDialog` and the CLI runner both invoke
+		// `buildSceneDescription(document)` with nothing else.
+		//
+		// Before the camera's size lived in the document, only the preview could supply it —
+		// through the optional second argument, filled from a mounted <video>'s reported size.
+		// So the same project framed a 16:9 camera 16:9 on screen and 4:3 in the file, and
+		// `cover_uv_rect` (Rust) trimmed the authored crop to that wrong box. This test fails
+		// on any version where the box depends on who is asking.
+		const asset = makeAsset({
+			id: "a",
+			originalPath: "/a.mp4",
+			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+			cameraTrack: {
+				sourcePath: "/a-webcam.mp4",
+				startMs: 0,
+				offsetMs: 0,
+				visible: true,
+				width: 1280,
+				height: 720,
+			},
+		});
+		const doc = makeDoc({
+			assets: [asset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 1,
+					timelineStartSec: 0,
+					timelineEndSec: 1,
+				}),
+			],
+			legacyEditor: { webcamSizePreset: 25 },
+		});
+		const scene = buildSceneDescription(doc);
+		const rect = scene.layout.webcamRect;
+		expect(rect).not.toBeNull();
+		// Pixel ratio, not fraction ratio — see the neighbouring case for why.
+		const pixelWidth = rect!.width * scene.output.width;
+		const pixelHeight = rect!.height * scene.output.height;
+		expect(pixelWidth / pixelHeight).toBeCloseTo(16 / 9, 1);
 	});
 
 	it("layout.webcamRect is null when no-webcam preset is selected", () => {
@@ -1647,6 +1731,73 @@ describe("buildSceneDescription.captions", () => {
 
 	it("sends nothing while the caption layer is hidden", () => {
 		expect(buildSceneDescription(docWithCaptions(false)).annotations).toHaveLength(0);
+	});
+
+	it("marks captions as frame-space so the compositor stops measuring the footage", () => {
+		const scene = buildSceneDescription(docWithCaptions(true));
+		expect(scene.annotations[0].space).toBe("frame");
+	});
+
+	it("holds the caption still while padding shrinks the screen rect", () => {
+		// Issue #396. Padding pulls `screenRect` in; a subtitle belongs to the frame the
+		// viewer sees, so its rect must not follow. Three points, because two could agree
+		// by coincidence — `paddingFit` is 1 - padding/100 * 0.4, so 1.0 / 0.8 / 0.6.
+		const rects = [0, 50, 100].map((padding) => {
+			const base = docWithCaptions(true);
+			const scene = buildSceneDescription({
+				...base,
+				legacyEditor: { ...(base.legacyEditor as Record<string, unknown>), padding },
+			} as AxcutDocument);
+			const caption = scene.annotations[0];
+			return {
+				screenWidth: scene.layout.screenRect?.width,
+				caption: { x: caption.x, y: caption.y, w: caption.w, h: caption.h },
+				fontSizeRel: caption.text?.fontSizeRel,
+			};
+		});
+
+		// The screen rect really does move — otherwise this test proves nothing.
+		expect(new Set(rects.map((r) => r.screenWidth)).size).toBe(3);
+		// ...and the caption does not, in position or in size.
+		expect(rects[1].caption).toEqual(rects[0].caption);
+		expect(rects[2].caption).toEqual(rects[0].caption);
+		// The font denominator has to follow the rect, or the caption holds still and
+		// still shrinks its text with the padding slider.
+		expect(rects[1].fontSizeRel).toBe(rects[0].fontSizeRel);
+		expect(rects[2].fontSizeRel).toBe(rects[0].fontSizeRel);
+	});
+
+	it("leaves the space key off a real annotation entirely", () => {
+		// Not `space: undefined` — an explicit key would change the annotation payload that
+		// shipped binaries already parse. `in` is the only check that tells them apart.
+		const doc = makeDoc({
+			annotations: [
+				{
+					id: "ann1",
+					startMs: 0,
+					endMs: 1000,
+					type: "text",
+					content: "hi",
+					position: { x: 10, y: 10 },
+					size: { width: 20, height: 10 },
+					style: {
+						color: "#fff",
+						backgroundColor: "transparent",
+						fontSize: 48,
+						fontFamily: "Inter",
+						fontWeight: "normal",
+						fontStyle: "normal",
+						textDecoration: "none",
+						textAlign: "center",
+						textAnimation: "none",
+					},
+					zIndex: 1,
+				},
+			],
+		});
+		const annotation = buildSceneDescription(doc).annotations[0];
+		expect(annotation).toBeDefined();
+		expect("space" in annotation).toBe(false);
 	});
 
 	it("carries the caption font size as a fraction, like every annotation", () => {

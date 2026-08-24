@@ -43,6 +43,8 @@
 		"permissionDenied": "錄影權限被拒絕。請允許螢幕錄製。",
 		"cameraDisconnected": "網路攝影機已中斷連線。",
 		"cameraNotFound": "找不到攝影機。",
+		"cameraCaptureUnavailable": "無法開啟攝影機，將在沒有攝影機的情況下錄製。",
+		"microphoneDefaulted": "無法辨識所選麥克風，將錄製預設輸入裝置。",
 		"accessibilityAllowAndRetry": "允許 OpenScreen 使用輔助使用權限，然後再次按下錄製以開始倒數。",
 		"selectSource": "請選擇要錄製的來源"
 	},
@@ -85,7 +87,6 @@
 		"switchToLightTheme": "切換至淺色主題",
 		"switchToDarkTheme": "切換至深色主題",
 		"toggleTheme": "切換主題",
-		"settings": "設定",
 		"export": "匯出",
 		"renameProject": "重新命名專案",
 		"noProject": "無專案",
@@ -132,6 +133,8 @@
 		"emptyHint": "尚無媒體 — 匯入錄製內容以開始。",
 		"importMedia": "匯入媒體",
 		"added": "已新增 {{label}}",
+		"addToTimeline": "新增至時間軸",
+		"addedToTimeline": "已將 {{label}} 新增至時間軸",
 		"sourceTranscript": "來源逐字稿",
 		"close": "關閉",
 		"transcriptReady": "逐字稿已就緒",
@@ -146,6 +149,7 @@
 		"transcribingEllipsis": "轉錄中…",
 		"pendingTranscription": "等待轉錄",
 		"transcriptionFailed": "轉錄失敗",
+		"cpuBackendHint": "正在使用 CPU 執行 — 比 GPU 慢約 2 倍",
 		"noTranscript": "沒有逐字稿",
 		"generating": "產生中",
 		"generationFailed": "產生失敗",
@@ -235,6 +239,8 @@
 		"selectModelFailed": "無法選擇模型",
 		"providerSettings": "提供者設定…",
 		"applyEditsFailed": "無法套用代理的編輯",
+		"agentEditConflict": "代理執行期間專案已變更，因此未套用代理的編輯。",
+		"applyAnyway": "仍然套用",
 		"chatFailed": "聊天失敗",
 		"rewindFailed": "倒轉失敗",
 		"rewoundSuccess": "已倒轉至該訊息的開頭",
@@ -281,7 +287,7 @@
 		"sendTitle": "傳送（Enter）",
 		"send": "傳送",
 		"rewindConfirmTitle": "要倒轉到這裡嗎？",
-		"rewindConfirmBody": "此時間點之後代理的編輯與後續對話回合將被回復。專案、對話與代理狀態將被還原。",
+		"rewindConfirmBody": "此時間點之後代理的編輯與後續對話回合將被回復。專案、對話與代理狀態將被還原。你在那之後所做的編輯也會被取代。",
 		"rewindConfirm": "倒轉",
 		"configureModel": "設定 AI 模型",
 		"historyDialog": {
@@ -361,7 +367,13 @@
 	},
 	"preview": {
 		"videoPreview": "影片預覽",
-		"webcamPreview": "攝影機預覽（拖曳可重新定位）"
+		"webcamPreview": "攝影機預覽（拖曳可重新定位）",
+		"mediaError": {
+			"title": "預覽已停止",
+			"description": "無法解碼此影片。檔案可能已損毀、仍在寫入中，或已不在專案預期的位置——你的專案本身完好無缺。",
+			"retry": "重試",
+			"detail": "詳細資訊：{{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "註解",

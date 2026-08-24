@@ -18,6 +18,7 @@
 		"edit": "編輯",
 		"view": "檢視",
 		"window": "視窗",
+		"help": "說明",
 		"quit": "退出",
 		"stopRecording": "停止錄製",
 		"undo": "復原",
@@ -39,7 +40,8 @@
 		"services": "服務",
 		"hide": "隱藏 OpenScreen",
 		"hideOthers": "隱藏其他",
-		"unhide": "全部顯示"
+		"unhide": "全部顯示",
+		"saveDiagnostics": "儲存診斷資料"
 	},
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} 已推出。目前版本為 {{currentVersion}}。",

@@ -1,8 +1,8 @@
 import {
+	AudioLines,
 	Captions as CaptionsIcon,
 	ChevronRight,
 	FileText,
-	Image as ImageIcon,
 	Layout as LayoutIcon,
 	Maximize2,
 	MousePointer2,
@@ -14,7 +14,7 @@ import {
 	ZoomIn,
 } from "lucide-react";
 import type { ComponentProps } from "react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { parseCustomPlaybackSpeedInput } from "@/components/video-editor/customPlaybackSpeed";
 import {
@@ -42,7 +42,7 @@ import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
 import { CaptionsPane } from "../CaptionsPane";
 import { ColorField } from "../ColorField";
 import {
-	BackgroundPane,
+	AudioPane,
 	CursorPane,
 	LayoutPane,
 	SliderCell,
@@ -54,12 +54,14 @@ import styles from "./EditorShellV4.module.css";
 
 type TimelineApi = ReturnType<typeof useTimeline>;
 
-export type Facet = "background" | "effects" | "layout" | "cursor" | "captions" | "transcript";
+export type Facet = "effects" | "layout" | "audio" | "cursor" | "captions" | "transcript";
 
-const FACETS: Array<{ id: Facet; labelKey: string; icon: typeof ImageIcon }> = [
-	{ id: "background", labelKey: "background.title", icon: ImageIcon },
+const FACETS: Array<{ id: Facet; labelKey: string; icon: typeof SlidersHorizontal }> = [
+	// Background is a SECTION of this facet now, not a facet of its own — see
+	// VideoEffectsPane for why the split had nowhere to sit.
 	{ id: "effects", labelKey: "effects.title", icon: SlidersHorizontal },
 	{ id: "layout", labelKey: "layout.title", icon: LayoutIcon },
+	{ id: "audio", labelKey: "audio.title", icon: AudioLines },
 	{ id: "cursor", labelKey: "cursor.title", icon: MousePointer2 },
 	{ id: "captions", labelKey: "facets.captions", icon: CaptionsIcon },
 	{ id: "transcript", labelKey: "facets.transcript", icon: FileText },
@@ -99,6 +101,17 @@ export function FloatingInspector({
 	const ts = useScopedT("settings");
 	const te = useScopedT("editor");
 	const [clipPickerOpen, setClipPickerOpen] = useState(false);
+	const clipPickerRef = useRef<HTMLDivElement | null>(null);
+	useEffect(() => {
+		if (!clipPickerOpen) return;
+		const onDocMouseDown = (e: MouseEvent) => {
+			if (clipPickerRef.current && !clipPickerRef.current.contains(e.target as Node)) {
+				setClipPickerOpen(false);
+			}
+		};
+		document.addEventListener("mousedown", onDocMouseDown);
+		return () => document.removeEventListener("mousedown", onDocMouseDown);
+	}, [clipPickerOpen]);
 	const selection = tl.selection;
 	const effectiveOpen = open || selection !== null;
 	return (
@@ -134,7 +147,7 @@ export function FloatingInspector({
 						<Icon size={17} />
 					</button>
 				))}
-				<div style={{ position: "relative" }}>
+				<div ref={clipPickerRef} style={{ position: "relative" }}>
 					<button
 						type="button"
 						title={te("editClipDialog.title")}
@@ -1052,9 +1065,9 @@ function FacetBody({
 		</button>
 	);
 
-	if (facet === "background") return wrap(collapse, <BackgroundPane />);
 	if (facet === "effects") return wrap(collapse, <VideoEffectsPane />);
 	if (facet === "layout") return wrap(collapse, <LayoutPane />);
+	if (facet === "audio") return wrap(collapse, <AudioPane />);
 	if (facet === "cursor") return wrap(collapse, <CursorPane />);
 	if (facet === "transcript") return wrap(collapse, <TranscriptPane {...transcriptProps} />);
 	return wrap(collapse, <CaptionsPane />);

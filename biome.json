@@ -7,6 +7,7 @@
 	},
 	"formatter": {
 		"enabled": true,
+		"includes": ["**", "!website/src/components/Recreation/generated.ts"],
 		"indentStyle": "tab",
 		"formatWithErrors": true,
 		"lineEnding": "lf",

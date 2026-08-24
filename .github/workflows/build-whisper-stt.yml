@@ -10,21 +10,11 @@ name: Build whisper-stt binaries
 #
 # ponytail: one binary per platform is enough because whisper.cpp selects the
 # right backend at runtime (Metal on Apple Silicon, Vulkan on Windows/Linux,
-# CPU fallback when no GPU/driver is available). A CUDA variant is supported
-# by the build script but is not built by default; Vulkan already accelerates
-# NVIDIA cards.
+# CPU fallback when no GPU/driver is available). Vulkan already accelerates
+# NVIDIA cards, so there is no separate CUDA build.
 
 on:
   workflow_dispatch:
-    inputs:
-      enable_cuda:
-        description: "Also build a CUDA variant when the host has an nvcc toolchain"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "true"
-          - "false"
   push:
     paths:
       - "scripts/build-whisper-stt.sh"
@@ -172,8 +162,6 @@ jobs:
             whisper-stt-build-${{ matrix.tag }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-
 
       - name: Run whisper-stt build script
-        env:
-          ENABLE_CUDA: ${{ github.event.inputs.enable_cuda || 'false' }}
         run: bash scripts/build-whisper-stt.sh
 
       - name: Stage binaries for upload
