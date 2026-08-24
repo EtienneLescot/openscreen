@@ -18,6 +18,19 @@ keywords:
 
 Download the latest installer for your platform from the [download page](/download), or straight from [GitHub Releases](https://github.com/getopenscreen/openscreen/releases).
 
+## System requirements
+
+| | Minimum | Recommended |
+|---|---|---|
+| **Windows** | Windows 10 version 1903 (build 18362) or later, Intel 8th Gen / AMD Ryzen 2000 series or newer | Windows 11, Intel 12th Gen / AMD Ryzen 4000 series or newer |
+| **macOS** | macOS 12.3 (Monterey) — required by ScreenCaptureKit for native capture | macOS 14 or later |
+| **Linux** | A desktop with `xdg-desktop-portal` and PipeWire (default on Ubuntu 22.04+, Fedora 34+) | Same, kept up to date |
+| **RAM** | 8 GB | 16 GB |
+
+:::note Older integrated graphics on Windows
+Machines with integrated graphics older than roughly 8th-generation Intel (or the equivalent AMD Ryzen 2000 series) are not blocked from installing, but some have known driver stability issues that can make a recording fail to stop and save — see [#460](https://github.com/getopenscreen/openscreen/issues/460). If you hit this, open the tray icon or **Help → Save Diagnostics** right after the failure (before starting another recording) and attach the file to a bug report.
+:::
+
 ## macOS
 
 Download the `.dmg` installer from [Releases](https://github.com/getopenscreen/openscreen/releases) and drag OpenScreen into your Applications folder. Builds from 1.9.0 onward are signed with a Developer ID certificate and notarized by Apple, so Gatekeeper does not block them and no terminal step is needed.
