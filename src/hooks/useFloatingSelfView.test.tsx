@@ -153,6 +153,18 @@ describe("useFloatingSelfView", () => {
 		await waitFor(() => expect(exitPictureInPicture).toHaveBeenCalledTimes(2));
 	});
 
+	it("closes an owned PiP window when the HUD is destroyed", async () => {
+		const stream = makeStream();
+		const view = render(<Harness recording stream={stream} autoShowEnabled={false} />);
+		makeReady();
+		fireEvent.click(screen.getByRole("button", { name: "toggle" }));
+		await waitFor(() => expect(requestPictureInPicture).toHaveBeenCalledTimes(1));
+
+		view.unmount();
+
+		await waitFor(() => expect(exitPictureInPicture).toHaveBeenCalledTimes(1));
+	});
+
 	it("contains unsupported and rejected requests", async () => {
 		const onUnavailable = vi.fn();
 		const stream = makeStream();

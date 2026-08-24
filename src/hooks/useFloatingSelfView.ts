@@ -167,14 +167,19 @@ export function useFloatingSelfView({
 
 	useEffect(() => {
 		const globalRequest = () => requestRef.current();
+		const ownedVideo = videoRef.current;
 		window.__openscreenRequestFloatingSelfView = globalRequest;
 		return () => {
 			if (window.__openscreenRequestFloatingSelfView === globalRequest) {
 				delete window.__openscreenRequestFloatingSelfView;
 			}
-			void hide();
+			// React may clear the ref before passive-effect cleanup. Keep the actual
+			// element so HUD destruction cannot strand its native PiP window.
+			if (ownedVideo && document.pictureInPictureElement === ownedVideo) {
+				void document.exitPictureInPicture().catch(() => undefined);
+			}
 		};
-	}, [hide]);
+	}, []);
 
 	return { videoRef, supported, ready, open, show, hide, toggle };
 }
