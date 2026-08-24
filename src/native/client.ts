@@ -181,11 +181,11 @@ export const nativeBridgeClient = {
 				action: "document.delete",
 				payload: { projectId },
 			}),
-		addAsset: (projectId: string, path: string, label?: string) =>
+		addAsset: (projectId: string, path: string, label?: string, kind?: "video" | "audio") =>
 			requireNativeBridgeData<AiEditionAssetResult>({
 				domain: "aiEdition",
 				action: "document.addAsset",
-				payload: { projectId, path, label },
+				payload: { projectId, path, label, kind },
 			}),
 		removeAsset: (projectId: string, assetId: string) =>
 			requireNativeBridgeData<AiEditionAssetResult>({

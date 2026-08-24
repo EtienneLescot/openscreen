@@ -38,6 +38,9 @@ export interface ProjectSummary {
 export interface AddAssetInput {
 	path: string;
 	label?: string;
+	// "audio" imports an external voiceover / BGM / SFX file (issue #350).
+	// Defaults to "video" when omitted, so existing callers are unaffected.
+	kind?: "video" | "audio";
 }
 
 export class DocumentNotFoundError extends Error {
@@ -70,6 +73,24 @@ const SUPPORTED_VIDEO_EXTENSIONS = new Set([
 function isSupportedVideoPath(filePath: string): boolean {
 	const ext = path.extname(filePath).toLowerCase();
 	return SUPPORTED_VIDEO_EXTENSIONS.has(ext);
+}
+
+// Imported audio (issue #350). Decoding is handled downstream by the same
+// WebCodecs / ffmpeg paths that read a video's audio track, so this list is the
+// container formats decodeAudioData and the compositor can open.
+const SUPPORTED_AUDIO_EXTENSIONS = new Set([
+	".mp3",
+	".wav",
+	".m4a",
+	".aac",
+	".flac",
+	".ogg",
+	".opus",
+]);
+
+function isSupportedAudioPath(filePath: string): boolean {
+	const ext = path.extname(filePath).toLowerCase();
+	return SUPPORTED_AUDIO_EXTENSIONS.has(ext);
 }
 
 function safeProjectId(raw: string): string {
@@ -283,7 +304,15 @@ export class DocumentService {
 		if (!input.path) {
 			throw new ProjectFileError("Asset path is required.", projectId);
 		}
-		if (!isSupportedVideoPath(input.path)) {
+		const kind = input.kind ?? "video";
+		if (kind === "audio") {
+			if (!isSupportedAudioPath(input.path)) {
+				throw new ProjectFileError(
+					`Unsupported audio extension: ${path.extname(input.path)} (supported: ${[...SUPPORTED_AUDIO_EXTENSIONS].join(", ")})`,
+					projectId,
+				);
+			}
+		} else if (!isSupportedVideoPath(input.path)) {
 			throw new ProjectFileError(
 				`Unsupported video extension: ${path.extname(input.path)} (supported: ${[...SUPPORTED_VIDEO_EXTENSIONS].join(", ")})`,
 				projectId,
@@ -300,18 +329,24 @@ export class DocumentService {
 		}
 		const asset: AxcutAsset = {
 			id: createId("asset"),
-			kind: "video",
+			kind,
 			label: input.label?.trim() || path.basename(absolutePath),
 			originalPath: absolutePath,
 			sizeBytes,
 			cameraTrack: null,
 		};
+		// An audio import is an overlay, never the thing the timeline is built
+		// around, so it must not claim the empty primaryAssetId slot — otherwise the
+		// first file dropped into a fresh project (a BGM track) would become its
+		// primary asset and the editor would try to lay out clips from a file with
+		// no video.
+		const claimsPrimary = kind !== "audio" && !doc.project.primaryAssetId;
 		const next: AxcutDocument = {
 			...doc,
 			assets: [...doc.assets, asset],
 			project: {
 				...doc.project,
-				...(doc.project.primaryAssetId ? {} : { primaryAssetId: asset.id }),
+				...(claimsPrimary ? { primaryAssetId: asset.id } : {}),
 				updatedAt: new Date().toISOString(),
 			},
 		};

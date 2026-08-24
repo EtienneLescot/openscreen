@@ -843,6 +843,10 @@ export const createProjectInputSchema = z.object({
 export const addAssetInputSchema = z.object({
 	path: z.string().trim().min(1),
 	label: z.string().trim().optional(),
+	// "audio" imports an external voiceover / BGM / SFX file (issue #350); it has
+	// no video stream and never becomes the project's primary asset. Defaults to
+	// "video" so every existing caller keeps its current behaviour.
+	kind: z.enum(["video", "audio"]).default("video"),
 	autoTranscribe: z.boolean().default(true),
 });
 

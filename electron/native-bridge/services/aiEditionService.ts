@@ -151,9 +151,17 @@ export class AiEditionService {
 		}
 	}
 
-	async addAsset(projectId: string, path: string, label?: string): Promise<AiEditionAssetResult> {
-		const document = await this.options.documents.addAsset(projectId, { path, label });
-		const assetId = document.project.primaryAssetId ?? document.assets.at(-1)?.id ?? "";
+	async addAsset(
+		projectId: string,
+		path: string,
+		label?: string,
+		kind?: "video" | "audio",
+	): Promise<AiEditionAssetResult> {
+		const document = await this.options.documents.addAsset(projectId, { path, label, kind });
+		// The just-added asset is always the last one; primaryAssetId is only a
+		// fallback for the video case and would point at the wrong asset for an
+		// audio import (which never claims primary), so prefer the tail.
+		const assetId = document.assets.at(-1)?.id ?? document.project.primaryAssetId ?? "";
 		return { assetId, document };
 	}
 

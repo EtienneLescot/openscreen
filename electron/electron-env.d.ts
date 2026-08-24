@@ -289,6 +289,14 @@ interface Window {
 			name?: string;
 			canceled?: boolean;
 		}>;
+		// Import an external audio file (voiceover / BGM / SFX) — issue #350.
+		openAudioFilePicker: () => Promise<{
+			success: boolean;
+			path?: string;
+			name?: string;
+			canceled?: boolean;
+			message?: string;
+		}>;
 		setCurrentVideoPath: (path: string) => Promise<{ success: boolean }>;
 		setCurrentRecordingSession: (
 			session: import("../src/lib/recordingSession").RecordingSession | null,

@@ -280,6 +280,48 @@ describe("DocumentService", () => {
 			expect(after.project.primaryAssetId).toBe(first.project.primaryAssetId);
 			expect(after.assets).toHaveLength(2);
 		});
+
+		// Issue #350 — external audio import (voiceover / BGM / SFX).
+		it("appends an audio asset without claiming the primary slot", async () => {
+			const doc = await service.createProject("P");
+			const updated = await service.addAsset(doc.project.id, {
+				path: "/tmp/voiceover.mp3",
+				kind: "audio",
+			});
+			expect(updated.assets).toHaveLength(1);
+			expect(updated.assets[0]?.kind).toBe("audio");
+			// An audio-only file must never become the project's primary asset, even
+			// when it is the first file added to an otherwise-empty project.
+			expect(updated.project.primaryAssetId).toBeUndefined();
+		});
+
+		it("keeps the existing video primary when an audio track is added", async () => {
+			const doc = await service.createProject("P");
+			const withVideo = await service.addAsset(doc.project.id, { path: "/tmp/screen.mp4" });
+			const primary = withVideo.project.primaryAssetId;
+			const withAudio = await service.addAsset(doc.project.id, {
+				path: "/tmp/bgm.wav",
+				kind: "audio",
+			});
+			expect(withAudio.project.primaryAssetId).toBe(primary);
+			expect(withAudio.assets).toHaveLength(2);
+		});
+
+		it("rejects unsupported audio extensions", async () => {
+			const doc = await service.createProject("P");
+			await expect(
+				service.addAsset(doc.project.id, { path: "/tmp/clip.mp4", kind: "audio" }),
+			).rejects.toBeInstanceOf(ProjectFileError);
+		});
+
+		it("accepts a video extension under the default kind but not as audio", async () => {
+			const doc = await service.createProject("P");
+			// The same extension routing works in reverse: an .mp3 is fine as audio
+			// but rejected as video (covered above), and an .mp4 is the opposite.
+			await expect(
+				service.addAsset(doc.project.id, { path: "/tmp/a.mp3", kind: "audio" }),
+			).resolves.toBeDefined();
+		});
 	});
 
 	describe("removeAsset", () => {

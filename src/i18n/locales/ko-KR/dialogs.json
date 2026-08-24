@@ -79,11 +79,13 @@
 		"saveGif": "내보낸 GIF 저장",
 		"saveVideo": "내보낸 비디오 저장",
 		"selectVideo": "비디오 파일 선택",
+		"selectAudio": "Select Audio File",
 		"saveProject": "OpenScreen 프로젝트 저장",
 		"openProject": "OpenScreen 프로젝트 열기",
 		"gifImage": "GIF 이미지",
 		"mp4Video": "MP4 비디오",
 		"videoFiles": "비디오 파일",
+		"audioFiles": "Audio Files",
 		"openscreenProject": "OpenScreen 프로젝트",
 		"allFiles": "모든 파일"
 	}
