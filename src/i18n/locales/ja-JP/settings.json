@@ -326,5 +326,14 @@
 		"outputGain": "出力レベル",
 		"reset": "オーディオをリセット",
 		"help": "音声の出力レベルを調整します。プレビューと書き出しで同じように適用されます。"
+	},
+	"audioTrack": {
+		"defaultLabel": "Audio track",
+		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
+		"volume": "Volume",
+		"offset": "Start (s)",
+		"mute": "Mute",
+		"unmute": "Unmute",
+		"remove": "Remove track"
 	}
 }

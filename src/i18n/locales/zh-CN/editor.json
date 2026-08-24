@@ -154,7 +154,9 @@
 		"detectedLanguage": "检测到的语言：{{language}}",
 		"noAudioTrack": "无音频轨道",
 		"noAudioTrackHint": "此媒体没有音频轨道，没有可转录的内容。",
-		"noSpeechDetected": "未检测到语音"
+		"noSpeechDetected": "未检测到语音",
+		"couldNotAddAudio": "Could not add audio",
+		"importAudio": "Import audio"
 	},
 	"exportDialog": {
 		"title": "导出",

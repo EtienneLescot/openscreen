@@ -168,6 +168,12 @@ const DECLARED: WritePath[] = [
 	// Linking the camera track found next to a newly added asset. Part of the
 	// import, not an edit of its own.
 	w("src/lib/ai-edition/store/projectStore.ts", "addAsset", "save", "automatic"),
+	// Folding an imported audio file's probed duration onto its asset (issue #350).
+	// Part of the import, like the camera link above — not an edit of its own.
+	w("src/lib/ai-edition/store/projectStore.ts", "addAudioAsset", "save", "automatic"),
+	// Placing an imported audio track on the timeline. The user asked for it, via the
+	// media panel's "Import audio" or the timeline.
+	w("src/lib/ai-edition/store/projectStore.ts", "addAudioTrack", "save", "gesture"),
 	// THE round-3 fix. This is the shape that defeated round 2: a store action that
 	// writes on someone else's behalf. It forwards now, so its callers decide.
 	w("src/lib/ai-edition/store/projectStore.ts", "replaceTimeline", "save", "forwarded"),
@@ -234,6 +240,13 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "duplicateClip", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "insertClipAt", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "moveClip", "save", "gesture"),
+	// Imported audio tracks (issue #350). Each is a direct user edit — drag/trim the
+	// track, change its level, mute it, or delete it — one undo step apiece.
+	w("src/lib/ai-edition/store/useTimeline.ts", "moveAudioTrack", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "removeAudioTrack", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "resizeAudioTrack", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "setAudioTrackGain", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "toggleAudioTrackMute", "save", "gesture"),
 	// The round-2 defect: a background duration probe every freshly imported asset
 	// fires, because `addAsset` never populates `durationSec`.
 	w("src/lib/ai-edition/store/useTimeline.ts", "probeAndCorrectClip", "save", "automatic"),

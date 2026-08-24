@@ -4,11 +4,13 @@ import {
 	Loader2,
 	Maximize2,
 	MessageSquare,
+	Music,
 	Pencil,
 	Scissors,
 	Sparkles,
 	SplitSquareHorizontal,
 	Trash2,
+	VolumeX,
 	Wand2,
 	ZoomIn,
 } from "lucide-react";
@@ -23,13 +25,13 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { fromFileUrl } from "@/components/video-editor/projectPersistence";
+import { fromFileUrl, toFileUrl } from "@/components/video-editor/projectPersistence";
 import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
-import type { AxcutClip } from "@/lib/ai-edition/schema";
+import type { AxcutAudioTrack, AxcutClip } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionStore";
@@ -331,6 +333,70 @@ const ClipWaveform = memo(function ClipWaveform({
 					/>
 				);
 			})}
+		</div>
+	);
+});
+
+// One imported audio track on its lane (issue #350). Read-only for now — click to
+// select; drag-to-move and edge-trim land in a follow-up. The waveform reuses
+// ClipWaveform (its `.tlWave` is inset:0, so it paints behind the label here just
+// as it does inside a clip), windowed to the track's trim and scaled by the
+// track's own gain. `leftPct`/`widthPct` are precomputed by the parent so this
+// stays memoisable — a doc edit that doesn't touch this track won't re-render it.
+const AudioLanePill = memo(function AudioLanePill({
+	track,
+	url,
+	assetDurationSec,
+	leftPct,
+	widthPct,
+	selected,
+	onSelect,
+	label,
+}: {
+	track: AxcutAudioTrack;
+	url: string | undefined;
+	assetDurationSec: number | undefined;
+	leftPct: number;
+	widthPct: number;
+	selected: boolean;
+	onSelect: (id: string) => void;
+	label: string;
+}) {
+	const duration = assetDurationSec ?? track.durationSec;
+	return (
+		<div
+			role="button"
+			tabIndex={0}
+			className={`${styles.lanePill} ${styles.laneAudio}${
+				selected ? ` ${styles.lanePillSel}` : ""
+			}${track.mute ? ` ${styles.laneAudioMuted}` : ""}`}
+			style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: 3 }}
+			// Stop the pointer from starting a timeline scrub on .tlTracks; the click
+			// below does the selecting.
+			onPointerDown={(e) => e.stopPropagation()}
+			onClick={(e) => {
+				e.stopPropagation();
+				onSelect(track.id);
+			}}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					onSelect(track.id);
+				}
+			}}
+			title={label}
+		>
+			<ClipWaveform
+				videoUrl={url}
+				assetDurationSec={duration}
+				sourceStartSec={track.trimStartSec}
+				sourceEndSec={track.trimEndSec ?? duration}
+				gain={audioGainScalar(track.gainDb)}
+			/>
+			<span className={styles.laneAudioLabel}>
+				{track.mute ? <VolumeX size={11} /> : <Music size={11} />}
+				{label}
+			</span>
 		</div>
 	);
 });
@@ -1482,6 +1548,34 @@ export function V4Timeline({
 										hasAnyCamera ? t("hints.pressCameraFullscreen") : ts("layout.noWebcam"),
 									)}
 								</div>
+								{/* Imported audio tracks (issue #350). Only shown once a track exists —
+								    audio arrives via the media panel's "Import audio", not a keystroke,
+								    so an empty lane would advertise nothing. */}
+								{tl.audioTracks.length > 0 ? (
+									<div className={`${styles.tlLane} ${styles.tlLaneAudio}`}>
+										{tl.audioTracks.map((track) => {
+											const asset = tl.assets.find((a) => a.id === track.assetId);
+											const duration = asset?.durationSec ?? track.durationSec;
+											const widthSec = Math.max(
+												0,
+												(track.trimEndSec ?? duration) - track.trimStartSec,
+											);
+											return (
+												<AudioLanePill
+													key={track.id}
+													track={track}
+													url={asset ? toFileUrl(asset.originalPath) : undefined}
+													assetDurationSec={duration}
+													leftPct={pctOf(track.timelineStartSec)}
+													widthPct={pctOf(widthSec)}
+													selected={tl.selectedAudioTrackId === track.id}
+													onSelect={tl.selectAudioTrack}
+													label={track.label || asset?.label || ts("audioTrack.defaultLabel")}
+												/>
+											);
+										})}
+									</div>
+								) : null}
 							</>
 						) : null}
 

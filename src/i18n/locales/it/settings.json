@@ -326,5 +326,14 @@
 		"outputGain": "Livello di uscita",
 		"reset": "Reimposta audio",
 		"help": "Regola il livello di uscita audio. Si applica allo stesso modo nell’anteprima e nell’esportazione."
+	},
+	"audioTrack": {
+		"defaultLabel": "Audio track",
+		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
+		"volume": "Volume",
+		"offset": "Start (s)",
+		"mute": "Mute",
+		"unmute": "Unmute",
+		"remove": "Remove track"
 	}
 }

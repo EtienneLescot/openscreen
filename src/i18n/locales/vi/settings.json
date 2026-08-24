@@ -326,5 +326,14 @@
 		"outputGain": "Mức đầu ra",
 		"reset": "Đặt lại âm thanh",
 		"help": "Điều chỉnh mức đầu ra của âm thanh. Nó được áp dụng giống hệt nhau trong bản xem trước và khi xuất."
+	},
+	"audioTrack": {
+		"defaultLabel": "Audio track",
+		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
+		"volume": "Volume",
+		"offset": "Start (s)",
+		"mute": "Mute",
+		"unmute": "Unmute",
+		"remove": "Remove track"
 	}
 }

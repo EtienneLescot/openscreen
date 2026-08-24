@@ -326,5 +326,14 @@
 		"outputGain": "Уровень выхода",
 		"reset": "Сбросить аудио",
 		"help": "Настройте уровень звука на выходе. Он одинаково применяется в предпросмотре и при экспорте."
+	},
+	"audioTrack": {
+		"defaultLabel": "Audio track",
+		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
+		"volume": "Volume",
+		"offset": "Start (s)",
+		"mute": "Mute",
+		"unmute": "Unmute",
+		"remove": "Remove track"
 	}
 }

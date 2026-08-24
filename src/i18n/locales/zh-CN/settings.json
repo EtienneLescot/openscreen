@@ -326,5 +326,14 @@
 		"outputGain": "输出电平",
 		"reset": "重置音频",
 		"help": "调整音频输出电平。它在预览和导出中的效果完全一致。"
+	},
+	"audioTrack": {
+		"defaultLabel": "Audio track",
+		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
+		"volume": "Volume",
+		"offset": "Start (s)",
+		"mute": "Mute",
+		"unmute": "Unmute",
+		"remove": "Remove track"
 	}
 }

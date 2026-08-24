@@ -154,7 +154,9 @@
 		"detectedLanguage": "検出された言語: {{language}}",
 		"noAudioTrack": "音声トラックがありません",
 		"noAudioTrackHint": "このメディアには音声トラックがないため、文字起こしできません。",
-		"noSpeechDetected": "音声が検出されませんでした"
+		"noSpeechDetected": "音声が検出されませんでした",
+		"couldNotAddAudio": "Could not add audio",
+		"importAudio": "Import audio"
 	},
 	"exportDialog": {
 		"title": "エクスポート",

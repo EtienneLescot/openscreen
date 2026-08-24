@@ -13,8 +13,11 @@ import {
 	Layout as LayoutIcon,
 	Loader2,
 	MousePointerClick,
+	Music,
 	Sliders,
 	Trash2,
+	Volume2,
+	VolumeX,
 } from "lucide-react";
 
 import {
@@ -52,6 +55,7 @@ import {
 } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import {
 	buildAggregatedSections,
 	type ClipSection,
@@ -2327,6 +2331,105 @@ export function AudioPane() {
 				onClick={() => void set({ audioGainDb: 0 })}
 			>
 				{ts("audio.reset")}
+			</button>
+		</Pane>
+	);
+}
+
+type TimelineApi = ReturnType<typeof useTimeline>;
+
+// Per-track controls for the selected imported audio track (issue #350). Shown by
+// the inspector in place of the facet when an audio track is selected (see
+// FloatingInspector). Volume drives a local live value during the drag and only
+// writes (one undo step) on release, the same shape as the global output-gain
+// slider; mute / offset / remove each write once.
+export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
+	const ts = useScopedT("settings");
+	const trackId = tl.selectedAudioTrackId;
+	const track = tl.audioTracks.find((t) => t.id === trackId);
+	const asset = track ? tl.assets.find((a) => a.id === track.assetId) : undefined;
+	// Live-drag value for the volume slider; null means "show the committed gain".
+	const [liveGain, setLiveGain] = useState<number | null>(null);
+	// Draft text for the offset field; null means "show the track's real offset".
+	const [offsetDraft, setOffsetDraft] = useState<string | null>(null);
+	if (!track) return null;
+	const label = track.label || asset?.label || ts("audioTrack.defaultLabel");
+
+	const commitOffset = () => {
+		if (offsetDraft === null) return;
+		const parsed = Number.parseFloat(offsetDraft);
+		if (Number.isFinite(parsed)) void tl.moveAudioTrack(track.id, Math.max(0, parsed));
+		setOffsetDraft(null);
+	};
+
+	return (
+		<Pane title={label} icon={<Music size={14} />} helpText={ts("audioTrack.help")}>
+			<div className={styles.sliderGrid}>
+				<SliderCell
+					label={ts("audioTrack.volume")}
+					value={liveGain ?? track.gainDb}
+					min={-AUDIO_GAIN_DB_LIMIT}
+					max={AUDIO_GAIN_DB_LIMIT}
+					step={0.5}
+					decimals={1}
+					suffix=" dB"
+					disabled={track.mute}
+					onChange={(value) => setLiveGain(value)}
+					onCommit={() => {
+						if (liveGain !== null) void tl.setAudioTrackGain(track.id, liveGain);
+						setLiveGain(null);
+					}}
+				/>
+			</div>
+			<label
+				style={{
+					display: "flex",
+					alignItems: "center",
+					justifyContent: "space-between",
+					gap: 8,
+					fontSize: 12,
+					color: "var(--meta)",
+					margin: "2px 0 8px",
+				}}
+			>
+				<span>{ts("audioTrack.offset")}</span>
+				<input
+					type="number"
+					min={0}
+					step={0.1}
+					value={offsetDraft ?? track.timelineStartSec.toFixed(2)}
+					onChange={(e) => setOffsetDraft(e.target.value)}
+					onBlur={commitOffset}
+					onKeyDown={(e) => {
+						if (e.key === "Enter") e.currentTarget.blur();
+					}}
+					style={{
+						width: 84,
+						padding: "4px 6px",
+						background: "var(--surface-warm)",
+						border: "1px solid var(--border-soft)",
+						borderRadius: "var(--r-sm)",
+						color: "var(--fg)",
+						font: "12px var(--font-body)",
+						textAlign: "right",
+					}}
+				/>
+			</label>
+			<button
+				type="button"
+				className={styles.secondaryBtn}
+				onClick={() => void tl.toggleAudioTrackMute(track.id)}
+			>
+				{track.mute ? <VolumeX size={14} /> : <Volume2 size={14} />}
+				{track.mute ? ts("audioTrack.unmute") : ts("audioTrack.mute")}
+			</button>
+			<button
+				type="button"
+				className={styles.secondaryBtn}
+				onClick={() => void tl.removeAudioTrack(track.id)}
+			>
+				<Trash2 size={14} />
+				{ts("audioTrack.remove")}
 			</button>
 		</Pane>
 	);

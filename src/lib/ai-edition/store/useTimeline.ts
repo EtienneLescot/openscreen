@@ -8,7 +8,6 @@ import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import {
-	appendAudioTrack as appendAudioTrackInDocument,
 	moveAudioTrack as moveAudioTrackInDocument,
 	removeAudioTrack as removeAudioTrackInDocument,
 	setAudioTrackGain as setAudioTrackGainInDocument,
@@ -27,7 +26,7 @@ import {
 	resequenceClips,
 	setClipSourceRange,
 } from "../document/timeline";
-import { type AxcutClipCropRegion, type AxcutDocument, createAudioTrack } from "../schema";
+import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
 import { hasAnyClipWithCamera } from "../timeline/camera";
 import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
@@ -113,6 +112,14 @@ export function useTimeline() {
 	// the Delete key operates on.
 	const [multiSelection, setMultiSelection] = useState<RegionHandle[]>([]);
 	const [clipSelection, setClipSelection] = useState<string | null>(null);
+	// The selected imported audio track (issue #350) lives in the project store —
+	// not here — because the media panel and the inspector, in different subtrees,
+	// both touch it (see projectStore). It shares "this is the thing I mean"
+	// exclusivity with the region/clip selection above, so the selects below clear
+	// it and it clears them, but it carries none of the region delete/anchor logic.
+	const selectedAudioTrackId = useProjectStore((s) => s.selectedAudioTrackId);
+	const setSelectedAudioTrackId = useProjectStore((s) => s.setSelectedAudioTrackId);
+	const storeAddAudioTrack = useProjectStore((s) => s.addAudioTrack);
 	// Pre-drag snapshots for the two optimistic paths (zoom focus, annotations), so a
 	// failed commit can put the document back instead of leaving an edit on screen that
 	// was never written.
@@ -902,6 +909,7 @@ export function useTimeline() {
 		(kind: RegionKind, id: string, opts?: { additive?: boolean }) => {
 			const handle = { kind, id };
 			setClipSelection(null);
+			setSelectedAudioTrackId(null);
 			if (opts?.additive) {
 				// Shift-click toggles membership; the focused region follows the click.
 				setMultiSelection((prev) => {
@@ -914,14 +922,15 @@ export function useTimeline() {
 			setMultiSelection([handle]);
 			setSelection(handle);
 		},
-		[],
+		[setSelectedAudioTrackId],
 	);
 
 	const clearSelection = useCallback(() => {
 		setSelection(null);
 		setMultiSelection([]);
 		setClipSelection(null);
-	}, []);
+		setSelectedAudioTrackId(null);
+	}, [setSelectedAudioTrackId]);
 
 	// The Edit Clip dialog's Apply, as ONE document and ONE save.
 	//
@@ -1157,11 +1166,26 @@ export function useTimeline() {
 	);
 
 	// Mirror of selectRegion: picking a clip retires the pill selection.
-	const selectClip = useCallback((id: string) => {
-		setClipSelection(id);
-		setSelection(null);
-		setMultiSelection([]);
-	}, []);
+	const selectClip = useCallback(
+		(id: string) => {
+			setClipSelection(id);
+			setSelection(null);
+			setMultiSelection([]);
+			setSelectedAudioTrackId(null);
+		},
+		[setSelectedAudioTrackId],
+	);
+
+	// Picking an audio track retires every other selection, same exclusivity rule.
+	const selectAudioTrack = useCallback(
+		(id: string) => {
+			setSelectedAudioTrackId(id);
+			setSelection(null);
+			setMultiSelection([]);
+			setClipSelection(null);
+		},
+		[setSelectedAudioTrackId],
+	);
 
 	const speedRegions = hasDoc
 		? (((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as Array<{
@@ -1186,33 +1210,21 @@ export function useTimeline() {
 	// anchoring — each just writes `document.audioTracks` through the pure ops.
 
 	// Place a new track for an imported audio asset, its head at the playhead (in
-	// output-timeline seconds) unless the caller says otherwise. Returns the new
-	// track's id so the UI can select it, or null if the write didn't take.
+	// output-timeline seconds) unless the caller says otherwise. Delegates to the
+	// store op, which also selects the new track and returns its id (or null).
 	const addAudioTrack = useCallback(
-		async (assetId: string, timelineStartSec?: number): Promise<string | null> => {
-			if (!document) return null;
-			const asset = document.assets.find((a) => a.id === assetId);
-			if (!asset || asset.kind !== "audio") return null;
-			const track = createAudioTrack({
-				assetId,
-				durationSec: asset.durationSec ?? 0,
-				timelineStartSec: timelineStartSec ?? playheadSec(),
-				label: asset.label,
-			});
-			if (!(await saveDocument(appendAudioTrackInDocument(document, track), { history: true }))) {
-				return null;
-			}
-			return track.id;
-		},
-		[document, saveDocument],
+		(assetId: string, timelineStartSec?: number): Promise<string | null> =>
+			storeAddAudioTrack(assetId, timelineStartSec ?? playheadSec()),
+		[storeAddAudioTrack],
 	);
 
 	const removeAudioTrack = useCallback(
 		async (trackId: string) => {
 			if (!document) return;
+			if (selectedAudioTrackId === trackId) setSelectedAudioTrackId(null);
 			await saveDocument(removeAudioTrackInDocument(document, trackId), { history: true });
 		},
-		[document, saveDocument],
+		[document, saveDocument, selectedAudioTrackId, setSelectedAudioTrackId],
 	);
 
 	// Drag-reposition the track's head. `timelineStartSec` is output-timeline time.
@@ -1283,6 +1295,8 @@ export function useTimeline() {
 		resizeAudioTrack,
 		setAudioTrackGain,
 		toggleAudioTrackMute,
+		selectedAudioTrackId,
+		selectAudioTrack,
 		selectRegion,
 		clearSelection,
 		applyClipEdit,

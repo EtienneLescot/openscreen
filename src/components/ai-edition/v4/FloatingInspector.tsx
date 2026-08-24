@@ -43,6 +43,7 @@ import { CaptionsPane } from "../CaptionsPane";
 import { ColorField } from "../ColorField";
 import {
 	AudioPane,
+	AudioTrackPane,
 	CursorPane,
 	LayoutPane,
 	SliderCell,
@@ -113,13 +114,18 @@ export function FloatingInspector({
 		return () => document.removeEventListener("mousedown", onDocMouseDown);
 	}, [clipPickerOpen]);
 	const selection = tl.selection;
-	const effectiveOpen = open || selection !== null;
+	// An imported audio track is selected (issue #350) — like a region selection it
+	// takes over the inspector body with its own pane (see AudioTrackPane).
+	const audioTrackSelected = tl.selectedAudioTrackId !== null;
+	const effectiveOpen = open || selection !== null || audioTrackSelected;
 	return (
 		<div className={styles.inspectorWrap}>
 			{effectiveOpen ? (
 				<div className={styles.inspector}>
 					{selection ? (
 						<SelectionPane tl={tl} onClose={() => tl.clearSelection()} />
+					) : audioTrackSelected ? (
+						<AudioTrackPane tl={tl} />
 					) : (
 						<FacetBody facet={facet} onCollapse={onToggleOpen} transcriptProps={transcriptProps} />
 					)}
@@ -132,11 +138,11 @@ export function FloatingInspector({
 						type="button"
 						title={ts(labelKey)}
 						aria-label={ts(labelKey)}
-						aria-pressed={!selection && open && facet === id}
+						aria-pressed={!selection && !audioTrackSelected && open && facet === id}
 						onClick={() => {
 							// Switching facets while an element is selected should show
 							// the facet, not leave the selection pane on top of it.
-							if (selection) tl.clearSelection();
+							if (selection || audioTrackSelected) tl.clearSelection();
 							if (facet === id && open) {
 								onToggleOpen();
 							} else {
