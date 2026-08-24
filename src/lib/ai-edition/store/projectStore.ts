@@ -5,7 +5,7 @@ import { toastText } from "@/i18n/toastText";
 import { nativeBridgeClient } from "@/native/client";
 import { type Interval, replaceTimeline as replaceTimelineOp } from "../document/timeline";
 import { type AxcutAsset, type AxcutDocument, documentSchema } from "../schema";
-import { probeVideoDimensions } from "../timeline/duration";
+import { probeAudioDuration, probeVideoDimensions } from "../timeline/duration";
 import { clearHistory, currentWriteEpoch, pushHistory } from "./undoStack";
 
 // ponytail: thin Zustand wrapper over the native-bridge client. Keeps the
@@ -72,6 +72,14 @@ export interface ProjectState {
 	createProject: (title: string) => Promise<AxcutDocument>;
 	refresh: () => Promise<void>;
 	addAsset: (path: string, label?: string) => Promise<AxcutAsset | null>;
+	/**
+	 * Import an external audio file (voiceover / BGM / SFX) as a `kind: "audio"`
+	 * asset — issue #350. Unlike {@link addAsset} it never looks for a camera
+	 * sidecar, and it probes the file's duration up front so the timeline can lay
+	 * out its track (added separately, see the timeline store). Returns the added
+	 * asset, or null if the write was superseded.
+	 */
+	addAudioAsset: (path: string, label?: string) => Promise<AxcutAsset | null>;
 	removeAsset: (assetId: string) => Promise<void>;
 	/**
 	 * Write the document to disk. Resolves `true` when it took effect, `false` when it
@@ -323,6 +331,51 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			lastSavedAt: new Date(),
 		});
 		return addedAsset;
+	},
+
+	async addAudioAsset(path, label) {
+		const { projectId } = get();
+		if (!projectId) throw new Error("No project loaded");
+		// Same superseded guard as addAsset: the native add, a duration probe and a
+		// save all await, and a project switch / clear can land in between.
+		const epoch = currentWriteEpoch();
+		const superseded = () => get().projectId !== projectId || currentWriteEpoch() !== epoch;
+		const result = await nativeBridgeClient.aiEdition.addAsset(projectId, path, label, "audio");
+		if (superseded()) return null;
+		let document = parseDocument(result.document);
+		const addedAsset =
+			document.assets.find(
+				(a) => a.kind === "audio" && a.originalPath === path && (label ? a.label === label : true),
+			) ??
+			document.assets.at(-1) ??
+			null;
+		if (!addedAsset) return null;
+
+		// Probe the real length so the timeline can size the track pill immediately
+		// on add. Non-fatal: an unreadable file just leaves durationSec unset and the
+		// track store falls back to a placeholder. No camera lookup — audio has none.
+		const durationSec = await probeAudioDuration(toFileUrl(addedAsset.originalPath)).catch(
+			() => null,
+		);
+		if (superseded()) return null;
+		if (durationSec != null) {
+			const next: AxcutDocument = {
+				...document,
+				assets: document.assets.map((a) => (a.id === addedAsset.id ? { ...a, durationSec } : a)),
+			};
+			// history: false — probing a duration is part of the import, not an edit
+			// of its own, so it must not become the thing the next Ctrl+Z reverses.
+			if (await get().saveDocument(next, { history: false })) document = parseDocument(next);
+		}
+
+		if (superseded()) return null;
+		set({
+			document,
+			revision: get().revision + 1,
+			dirty: false,
+			lastSavedAt: new Date(),
+		});
+		return document.assets.find((a) => a.id === addedAsset.id) ?? addedAsset;
 	},
 
 	async removeAsset(assetId) {

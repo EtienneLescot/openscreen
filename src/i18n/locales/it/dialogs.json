@@ -79,11 +79,13 @@
 		"saveGif": "Salva GIF esportata",
 		"saveVideo": "Salva video esportato",
 		"selectVideo": "Seleziona file video",
+		"selectAudio": "Select Audio File",
 		"saveProject": "Salva progetto OpenScreen",
 		"openProject": "Apri progetto OpenScreen",
 		"gifImage": "Immagine GIF",
 		"mp4Video": "Video MP4",
 		"videoFiles": "File video",
+		"audioFiles": "Audio Files",
 		"openscreenProject": "Progetto OpenScreen",
 		"allFiles": "Tutti i file"
 	}

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { probeVideoDuration } from "./duration";
+import { probeAudioDuration, probeVideoDuration } from "./duration";
 
 interface FakeVideo {
 	duration: number;
@@ -8,7 +8,16 @@ interface FakeVideo {
 	onerror: ((ev: Event) => unknown) | null;
 }
 
-describe("probeVideoDuration", () => {
+// `probeVideoDuration` and `probeAudioDuration` are the same probe on a
+// different media element, so the fake-element harness and the cases are shared
+// and driven per tag. See the schema/store for why audio import needs its own
+// probe (issue #350).
+const PROBES = [
+	{ label: "probeVideoDuration", tag: "video", probe: probeVideoDuration },
+	{ label: "probeAudioDuration", tag: "audio", probe: probeAudioDuration },
+] as const;
+
+describe.each(PROBES)("$label", ({ tag, probe }) => {
 	let created: FakeVideo[];
 	let originalCreate: typeof document.createElement;
 	let appendSpy: ReturnType<typeof vi.spyOn> | null;
@@ -21,9 +30,9 @@ describe("probeVideoDuration", () => {
 		// `"webview"`-only overload — the one `.call` resolves to, which then rejects a
 		// generic string tag. Pin the plain `(tagName: string) => HTMLElement` overload.
 		const createReal: (this: Document, tag: string) => HTMLElement = originalCreate;
-		document.createElement = ((tag: string) => {
-			const node = createReal.call(document, tag);
-			if (tag === "video") {
+		document.createElement = ((el: string) => {
+			const node = createReal.call(document, el);
+			if (el === tag) {
 				const fake: FakeVideo = {
 					duration: Number.NaN,
 					onloadedmetadata: null,
@@ -66,11 +75,11 @@ describe("probeVideoDuration", () => {
 	});
 
 	it("returns null when src is empty", async () => {
-		await expect(probeVideoDuration("")).resolves.toBeNull();
+		await expect(probe("")).resolves.toBeNull();
 	});
 
 	it("returns duration on loadedmetadata", async () => {
-		const p = probeVideoDuration("file:///tmp/clip.mp4");
+		const p = probe("file:///tmp/clip");
 		await vi.advanceTimersByTimeAsync(0);
 		const v = created[0];
 		v.duration = 12.5;
@@ -79,14 +88,14 @@ describe("probeVideoDuration", () => {
 	});
 
 	it("returns null on error", async () => {
-		const p = probeVideoDuration("file:///missing.mp4");
+		const p = probe("file:///missing");
 		await vi.advanceTimersByTimeAsync(0);
 		created[0].onerror?.(new Event("error"));
 		await expect(p).resolves.toBeNull();
 	});
 
 	it("returns null on timeout", async () => {
-		const p = probeVideoDuration("file:///slow.mp4", 1000);
+		const p = probe("file:///slow", 1000);
 		await vi.advanceTimersByTimeAsync(0);
 		await vi.advanceTimersByTimeAsync(2000);
 		await expect(p).resolves.toBeNull();
@@ -94,7 +103,7 @@ describe("probeVideoDuration", () => {
 
 	it("returns null for non-finite duration", async () => {
 		for (const d of [Number.POSITIVE_INFINITY, Number.NaN, -1, 0]) {
-			const p = probeVideoDuration("file:///x.mp4");
+			const p = probe("file:///x");
 			await vi.advanceTimersByTimeAsync(0);
 			const v = created[created.length - 1];
 			v.duration = d;

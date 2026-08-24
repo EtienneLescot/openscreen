@@ -16,6 +16,17 @@ const toastMocks = vi.hoisted(() => ({
 	error: vi.fn(),
 }));
 
+// Stub only the audio duration probe (issue #350): mounting a real <audio> in
+// jsdom never fires loadedmetadata, so an unmocked probe would block on its
+// timeout. Everything else in the module (probeVideoDimensions) stays real so
+// the video-import tests above are untouched.
+const durationMocks = vi.hoisted(() => ({ probeAudioDuration: vi.fn() }));
+
+vi.mock("../timeline/duration", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../timeline/duration")>()),
+	probeAudioDuration: durationMocks.probeAudioDuration,
+}));
+
 vi.mock("@/native/client", () => ({
 	nativeBridgeClient: {
 		aiEdition: {
@@ -73,6 +84,7 @@ describe("useProjectStore", () => {
 			mock.mockReset();
 		}
 		toastMocks.error.mockReset();
+		durationMocks.probeAudioDuration.mockReset();
 		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
 		(window as any).electronAPI = { findRecordingCamera: vi.fn() };
 	});
@@ -297,6 +309,69 @@ describe("useProjectStore", () => {
 
 		expect(toastMocks.error).toHaveBeenCalledTimes(1);
 		expect(toastMocks.error.mock.calls[0][0]).toContain("video.mp4");
+	});
+
+	// Issue #350 — external audio import.
+	it("addAudioAsset passes kind 'audio', skips the camera lookup, and returns the asset", async () => {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		durationMocks.probeAudioDuration.mockResolvedValue(null);
+		const audioDoc = {
+			...sampleDoc,
+			assets: [
+				{ id: "audio_asset", kind: "audio", label: "voiceover.mp3", originalPath: "/tmp/vo.mp3" },
+			],
+		};
+		bridgeMocks.addAsset.mockResolvedValue({ assetId: "audio_asset", document: audioDoc });
+
+		const asset = await useProjectStore.getState().addAudioAsset("/tmp/vo.mp3");
+
+		expect(asset?.id).toBe("audio_asset");
+		expect(asset?.kind).toBe("audio");
+		// The bridge must be told this is an audio import (4th arg).
+		expect(bridgeMocks.addAsset).toHaveBeenCalledWith(
+			"proj_test",
+			"/tmp/vo.mp3",
+			undefined,
+			"audio",
+		);
+		// Audio has no camera sidecar — the lookup that addAsset does must not run.
+		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
+		expect((window as any).electronAPI.findRecordingCamera).not.toHaveBeenCalled();
+		// Probe returned null, so nothing to stamp: no extra save.
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+	});
+
+	it("addAudioAsset stamps the probed duration onto the asset", async () => {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		durationMocks.probeAudioDuration.mockResolvedValue(8.25);
+		const audioDoc = {
+			...sampleDoc,
+			assets: [
+				{ id: "audio_asset", kind: "audio", label: "bgm.wav", originalPath: "/tmp/bgm.wav" },
+			],
+		};
+		bridgeMocks.addAsset.mockResolvedValue({ assetId: "audio_asset", document: audioDoc });
+		bridgeMocks.save.mockImplementation((document: unknown) =>
+			Promise.resolve({ success: true, document }),
+		);
+
+		const asset = await useProjectStore.getState().addAudioAsset("/tmp/bgm.wav");
+
+		expect(asset?.durationSec).toBe(8.25);
+		expect(bridgeMocks.save).toHaveBeenCalledTimes(1);
+		expect(useProjectStore.getState().document?.assets[0]?.durationSec).toBe(8.25);
 	});
 
 	// The save boundary. Every write in the app funnels through `saveDocument`, and

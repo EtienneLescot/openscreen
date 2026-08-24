@@ -80,11 +80,13 @@
 		"saveGif": "Save Exported GIF",
 		"saveVideo": "Save Exported Video",
 		"selectVideo": "Select Video File",
+		"selectAudio": "Select Audio File",
 		"saveProject": "Save OpenScreen Project",
 		"openProject": "Open OpenScreen Project",
 		"gifImage": "GIF Image",
 		"mp4Video": "MP4 Video",
 		"videoFiles": "Video Files",
+		"audioFiles": "Audio Files",
 		"openscreenProject": "OpenScreen Project",
 		"allFiles": "All Files"
 	}
