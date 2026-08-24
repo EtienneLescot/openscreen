@@ -386,6 +386,7 @@ function createShimBridgeClient() {
 					},
 					annotations: [],
 					zoomRanges: [],
+					audioTracks: [],
 					legacyEditor: null,
 				};
 				documentsByProject[doc.project.id] = doc;

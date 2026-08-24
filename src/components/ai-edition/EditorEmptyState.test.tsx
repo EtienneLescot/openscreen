@@ -53,6 +53,7 @@ const sampleDoc = vi.hoisted(
 		},
 		annotations: [],
 		zoomRanges: [],
+		audioTracks: [],
 		legacyEditor: null,
 	}),
 );

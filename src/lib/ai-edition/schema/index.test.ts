@@ -3,8 +3,10 @@ import { migrateRawDocumentToCurrent } from "../document/migrate";
 import {
 	annotationRegionSchema,
 	assetSchema,
+	audioTrackSchema,
 	axcutSchemaVersion,
 	clipSchema,
+	createAudioTrack,
 	createEmptyDocument,
 	documentSchema,
 	ensureDocument,
@@ -40,6 +42,7 @@ describe("axcut-schema v7", () => {
 		expect(doc.timeline.captionRanges).toEqual([]);
 		expect(doc.annotations).toEqual([]);
 		expect(doc.zoomRanges).toEqual([]);
+		expect(doc.audioTracks).toEqual([]);
 		expect(doc.transcripts).toEqual([]);
 		expect(doc.legacyEditor).toBeNull();
 	});
@@ -73,14 +76,22 @@ describe("axcut-schema v7", () => {
 		).toThrow();
 	});
 
-	it("assetSchema requires kind = 'video'", () => {
+	it("assetSchema accepts kind 'video' and 'audio', defaulting to 'video'", () => {
+		// Widened from a literal when external-audio import landed (issue #350).
+		const video = assetSchema.parse({ id: "a1", label: "x", originalPath: "/x.mp4" });
+		expect(video.kind).toBe("video");
+		const audio = assetSchema.parse({
+			id: "a2",
+			kind: "audio",
+			label: "bgm",
+			originalPath: "/bgm.mp3",
+		});
+		expect(audio.kind).toBe("audio");
+	});
+
+	it("assetSchema rejects an unknown kind", () => {
 		expect(() =>
-			assetSchema.parse({
-				id: "asset_1",
-				kind: "audio",
-				label: "x",
-				originalPath: "/x.mp4",
-			}),
+			assetSchema.parse({ id: "a1", kind: "image", label: "x", originalPath: "/x.png" }),
 		).toThrow();
 	});
 
@@ -960,5 +971,82 @@ describe("v6 -> v7 trim clip-anchor migration", () => {
 				reason: "",
 			},
 		]);
+	});
+});
+
+describe("audio tracks (issue #350)", () => {
+	it("applies defaults for gain, mute, trim, position, and label", () => {
+		const track = audioTrackSchema.parse({
+			id: "audio_1",
+			assetId: "asset_1",
+			durationSec: 42,
+		});
+		expect(track.timelineStartSec).toBe(0);
+		expect(track.trimStartSec).toBe(0);
+		expect(track.trimEndSec).toBeUndefined();
+		expect(track.gainDb).toBe(0);
+		expect(track.mute).toBe(false);
+		expect(track.label).toBe("");
+	});
+
+	it("rejects a trim window whose end precedes its start", () => {
+		expect(() =>
+			audioTrackSchema.parse({
+				id: "audio_1",
+				assetId: "asset_1",
+				durationSec: 10,
+				trimStartSec: 5,
+				trimEndSec: 2,
+			}),
+		).toThrow();
+	});
+
+	it("rejects a negative timelineStartSec", () => {
+		expect(() =>
+			audioTrackSchema.parse({
+				id: "audio_1",
+				assetId: "asset_1",
+				durationSec: 10,
+				timelineStartSec: -1,
+			}),
+		).toThrow();
+	});
+
+	it("createAudioTrack builds a schema-valid track with a prefixed id", () => {
+		const track = createAudioTrack({
+			assetId: "asset_1",
+			durationSec: 12.5,
+			timelineStartSec: 3,
+			label: "voiceover.mp3",
+		});
+		expect(track.id).toMatch(/^audio_/);
+		expect(track.assetId).toBe("asset_1");
+		expect(track.durationSec).toBe(12.5);
+		expect(track.timelineStartSec).toBe(3);
+		expect(track.label).toBe("voiceover.mp3");
+		// The factory output must itself round-trip through the schema.
+		expect(() => audioTrackSchema.parse(track)).not.toThrow();
+	});
+
+	it("defaults audioTracks to [] when a stored document omits the key", () => {
+		// A document written before issue #350 has no `audioTracks`; the defaulted
+		// array must fill in so older files load unchanged (no schemaVersion bump).
+		const { audioTracks: _drop, ...withoutAudio } = createEmptyDocument({
+			projectId: "p",
+			title: "t",
+		});
+		expect("audioTracks" in withoutAudio).toBe(false);
+		const parsed = documentSchema.parse(withoutAudio);
+		expect(parsed.audioTracks).toEqual([]);
+	});
+
+	it("round-trips a document carrying an audio track", () => {
+		const track = createAudioTrack({ assetId: "asset_1", durationSec: 8 });
+		const doc = {
+			...createEmptyDocument({ projectId: "p", title: "t" }),
+			audioTracks: [track],
+		};
+		const parsed = documentSchema.parse(doc);
+		expect(parsed.audioTracks).toEqual([track]);
 	});
 });

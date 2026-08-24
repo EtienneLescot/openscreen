@@ -91,6 +91,7 @@ function makeDoc(
 		},
 		annotations: overrides.annotations ?? [],
 		zoomRanges: overrides.zoomRanges ?? [],
+		audioTracks: overrides.audioTracks ?? [],
 		legacyEditor: overrides.legacyEditor ?? null,
 	};
 }
