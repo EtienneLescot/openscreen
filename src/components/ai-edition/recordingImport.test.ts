@@ -6,7 +6,7 @@ import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { undo } from "@/lib/ai-edition/store/undo";
 import { clearHistory, past } from "@/lib/ai-edition/store/undoStack";
-import { probeVideoDimensions } from "@/lib/ai-edition/timeline/duration";
+import { probeVideoDimensions, probeVideoDuration } from "@/lib/ai-edition/timeline/duration";
 import { importPendingRecording } from "./recordingImport";
 
 // The first describe stubs the store actions, so the bridge is never reached
@@ -20,12 +20,14 @@ const bridge = vi.hoisted(() => ({
 vi.mock("@/native/client", () => ({ nativeBridgeClient: { aiEdition: bridge } }));
 vi.mock("@/lib/ai-edition/timeline/duration", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/ai-edition/timeline/duration")>();
-	return { ...actual, probeVideoDimensions: vi.fn() };
+	return { ...actual, probeVideoDimensions: vi.fn(), probeVideoDuration: vi.fn() };
 });
 
 const createProject = vi.fn(async () => undefined);
 const addAsset = vi.fn(async () => null);
-const saveDocument = vi.fn(async () => true);
+const saveDocument = vi.fn(
+	async (_document: AxcutDocument, _options?: { history?: boolean }) => true,
+);
 const replaceTimeline = vi.fn(async () => undefined);
 
 // Read before anything stubs them: the first describe replaces these actions on the
@@ -58,6 +60,7 @@ describe("importPendingRecording", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.mocked(probeVideoDimensions).mockResolvedValue({ width: 2940, height: 1912 });
+		vi.mocked(probeVideoDuration).mockResolvedValue(42);
 		useProjectStore.setState({
 			document: null,
 			// biome-ignore lint/suspicious/noExplicitAny: partial action stubs, the rest of the store is untouched
@@ -100,23 +103,35 @@ describe("importPendingRecording", () => {
 		expect(addAsset).toHaveBeenCalledTimes(1);
 	});
 
-	it("seeds a placeholder clip when the imported asset has none", async () => {
+	it("seeds the probed clip in the same automatic save", async () => {
 		stubElectronApi("/recordings/recording-1.webm");
 		addAsset.mockImplementationOnce(async () => {
+			const document = createEmptyDocument({ projectId: "p1", title: "Recording" });
 			useProjectStore.setState({
-				// biome-ignore lint/suspicious/noExplicitAny: only the two fields the seed reads
-				document: { assets: [{ id: "a1" }], timeline: { clips: [] } } as any,
+				document: {
+					...document,
+					assets: [
+						{
+							id: "a1",
+							kind: "video",
+							label: "Recording",
+							originalPath: "/recordings/recording-1.webm",
+							cameraTrack: null,
+						},
+					],
+					project: { ...document.project, primaryAssetId: "a1" },
+				},
 			});
 			return null;
 		});
 
 		await importPendingRecording();
 
-		expect(replaceTimeline).toHaveBeenCalledWith(
-			[{ startSec: 0, endSec: 60 }],
-			"Auto-imported recording",
-			{ history: false },
-		);
+		const savedDocument = saveDocument.mock.calls[0]?.[0] as AxcutDocument;
+		expect(savedDocument.assets[0]?.durationSec).toBe(42);
+		expect(savedDocument.timeline.clips).toHaveLength(1);
+		expect(savedDocument.timeline.clips[0]?.timelineEndSec).toBe(42);
+		expect(saveDocument).toHaveBeenCalledWith(savedDocument, { history: false });
 	});
 });
 
@@ -156,6 +171,7 @@ describe("what the recording import leaves on the undo stack", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.mocked(probeVideoDimensions).mockResolvedValue({ width: 2940, height: 1912 });
+		vi.mocked(probeVideoDuration).mockResolvedValue(42);
 		useProjectStore.getState().clear();
 		useProjectStore.setState(realActions);
 		clearHistory();
@@ -181,6 +197,8 @@ describe("what the recording import leaves on the undo stack", () => {
 		const settings = getEditorSettings(useProjectStore.getState().document);
 		expect(settings.aspectRatio).toBe("735:478");
 		expect(settings.padding).toBe(8);
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(1);
+		expect(useProjectStore.getState().document?.assets[0]?.durationSec).toBe(42);
 		expect(past).toHaveLength(0);
 	});
 
