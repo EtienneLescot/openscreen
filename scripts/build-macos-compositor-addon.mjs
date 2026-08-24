@@ -27,6 +27,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseOtoolReferences } from "./macos-ffmpeg-relocation.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -157,10 +158,9 @@ function installAtomically(from, to) {
 function vendorFfmpegDylibs(nodePath, ffmpegDir) {
 	const outDir = path.dirname(nodePath);
 	const libDir = path.join(ffmpegDir, "lib");
-	const linked = execFileSync("otool", ["-L", nodePath], { encoding: "utf8" })
-		.split("\n")
-		.map((line) => line.trim().split(" ")[0])
-		.filter((p) => /\/lib(av|sw)\w+\.\d+\.dylib$/.test(p));
+	const linked = parseOtoolReferences(
+		execFileSync("otool", ["-L", nodePath], { encoding: "utf8" }),
+	).filter((p) => /\/lib(av|sw)\w+\.\d+\.dylib$/.test(p));
 	if (linked.length === 0) {
 		throw new Error(`${nodePath} links no ffmpeg dylib — nothing to vendor, which is wrong.`);
 	}
@@ -178,10 +178,9 @@ function vendorFfmpegDylibs(nodePath, ffmpegDir) {
 	}
 	// Inter-library references, and the addon's own.
 	for (const target of [...names.map((n) => path.join(outDir, n)), nodePath]) {
-		const deps = execFileSync("otool", ["-L", target], { encoding: "utf8" })
-			.split("\n")
-			.map((line) => line.trim().split(" ")[0])
-			.filter((p) => p.startsWith("/") && /lib(av|sw)\w+\.\d+\.dylib$/.test(p));
+		const deps = parseOtoolReferences(
+			execFileSync("otool", ["-L", target], { encoding: "utf8" }),
+		).filter((p) => p.startsWith("/") && /lib(av|sw)\w+\.\d+\.dylib$/.test(p));
 		for (const dep of deps) {
 			execFileSync("install_name_tool", ["-change", dep, `@rpath/${path.basename(dep)}`, target]);
 		}
@@ -210,11 +209,7 @@ function vendorFfmpegDylibs(nodePath, ffmpegDir) {
 			.slice(1) // first line is the filename echoed back
 			.map((l) => l.trim())
 			.filter(Boolean);
-		const deps = execFileSync("otool", ["-L", file], { encoding: "utf8" })
-			.split("\n")
-			.slice(1) // ditto
-			.map((l) => l.trim().split(" ")[0])
-			.filter(Boolean);
+		const deps = parseOtoolReferences(execFileSync("otool", ["-L", file], { encoding: "utf8" }));
 		return [...id, ...deps].filter(
 			(p) => p.startsWith("/") && !p.startsWith("/usr/lib/") && !p.startsWith("/System/"),
 		);
