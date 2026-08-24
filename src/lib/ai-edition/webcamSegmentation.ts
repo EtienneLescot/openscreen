@@ -208,12 +208,10 @@ export async function prepareSegmentedWebcamTrack(
 	const videoSource = new CanvasSource(canvas, {
 		codec: isTransparent ? "vp9" : "avc",
 		bitrate: 4_000_000,
-		width,
-		height,
 		...(isTransparent ? { alpha: "keep" as const } : {}),
 	});
 
-	output.addTrack(videoSource);
+	output.addVideoTrack(videoSource);
 	await output.start();
 
 	for (let i = 0; i < totalFrames; i++) {
