@@ -20,15 +20,19 @@
 //! the cursor-only session Stage 1 shipped, which is what
 //! `PipeWireCursorRecordingSession` still uses.
 //!
-//! WHAT IT CANNOT DO. Mouse buttons. Wayland exposes no portal for input
-//! events, and /dev/input/event* is root:input. Every sample is therefore a
-//! "move"; there is no click detection to be had here at any effort level.
+//! MOUSE BUTTONS. Not from the portal — Wayland exposes no portal for input
+//! events. The one source left is evdev (/dev/input/event*), which is root:input
+//! and so needs the user in the `input` group. When that permission exists the
+//! helper reads left-button presses and tags the coinciding sample "click"; when
+//! it does not, every sample is a "move", as before. See `input.rs` for the
+//! reader and its deliberately narrow scope (BTN_LEFT only, never keystrokes).
 
 mod bitmap;
 mod capture;
 mod encoder;
 mod events;
 mod ffmpeg;
+mod input;
 mod portal;
 mod shim;
 
@@ -208,6 +212,10 @@ struct AudioSourceConfig {
 enum Message {
     Portal(Box<Result<portal::PortalStream, portal::PortalError>>),
     Stream(StreamEvent),
+    /// A left mouse-button press observed on evdev — the next cursor sample is
+    /// tagged `"click"`. See [`input`] for why this is the only way to see a
+    /// button on Wayland, and for its permission and privacy model.
+    PointerButton,
     /// Arm a deferred session: connect to PipeWire and start encoding.
     Record,
     Pause,
@@ -283,6 +291,18 @@ fn main() {
     let (sender, receiver) = mpsc::channel::<Message>();
     spawn_stdin_reader(sender.clone());
     spawn_portal(sender.clone(), cursor_mode);
+    // Left-button telemetry from evdev. Absent when the user is not in the
+    // `input` group; a session that paints no cursor has no use for it either.
+    // Warn in that case so a "clicks do nothing on Linux" report is answerable
+    // from the log alone rather than looking like a capture bug.
+    if !input::spawn_readers(&sender) && cursor_mode.reports_cursor() {
+        let _ = emitter.emit(&Event::Warning {
+            code: "click-capture-unavailable".to_owned(),
+            message: "no readable /dev/input pointer device — add this user to the 'input' \
+                      group to record click telemetry; cursor samples will otherwise all be moves"
+                .to_owned(),
+        });
+    }
 
     let session = RunConfig {
         tick,
@@ -568,6 +588,8 @@ fn run<W: Write>(
     let mut cursor: Option<CursorState> = None;
     let mut known_assets: HashSet<String> = HashSet::new();
     let mut pending_asset: Option<CursorAsset> = None;
+    // Set by a `PointerButton` message, consumed by the next emitted sample.
+    let mut pending_click = false;
     let mut reported_cursor_meta = false;
     // Allocated up front so the PipeWire callback has somewhere to put frames
     // from the very first buffer; `None` in cursor-only mode, which is also what
@@ -596,6 +618,12 @@ fn run<W: Write>(
     loop {
         match receiver.recv_timeout(config.tick) {
             Ok(Message::Stop) => break,
+
+            // Latched, not emitted here: a bare press carries no position, so it
+            // waits for the next sample (which does) to become a `"click"`.
+            Ok(Message::PointerButton) => {
+                pending_click = true;
+            }
 
             Ok(Message::Pause) => {
                 paused = true;
@@ -1052,14 +1080,14 @@ fn run<W: Write>(
                 // A new sprite ships immediately; positions respect the sample
                 // interval so a 120fps compositor cannot flood stdout.
                 if asset_is_new || last_emit.elapsed() >= config.sample_interval {
-                    emit_sample(emitter, &cursor, size, &mut pending_asset);
+                    emit_sample(emitter, &cursor, size, &mut pending_asset, &mut pending_click);
                     last_emit = Instant::now();
                 }
             }
 
             Err(RecvTimeoutError::Timeout) => {
                 if cursor.is_some() && last_emit.elapsed() >= config.sample_interval {
-                    emit_sample(emitter, &cursor, size, &mut pending_asset);
+                    emit_sample(emitter, &cursor, size, &mut pending_asset, &mut pending_click);
                     last_emit = Instant::now();
                 }
                 // The heartbeat that keeps the output at a constant frame rate
@@ -1153,11 +1181,22 @@ fn emit_sample<W: Write>(
     cursor: &Option<CursorState>,
     size: Option<(i32, i32)>,
     pending_asset: &mut Option<CursorAsset>,
+    pending_click: &mut bool,
 ) {
     let (Some(state), Some((width, height))) = (cursor, size) else {
         return;
     };
     let visible = state.x >= 0 && state.y >= 0 && state.x < width && state.y < height;
+    // A click observed since the last sample rides out on this one. Cleared only
+    // when a sample is actually emitted, so a press that lands before the stream
+    // is live tags the first real sample rather than being dropped; at the sample
+    // cadence the cursor has not moved enough for the position to be wrong.
+    let interaction_type = if *pending_click {
+        *pending_click = false;
+        Some("click".to_owned())
+    } else {
+        None
+    };
     let _ = emitter.emit(&Event::CursorSample {
         timestamp_ms: timestamp_ms(),
         x: state.x,
@@ -1167,6 +1206,7 @@ fn emit_sample<W: Write>(
         visible,
         asset_id: state.asset_id.clone(),
         asset: pending_asset.take(),
+        interaction_type,
     });
 }
 

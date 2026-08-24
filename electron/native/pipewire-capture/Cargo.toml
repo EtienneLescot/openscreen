@@ -50,6 +50,7 @@ serde_json = "1"
 png = "0.17"
 base64 = "0.22"
 sha2 = "0.10"
+evdev = "0.13"
 
 [build-dependencies]
 cc = "1"
