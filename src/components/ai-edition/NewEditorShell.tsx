@@ -1244,6 +1244,11 @@ export function NewEditorShell() {
 									hasProject={hasProject}
 									hasAsset={hasAsset}
 									videoSources={videoSources}
+									// Imported audio tracks (issue #350). `videoSources` already
+									// resolves a URL for every asset (audio included), so it doubles as
+									// the audio source list; VirtualPreview looks each track up by assetId.
+									audioTracks={tl.audioTracks}
+									audioSources={videoSources}
 									clips={clips}
 									zoomRegions={tl.zoomRegions}
 									speedRegions={tl.speedRegions}

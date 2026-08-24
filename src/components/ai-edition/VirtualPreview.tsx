@@ -5,7 +5,12 @@ import {
 	MAX_NATIVE_PLAYBACK_RATE,
 } from "@/components/video-editor/types";
 import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
-import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import type {
+	AxcutAudioTrack,
+	AxcutClip,
+	AxcutTrimRange,
+	AxcutZoomRegion,
+} from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
@@ -65,6 +70,32 @@ export function resolveAudioTrackPlayback(
 	};
 }
 
+/**
+ * Where an imported audio track (issue #350) should sit against the RAW virtual
+ * timeline clock, and whether it should be playing there.
+ *
+ * A track occupies `[timelineStartSec, timelineStartSec + (trimEnd - trimStart)]`
+ * on the timeline; its source position is `trimStart` plus however far the
+ * playhead is into that span. Outside the span — or when muted — it parks at the
+ * nearer trim edge and stays paused, the same discipline `resolveAudioTrackPlayback`
+ * uses so the rAF never seeks an element into nothing.
+ *
+ * This is the RAW/document timeline the ruler, playhead and lane all use — NOT
+ * the trim-compressed output timeline — because that is where the track was
+ * placed (`useTimeline.addAudioTrack` seeds `timelineStartSec` from the playhead).
+ * The export mixes on the same RAW positions (see audio.rs), so the two agree.
+ */
+export function resolveTimelineAudioPlayback(virtualTimeSec: number, track: AxcutAudioTrack) {
+	const trimStart = Math.max(0, track.trimStartSec);
+	const trimEnd = track.trimEndSec ?? track.durationSec;
+	const windowLen = Math.max(0, trimEnd - trimStart);
+	const local = virtualTimeSec - track.timelineStartSec;
+	return {
+		targetTimeSec: Math.min(Math.max(trimStart, trimStart + local), trimEnd),
+		shouldPlay: !track.mute && local >= 0 && local < windowLen,
+	};
+}
+
 export interface PreviewAudioGraph {
 	context: AudioContext;
 	gain: GainNode;
@@ -112,6 +143,11 @@ function findNextClipByTimelineOrder(
 
 interface VirtualPreviewProps {
 	videoSources: VideoSource[];
+	/** Imported audio tracks to mix over the video (issue #350), and the file URLs
+	 *  their assets resolve to (keyed by assetId in `id`). Both default to empty, so
+	 *  a project with no imported audio behaves exactly as before. */
+	audioTracks?: AxcutAudioTrack[];
+	audioSources?: VideoSource[];
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
@@ -156,6 +192,8 @@ interface VirtualPreviewProps {
 
 export function VirtualPreview({
 	videoSources,
+	audioTracks = [],
+	audioSources = [],
 	clips,
 	zoomRegions = [],
 	speedRegions = [],
@@ -426,6 +464,17 @@ export function VirtualPreview({
 	virtualDurationSecRef.current = virtualDurationSec;
 	const speedRegionsRef = useRef(speedRegions);
 	speedRegionsRef.current = speedRegions;
+	// Imported audio tracks (issue #350): the rAF reads these through refs, same as
+	// everything else it touches, so a track added/edited mid-playback is picked up
+	// without re-creating the loop. `audioTrackElsRef` maps a track id to its mounted
+	// <audio> element (registered by the ref callback on render).
+	const audioTracksRef = useRef(audioTracks);
+	audioTracksRef.current = audioTracks;
+	const audioTrackElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+	const registerAudioTrackEl = useCallback((trackId: string, element: HTMLAudioElement | null) => {
+		if (element) audioTrackElsRef.current.set(trackId, element);
+		else audioTrackElsRef.current.delete(trackId);
+	}, []);
 	// Same reasoning as `clipsRef` above, for the one thing the rAF calls rather than reads:
 	// `seekToVirtualTime` is a `useCallback` whose deps include `clips`, so it takes a new
 	// identity on every clip mutation — a REORDER included. The rAF below is deliberately
@@ -469,6 +518,33 @@ export function VirtualPreview({
 					if (playback) void playback.catch(() => undefined);
 				} else if ((v.paused || !target.shouldPlay) && !audio.paused) {
 					audio.pause();
+				}
+			}
+			// Imported audio tracks (issue #350): position each against the RAW
+			// virtual timeline it was placed on, play it only inside its window, and
+			// set its level from the track gain × the global output gain. Using
+			// `.volume` rather than a WebAudio node keeps the delicate
+			// primary/supplemental graph untouched; a boost past 0 dB clamps in the
+			// preview (volume maxes at 1) but is still written to the export.
+			const globalGain = audioGainScalar(audioGainDbRef.current);
+			for (const track of audioTracksRef.current) {
+				const el = audioTrackElsRef.current.get(track.id);
+				if (!el) continue;
+				const trackTarget = resolveTimelineAudioPlayback(virtualTimeSecRef.current, track);
+				if (el.playbackRate !== v.playbackRate) el.playbackRate = v.playbackRate;
+				el.volume = Math.min(1, audioGainScalar(track.gainDb) * globalGain);
+				if (Math.abs(el.currentTime - trackTarget.targetTimeSec) > 0.025) {
+					try {
+						el.currentTime = trackTarget.targetTimeSec;
+					} catch {
+						// media metadata not ready yet
+					}
+				}
+				if (!v.paused && trackTarget.shouldPlay && el.paused) {
+					const playback = el.play();
+					if (playback) void playback.catch(() => undefined);
+				} else if ((v.paused || !trackTarget.shouldPlay) && !el.paused) {
+					el.pause();
 				}
 			}
 			// Publish this frame's live position/rate for other media elements
@@ -1146,6 +1222,23 @@ export function VirtualPreview({
 								data-testid="preview-audio-supplemental"
 							/>
 						) : null}
+						{/* Imported audio tracks (issue #350). One element per track, kept in
+						    sync by the rAF loop above via audioTrackElsRef. A track whose asset
+						    URL isn't resolved yet is skipped rather than mounted src-less. */}
+						{audioTracks.map((track) => {
+							const src = audioSources.find((s) => s.id === track.assetId)?.src;
+							if (!src) return null;
+							return (
+								<audio
+									key={`audio-track:${track.id}`}
+									ref={(element) => registerAudioTrackEl(track.id, element)}
+									src={src}
+									preload="metadata"
+									aria-hidden="true"
+									data-testid={`preview-audio-track-${track.id}`}
+								/>
+							);
+						})}
 						{/* Plus d'overlay ici du tout. « Loading preview… » reflétait l'état du
 						    <video> CACHÉ (source horloge/audio), pas la preview RÉELLE — le canvas
 						    natif, qui montre déjà une image valide pendant que le <video> re-seek.

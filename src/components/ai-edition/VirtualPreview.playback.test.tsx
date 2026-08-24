@@ -207,3 +207,92 @@ describe("VirtualPreview playback across a clip boundary", () => {
 		expect(video.pauseCalls).toHaveLength(0);
 	});
 });
+
+// Issue #350 — imported audio tracks follow the RAW virtual playhead. The
+// decision math is unit-tested in VirtualPreview.audio.test.ts; here we prove the
+// rAF loop applies it to the mounted <audio> element (seek + play/pause).
+function driveAudioEl(el: HTMLAudioElement) {
+	let currentTime = 0;
+	let paused = true;
+	Object.defineProperty(el, "currentTime", {
+		configurable: true,
+		get: () => currentTime,
+		set: (next: number) => {
+			currentTime = next;
+		},
+	});
+	Object.defineProperty(el, "paused", { configurable: true, get: () => paused });
+	Object.defineProperty(el, "duration", { configurable: true, get: () => 10 });
+	el.play = vi.fn(() => {
+		paused = false;
+		return Promise.resolve();
+	});
+	el.pause = vi.fn(() => {
+		paused = true;
+	});
+	return {
+		get currentTime() {
+			return currentTime;
+		},
+	};
+}
+
+describe("VirtualPreview imported audio tracks", () => {
+	// Windowed to source 1..3 (2s) and placed at timeline 2 → occupies 2..4.
+	const track = {
+		id: "trk",
+		assetId: "aud",
+		timelineStartSec: 2,
+		durationSec: 10,
+		trimStartSec: 1,
+		trimEndSec: 3,
+		gainDb: 0,
+		mute: false,
+		label: "",
+	};
+
+	function mountWithAudio() {
+		const sources: VideoSource[] = [{ id: "a1", src: "file:///tmp/a1.mp4", label: "a1" }];
+		const audioSources: VideoSource[] = [{ id: "aud", src: "file:///tmp/vo.mp3", label: "vo" }];
+		const { container } = render(
+			<VirtualPreview
+				videoSources={sources}
+				audioTracks={[track]}
+				audioSources={audioSources}
+				clips={[clip("c1", "a1", 0, 10, 0)]}
+				onTimeChange={vi.fn()}
+			/>,
+		);
+		const videoEl = container.querySelector("video");
+		if (!videoEl) throw new Error("no <video>");
+		const video = driveVideo(videoEl as HTMLVideoElement);
+		act(() => fireEvent.loadedMetadata(videoEl));
+		const audioEl = container.querySelector<HTMLAudioElement>(
+			'[data-testid="preview-audio-track-trk"]',
+		);
+		if (!audioEl) throw new Error("no track <audio>");
+		return { video, audioEl, audio: driveAudioEl(audioEl) };
+	}
+
+	it("mounts one <audio> per track with the asset's URL", () => {
+		const { audioEl } = mountWithAudio();
+		expect(audioEl.getAttribute("src")).toBe("file:///tmp/vo.mp3");
+	});
+
+	it("plays inside the window at the trim-offset source time, pauses outside", () => {
+		const { video, audioEl, audio } = mountWithAudio();
+		video.play();
+		// virtualTime lands one tick after the video seek, and the audio loop reads
+		// last frame's virtualTime, so two ticks settle the decision.
+		video.seekTo(3); // virtual 3 → 1s into the 2..4 span
+		tick();
+		tick();
+		expect(audioEl.play).toHaveBeenCalled();
+		expect(audio.currentTime).toBeCloseTo(2, 1); // trimStart 1 + 1s in
+
+		video.seekTo(5); // virtual 5 → past the window end (4)
+		tick();
+		tick();
+		expect(audioEl.pause).toHaveBeenCalled();
+	});
+});
