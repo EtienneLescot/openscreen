@@ -988,6 +988,13 @@ jobs:
         # with a tag ref and failed its deploy every time. See docs.yml.
         if: ${{ steps.release.outputs.is_prerelease == 'false' }}
         timeout-minutes: 20
+        # Bookkeeping, not publishing: the release itself is already out by the time
+        # this runs. Letting it fail the job silently skipped publish-msstore on
+        # v1.10.0's first build (an unrelated Store submission, gated on this job's
+        # `needs` success) even though "Publish release assets" above had already
+        # succeeded. Allowed to fail so a flaky docs deploy never blocks a downstream
+        # publish step.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
         run: |
