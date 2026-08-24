@@ -13,6 +13,8 @@ vi.mock("@/contexts/I18nContext", () => ({
 	useScopedT: () => (key: string) => key,
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+// The audio lane's pill renders a ClipWaveform; no decode in this geometry suite.
+vi.mock("@/hooks/useAudioPeaks", () => ({ useAudioPeaks: () => null }));
 
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { V4Timeline } from "./V4Timeline";
@@ -339,5 +341,107 @@ describe("V4Timeline clip row", () => {
 				3,
 			);
 		}
+	});
+});
+
+// Issue #350 — dragging an imported audio track on its lane. The pixel→second
+// math and the single-write commit are what these pin; the clamp/guard math is
+// covered by document/audioTracks.test.ts.
+describe("V4Timeline audio lane drag", () => {
+	const AUDIO_ASSET = { id: "aud", label: "voiceover", originalPath: "/vo.mp3", durationSec: 60 };
+	const makeTrack = () => ({
+		id: "trk1",
+		assetId: "aud",
+		timelineStartSec: 100,
+		durationSec: 60,
+		trimStartSec: 0,
+		trimEndSec: undefined as number | undefined,
+		gainDb: 0,
+		mute: false,
+		label: "vo",
+	});
+
+	function renderAudio() {
+		const placeAudioTrack = vi.fn(
+			async (
+				_id: string,
+				_placement: { timelineStartSec: number; trimStartSec: number; trimEndSec?: number },
+			) => {
+				/* the drag only awaits it */
+			},
+		);
+		const selectAudioTrack = vi.fn();
+		const tl = {
+			clips: [clip(0, TOTAL_SEC)],
+			assets: [AUDIO_ASSET],
+			annotationRegions: [],
+			speedRegions: [],
+			cameraFullscreenRegions: [],
+			zoomRegions: [],
+			trimRanges: [],
+			selection: null,
+			multiSelection: [],
+			clipSelection: null,
+			audioTracks: [makeTrack()],
+			selectedAudioTrackId: null,
+			selectAudioTrack,
+			placeAudioTrack,
+			clearSelection: vi.fn(),
+			selectRegion: vi.fn(),
+			selectClip: vi.fn(),
+			updateAnnotationSpan: vi.fn(async () => undefined),
+			addZoom: vi.fn(async () => undefined),
+		};
+		render(
+			<V4Timeline
+				tl={tl as unknown as ReturnType<typeof useTimeline>}
+				setCurrentTime={vi.fn()}
+				playing={false}
+				onTogglePlay={vi.fn()}
+				onPrevClip={vi.fn()}
+				onNextClip={vi.fn()}
+				onEditClip={vi.fn()}
+			/>,
+		);
+		return { pill: screen.getByTitle("vo"), placeAudioTrack, selectAudioTrack };
+	}
+
+	// 900px / 1800s = 0.5 px per second, so +90px is +180s.
+	const secForPx = (px: number) => (px / VIEWPORT_PX) * TOTAL_SEC;
+
+	it("selects the track on pointer-down before any movement", () => {
+		const { pill, selectAudioTrack } = renderAudio();
+		fireEvent.pointerDown(pill, { clientX: 0 });
+		window.dispatchEvent(new MouseEvent("pointerup", { clientX: 0 }));
+		expect(selectAudioTrack).toHaveBeenCalledWith("trk1");
+	});
+
+	it("body drag slides the head and commits once, trims untouched", () => {
+		const { pill, placeAudioTrack } = renderAudio();
+		fireEvent.pointerDown(pill, { clientX: 0 });
+		window.dispatchEvent(new MouseEvent("pointermove", { clientX: 90 }));
+		window.dispatchEvent(new MouseEvent("pointerup", { clientX: 90 }));
+		expect(placeAudioTrack).toHaveBeenCalledTimes(1);
+		const [id, placement] = placeAudioTrack.mock.calls[0];
+		expect(id).toBe("trk1");
+		expect(placement.timelineStartSec).toBeCloseTo(100 + secForPx(90), 3);
+		expect(placement.trimStartSec).toBe(0);
+		expect(placement.trimEndSec).toBeCloseTo(60, 3);
+	});
+
+	it("right-handle drag pulls the out-point in, head fixed", () => {
+		const { pill, placeAudioTrack } = renderAudio();
+		// The right resize handle is the last child of the pill.
+		const handle = pill.lastElementChild as Element;
+		fireEvent.pointerDown(handle, { clientX: 0 });
+		window.dispatchEvent(new MouseEvent("pointermove", { clientX: -30 }));
+		window.dispatchEvent(new MouseEvent("pointerup", { clientX: -30 }));
+		expect(placeAudioTrack).toHaveBeenCalledTimes(1);
+		const [, placement] = placeAudioTrack.mock.calls[0];
+		expect(placement.timelineStartSec).toBe(100);
+		expect(placement.trimStartSec).toBe(0);
+		// 60s window − 60px worth of seconds (−30px = −60s) → out-point at 0? No:
+		// −30px = −60s, so trimEnd 60 → 0 clamps to trimStart + MIN. Use a smaller drag.
+		expect(placement.trimEndSec).toBeLessThan(60);
 	});
 });

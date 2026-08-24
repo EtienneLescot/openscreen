@@ -68,6 +68,31 @@ export function setAudioTrackTrim(
 	return updateAudioTrack(doc, trackId, (t) => ({ ...t, trimStartSec, trimEndSec }));
 }
 
+/**
+ * Set position and trim together in one write — what an edge-drag on the lane
+ * needs: dragging the left edge moves both `timelineStartSec` and `trimStartSec`
+ * at once, and committing that as two ops would be two undo steps. Same guards as
+ * {@link moveAudioTrack} and {@link setAudioTrackTrim} so the result stays valid.
+ */
+export function setAudioTrackPlacement(
+	doc: AxcutDocument,
+	trackId: string,
+	placement: { timelineStartSec: number; trimStartSec: number; trimEndSec?: number },
+): AxcutDocument {
+	const timelineStartSec = finiteNonNeg(placement.timelineStartSec);
+	const trimStartSec = finiteNonNeg(placement.trimStartSec);
+	const trimEndSec =
+		placement.trimEndSec === undefined
+			? undefined
+			: Math.max(trimStartSec, finiteNonNeg(placement.trimEndSec));
+	return updateAudioTrack(doc, trackId, (t) => ({
+		...t,
+		timelineStartSec,
+		trimStartSec,
+		trimEndSec,
+	}));
+}
+
 /** Set a track's level in dB. Any finite value; the mixer applies the gain. */
 export function setAudioTrackGain(
 	doc: AxcutDocument,

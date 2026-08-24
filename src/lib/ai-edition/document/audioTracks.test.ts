@@ -6,6 +6,7 @@ import {
 	removeAudioTrack,
 	setAudioTrackGain,
 	setAudioTrackMute,
+	setAudioTrackPlacement,
 	setAudioTrackTrim,
 } from "./audioTracks";
 
@@ -65,6 +66,31 @@ describe("audioTracks document ops (issue #350)", () => {
 		const muted = setAudioTrackMute(withGain, track.id, true);
 		expect(muted.audioTracks[0]?.mute).toBe(true);
 		expect(muted.audioTracks[0]?.gainDb).toBe(-3);
+	});
+
+	it("setAudioTrackPlacement writes position and trim together, staying schema-valid", () => {
+		const { doc, track } = docWithTrack();
+		const placed = setAudioTrackPlacement(doc, track.id, {
+			timelineStartSec: 8,
+			trimStartSec: 3,
+			trimEndSec: 12,
+		});
+		expect(placed.audioTracks[0]).toMatchObject({
+			timelineStartSec: 8,
+			trimStartSec: 3,
+			trimEndSec: 12,
+		});
+		// Same guards as the single-field ops: negatives floor, trimEnd >= trimStart.
+		const guarded = setAudioTrackPlacement(doc, track.id, {
+			timelineStartSec: -2,
+			trimStartSec: 5,
+			trimEndSec: 1,
+		});
+		expect(guarded.audioTracks[0]).toMatchObject({
+			timelineStartSec: 0,
+			trimStartSec: 5,
+			trimEndSec: 5,
+		});
 	});
 
 	it("update ops leave other tracks untouched", () => {

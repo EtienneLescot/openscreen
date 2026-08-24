@@ -12,6 +12,7 @@ import {
 	removeAudioTrack as removeAudioTrackInDocument,
 	setAudioTrackGain as setAudioTrackGainInDocument,
 	setAudioTrackMute as setAudioTrackMuteInDocument,
+	setAudioTrackPlacement as setAudioTrackPlacementInDocument,
 	setAudioTrackTrim as setAudioTrackTrimInDocument,
 } from "../document/audioTracks";
 import { createId } from "../document/ids";
@@ -1248,6 +1249,22 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
+	// The commit for a lane drag: position and trim in one write (one undo step).
+	// A left-edge drag moves both timelineStartSec and trimStartSec, which two
+	// separate ops could not do atomically. See setAudioTrackPlacement.
+	const placeAudioTrack = useCallback(
+		async (
+			trackId: string,
+			placement: { timelineStartSec: number; trimStartSec: number; trimEndSec?: number },
+		) => {
+			if (!document) return;
+			await saveDocument(setAudioTrackPlacementInDocument(document, trackId, placement), {
+				history: true,
+			});
+		},
+		[document, saveDocument],
+	);
+
 	const setAudioTrackGain = useCallback(
 		async (trackId: string, gainDb: number) => {
 			if (!document) return;
@@ -1293,6 +1310,7 @@ export function useTimeline() {
 		removeAudioTrack,
 		moveAudioTrack,
 		resizeAudioTrack,
+		placeAudioTrack,
 		setAudioTrackGain,
 		toggleAudioTrackMute,
 		selectedAudioTrackId,

@@ -337,12 +337,14 @@ const ClipWaveform = memo(function ClipWaveform({
 	);
 });
 
-// One imported audio track on its lane (issue #350). Read-only for now — click to
-// select; drag-to-move and edge-trim land in a follow-up. The waveform reuses
-// ClipWaveform (its `.tlWave` is inset:0, so it paints behind the label here just
-// as it does inside a clip), windowed to the track's trim and scaled by the
-// track's own gain. `leftPct`/`widthPct` are precomputed by the parent so this
-// stays memoisable — a doc edit that doesn't touch this track won't re-render it.
+// One imported audio track on its lane (issue #350). Grab the body to move it,
+// the edge handles to trim (left = in-point, which moves the head too; right =
+// out-point). The waveform reuses ClipWaveform (its `.tlWave` is inset:0, so it
+// paints behind the label here just as it does inside a clip), windowed to the
+// track's trim and scaled by the track's own gain. `leftPct`/`widthPct` are
+// precomputed by the parent — during a drag they carry the live preview geometry
+// — so this stays memoisable: a doc edit that doesn't touch this track, and a
+// drag on another one, won't re-render it.
 const AudioLanePill = memo(function AudioLanePill({
 	track,
 	url,
@@ -350,6 +352,7 @@ const AudioLanePill = memo(function AudioLanePill({
 	leftPct,
 	widthPct,
 	selected,
+	onStartDrag,
 	onSelect,
 	label,
 }: {
@@ -359,6 +362,7 @@ const AudioLanePill = memo(function AudioLanePill({
 	leftPct: number;
 	widthPct: number;
 	selected: boolean;
+	onStartDrag: (e: ReactPointerEvent, track: AxcutAudioTrack, mode: "move" | "l" | "r") => void;
 	onSelect: (id: string) => void;
 	label: string;
 }) {
@@ -371,13 +375,8 @@ const AudioLanePill = memo(function AudioLanePill({
 				selected ? ` ${styles.lanePillSel}` : ""
 			}${track.mute ? ` ${styles.laneAudioMuted}` : ""}`}
 			style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: 3 }}
-			// Stop the pointer from starting a timeline scrub on .tlTracks; the click
-			// below does the selecting.
-			onPointerDown={(e) => e.stopPropagation()}
-			onClick={(e) => {
-				e.stopPropagation();
-				onSelect(track.id);
-			}}
+			// Body drag moves the track; it also selects and stops the .tlTracks scrub.
+			onPointerDown={(e) => onStartDrag(e, track, "move")}
 			onKeyDown={(e) => {
 				if (e.key === "Enter" || e.key === " ") {
 					e.preventDefault();
@@ -386,6 +385,11 @@ const AudioLanePill = memo(function AudioLanePill({
 			}}
 			title={label}
 		>
+			<span
+				className={styles.lanePillHandle}
+				style={{ left: 0 }}
+				onPointerDown={(e) => onStartDrag(e, track, "l")}
+			/>
 			<ClipWaveform
 				videoUrl={url}
 				assetDurationSec={duration}
@@ -397,6 +401,11 @@ const AudioLanePill = memo(function AudioLanePill({
 				{track.mute ? <VolumeX size={11} /> : <Music size={11} />}
 				{label}
 			</span>
+			<span
+				className={styles.lanePillHandle}
+				style={{ right: 0 }}
+				onPointerDown={(e) => onStartDrag(e, track, "r")}
+			/>
 		</div>
 	);
 });
@@ -837,6 +846,119 @@ export function V4Timeline({
 				} else {
 					activePillDragRef.current = null;
 					setActivePillDrag(null);
+				}
+			};
+			window.addEventListener("pointermove", move);
+			window.addEventListener("pointerup", up);
+		},
+		[tl, total, clips, pxPerSec],
+	);
+
+	// Live preview geometry for an audio track being dragged (issue #350), the
+	// audio-lane counterpart of activePillDrag — see startAudioDrag. Times are
+	// output-timeline (start) and source (trimStart/trimEnd) seconds.
+	const [audioDrag, setAudioDrag] = useState<{
+		id: string;
+		start: number;
+		trimStart: number;
+		trimEnd: number;
+	} | null>(null);
+	const audioDragRef = useRef<typeof audioDrag>(null);
+
+	// Drag an audio track: "move" slides the head (both edges together), "l"/"r"
+	// trim the in/out points. The left edge moves the head AND the in-point so the
+	// right edge stays put — hence the single placeAudioTrack commit on release.
+	// Like the region pills, the preview is local state and the document is written
+	// once, on pointerup.
+	const startAudioDrag = useCallback(
+		(e: ReactPointerEvent, track: AxcutAudioTrack, mode: "move" | "l" | "r") => {
+			e.preventDefault();
+			e.stopPropagation();
+			tl.selectAudioTrack(track.id);
+			const el = canvasRef.current;
+			if (!el) return;
+			const r = el.getBoundingClientRect();
+			const startX = e.clientX;
+			const asset = tl.assets.find((a) => a.id === track.assetId);
+			// The source length caps the out-point; fall back to the current window when
+			// the file hasn't been probed (durationSec 0), so a drag can't extend past it.
+			const sourceLen = asset?.durationSec || track.durationSec || track.trimEndSec || 0;
+			const origStart = track.timelineStartSec;
+			const origTrimStart = track.trimStartSec;
+			const origTrimEnd = track.trimEndSec ?? sourceLen;
+			const maxEnd = sourceLen > 0 ? sourceLen : origTrimEnd;
+			// Snap the moving edge to clip boundaries and the timeline ends, same PILL_SNAP_PX
+			// magnet the region pills use.
+			const snapTargets = [
+				0,
+				total,
+				...clips.map((c) => c.timelineStartSec),
+				...clips.map((c) => c.timelineEndSec),
+			];
+			const snapThresh = pxPerSec > 0 ? PILL_SNAP_PX / pxPerSec : 0;
+			const snap = (v: number): number => {
+				let best = v;
+				let bestD = snapThresh;
+				for (const target of snapTargets) {
+					const d = Math.abs(target - v);
+					if (d < bestD) {
+						bestD = d;
+						best = target;
+					}
+				}
+				setSnapPct(best === v ? null : (best / total) * 100);
+				return best;
+			};
+			const move = (ev: PointerEvent) => {
+				const dxSec = ((ev.clientX - startX) / r.width) * total;
+				let ns = origStart;
+				let nts = origTrimStart;
+				let nte = origTrimEnd;
+				if (mode === "move") {
+					ns = Math.max(0, snap(origStart + dxSec));
+				} else if (mode === "l") {
+					// The left edge can't cross the right one, and can't reveal more head
+					// than the source has (trimStart floors at 0 → head floors at
+					// origStart - origTrimStart).
+					const rightEdge = origStart + (origTrimEnd - origTrimStart);
+					const lowerLeft = Math.max(0, origStart - origTrimStart);
+					let newLeft = snap(origStart + dxSec);
+					newLeft = Math.min(Math.max(newLeft, lowerLeft), rightEdge - MIN_REGION_SEC);
+					ns = newLeft;
+					nts = origTrimStart + (newLeft - origStart);
+					nte = origTrimEnd;
+				} else {
+					// Right edge: move the out-point, head fixed. Snap on the timeline
+					// position of the edge, then map back to a source out-point.
+					const snappedRight = snap(origStart + (origTrimEnd - origTrimStart) + dxSec);
+					const newTrimEnd = origTrimStart + (snappedRight - origStart);
+					nte = Math.min(Math.max(newTrimEnd, origTrimStart + MIN_REGION_SEC), maxEnd);
+				}
+				const next = { id: track.id, start: ns, trimStart: nts, trimEnd: nte };
+				audioDragRef.current = next;
+				setAudioDrag(next);
+			};
+			const up = () => {
+				setSnapPct(null);
+				window.removeEventListener("pointermove", move);
+				window.removeEventListener("pointerup", up);
+				const fin = audioDragRef.current;
+				if (fin) {
+					void tl
+						.placeAudioTrack(fin.id, {
+							timelineStartSec: fin.start,
+							trimStartSec: fin.trimStart,
+							trimEndSec: fin.trimEnd,
+						})
+						.finally(() => {
+							if (audioDragRef.current === fin) {
+								audioDragRef.current = null;
+								setAudioDrag(null);
+							}
+						});
+				} else {
+					audioDragRef.current = null;
+					setAudioDrag(null);
 				}
 			};
 			window.addEventListener("pointermove", move);
@@ -1556,19 +1678,23 @@ export function V4Timeline({
 										{tl.audioTracks.map((track) => {
 											const asset = tl.assets.find((a) => a.id === track.assetId);
 											const duration = asset?.durationSec ?? track.durationSec;
-											const widthSec = Math.max(
-												0,
-												(track.trimEndSec ?? duration) - track.trimStartSec,
-											);
+											// While this track is being dragged, lay it out from the live
+											// preview geometry instead of the not-yet-written document.
+											const drag = audioDrag?.id === track.id ? audioDrag : null;
+											const start = drag ? drag.start : track.timelineStartSec;
+											const trimStart = drag ? drag.trimStart : track.trimStartSec;
+											const trimEnd = drag ? drag.trimEnd : (track.trimEndSec ?? duration);
+											const widthSec = Math.max(0, trimEnd - trimStart);
 											return (
 												<AudioLanePill
 													key={track.id}
 													track={track}
 													url={asset ? toFileUrl(asset.originalPath) : undefined}
 													assetDurationSec={duration}
-													leftPct={pctOf(track.timelineStartSec)}
+													leftPct={pctOf(start)}
 													widthPct={pctOf(widthSec)}
 													selected={tl.selectedAudioTrackId === track.id}
+													onStartDrag={startAudioDrag}
 													onSelect={tl.selectAudioTrack}
 													label={track.label || asset?.label || ts("audioTrack.defaultLabel")}
 												/>
