@@ -33,6 +33,7 @@
 		"microphoneDenied": "Mikrofon erişimi reddedildi. Kayıt ses olmadan devam edecek.",
 		"cameraDenied": "Kamera erişimi reddedildi. Kayıt kamera olmadan devam edecek.",
 		"permissionDenied": "Kayıt izni reddedildi. Lütfen ekran kaydına izin verin.",
+		"selfCaptureExclusionFailed": "OpenScreen kendi pencerelerini tam ekran kaydından güvenli biçimde çıkaramadığı için kayıt başlamadı.",
 		"cameraDisconnected": "Webcam bağlantısı kesildi.",
 		"cameraNotFound": "Kamera bulunamadı.",
 		"cameraCaptureUnavailable": "Kamera açılamadı. Kamerasız kaydediliyor.",

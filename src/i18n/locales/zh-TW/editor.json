@@ -41,6 +41,7 @@
 		"microphoneDenied": "麥克風權限被拒絕。錄製將繼續，但不包含音訊。",
 		"cameraDenied": "攝影機權限被拒絕。錄製將繼續，但不包含攝影機畫面。",
 		"permissionDenied": "錄影權限被拒絕。請允許螢幕錄製。",
+		"selfCaptureExclusionFailed": "未開始錄製，因為 OpenScreen 無法安全地從全螢幕錄製中排除自身視窗。",
 		"cameraDisconnected": "網路攝影機已中斷連線。",
 		"cameraNotFound": "找不到攝影機。",
 		"cameraCaptureUnavailable": "無法開啟攝影機，將在沒有攝影機的情況下錄製。",

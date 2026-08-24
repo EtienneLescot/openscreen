@@ -1338,6 +1338,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			};
 			const result = await window.electronAPI.startNativeMacRecording(request);
 			if (!result.success || !result.recordingId) {
+				if (result.errorCode === "self-capture-exclusion-failed") {
+					throw new Error(t("recording.selfCaptureExclusionFailed"));
+				}
 				throw new Error(result.error ?? "Native macOS capture failed.");
 			}
 			if (!isCountdownRunActive(countdownRunToken)) {

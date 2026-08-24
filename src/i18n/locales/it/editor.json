@@ -45,6 +45,7 @@
 		"cameraCaptureUnavailable": "Impossibile aprire la fotocamera. Registrazione senza di essa.",
 		"microphoneDefaulted": "Impossibile identificare il microfono scelto. Registrazione dall'ingresso predefinito.",
 		"permissionDenied": "Autorizzazione di registrazione negata. Consenti la registrazione dello schermo.",
+		"selfCaptureExclusionFailed": "La registrazione non è iniziata perché OpenScreen non ha potuto escludere in sicurezza le proprie finestre dalla cattura a schermo intero.",
 		"accessibilityAllowAndRetry": "Consenti l'accesso all'accessibilità per OpenScreen, poi premi di nuovo registra per avviare il conto alla rovescia.",
 		"selectSource": "Seleziona una sorgente da registrare"
 	},

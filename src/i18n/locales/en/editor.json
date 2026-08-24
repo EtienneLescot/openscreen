@@ -45,6 +45,7 @@
 		"cameraCaptureUnavailable": "The camera could not be opened. Recording without it.",
 		"microphoneDefaulted": "The chosen microphone could not be identified. Recording the default input.",
 		"permissionDenied": "Recording permission denied. Please allow screen recording.",
+		"selfCaptureExclusionFailed": "Recording did not start because OpenScreen could not safely keep its own windows out of the full-screen capture.",
 		"accessibilityAllowAndRetry": "Allow Accessibility access for OpenScreen, then press record again to start the countdown.",
 		"selectSource": "Please select a source to record"
 	},

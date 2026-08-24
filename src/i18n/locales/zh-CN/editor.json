@@ -45,6 +45,7 @@
 		"cameraCaptureUnavailable": "无法打开摄像头，正在不使用摄像头录制。",
 		"microphoneDefaulted": "无法识别所选麦克风，正在录制默认输入设备。",
 		"permissionDenied": "录屏权限被拒绝。请允许屏幕录制。",
+		"selfCaptureExclusionFailed": "未开始录制，因为 OpenScreen 无法安全地从全屏录制中排除自身窗口。",
 		"accessibilityAllowAndRetry": "允许 OpenScreen 使用辅助功能权限，然后再次按录制以开始倒计时。",
 		"selectSource": "请选择要录制的源"
 	},

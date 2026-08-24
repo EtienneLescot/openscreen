@@ -45,6 +45,7 @@
 		"cameraCaptureUnavailable": "Não foi possível abrir a câmera. Gravando sem ela.",
 		"microphoneDefaulted": "Não foi possível identificar o microfone escolhido. Gravando a entrada padrão.",
 		"permissionDenied": "Permissão de gravação negada. Por favor, permita a gravação de tela.",
+		"selfCaptureExclusionFailed": "A gravação não começou porque o OpenScreen não conseguiu excluir com segurança as próprias janelas da captura de tela inteira.",
 		"accessibilityAllowAndRetry": "Permita o acesso de Acessibilidade para o OpenScreen e pressione gravar novamente para iniciar a contagem regressiva.",
 		"selectSource": "Por favor, selecione uma fonte para gravar"
 	},
