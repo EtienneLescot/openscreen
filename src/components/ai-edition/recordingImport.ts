@@ -14,7 +14,11 @@
 // derived `currentVideoPath`); the only renderer that still needs the session
 // after this point is the CLI runner, which lives in its own process.
 
+import { toFileUrl } from "@/components/video-editor/projectPersistence";
+import { patchEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { probeVideoDimensions } from "@/lib/ai-edition/timeline/duration";
+import { toAspectRatioToken } from "@/utils/aspectRatioUtils";
 
 /**
  * Imports the recording the HUD handed over into a new project, and consumes the
@@ -35,6 +39,27 @@ export async function importPendingRecording(): Promise<boolean> {
 	const label = screenPath.split(/[\\/]/).pop() || "Recording";
 	await useProjectStore.getState().createProject(`Recording ${new Date().toLocaleString()}`);
 	await useProjectStore.getState().addAsset(screenPath, label);
+
+	// A Mac display is commonly not 16:9 (the current built-in panel records at
+	// 2940×1912). Starting every recording project at 16:9 therefore adds wide
+	// side bars before the user's intentional 8% padding is applied, making the
+	// padding look different horizontally and vertically. New recording projects
+	// should start in the recording's own shape; existing projects retain their
+	// stored format. Probe before the editor paints when possible, and keep the
+	// dynamic `native` token as the safe fallback until normal metadata probing
+	// fills the asset dimensions.
+	const importedDocument = useProjectStore.getState().document;
+	if (importedDocument) {
+		const dimensions = await probeVideoDimensions(toFileUrl(screenPath));
+		const nativeAspect = dimensions
+			? toAspectRatioToken(dimensions.width, dimensions.height)
+			: null;
+		const framedDocument = patchEditorSettings(importedDocument, {
+			aspectRatio: nativeAspect ?? "native",
+		});
+		const saved = await useProjectStore.getState().saveDocument(framedDocument, { history: false });
+		if (!saved) throw new Error("Could not save the recording's native frame shape");
+	}
 	// Consumed: the recording now lives in a project. Cleared here rather than
 	// after the timeline seed below so a failure down there can't hand the same
 	// recording to the next editor window.

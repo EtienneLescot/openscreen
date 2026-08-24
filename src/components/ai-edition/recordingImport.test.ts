@@ -2,9 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceTimeline as replaceTimelineOp } from "@/lib/ai-edition/document/timeline";
 import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema";
+import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { undo } from "@/lib/ai-edition/store/undo";
 import { clearHistory, past } from "@/lib/ai-edition/store/undoStack";
+import { probeVideoDimensions } from "@/lib/ai-edition/timeline/duration";
 import { importPendingRecording } from "./recordingImport";
 
 // The first describe stubs the store actions, so the bridge is never reached
@@ -16,9 +18,14 @@ const bridge = vi.hoisted(() => ({
 	save: vi.fn(),
 }));
 vi.mock("@/native/client", () => ({ nativeBridgeClient: { aiEdition: bridge } }));
+vi.mock("@/lib/ai-edition/timeline/duration", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/ai-edition/timeline/duration")>();
+	return { ...actual, probeVideoDimensions: vi.fn() };
+});
 
 const createProject = vi.fn(async () => undefined);
 const addAsset = vi.fn(async () => null);
+const saveDocument = vi.fn(async () => true);
 const replaceTimeline = vi.fn(async () => undefined);
 
 // Read before anything stubs them: the first describe replaces these actions on the
@@ -26,6 +33,7 @@ const replaceTimeline = vi.fn(async () => undefined);
 const realActions = {
 	createProject: useProjectStore.getState().createProject,
 	addAsset: useProjectStore.getState().addAsset,
+	saveDocument: useProjectStore.getState().saveDocument,
 	replaceTimeline: useProjectStore.getState().replaceTimeline,
 };
 
@@ -49,12 +57,15 @@ function stubElectronApi(screenVideoPath: string | null) {
 describe("importPendingRecording", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.mocked(probeVideoDimensions).mockResolvedValue({ width: 2940, height: 1912 });
 		useProjectStore.setState({
 			document: null,
 			// biome-ignore lint/suspicious/noExplicitAny: partial action stubs, the rest of the store is untouched
 			createProject: createProject as any,
 			// biome-ignore lint/suspicious/noExplicitAny: partial action stubs, the rest of the store is untouched
 			addAsset: addAsset as any,
+			// biome-ignore lint/suspicious/noExplicitAny: partial action stubs, the rest of the store is untouched
+			saveDocument: saveDocument as any,
 			replaceTimeline,
 		});
 	});
@@ -144,6 +155,7 @@ describe("what the recording import leaves on the undo stack", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.mocked(probeVideoDimensions).mockResolvedValue({ width: 2940, height: 1912 });
 		useProjectStore.getState().clear();
 		useProjectStore.setState(realActions);
 		clearHistory();
@@ -161,6 +173,15 @@ describe("what the recording import leaves on the undo stack", () => {
 
 		expect(past).toHaveLength(0);
 		expect(undo()).toBe(false);
+	});
+
+	it("starts a recording project in the source shape with the clean eight-percent padding", async () => {
+		await importPendingRecording();
+
+		const settings = getEditorSettings(useProjectStore.getState().document);
+		expect(settings.aspectRatio).toBe("735:478");
+		expect(settings.padding).toBe(8);
+		expect(past).toHaveLength(0);
 	});
 
 	it("still has its clip after the first Ctrl+Z", async () => {
