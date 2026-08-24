@@ -156,11 +156,34 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	requestNativeMacCursorAccess: () => {
 		return ipcRenderer.invoke("request-native-mac-cursor-access");
 	},
-	requestFloatingSelfViewAutoOpen: () =>
-		ipcRenderer.invoke("request-floating-self-view-auto-open") as Promise<{
+	showFloatingSelfView: (deviceId?: string) =>
+		ipcRenderer.invoke("floating-self-view-show", deviceId) as Promise<{
 			success: boolean;
 			error?: string;
 		}>,
+	hideFloatingSelfView: () =>
+		ipcRenderer.invoke("floating-self-view-hide") as Promise<{
+			success: boolean;
+			error?: string;
+		}>,
+	getFloatingSelfViewState: () =>
+		ipcRenderer.invoke("floating-self-view-state") as Promise<{ open: boolean }>,
+	onFloatingSelfViewStateChanged: (callback: (state: { open: boolean }) => void) => {
+		const listener = (_event: unknown, state: { open: boolean }) => callback(state);
+		ipcRenderer.on("floating-self-view-state-changed", listener);
+		return () => ipcRenderer.removeListener("floating-self-view-state-changed", listener);
+	},
+	onFloatingSelfViewCommand: (
+		callback: (command: { visible: boolean; deviceId?: string }) => void,
+	) => {
+		const listener = (_event: unknown, command: { visible: boolean; deviceId?: string }) =>
+			callback(command);
+		ipcRenderer.on("floating-self-view-command", listener);
+		return () => ipcRenderer.removeListener("floating-self-view-command", listener);
+	},
+	reportFloatingSelfViewReady: () => ipcRenderer.invoke("floating-self-view-ready"),
+	reportFloatingSelfViewFailed: () => ipcRenderer.invoke("floating-self-view-failed"),
+	closeFloatingSelfViewWindow: () => ipcRenderer.invoke("floating-self-view-window-close"),
 	storeRecordedVideo: (videoData: ArrayBuffer, fileName: string) => {
 		return ipcRenderer.invoke("store-recorded-video", videoData, fileName);
 	},

@@ -949,15 +949,6 @@ export function LaunchWindow() {
 			onPointerMove={handleRootPointerMove}
 			onPointerLeave={handlePointerLeave}
 		>
-			{/* The recorder owns this stream. PiP borrows it without ever stopping tracks. */}
-			<video
-				ref={floatingSelfView.videoRef}
-				autoPlay
-				muted
-				playsInline
-				aria-hidden="true"
-				className="pointer-events-none fixed -left-[2px] -top-[2px] h-px w-px opacity-0"
-			/>
 			{/* One bottom-anchored stack: the bar, then whatever floats above it.
 			    Everything is laid out by flexbox relative to the bar, so no popover
 			    needs a measured position and none of them can move the window. */}

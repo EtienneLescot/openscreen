@@ -23,9 +23,6 @@ declare namespace NodeJS {
 
 // Used in Renderer process, expose in `preload.ts`
 interface Window {
-	__openscreenRequestFloatingSelfView?: () => Promise<
-		import("../src/hooks/useFloatingSelfView").FloatingSelfViewRequestResult
-	>;
 	electronAPI: {
 		invokeNativeBridge: <TData = unknown>(
 			request: import("../src/native/contracts").NativeBridgeRequest,
@@ -87,10 +84,19 @@ interface Window {
 			status: string;
 			error?: string;
 		}>;
-		requestFloatingSelfViewAutoOpen: () => Promise<{
+		showFloatingSelfView: (deviceId?: string) => Promise<{
 			success: boolean;
 			error?: string;
 		}>;
+		hideFloatingSelfView: () => Promise<{ success: boolean; error?: string }>;
+		getFloatingSelfViewState: () => Promise<{ open: boolean }>;
+		onFloatingSelfViewStateChanged: (callback: (state: { open: boolean }) => void) => () => void;
+		onFloatingSelfViewCommand: (
+			callback: (command: { visible: boolean; deviceId?: string }) => void,
+		) => () => void;
+		reportFloatingSelfViewReady: () => Promise<{ success: boolean; error?: string }>;
+		reportFloatingSelfViewFailed: () => Promise<{ success: boolean; error?: string }>;
+		closeFloatingSelfViewWindow: () => Promise<{ success: boolean; error?: string }>;
 		assetBaseUrl: string;
 		storeRecordedVideo: (
 			videoData: ArrayBuffer,

@@ -34,6 +34,7 @@ import { parseCliArgs } from "./cli/args";
 import { runCli } from "./cli/cliMain";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "./diagnostics/main-log-buffer";
 import { buildEditMenuSubmenu, type EditorUndoRedoChannel, routeEditorUndoRedo } from "./edit-menu";
+import { FloatingSelfViewController } from "./floatingSelfView";
 import {
 	loadAndRegisterGlobalShortcut,
 	registerOpenAppShortcut,
@@ -52,6 +53,7 @@ import { checkLatestRelease } from "./update-checker";
 import {
 	createCountdownOverlayWindow,
 	createEditorWindow,
+	createFloatingSelfViewWindow,
 	createHudOverlayWindow,
 	createNotesWindow,
 	createSourceSelectorWindow,
@@ -126,6 +128,7 @@ let mainWindow: BrowserWindow | null = null;
 let sourceSelectorWindow: BrowserWindow | null = null;
 let countdownOverlayWindow: BrowserWindow | null = null;
 let notesWindow: BrowserWindow | null = null;
+let floatingSelfViewController: FloatingSelfViewController | null = null;
 let tray: Tray | null = null;
 let selectedSourceName = "";
 const isMac = process.platform === "darwin";
@@ -135,12 +138,28 @@ const trayIconSize = isMac ? 16 : 24;
 const defaultTrayIcon = getTrayIcon("openscreen.png", trayIconSize);
 const recordingTrayIcon = getTrayIcon("rec-button.png", trayIconSize);
 
+function quitIfOnlyFloatingSelfViewRemains() {
+	if (cliCommand) return;
+	setImmediate(() => {
+		const hasPrimaryWindow = BrowserWindow.getAllWindows().some(
+			(window) => !window.isDestroyed() && !floatingSelfViewController?.ownsWindow(window),
+		);
+		if (!hasPrimaryWindow) app.quit();
+	});
+}
+
 function createWindow() {
 	if (mainWindow && !mainWindow.isDestroyed()) {
 		return;
 	}
 
-	mainWindow = createHudOverlayWindow();
+	const hudWindow = createHudOverlayWindow();
+	mainWindow = hudWindow;
+	hudWindow.once("closed", () => {
+		if (mainWindow === hudWindow) mainWindow = null;
+		floatingSelfViewController?.hideForHudDestruction();
+		quitIfOnlyFloatingSelfViewRemains();
+	});
 }
 
 function showMainWindow() {
@@ -876,6 +895,11 @@ function createEditorWindowWrapper() {
 			// "cancel": flag reset, window stays open
 		});
 	});
+	const editorWindow = mainWindow;
+	editorWindow.once("closed", () => {
+		if (mainWindow === editorWindow) mainWindow = null;
+		quitIfOnlyFloatingSelfViewRemains();
+	});
 }
 
 function createSourceSelectorWindowWrapper() {
@@ -885,6 +909,7 @@ function createSourceSelectorWindowWrapper() {
 		if (mainWindow && !mainWindow.isDestroyed()) {
 			mainWindow.webContents.send("source-selector-closed");
 		}
+		quitIfOnlyFloatingSelfViewRemains();
 	});
 	return sourceSelectorWindow;
 }
@@ -897,6 +922,7 @@ function createNotesWindowWrapper() {
 			if (mainWindow && !mainWindow.isDestroyed()) {
 				mainWindow.webContents.send("notes-window-closed");
 			}
+			quitIfOnlyFloatingSelfViewRemains();
 		});
 		return notesWindow;
 	}
@@ -910,6 +936,7 @@ function createCountdownOverlayWindowWrapper() {
 	countdownOverlayWindow = createCountdownOverlayWindow();
 	countdownOverlayWindow.on("closed", () => {
 		countdownOverlayWindow = null;
+		quitIfOnlyFloatingSelfViewRemains();
 	});
 	return countdownOverlayWindow;
 }
@@ -954,6 +981,7 @@ app.on("before-quit", (event) => {
 	// quit is deferred below: the user asked to leave, and a check they can re-run from the
 	// tray is not worth holding the helper's teardown behind.
 	updateCheckAbort?.abort();
+	floatingSelfViewController?.destroy();
 	if (sttShutdownFinished) return;
 	event.preventDefault();
 	if (sttShutdownPromise) return;
@@ -1142,6 +1170,17 @@ appReady?.then(async () => {
 	setupApplicationMenu();
 	await ensureRecordingsDir();
 
+	if (process.platform === "darwin") {
+		floatingSelfViewController = new FloatingSelfViewController({
+			createWindow: createFloatingSelfViewWindow,
+			getHudWindow: () => mainWindow,
+		});
+		// The native window ID must exist before ScreenCaptureKit enumerates
+		// shareable content for a display recording. The camera itself stays closed
+		// until a recording starts and the HUD asks to show this hidden window.
+		floatingSelfViewController.precreate();
+	}
+
 	function switchToHudWrapper() {
 		if (mainWindow) {
 			isForceClosing = true;
@@ -1174,6 +1213,7 @@ appReady?.then(async () => {
 			}
 		},
 		switchToHudWrapper,
+		floatingSelfViewController ?? undefined,
 	);
 
 	// Native STT (whisper.cpp + forced alignment) — single instance per app.

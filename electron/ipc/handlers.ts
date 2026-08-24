@@ -53,7 +53,7 @@ import type { CursorTelemetryReader } from "../ai-edition/deep-agent/service";
 import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "../diagnostics/main-log-buffer";
-import { requestAutoFloatingSelfView } from "../floatingSelfView";
+import type { FloatingSelfViewController } from "../floatingSelfView";
 import { mainT } from "../i18n";
 import { getInstallChannel } from "../install-channel";
 import { RECORDINGS_DIR } from "../main";
@@ -1751,12 +1751,54 @@ export function registerIpcHandlers(
 	getCountdownOverlayWindow?: () => BrowserWindow | null,
 	onRecordingStateChange?: (recording: boolean, sourceName: string) => void,
 	_switchToHud?: () => void,
+	floatingSelfViewController?: FloatingSelfViewController,
 ) {
-	ipcMain.handle("request-floating-self-view-auto-open", async (event) => {
+	ipcMain.handle("floating-self-view-show", async (event, deviceId?: unknown) => {
 		if (process.platform !== "darwin") {
 			return { success: false, error: "unsupported-platform" };
 		}
-		return requestAutoFloatingSelfView(event.sender, getMainWindow());
+		if (!floatingSelfViewController) {
+			return { success: false, error: "self-view-unavailable" };
+		}
+		return floatingSelfViewController.show(event.sender, deviceId);
+	});
+
+	ipcMain.handle("floating-self-view-hide", (event) => {
+		if (process.platform !== "darwin" || !floatingSelfViewController) {
+			return { success: false, error: "unsupported-platform" };
+		}
+		return floatingSelfViewController.hide(event.sender);
+	});
+
+	ipcMain.handle("floating-self-view-state", () => {
+		return floatingSelfViewController?.getState() ?? { open: false };
+	});
+
+	ipcMain.handle("floating-self-view-ready", (event) => {
+		return (
+			floatingSelfViewController?.handleReady(event.sender) ?? {
+				success: false,
+				error: "self-view-unavailable",
+			}
+		);
+	});
+
+	ipcMain.handle("floating-self-view-failed", (event) => {
+		return (
+			floatingSelfViewController?.handleFailure(event.sender) ?? {
+				success: false,
+				error: "self-view-unavailable",
+			}
+		);
+	});
+
+	ipcMain.handle("floating-self-view-window-close", (event) => {
+		return (
+			floatingSelfViewController?.handleWindowClose(event.sender) ?? {
+				success: false,
+				error: "self-view-unavailable",
+			}
+		);
 	});
 
 	async function requestScreenAccess() {

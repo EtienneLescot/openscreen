@@ -50,8 +50,8 @@ const CONTENT_PROTECTION_FORCED = process.env["OPENSCREEN_FORCE_CONTENT_PROTECTI
  * partly true regardless — ScreenCaptureKit ignores `sharingType`, so any
  * SCK-based recorder (including *ours*, see
  * `electron/native/screencapturekit/`) captures these windows anyway. The
- * durable fix is to exclude our own windows via `SCContentFilter`'s
- * `excludingWindows:`, which that helper currently passes as `[]`.
+ * durable fix is the helper's application-exclusion filter, with a fully
+ * resolved own-window exclusion filter as its fail-closed fallback.
  */
 const CONTENT_PROTECTION_BREAKS_DISPLAY = (() => {
 	if (process.platform !== "darwin") return false;
@@ -375,6 +375,66 @@ export function createHudOverlayWindow(): BrowserWindow {
 	} else {
 		win.loadFile(path.join(RENDERER_DIST, "index.html"), {
 			query: { windowType: "hud-overlay" },
+		});
+	}
+
+	return win;
+}
+
+/**
+ * Capture-safe macOS webcam self-view.
+ *
+ * This window is deliberately created while still hidden, before a display
+ * recording can start. ScreenCaptureKit can then resolve it as an ordinary
+ * OpenScreen BrowserWindow when the application-exclusion filter is built.
+ * Native video PiP cannot be used here: on macOS 26 its special window is
+ * visible in full-display recordings even when the owning application is
+ * excluded.
+ */
+export function createFloatingSelfViewWindow(): BrowserWindow {
+	const { workArea } = screen.getPrimaryDisplay();
+	const width = 320;
+	const height = 180;
+	const margin = 24;
+	const win = new BrowserWindow({
+		width,
+		height,
+		minWidth: 240,
+		minHeight: 135,
+		maxWidth: 640,
+		maxHeight: 360,
+		x: workArea.x + workArea.width - width - margin,
+		y: workArea.y + workArea.height - height - margin,
+		frame: false,
+		backgroundColor: "#050608",
+		resizable: true,
+		movable: true,
+		alwaysOnTop: true,
+		skipTaskbar: true,
+		hasShadow: true,
+		show: false,
+		title: "OpenScreen self-view",
+		webPreferences: {
+			preload: path.join(__dirname, "preload.mjs"),
+			additionalArguments: [ASSET_BASE_URL_ARG],
+			nodeIntegration: false,
+			contextIsolation: true,
+			backgroundThrottling: false,
+		},
+	});
+
+	win.setAspectRatio(16 / 9);
+	applyContentProtection(win, "floating self-view");
+	if (process.platform === "darwin") {
+		win.setAlwaysOnTop(true, "floating", 1);
+		win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+	}
+
+	if (VITE_DEV_SERVER_URL) {
+		win.loadURL(VITE_DEV_SERVER_URL + "?windowType=floating-self-view");
+	} else {
+		win.loadFile(path.join(RENDERER_DIST, "index.html"), {
+			query: { windowType: "floating-self-view" },
 		});
 	}
 
