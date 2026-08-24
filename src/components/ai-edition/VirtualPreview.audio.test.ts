@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { AxcutAudioTrack } from "@/lib/ai-edition/schema";
 import {
 	applyPreviewAudioSettings,
 	type PreviewAudioGraph,
 	resolveAudioTrackPlayback,
+	resolveTimelineAudioPlayback,
 } from "./VirtualPreview";
 
 /** Minimal stand-in: the function only ever touches `gain.gain.value`. */
@@ -78,5 +80,56 @@ describe("applyPreviewAudioSettings", () => {
 		applyPreviewAudioSettings(graph, [element], -6.0206);
 		expect(element.volume).toBe(0.25);
 		expect(graph.gain.gain.value).toBeCloseTo(0.5, 4);
+	});
+});
+
+describe("resolveTimelineAudioPlayback", () => {
+	// A track placed 10s into the RAW timeline, source windowed to 2..8 (6s long).
+	const track: AxcutAudioTrack = {
+		id: "t1",
+		assetId: "a1",
+		timelineStartSec: 10,
+		durationSec: 20,
+		trimStartSec: 2,
+		trimEndSec: 8,
+		gainDb: 0,
+		mute: false,
+		label: "",
+	};
+
+	it("maps the playhead to a source position offset by the trim in-point", () => {
+		// 3s into the track's span → 2 (trimStart) + 3 = 5s of source.
+		expect(resolveTimelineAudioPlayback(13, track)).toEqual({ targetTimeSec: 5, shouldPlay: true });
+	});
+
+	it("does not play before the track starts, parked at the in-point", () => {
+		expect(resolveTimelineAudioPlayback(9, track)).toEqual({ targetTimeSec: 2, shouldPlay: false });
+	});
+
+	it("does not play past the window end, parked at the out-point", () => {
+		// Window is 6s (2..8), so timeline 10..16. At 16 it has just ended.
+		expect(resolveTimelineAudioPlayback(16, track)).toEqual({
+			targetTimeSec: 8,
+			shouldPlay: false,
+		});
+	});
+
+	it("never plays while muted, even inside its window", () => {
+		const muted = { ...track, mute: true };
+		expect(resolveTimelineAudioPlayback(13, muted)).toEqual({
+			targetTimeSec: 5,
+			shouldPlay: false,
+		});
+	});
+
+	it("uses the asset duration as the out-point when the tail isn't trimmed", () => {
+		const untrimmed = { ...track, trimStartSec: 0, trimEndSec: undefined, durationSec: 5 };
+		// Span is 10..15. At 14 → 4s of source, still playing.
+		expect(resolveTimelineAudioPlayback(14, untrimmed)).toEqual({
+			targetTimeSec: 4,
+			shouldPlay: true,
+		});
+		// At 15 the 5s file is over.
+		expect(resolveTimelineAudioPlayback(15, untrimmed).shouldPlay).toBe(false);
 	});
 });
