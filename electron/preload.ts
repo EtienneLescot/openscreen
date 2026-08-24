@@ -174,15 +174,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		return () => ipcRenderer.removeListener("floating-self-view-state-changed", listener);
 	},
 	onFloatingSelfViewCommand: (
-		callback: (command: { visible: boolean; deviceId?: string }) => void,
+		callback: (command: { visible: boolean; requestId: number; deviceId?: string }) => void,
 	) => {
-		const listener = (_event: unknown, command: { visible: boolean; deviceId?: string }) =>
-			callback(command);
+		const listener = (
+			_event: unknown,
+			command: { visible: boolean; requestId: number; deviceId?: string },
+		) => callback(command);
 		ipcRenderer.on("floating-self-view-command", listener);
 		return () => ipcRenderer.removeListener("floating-self-view-command", listener);
 	},
-	reportFloatingSelfViewReady: () => ipcRenderer.invoke("floating-self-view-ready"),
-	reportFloatingSelfViewFailed: () => ipcRenderer.invoke("floating-self-view-failed"),
+	reportFloatingSelfViewReady: (requestId: number) =>
+		ipcRenderer.invoke("floating-self-view-ready", requestId),
+	reportFloatingSelfViewFailed: (requestId: number) =>
+		ipcRenderer.invoke("floating-self-view-failed", requestId),
 	closeFloatingSelfViewWindow: () => ipcRenderer.invoke("floating-self-view-window-close"),
 	storeRecordedVideo: (videoData: ArrayBuffer, fileName: string) => {
 		return ipcRenderer.invoke("store-recorded-video", videoData, fileName);

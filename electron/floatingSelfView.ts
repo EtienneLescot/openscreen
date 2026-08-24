@@ -15,6 +15,7 @@ export interface FloatingSelfViewState {
 }
 
 interface PendingShow {
+	requestId: number;
 	resolve: (result: FloatingSelfViewResult) => void;
 	timer: ReturnType<typeof setTimeout>;
 }
@@ -51,6 +52,8 @@ export class FloatingSelfViewController {
 	private pendingShow: PendingShow | null = null;
 	private open = false;
 	private destroying = false;
+	private nextRequestId = 0;
+	private activeRequestId: number | null = null;
 	private readonly showTimeoutMs: number;
 
 	constructor(private readonly options: FloatingSelfViewControllerOptions) {
@@ -72,11 +75,13 @@ export class FloatingSelfViewController {
 		win.on("closed", () => {
 			if (this.window === win) this.window = null;
 			this.open = false;
+			this.activeRequestId = null;
 			this.finishPending({ success: false, error: "self-view-unavailable" });
 			this.broadcastState();
 		});
 		win.webContents.on("render-process-gone", () => {
 			this.open = false;
+			this.activeRequestId = null;
 			this.finishPending({ success: false, error: "self-view-unavailable" });
 			this.broadcastState();
 		});
@@ -110,23 +115,25 @@ export class FloatingSelfViewController {
 
 		if (this.open && win.isVisible()) return { success: true };
 		this.finishPending({ success: false, error: "self-view-unavailable" });
+		const requestId = this.createRequestId();
+		this.activeRequestId = requestId;
 
 		return await new Promise<FloatingSelfViewResult>((resolve) => {
 			const timer = setTimeout(() => {
-				if (this.pendingShow?.resolve !== resolve) return;
-				this.pendingShow = null;
-				this.hideInternal();
-				resolve({ success: false, error: "request-timeout" });
+				if (this.pendingShow?.requestId !== requestId) return;
+				this.hideInternal({ success: false, error: "request-timeout" });
 			}, this.showTimeoutMs);
-			this.pendingShow = { resolve, timer };
+			this.pendingShow = { requestId, resolve, timer };
 
 			const requestCamera = () => {
 				if (win.isDestroyed() || win.webContents.isDestroyed()) {
+					if (this.activeRequestId === requestId) this.activeRequestId = null;
 					this.finishPending({ success: false, error: "self-view-unavailable" });
 					return;
 				}
 				win.webContents.send("floating-self-view-command", {
 					visible: true,
+					requestId,
 					deviceId: normalizeDeviceId(deviceId),
 				});
 			};
@@ -152,10 +159,14 @@ export class FloatingSelfViewController {
 		this.hideInternal();
 	}
 
-	handleReady(sender: WebContents): FloatingSelfViewResult {
+	handleReady(sender: WebContents, requestId: unknown): FloatingSelfViewResult {
 		const win = this.window;
 		if (!win || win.isDestroyed() || sender !== win.webContents) {
 			return { success: false, error: "unauthorized-sender" };
+		}
+		if (this.activeRequestId === null || requestId !== this.activeRequestId) {
+			win.hide();
+			return { success: true };
 		}
 		this.open = true;
 		win.showInactive();
@@ -164,10 +175,14 @@ export class FloatingSelfViewController {
 		return { success: true };
 	}
 
-	handleFailure(sender: WebContents): FloatingSelfViewResult {
+	handleFailure(sender: WebContents, requestId: unknown): FloatingSelfViewResult {
 		const win = this.window;
 		if (!win || win.isDestroyed() || sender !== win.webContents) {
 			return { success: false, error: "unauthorized-sender" };
+		}
+		if (this.activeRequestId === null || requestId !== this.activeRequestId) {
+			win.hide();
+			return { success: true };
 		}
 		this.hideInternal({ success: false, error: "camera-unavailable" });
 		return { success: true };
@@ -185,10 +200,14 @@ export class FloatingSelfViewController {
 	destroy(): void {
 		const win = this.window;
 		this.destroying = true;
+		this.activeRequestId = null;
 		this.finishPending({ success: false, error: "self-view-unavailable" });
 		if (win && !win.isDestroyed()) {
 			if (!win.webContents.isDestroyed()) {
-				win.webContents.send("floating-self-view-command", { visible: false });
+				win.webContents.send("floating-self-view-command", {
+					visible: false,
+					requestId: this.createRequestId(),
+				});
 			}
 			win.destroy();
 		}
@@ -203,9 +222,13 @@ export class FloatingSelfViewController {
 		},
 	): void {
 		const win = this.window;
+		this.activeRequestId = null;
 		if (win && !win.isDestroyed()) {
 			if (!win.webContents.isDestroyed()) {
-				win.webContents.send("floating-self-view-command", { visible: false });
+				win.webContents.send("floating-self-view-command", {
+					visible: false,
+					requestId: this.createRequestId(),
+				});
 			}
 			win.hide();
 		}
@@ -221,6 +244,11 @@ export class FloatingSelfViewController {
 		this.pendingShow = null;
 		clearTimeout(pending.timer);
 		pending.resolve(result);
+	}
+
+	private createRequestId(): number {
+		this.nextRequestId += 1;
+		return this.nextRequestId;
 	}
 
 	private broadcastState(): void {

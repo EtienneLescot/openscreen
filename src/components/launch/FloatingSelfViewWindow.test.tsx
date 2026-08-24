@@ -5,7 +5,9 @@ import { I18nProvider } from "@/contexts/I18nContext";
 import { FloatingSelfViewWindow } from "./FloatingSelfViewWindow";
 
 describe("FloatingSelfViewWindow", () => {
-	let command: ((value: { visible: boolean; deviceId?: string }) => void) | undefined;
+	let command:
+		| ((value: { visible: boolean; requestId: number; deviceId?: string }) => void)
+		| undefined;
 	let getUserMedia: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
@@ -50,8 +52,10 @@ describe("FloatingSelfViewWindow", () => {
 		);
 
 		expect(getUserMedia).not.toHaveBeenCalled();
-		await act(async () => command?.({ visible: true, deviceId: "camera-2" }));
-		await waitFor(() => expect(window.electronAPI.reportFloatingSelfViewReady).toHaveBeenCalled());
+		await act(async () => command?.({ visible: true, requestId: 17, deviceId: "camera-2" }));
+		await waitFor(() =>
+			expect(window.electronAPI.reportFloatingSelfViewReady).toHaveBeenCalledWith(17),
+		);
 		expect(getUserMedia).toHaveBeenCalledWith({
 			audio: false,
 			video: {
@@ -62,7 +66,7 @@ describe("FloatingSelfViewWindow", () => {
 			},
 		});
 
-		act(() => command?.({ visible: false }));
+		act(() => command?.({ visible: false, requestId: 18 }));
 		expect(stop).toHaveBeenCalledTimes(1);
 	});
 
@@ -74,8 +78,10 @@ describe("FloatingSelfViewWindow", () => {
 			</I18nProvider>,
 		);
 
-		await act(async () => command?.({ visible: true }));
-		await waitFor(() => expect(window.electronAPI.reportFloatingSelfViewFailed).toHaveBeenCalled());
+		await act(async () => command?.({ visible: true, requestId: 22 }));
+		await waitFor(() =>
+			expect(window.electronAPI.reportFloatingSelfViewFailed).toHaveBeenCalledWith(22),
+		);
 		expect(window.electronAPI.reportFloatingSelfViewReady).not.toHaveBeenCalled();
 	});
 });

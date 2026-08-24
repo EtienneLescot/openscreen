@@ -22,7 +22,7 @@ export function FloatingSelfViewWindow() {
 	}, []);
 
 	const start = useCallback(
-		async (deviceId?: string) => {
+		async (requestId: number, deviceId?: string) => {
 			stop();
 			const generation = requestGeneration.current;
 			try {
@@ -48,7 +48,7 @@ export function FloatingSelfViewWindow() {
 					() => {
 						if (requestGeneration.current !== generation) return;
 						stop();
-						void window.electronAPI.reportFloatingSelfViewFailed();
+						void window.electronAPI.reportFloatingSelfViewFailed(requestId);
 					},
 					{ once: true },
 				);
@@ -58,11 +58,11 @@ export function FloatingSelfViewWindow() {
 				video.srcObject = stream;
 				await video.play();
 				if (requestGeneration.current !== generation) return;
-				await window.electronAPI.reportFloatingSelfViewReady();
+				await window.electronAPI.reportFloatingSelfViewReady(requestId);
 			} catch {
 				if (requestGeneration.current !== generation) return;
 				stop();
-				await window.electronAPI.reportFloatingSelfViewFailed().catch(() => undefined);
+				await window.electronAPI.reportFloatingSelfViewFailed(requestId).catch(() => undefined);
 			}
 		},
 		[stop],
@@ -70,7 +70,7 @@ export function FloatingSelfViewWindow() {
 
 	useEffect(() => {
 		const unsubscribe = window.electronAPI.onFloatingSelfViewCommand((command) => {
-			if (command.visible) void start(command.deviceId);
+			if (command.visible) void start(command.requestId, command.deviceId);
 			else stop();
 		});
 		return () => {

@@ -1774,18 +1774,18 @@ export function registerIpcHandlers(
 		return floatingSelfViewController?.getState() ?? { open: false };
 	});
 
-	ipcMain.handle("floating-self-view-ready", (event) => {
+	ipcMain.handle("floating-self-view-ready", (event, requestId: unknown) => {
 		return (
-			floatingSelfViewController?.handleReady(event.sender) ?? {
+			floatingSelfViewController?.handleReady(event.sender, requestId) ?? {
 				success: false,
 				error: "self-view-unavailable",
 			}
 		);
 	});
 
-	ipcMain.handle("floating-self-view-failed", (event) => {
+	ipcMain.handle("floating-self-view-failed", (event, requestId: unknown) => {
 		return (
-			floatingSelfViewController?.handleFailure(event.sender) ?? {
+			floatingSelfViewController?.handleFailure(event.sender, requestId) ?? {
 				success: false,
 				error: "self-view-unavailable",
 			}

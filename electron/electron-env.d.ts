@@ -92,10 +92,14 @@ interface Window {
 		getFloatingSelfViewState: () => Promise<{ open: boolean }>;
 		onFloatingSelfViewStateChanged: (callback: (state: { open: boolean }) => void) => () => void;
 		onFloatingSelfViewCommand: (
-			callback: (command: { visible: boolean; deviceId?: string }) => void,
+			callback: (command: { visible: boolean; requestId: number; deviceId?: string }) => void,
 		) => () => void;
-		reportFloatingSelfViewReady: () => Promise<{ success: boolean; error?: string }>;
-		reportFloatingSelfViewFailed: () => Promise<{ success: boolean; error?: string }>;
+		reportFloatingSelfViewReady: (
+			requestId: number,
+		) => Promise<{ success: boolean; error?: string }>;
+		reportFloatingSelfViewFailed: (
+			requestId: number,
+		) => Promise<{ success: boolean; error?: string }>;
 		closeFloatingSelfViewWindow: () => Promise<{ success: boolean; error?: string }>;
 		assetBaseUrl: string;
 		storeRecordedVideo: (
