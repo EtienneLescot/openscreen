@@ -1,4 +1,14 @@
-import { ArrowLeft, Check, Film, Loader2, MessageSquare, Plus, Search, X } from "lucide-react";
+import {
+	ArrowLeft,
+	Check,
+	Film,
+	Loader2,
+	MessageSquare,
+	Music,
+	Plus,
+	Search,
+	X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -147,6 +157,7 @@ export function MediaPane() {
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
+	const importAudioAsset = useProjectStore((s) => s.importAudioAsset);
 	// Transcripts land on their own (transcriptionStore's background pass); the
 	// pane reports where each one is at and offers a per-asset re-run.
 	const transcriptions = useAssetTranscriptions();
@@ -172,6 +183,30 @@ export function MediaPane() {
 			toast.success(t("mediaStage.added", { label }));
 		} catch (err) {
 			toast.error(t("mediaStage.couldNotAddAsset"), {
+				description: err instanceof Error ? err.message : String(err),
+			});
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	// Import an external audio file (voiceover / BGM / SFX) — issue #350. Adds the
+	// asset AND places a track at the playhead in one action (importAudioAsset), so
+	// the file lands visibly on the timeline the way importing a video lands a clip.
+	const handleImportAudio = async () => {
+		if (!projectId) {
+			toast.error(t("mediaStage.openProjectFirst"));
+			return;
+		}
+		const picker = await window.electronAPI?.openAudioFilePicker();
+		if (!picker?.success || !picker.path) return;
+		setBusy(true);
+		try {
+			const label = picker.name || basename(picker.path);
+			await importAudioAsset(picker.path, label);
+			toast.success(t("mediaStage.added", { label }));
+		} catch (err) {
+			toast.error(t("mediaStage.couldNotAddAudio"), {
 				description: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
@@ -250,6 +285,15 @@ export function MediaPane() {
 			>
 				<Plus size={14} />
 				{t("mediaStage.importMedia")}
+			</button>
+			<button
+				type="button"
+				className={styles.importBtn}
+				onClick={handleImportAudio}
+				disabled={!projectId || busy}
+			>
+				<Music size={14} />
+				{t("mediaStage.importAudio")}
 			</button>
 			{document?.transcript ? (
 				<div

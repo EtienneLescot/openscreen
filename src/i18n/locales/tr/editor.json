@@ -160,7 +160,9 @@
 		"detectedLanguage": "Algılanan dil: {{language}}",
 		"noAudioTrack": "Ses parçası yok",
 		"noAudioTrackHint": "Bu medyada ses parçası yok — metne dökülecek bir şey bulunmuyor.",
-		"noSpeechDetected": "Konuşma algılanmadı"
+		"noSpeechDetected": "Konuşma algılanmadı",
+		"couldNotAddAudio": "Could not add audio",
+		"importAudio": "Import audio"
 	},
 	"exportDialog": {
 		"title": "Dışa Aktar",

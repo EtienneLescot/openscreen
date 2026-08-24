@@ -1496,6 +1496,36 @@
 	border-color: #a855f7;
 	background: rgba(168, 85, 247, 0.14);
 }
+/* Imported audio tracks (issue #350). A distinct teal so a BGM/voiceover track
+   reads apart from the effect pills, and taller than a lane pill so the waveform
+   inside it is legible. */
+.laneAudio {
+	border-color: #14b8a6;
+	background: rgba(20, 184, 166, 0.16);
+	height: 30px;
+	top: 1px;
+	cursor: pointer;
+}
+.laneAudio:active {
+	cursor: pointer;
+}
+.laneAudioMuted {
+	opacity: 0.5;
+}
+/* The label rides above the waveform (which is inset:0 behind it). */
+.laneAudioLabel {
+	position: relative;
+	z-index: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+}
+/* The audio lane is taller than the effect lanes to give the waveform room. */
+.tlLaneAudio {
+	height: 32px;
+}
 .tlClips {
 	position: relative;
 	/* NOT a flex row. Clips are absolutely positioned by percentage of the

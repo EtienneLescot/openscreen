@@ -71,6 +71,15 @@
 		"outputGain": "Output level",
 		"reset": "Reset audio"
 	},
+	"audioTrack": {
+		"defaultLabel": "Audio track",
+		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
+		"volume": "Volume",
+		"offset": "Start (s)",
+		"mute": "Mute",
+		"unmute": "Unmute",
+		"remove": "Remove track"
+	},
 	"effects": {
 		"title": "Composition",
 		"blurBg": "Blur BG",

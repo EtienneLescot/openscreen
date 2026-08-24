@@ -128,10 +128,12 @@
 	"mediaStage": {
 		"openProjectFirst": "Open a project first",
 		"couldNotAddAsset": "Could not add asset",
+		"couldNotAddAudio": "Could not add audio",
 		"searchPlaceholder": "Search media…",
 		"dragHint": "Drag a clip onto the timeline below to add it",
 		"emptyHint": "No media yet — import a recording to get started.",
 		"importMedia": "Import media",
+		"importAudio": "Import audio",
 		"added": "Added {{label}}",
 		"addToTimeline": "Add to timeline",
 		"addedToTimeline": "Added {{label}} to the timeline",

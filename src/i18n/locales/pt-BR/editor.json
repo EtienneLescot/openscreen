@@ -160,7 +160,9 @@
 		"detectedLanguage": "Idioma detectado: {{language}}",
 		"noAudioTrack": "Sem faixa de áudio",
 		"noAudioTrackHint": "Esta mídia não tem faixa de áudio — não há nada para transcrever.",
-		"noSpeechDetected": "Nenhuma fala detectada"
+		"noSpeechDetected": "Nenhuma fala detectada",
+		"couldNotAddAudio": "Could not add audio",
+		"importAudio": "Import audio"
 	},
 	"exportDialog": {
 		"title": "Exportar",
