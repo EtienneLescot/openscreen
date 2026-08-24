@@ -133,4 +133,25 @@ describe("user preferences", () => {
 
 		expect(loadUserPreferences().hideSoftwareEncoderFallbackNotice).toBe(false);
 	});
+
+	it("defaults the floating self-view to auto-show for legacy preferences", () => {
+		localStorage.setItem("openscreen_user_preferences", JSON.stringify({ trayLayout: "vertical" }));
+
+		expect(loadUserPreferences().floatingSelfViewEnabled).toBe(true);
+	});
+
+	it("persists the floating self-view auto-show preference", () => {
+		saveUserPreferences({ floatingSelfViewEnabled: false });
+
+		expect(loadUserPreferences().floatingSelfViewEnabled).toBe(false);
+	});
+
+	it("falls back to auto-show when the floating self-view preference is malformed", () => {
+		localStorage.setItem(
+			"openscreen_user_preferences",
+			JSON.stringify({ floatingSelfViewEnabled: "no" }),
+		);
+
+		expect(loadUserPreferences().floatingSelfViewEnabled).toBe(true);
+	});
 });

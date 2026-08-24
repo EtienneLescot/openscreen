@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_EDITOR_LAYOUT_SETTINGS } from "@/components/video-editor/editorDefaults";
 import {
 	DEFAULT_CROP_REGION,
 	DEFAULT_CURSOR_SIZE,
@@ -44,6 +45,8 @@ describe("getEditorSettings", () => {
 		expect(snap.webcamLayoutPreset).toBe(DEFAULT_WEBCAM_LAYOUT_PRESET);
 		expect(snap.webcamMaskShape).toBe(DEFAULT_WEBCAM_MASK_SHAPE);
 		expect(snap.cursor.size).toBe(DEFAULT_CURSOR_SIZE);
+		expect(snap.padding).toBe(8);
+		expect(snap.padding).toBe(DEFAULT_EDITOR_LAYOUT_SETTINGS.padding);
 	});
 
 	it("returns the defaults when the document is null", () => {
@@ -63,6 +66,7 @@ describe("getEditorSettings", () => {
 				webcamMaskShape: "circle",
 				cursorSize: 5,
 				cursorSmoothing: 0.8,
+				padding: 50,
 			},
 		};
 		const snap = getEditorSettings(doc);
@@ -74,6 +78,7 @@ describe("getEditorSettings", () => {
 		expect(snap.webcamMaskShape).toBe("circle");
 		expect(snap.cursor.size).toBe(5);
 		expect(snap.cursor.smoothing).toBe(0.8);
+		expect(snap.padding).toBe(50);
 	});
 
 	it("falls back to defaults for unknown or wrong-type values", () => {

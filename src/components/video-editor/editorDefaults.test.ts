@@ -11,6 +11,11 @@ import {
 import { normalizeProjectEditor } from "./projectPersistence";
 
 describe("editor defaults SSOT", () => {
+	it("starts clean projects at eight percent padding", () => {
+		expect(DEFAULT_EDITOR_LAYOUT_SETTINGS.padding).toBe(8);
+		expect(DEFAULT_PREFS.padding).toBe(8);
+	});
+
 	it("keeps history defaults aligned with editor defaults", () => {
 		expect(INITIAL_EDITOR_STATE).toMatchObject({
 			...DEFAULT_EDITOR_APPEARANCE_SETTINGS,
@@ -51,5 +56,9 @@ describe("editor defaults SSOT", () => {
 			gifLoop: DEFAULT_GIF_SETTINGS.loop,
 			gifSizePreset: DEFAULT_GIF_SETTINGS.sizePreset,
 		});
+	});
+
+	it("preserves padding stored in an existing project", () => {
+		expect(normalizeProjectEditor({ padding: 50 }).padding).toBe(50);
 	});
 });
