@@ -7,6 +7,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
+import {
+	appendAudioTrack as appendAudioTrackInDocument,
+	moveAudioTrack as moveAudioTrackInDocument,
+	removeAudioTrack as removeAudioTrackInDocument,
+	setAudioTrackGain as setAudioTrackGainInDocument,
+	setAudioTrackMute as setAudioTrackMuteInDocument,
+	setAudioTrackTrim as setAudioTrackTrimInDocument,
+} from "../document/audioTracks";
 import { createId } from "../document/ids";
 import {
 	duplicateClip as duplicateClipInDocument,
@@ -19,7 +27,7 @@ import {
 	resequenceClips,
 	setClipSourceRange,
 } from "../document/timeline";
-import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
+import { type AxcutClipCropRegion, type AxcutDocument, createAudioTrack } from "../schema";
 import { hasAnyClipWithCamera } from "../timeline/camera";
 import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
@@ -1173,9 +1181,85 @@ export function useTimeline() {
 			}>) ?? [])
 		: [];
 
+	// --- Imported audio tracks (issue #350) -------------------------------------
+	// Timeline-global overlays, so unlike the region ops above these need no clip
+	// anchoring — each just writes `document.audioTracks` through the pure ops.
+
+	// Place a new track for an imported audio asset, its head at the playhead (in
+	// output-timeline seconds) unless the caller says otherwise. Returns the new
+	// track's id so the UI can select it, or null if the write didn't take.
+	const addAudioTrack = useCallback(
+		async (assetId: string, timelineStartSec?: number): Promise<string | null> => {
+			if (!document) return null;
+			const asset = document.assets.find((a) => a.id === assetId);
+			if (!asset || asset.kind !== "audio") return null;
+			const track = createAudioTrack({
+				assetId,
+				durationSec: asset.durationSec ?? 0,
+				timelineStartSec: timelineStartSec ?? playheadSec(),
+				label: asset.label,
+			});
+			if (!(await saveDocument(appendAudioTrackInDocument(document, track), { history: true }))) {
+				return null;
+			}
+			return track.id;
+		},
+		[document, saveDocument],
+	);
+
+	const removeAudioTrack = useCallback(
+		async (trackId: string) => {
+			if (!document) return;
+			await saveDocument(removeAudioTrackInDocument(document, trackId), { history: true });
+		},
+		[document, saveDocument],
+	);
+
+	// Drag-reposition the track's head. `timelineStartSec` is output-timeline time.
+	const moveAudioTrack = useCallback(
+		async (trackId: string, timelineStartSec: number) => {
+			if (!document) return;
+			await saveDocument(moveAudioTrackInDocument(document, trackId, timelineStartSec), {
+				history: true,
+			});
+		},
+		[document, saveDocument],
+	);
+
+	// Edge-drag trim: window the source file (source seconds). Pass
+	// `trimEndSec: undefined` to clear the tail trim.
+	const resizeAudioTrack = useCallback(
+		async (trackId: string, trim: { trimStartSec: number; trimEndSec?: number }) => {
+			if (!document) return;
+			await saveDocument(setAudioTrackTrimInDocument(document, trackId, trim), { history: true });
+		},
+		[document, saveDocument],
+	);
+
+	const setAudioTrackGain = useCallback(
+		async (trackId: string, gainDb: number) => {
+			if (!document) return;
+			await saveDocument(setAudioTrackGainInDocument(document, trackId, gainDb), { history: true });
+		},
+		[document, saveDocument],
+	);
+
+	const toggleAudioTrackMute = useCallback(
+		async (trackId: string) => {
+			if (!document) return;
+			const track = document.audioTracks.find((t) => t.id === trackId);
+			if (!track) return;
+			await saveDocument(setAudioTrackMuteInDocument(document, trackId, !track.mute), {
+				history: true,
+			});
+		},
+		[document, saveDocument],
+	);
+
 	return {
 		zoomRegions: document?.zoomRanges ?? [],
 		trimRanges: document?.timeline.trimRanges ?? [],
+		audioTracks: document?.audioTracks ?? [],
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
 		speedRegions,
 		cameraFullscreenRegions,
@@ -1193,6 +1277,12 @@ export function useTimeline() {
 		addCameraFullscreen,
 		removeRegion,
 		removeRegions,
+		addAudioTrack,
+		removeAudioTrack,
+		moveAudioTrack,
+		resizeAudioTrack,
+		setAudioTrackGain,
+		toggleAudioTrackMute,
 		selectRegion,
 		clearSelection,
 		applyClipEdit,
