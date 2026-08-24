@@ -110,6 +110,7 @@ const sampleDoc: AxcutDocument = {
 	},
 	annotations: [],
 	zoomRanges: [],
+	audioTracks: [],
 	legacyEditor: null,
 };
 

@@ -245,6 +245,7 @@ const base = {
 	transcripts: [],
 	annotations: [],
 	zoomRanges: [],
+	audioTracks: [],
 	legacyEditor: null,
 };
 

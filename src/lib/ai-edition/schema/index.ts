@@ -150,7 +150,12 @@ export const assetTranscriptionFailureSchema = z.object({
 
 export const assetSchema = z.object({
 	id: z.string().min(1),
-	kind: z.literal("video"),
+	// Widened from a `"video"` literal when external-audio import landed (issue
+	// #350). An imported voiceover / BGM / SFX file carries no video stream, so it
+	// needs its own kind; every document written before this only ever held
+	// `"video"`, which still validates, so the widening is additive (no
+	// schemaVersion bump — same rule as `transcriptionFailure` below).
+	kind: z.enum(["video", "audio"]).default("video"),
 	label: z.string().min(1),
 	originalPath: z.string().min(1),
 	proxyPath: z.string().optional(),
@@ -471,6 +476,38 @@ export const zoomRegionSchema = endGteStart(
 	"startMs",
 );
 
+// External audio import (issue #350) — voiceover / BGM / SFX layered over the
+// assembled programme. Unlike zoom/speed/annotation/trim, an audio track is NOT
+// clip-anchored: it floats over the whole timeline, so it is addressed in OUTPUT
+// (post-trim, post-speed) timeline seconds — the same domain the compositor's
+// concatenated programme PCM lives in (see `SceneAudio` in
+// src/native/sceneDescription.ts and `audio.rs`). That single invariant is what
+// keeps the live preview and the export in sync without a per-track sync offset.
+//
+// `assetId` points at an asset with `kind: "audio"`. `timelineStartSec` places
+// the track's head on the programme; `trimStartSec`/`trimEndSec` window the
+// source file (both in source seconds); `gainDb` + `mute` set its level.
+export const audioTrackSchema = z
+	.object({
+		id: z.string().min(1),
+		assetId: z.string().min(1),
+		timelineStartSec: z.number().nonnegative().default(0),
+		// Full source duration of the underlying file, cached here so the timeline
+		// can lay out the pill before the asset is re-probed on load.
+		durationSec: z.number().nonnegative().default(0),
+		trimStartSec: z.number().nonnegative().default(0),
+		// Absent means "play to the end of the file". Explicit when the user trims
+		// the tail so the pill and the export agree on where the track stops.
+		trimEndSec: z.number().nonnegative().optional(),
+		gainDb: z.number().default(0),
+		mute: z.boolean().default(false),
+		label: z.string().default(""),
+	})
+	.refine((data) => data.trimEndSec === undefined || data.trimEndSec >= data.trimStartSec, {
+		message: "trimEndSec must be greater than or equal to trimStartSec",
+		path: ["trimEndSec"],
+	});
+
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time
 // by the existing pipeline (see technical-documentation/architecture/document-model.md).
@@ -503,6 +540,9 @@ const documentSchemaShape = z.object({
 	}),
 	annotations: z.array(annotationRegionSchema).default([]),
 	zoomRanges: z.array(zoomRegionSchema).default([]),
+	// Imported audio tracks (issue #350). Defaulted so every document written
+	// before this loads unchanged; an older build simply strips the key on save.
+	audioTracks: z.array(audioTrackSchema).default([]),
 	legacyEditor: legacyEditorSchema.nullable().default(null),
 });
 
@@ -942,6 +982,7 @@ export type AxcutTimelineOperation = z.infer<typeof timelineOperationSchema>;
 export type AxcutAnnotationRegion = z.infer<typeof annotationRegionSchema>;
 export type AxcutZoomRegion = z.infer<typeof zoomRegionSchema>;
 export type AxcutCameraTrack = z.infer<typeof cameraTrackSchema>;
+export type AxcutAudioTrack = z.infer<typeof audioTrackSchema>;
 export type AxcutLegacyEditor = z.infer<typeof legacyEditorSchema>;
 export type AxcutDocument = z.infer<typeof documentSchema>;
 export type AxcutDocumentInput = z.input<typeof documentSchema>;
@@ -977,10 +1018,32 @@ export function createEmptyDocument(
 		},
 		annotations: [],
 		zoomRanges: [],
+		audioTracks: [],
 		legacyEditor: null,
 	});
 }
 
 export function ensureDocument(value: unknown): AxcutDocument {
 	return documentSchema.parse(value);
+}
+
+/**
+ * Build a timeline audio track for an imported audio asset (issue #350). The
+ * head is placed at `timelineStartSec` (output-timeline seconds) and the track
+ * spans the whole source file until the user trims it. Parsed through the schema
+ * so every default (gain, mute, trim) is applied in one place.
+ */
+export function createAudioTrack(input: {
+	assetId: string;
+	durationSec: number;
+	timelineStartSec?: number;
+	label?: string;
+}): AxcutAudioTrack {
+	return audioTrackSchema.parse({
+		id: createId("audio"),
+		assetId: input.assetId,
+		durationSec: input.durationSec,
+		timelineStartSec: input.timelineStartSec ?? 0,
+		label: input.label ?? "",
+	});
 }
