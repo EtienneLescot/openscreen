@@ -45,6 +45,20 @@ const WITH_STALLED_READBACK =
 	process.env.OPENSCREEN_WGC_TEST_STALL_READBACK === "true" ||
 	process.argv.includes("--stall-readback");
 const STALL_READBACK_MS = Number(process.env[STALL_READBACK_ENV] ?? 60_000);
+const STALL_FRAME_CALLBACK_ENV = "OPENSCREEN_WGC_TEST_STALL_FRAME_CALLBACK_MS";
+/**
+ * Reproduces getopenscreen/openscreen#460 on ordinary hardware: stalls the WGC
+ * frame *callback* itself while it holds the frame lock, the shape that issue
+ * actually reproduced on Intel HD 520 ("A WGC frame callback did not finish").
+ * Distinct from WITH_STALLED_READBACK above -- that stalls the writer's own
+ * readback, which quiesceCapture()'s drain cannot see (callbacksInFlight_
+ * stays at zero), so it cannot exercise the video-writer-join skip this stall
+ * exists to test.
+ */
+const WITH_STALLED_FRAME_CALLBACK =
+	process.env.OPENSCREEN_WGC_TEST_STALL_FRAME_CALLBACK === "true" ||
+	process.argv.includes("--stall-frame-callback");
+const STALL_FRAME_CALLBACK_MS = Number(process.env[STALL_FRAME_CALLBACK_ENV] ?? 60_000);
 const STOP_BUDGET_ENV = "OPENSCREEN_WGC_STOP_BUDGET_MS";
 /**
  * The helper's global shutdown ceiling, pinned into its environment below so
@@ -64,17 +78,24 @@ if (WITH_SOFTWARE_ENCODER && WITH_SOFTWARE_FALLBACK) {
 	throw new Error("--software-encoder and --software-fallback are mutually exclusive");
 }
 
-function runHelper(config, { injectDefaultSinkWriterFailure = false, stallReadbackMs = 0 } = {}) {
+function runHelper(
+	config,
+	{ injectDefaultSinkWriterFailure = false, stallReadbackMs = 0, stallFrameCallbackMs = 0 } = {},
+) {
 	return new Promise((resolve, reject) => {
 		const env = { ...process.env };
 		delete env[INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV];
 		delete env[STALL_READBACK_ENV];
+		delete env[STALL_FRAME_CALLBACK_ENV];
 		env[STOP_BUDGET_ENV] = String(STOP_BUDGET_MS);
 		if (injectDefaultSinkWriterFailure) {
 			env[INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV] = "1";
 		}
 		if (stallReadbackMs > 0) {
 			env[STALL_READBACK_ENV] = String(stallReadbackMs);
+		}
+		if (stallFrameCallbackMs > 0) {
+			env[STALL_FRAME_CALLBACK_ENV] = String(stallFrameCallbackMs);
 		}
 		const child = spawn(HELPER_PATH, [JSON.stringify(config)], {
 			env,
@@ -211,6 +232,48 @@ function startFixtureWindow() {
 			reject(error);
 		});
 	});
+}
+
+/**
+ * Windows Graphics Capture delivers frames on compositor damage, not on a
+ * fixed clock -- on a genuinely idle desktop the frame pool can go a full
+ * test run without ever firing FrameArrived once. That is invisible to most
+ * of this harness, which just needs *a* frame eventually, but the
+ * stalled-frame-callback regression check needs one to land *inside* the
+ * DURATION_MS window specifically, so the stall this injects is actually the
+ * thing holding the frame lock when `stop` arrives.
+ *
+ * Moving the cursor alone does not reliably do this: most modern GPU/driver
+ * combinations composite the cursor on its own hardware overlay plane, so
+ * repositioning it never touches the desktop bitmap WGC captures (confirmed
+ * empirically here -- frames=0 with a cursor-only nudge running the whole
+ * test). A visible window changing position is not optional the way the
+ * cursor is; DWM has to redraw the area it moved across. Returns a stop
+ * function; always call it, paired failure or not, or the window and its
+ * PowerShell host outlive the test process.
+ */
+function startScreenActivity() {
+	const child = spawn(
+		"powershell",
+		[
+			"-NoProfile",
+			"-Command",
+			"Add-Type -AssemblyName System.Windows.Forms; " +
+				"$f = New-Object System.Windows.Forms.Form; " +
+				"$f.StartPosition = 'Manual'; $f.Location = New-Object System.Drawing.Point(0,0); " +
+				"$f.Size = New-Object System.Drawing.Size(200,200); " +
+				"$f.TopMost = $true; $f.Show(); " +
+				"$x = 0; " +
+				"while ($true) { " +
+				"$f.Location = New-Object System.Drawing.Point($x, 0); " +
+				"$x = ($x + 20) % 200; " +
+				"[System.Windows.Forms.Application]::DoEvents(); " +
+				"Start-Sleep -Milliseconds 100; " +
+				"}",
+		],
+		{ stdio: ["ignore", "ignore", "ignore"], windowsHide: false },
+	);
+	return () => child.kill();
 }
 
 function normalizeDeviceName(value) {
@@ -413,16 +476,19 @@ const config = {
 	},
 };
 
+const stopScreenActivity = WITH_STALLED_FRAME_CALLBACK ? startScreenActivity() : null;
 let result;
 try {
 	result = await runHelper(config, {
 		injectDefaultSinkWriterFailure: WITH_SOFTWARE_FALLBACK,
 		stallReadbackMs: WITH_STALLED_READBACK ? STALL_READBACK_MS : 0,
+		stallFrameCallbackMs: WITH_STALLED_FRAME_CALLBACK ? STALL_FRAME_CALLBACK_MS : 0,
 	});
 } finally {
 	if (fixtureWindow) {
 		fixtureWindow.child.kill();
 	}
+	stopScreenActivity?.();
 }
 
 // The regression check for issue #252. With the frame lock deliberately wedged
@@ -448,6 +514,51 @@ if (WITH_STALLED_READBACK) {
 		stopLatencyMs: result.stopLatencyMs,
 		steps,
 		abandoned: result.stderr.match(/step=(\S+)\s+elapsed_ms=\d+\s+phase=abandoned/)?.[1] ?? null,
+	});
+	fs.rmSync(outputPath, { force: true });
+	process.exit(0);
+}
+
+// The regression check for getopenscreen/openscreen#460: a frame callback
+// wedged inside the driver, confirmed on real hardware via a Save Diagnostics
+// report. Before the fix, video-writer-join burned its whole step budget
+// joining a thread parked behind that same stuck callback -- this asserts
+// both that the helper still exits promptly (not the ~13s that step's own
+// budget alone would cost) and that it took the specific skip path rather
+// than any other route to exiting.
+if (WITH_STALLED_FRAME_CALLBACK) {
+	if (result.stopHung) {
+		throw new Error(
+			`Helper survived ${STOP_HANG_LIMIT_MS}ms past "stop" with a stalled frame callback. ` +
+				"Its shutdown watchdog did not fire (issue #460).",
+		);
+	}
+	const steps = readStopTimingSteps(result.stderr);
+	if (!steps.includes("command-received")) {
+		throw new Error(`Helper never acknowledged "stop". Steps seen: ${steps.join(", ") || "none"}`);
+	}
+	if (!result.stderr.includes("reason=frame-callback-stuck")) {
+		throw new Error(
+			`Helper did not take the video-writer-join skip path. stderr:\n${result.stderr}`,
+		);
+	}
+	// wgc-quiesce's own drain is a fixed 5000ms, so a healthy skip lands
+	// there plus the near-instant audio/microphone/webcam steps -- nowhere
+	// near the ~13s (5s drain + the 8s step budget) the join it replaces
+	// would have cost before this fix.
+	const STALLED_FRAME_CALLBACK_LATENCY_BUDGET_MS = 10_000;
+	if (
+		result.stopLatencyMs !== null &&
+		result.stopLatencyMs > STALLED_FRAME_CALLBACK_LATENCY_BUDGET_MS
+	) {
+		throw new Error(
+			`Stop took ${result.stopLatencyMs}ms with a stalled frame callback, over the ` +
+				`${STALLED_FRAME_CALLBACK_LATENCY_BUDGET_MS}ms budget the video-writer-join skip should keep it under.`,
+		);
+	}
+	console.log("WGC helper stalled-frame-callback stop check passed", {
+		stopLatencyMs: result.stopLatencyMs,
+		steps,
 	});
 	fs.rmSync(outputPath, { force: true });
 	process.exit(0);
