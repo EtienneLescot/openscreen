@@ -63,6 +63,14 @@
 			"circle": "圆形",
 			"square": "正方形",
 			"rounded": "圆角"
+		},
+		"webcamBackground": "摄像头背景",
+		"webcamBlurIntensity": "模糊强度",
+		"bgModes": {
+			"none": "原画",
+			"transparent": "抠图",
+			"blur": "模糊",
+			"custom": "自定义"
 		}
 	},
 	"effects": {

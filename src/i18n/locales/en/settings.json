@@ -63,6 +63,14 @@
 			"circle": "Circle",
 			"square": "Square",
 			"rounded": "Rounded"
+		},
+		"webcamBackground": "Camera Background",
+		"webcamBlurIntensity": "Blur Intensity",
+		"bgModes": {
+			"none": "Original",
+			"transparent": "Cutout",
+			"blur": "Blur",
+			"custom": "Custom"
 		}
 	},
 	"audio": {

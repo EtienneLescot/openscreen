@@ -154,4 +154,49 @@ describe("WebcamOverlay (per-clip camera resolution)", () => {
 		rerender(<WebcamOverlay {...baseProps(2)} />);
 		expect(container.querySelector("video")).toBeTruthy();
 	});
+
+	it("renders background container when custom or blur background mode is active", () => {
+		const doc = makeDocument();
+		doc.legacyEditor = {
+			wallpaper: "#000000",
+			shadowIntensity: 0,
+			borderRadius: 0,
+			padding: 0,
+			showBlur: false,
+			motionBlurAmount: 0,
+			webcamSizePreset: 25,
+			webcamMaskShape: "rectangle",
+			webcamLayoutPreset: "picture-in-picture",
+			webcamMirrored: false,
+			webcamReactiveZoom: false,
+			webcamBackgroundMode: "custom",
+			webcamWallpaper: "#ff0080",
+			webcamBlurIntensity: 0.5,
+			cursorShow: false,
+			cursorSize: 1,
+			cursorSmoothing: 0,
+			cursorMotionBlur: 0,
+			cursorClickBounce: 0,
+			cursorTheme: "default",
+			cursorClipToBounds: false,
+		};
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: doc,
+			revision: 1,
+			status: "ready",
+			error: null,
+			sourceDurationSec: 0,
+			currentTimeSec: 2,
+			dirty: false,
+			lastSavedAt: new Date(),
+		});
+
+		const { container } = render(<WebcamOverlay {...baseProps(2)} />);
+		const video = container.querySelector("video");
+		expect(video).toBeTruthy();
+		const bg = container.querySelector("[aria-hidden='true']");
+		expect(bg).toBeTruthy();
+		expect((bg as HTMLElement)?.style.backgroundColor).toBe("rgb(255, 0, 128)");
+	});
 });

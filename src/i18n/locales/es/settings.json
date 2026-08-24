@@ -63,6 +63,14 @@
 			"circle": "Círculo",
 			"square": "Cuadrado",
 			"rounded": "Redondeado"
+		},
+		"webcamBackground": "Fondo de la cámara",
+		"webcamBlurIntensity": "Intensidad del desenfoque",
+		"bgModes": {
+			"none": "Original",
+			"transparent": "Recortado",
+			"blur": "Desenfocado",
+			"custom": "Personalizado"
 		}
 	},
 	"effects": {

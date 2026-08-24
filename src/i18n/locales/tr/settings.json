@@ -63,6 +63,14 @@
 			"circle": "Daire",
 			"square": "Kare",
 			"rounded": "Yuvarlatılmış"
+		},
+		"webcamBackground": "Kamera Arka Planı",
+		"webcamBlurIntensity": "Bulanıklık Yoğunluğu",
+		"bgModes": {
+			"none": "Orijinal",
+			"transparent": "Kesme",
+			"blur": "Bulanık",
+			"custom": "Özel"
 		}
 	},
 	"effects": {
