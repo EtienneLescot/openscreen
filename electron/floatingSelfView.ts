@@ -170,6 +170,9 @@ export class FloatingSelfViewController {
 		}
 		this.open = true;
 		win.showInactive();
+		// Reassert z-order after every hidden -> visible transition. macOS may
+		// otherwise leave the panel behind the app that owns the active Space.
+		win.moveTop();
 		this.broadcastState();
 		this.finishPending({ success: true });
 		return { success: true };

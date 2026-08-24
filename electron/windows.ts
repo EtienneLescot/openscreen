@@ -426,7 +426,12 @@ export function createFloatingSelfViewWindow(): BrowserWindow {
 	win.setAspectRatio(16 / 9);
 	applyContentProtection(win, "floating self-view");
 	if (process.platform === "darwin") {
-		win.setAlwaysOnTop(true, "floating", 1);
+		// NSFloatingWindowLevel can still fall behind a maximized app or a native
+		// fullscreen Space. The self-view is an explicit recording control, so use
+		// Electron's documented fullscreen-safe level while recording and keep the
+		// all-Spaces behavior below. Capture safety comes from ScreenCaptureKit's
+		// application filter and content protection, not from the window level.
+		win.setAlwaysOnTop(true, "screen-saver", 1);
 		win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 	}
 

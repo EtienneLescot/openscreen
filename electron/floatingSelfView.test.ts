@@ -28,6 +28,7 @@ function fixture() {
 		isDestroyed: vi.fn(() => false),
 		isVisible: vi.fn(() => false),
 		showInactive: vi.fn(),
+		moveTop: vi.fn(),
 		hide: vi.fn(),
 		destroy: vi.fn(),
 		webContents: selfViewSender,
@@ -71,6 +72,7 @@ describe("capture-safe floating self-view controller", () => {
 		expect(controller.handleReady(selfViewSender, 1)).toEqual({ success: true });
 		await expect(show).resolves.toEqual({ success: true });
 		expect(selfViewWindow.showInactive).toHaveBeenCalledTimes(1);
+		expect(selfViewWindow.moveTop).toHaveBeenCalledTimes(1);
 		expect(controller.getState()).toEqual({ open: true });
 	});
 
