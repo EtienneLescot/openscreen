@@ -1286,3 +1286,122 @@ describe("useTimeline drag snapshots", () => {
 		expect(useProjectStore.getState().document?.annotations[0].content).toBe("before");
 	});
 });
+
+// Issue #350 — imported audio tracks. The hook wraps the pure ops in
+// document/audioTracks.ts (unit-tested separately); these cover the wiring:
+// asset lookup, playhead placement, the save, and undo.
+describe("useTimeline audio tracks", () => {
+	const audioDoc: AxcutDocument = {
+		...sampleDoc,
+		assets: [
+			...sampleDoc.assets,
+			{
+				id: "audio_1",
+				kind: "audio",
+				label: "voiceover.mp3",
+				originalPath: "/tmp/vo.mp3",
+				durationSec: 30,
+				cameraTrack: null,
+			},
+		],
+	};
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		clearHistory();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: audioDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+			currentTimeSec: 4,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("addAudioTrack places a track for the asset at the playhead and returns its id", async () => {
+		const { result } = renderTimeline();
+		let id: string | null = null;
+		await act(async () => {
+			id = await result.current.addAudioTrack("audio_1");
+		});
+		const tracks = useProjectStore.getState().document?.audioTracks ?? [];
+		expect(tracks).toHaveLength(1);
+		expect(id).toBe(tracks[0]?.id);
+		expect(tracks[0]).toMatchObject({
+			assetId: "audio_1",
+			durationSec: 30,
+			timelineStartSec: 4,
+			label: "voiceover.mp3",
+		});
+	});
+
+	it("addAudioTrack refuses a non-audio (or unknown) asset", async () => {
+		const { result } = renderTimeline();
+		let videoId: string | null = "x";
+		let missingId: string | null = "x";
+		await act(async () => {
+			videoId = await result.current.addAudioTrack("asset_1"); // a video asset
+			missingId = await result.current.addAudioTrack("nope");
+		});
+		expect(videoId).toBeNull();
+		expect(missingId).toBeNull();
+		expect(useProjectStore.getState().document?.audioTracks).toEqual([]);
+	});
+
+	it("move / trim / gain / mute update the track and each is one undo step", async () => {
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioTrack("audio_1", 2)) ?? "";
+		});
+		await act(async () => {
+			await result.current.moveAudioTrack(id, 9);
+		});
+		await act(async () => {
+			await result.current.resizeAudioTrack(id, { trimStartSec: 1, trimEndSec: 8 });
+		});
+		await act(async () => {
+			await result.current.setAudioTrackGain(id, -6);
+		});
+		await act(async () => {
+			await result.current.toggleAudioTrackMute(id);
+		});
+
+		const track = useProjectStore.getState().document?.audioTracks[0];
+		expect(track).toMatchObject({
+			timelineStartSec: 9,
+			trimStartSec: 1,
+			trimEndSec: 8,
+			gainDb: -6,
+			mute: true,
+		});
+
+		// Five writes (add + four edits) → the mute undoes first.
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.audioTracks[0]?.mute).toBe(false);
+	});
+
+	it("removeAudioTrack deletes the track", async () => {
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioTrack("audio_1")) ?? "";
+		});
+		await act(async () => {
+			await result.current.removeAudioTrack(id);
+		});
+		expect(useProjectStore.getState().document?.audioTracks).toEqual([]);
+	});
+});
