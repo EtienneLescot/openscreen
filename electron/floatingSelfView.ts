@@ -169,7 +169,21 @@ export class FloatingSelfViewController {
 			return { success: true };
 		}
 		this.open = true;
+		// This window is pre-created hidden before ScreenCaptureKit enumerates
+		// exclusions. On macOS a normal window can retain the Space where it was
+		// created even though the all-workspaces flag was set at construction time.
+		// Reassert the fullscreen collection behavior on the hidden -> visible
+		// transition, then once more after showInactive() in case AppKit rebuilt the
+		// native ordering while showing the non-activating panel.
+		const allSpacesOptions = {
+			visibleOnFullScreen: true,
+			skipTransformProcessType: true,
+		};
+		win.setVisibleOnAllWorkspaces(true, allSpacesOptions);
+		win.setAlwaysOnTop(true, "screen-saver", 1);
 		win.showInactive();
+		win.setVisibleOnAllWorkspaces(true, allSpacesOptions);
+		win.setAlwaysOnTop(true, "screen-saver", 1);
 		// Reassert z-order after every hidden -> visible transition. macOS may
 		// otherwise leave the panel behind the app that owns the active Space.
 		win.moveTop();

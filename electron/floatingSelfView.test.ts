@@ -28,6 +28,8 @@ function fixture() {
 		isDestroyed: vi.fn(() => false),
 		isVisible: vi.fn(() => false),
 		showInactive: vi.fn(),
+		setVisibleOnAllWorkspaces: vi.fn(),
+		setAlwaysOnTop: vi.fn(),
 		moveTop: vi.fn(),
 		hide: vi.fn(),
 		destroy: vi.fn(),
@@ -72,6 +74,13 @@ describe("capture-safe floating self-view controller", () => {
 		expect(controller.handleReady(selfViewSender, 1)).toEqual({ success: true });
 		await expect(show).resolves.toEqual({ success: true });
 		expect(selfViewWindow.showInactive).toHaveBeenCalledTimes(1);
+		expect(selfViewWindow.setVisibleOnAllWorkspaces).toHaveBeenCalledTimes(2);
+		expect(selfViewWindow.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, {
+			visibleOnFullScreen: true,
+			skipTransformProcessType: true,
+		});
+		expect(selfViewWindow.setAlwaysOnTop).toHaveBeenCalledTimes(2);
+		expect(selfViewWindow.setAlwaysOnTop).toHaveBeenCalledWith(true, "screen-saver", 1);
 		expect(selfViewWindow.moveTop).toHaveBeenCalledTimes(1);
 		expect(controller.getState()).toEqual({ open: true });
 	});

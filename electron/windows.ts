@@ -406,9 +406,15 @@ export function createFloatingSelfViewWindow(): BrowserWindow {
 		x: workArea.x + workArea.width - width - margin,
 		y: workArea.y + workArea.height - height - margin,
 		frame: false,
+		// Electron's macOS `panel` type adds the non-activating panel style mask.
+		// Unlike a normal hidden BrowserWindow, it is explicitly designed to float
+		// above fullscreen apps and appear on every Space. This window is macOS-only
+		// (the controller is created only in the Darwin boot path).
+		type: "panel",
 		backgroundColor: "#050608",
 		resizable: true,
 		movable: true,
+		fullscreenable: false,
 		alwaysOnTop: true,
 		skipTaskbar: true,
 		hasShadow: true,
