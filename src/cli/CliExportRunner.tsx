@@ -27,6 +27,7 @@ import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { DEFAULT_ZOOM_DEPTH, ZOOM_DEPTH_SCALES } from "@/lib/ai-edition/timeline/zoom-scale";
 import { buildAutoZoomSuggestions } from "@/lib/ai-edition/timeline/zoom-suggestions";
+import { prepareSegmentedWebcamTrack } from "@/lib/ai-edition/webcamSegmentation";
 import type { CliDoneResult, CliExportRequest } from "@/lib/cliContracts";
 import { GIF_SIZE_PRESETS, type GifSizePreset } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
@@ -263,11 +264,47 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 		aspectRatioValue,
 	});
 
-	const clips = buildNativeClipList(axcutDocument);
+	let clips = buildNativeClipList(axcutDocument);
 	if (clips.length === 0) {
 		throw new Error("The project's timeline has no visible clips to export");
 	}
-	const sceneJson = JSON.stringify(buildSceneDescription(axcutDocument));
+	const sceneDesc = buildSceneDescription(axcutDocument);
+	const settings = getEditorSettings(axcutDocument);
+
+	if (settings.webcamBackgroundMode !== "none") {
+		const processedMap = new Map<string, string>();
+		for (const clip of clips) {
+			if (clip.webcamPath && !processedMap.has(clip.webcamPath)) {
+				const processedPath = await prepareSegmentedWebcamTrack(
+					clip.webcamPath,
+					{
+						mode: settings.webcamBackgroundMode,
+						blurIntensity: settings.webcamBlurIntensity,
+						wallpaper: settings.webcamWallpaper,
+					},
+					(prog) => {
+						window.electronAPI.cliProgress({
+							percentage: Math.min(100, prog * 100),
+							currentFrame: Math.round(prog * 100),
+							totalFrames: 100,
+							estimatedTimeRemaining: 0,
+						});
+					},
+				);
+				processedMap.set(clip.webcamPath, processedPath);
+			}
+		}
+		clips = clips.map((clip) =>
+			clip.webcamPath && processedMap.has(clip.webcamPath)
+				? { ...clip, webcamPath: processedMap.get(clip.webcamPath)! }
+				: clip,
+		);
+		sceneDesc.webcamEffect = {
+			mode: "presegmented",
+			blurIntensity: settings.webcamBackgroundMode === "transparent" ? -1 : 0,
+		};
+	}
+	const sceneJson = JSON.stringify(sceneDesc);
 
 	// Progress: native pushes raw encoded-frame counts; totals and pacing are
 	// computed here, mirroring the ExportDialog.

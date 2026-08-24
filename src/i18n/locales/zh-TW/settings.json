@@ -64,6 +64,14 @@
 			"circle": "圓形",
 			"square": "正方形",
 			"rounded": "圓角"
+		},
+		"webcamBackground": "攝影機背景",
+		"webcamBlurIntensity": "模糊強度",
+		"bgModes": {
+			"none": "原畫",
+			"transparent": "去背",
+			"blur": "模糊",
+			"custom": "自訂"
 		}
 	},
 	"effects": {

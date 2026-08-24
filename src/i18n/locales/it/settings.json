@@ -63,6 +63,14 @@
 			"circle": "Cerchio",
 			"square": "Quadrato",
 			"rounded": "Arrotondato"
+		},
+		"webcamBackground": "Sfondo della fotocamera",
+		"webcamBlurIntensity": "Intensità sfocatura",
+		"bgModes": {
+			"none": "Originale",
+			"transparent": "Scontornato",
+			"blur": "Sfocato",
+			"custom": "Personalizzato"
 		}
 	},
 	"effects": {

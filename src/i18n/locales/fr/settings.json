@@ -63,6 +63,14 @@
 			"circle": "Cercle",
 			"square": "Carré",
 			"rounded": "Arrondi"
+		},
+		"webcamBackground": "Arrière-plan de la caméra",
+		"webcamBlurIntensity": "Intensité du flou",
+		"bgModes": {
+			"none": "Original",
+			"transparent": "Détouré",
+			"blur": "Flouté",
+			"custom": "Personnalisé"
 		}
 	},
 	"effects": {

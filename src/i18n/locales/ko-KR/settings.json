@@ -63,6 +63,14 @@
 			"circle": "원형",
 			"square": "정사각형",
 			"rounded": "둥근 모서리"
+		},
+		"webcamBackground": "카메라 배경",
+		"webcamBlurIntensity": "블러 강도",
+		"bgModes": {
+			"none": "원본",
+			"transparent": "누끼",
+			"blur": "블러",
+			"custom": "사용자 지정"
 		}
 	},
 	"effects": {
