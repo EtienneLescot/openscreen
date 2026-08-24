@@ -407,11 +407,13 @@ bool resolveStreamSinkIndex(IMFMediaSink* mediaSink, const GUID& majorType, DWOR
 // Did the video stream's encoder MFT actually land on hardware?
 //
 // BeginWriting() succeeding says nothing about this: on the "default" path
-// (see kVideoEncoderRuntime* in mf_encoder.h) no attribute asked for hardware
-// transforms, so Media Foundation is free to hand the sink writer a software
-// MFT even when a hardware one is registered and would have worked. The only
-// way to know which one it actually picked is to ask the pipeline it built,
-// after the fact -- IMFSinkWriterEx::GetTransformForStream walks the MFTs the
+// (see kVideoEncoderRuntime* in mf_encoder.h) MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS
+// is requested whenever software encoding is not forced, but that request
+// only asks Media Foundation to consider a hardware MFT -- it can still hand
+// the sink writer a software one even when a hardware encoder is registered
+// and would have worked. The only way to know which one it actually picked
+// is to ask the pipeline it built, after the fact --
+// IMFSinkWriterEx::GetTransformForStream walks the MFTs the
 // sink writer inserted for a stream, and a hardware MFT instance is required
 // to expose MFT_ENUM_HARDWARE_URL_Attribute on its own attribute store (not
 // just on the IMFActivate MFTEnumEx returns), which is what distinguishes it
