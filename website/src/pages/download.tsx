@@ -56,7 +56,7 @@ const PLATFORMS: PlatformSpec[] = [
 		footnote: (
 			<>
 				System audio is captured without extra drivers. Integrated graphics older than ~8th-gen
-				Intel may hit known recording-stop issues — see{" "}
+				Intel (or the AMD Ryzen 2000 series equivalent) may hit known recording-stop issues — see{" "}
 				<Link to="/docs/installation#system-requirements">system requirements</Link>.
 			</>
 		),

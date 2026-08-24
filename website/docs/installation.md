@@ -24,7 +24,7 @@ Download the latest installer for your platform from the [download page](/downlo
 |---|---|---|
 | **Windows** | Windows 10 version 1903 (build 18362) or later, Intel 8th Gen / AMD Ryzen 2000 series or newer | Windows 11, Intel 12th Gen / AMD Ryzen 4000 series or newer |
 | **macOS** | macOS 12.3 (Monterey) — required by ScreenCaptureKit for native capture | macOS 14 or later |
-| **Linux** | A desktop with `xdg-desktop-portal` and PipeWire (default on Ubuntu 22.04+, Fedora 34+) | Same, kept up to date |
+| **Linux** | `xdg-desktop-portal` and PipeWire for native capture and system audio (default on Ubuntu 22.04+, Fedora 34+) — recording still works without them through the [browser-capture fallback](#platform-differences), with fewer capabilities | Same, kept up to date |
 | **RAM** | 8 GB | 16 GB |
 
 :::note Older integrated graphics on Windows
