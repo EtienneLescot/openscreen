@@ -8,6 +8,7 @@
 // are used everywhere; values that v3 owns directly (zoomRanges, annotations,
 // transcripts, clips) stay in their dedicated fields.
 
+import { DEFAULT_EDITOR_LAYOUT_SETTINGS } from "@/components/video-editor/editorDefaults";
 import {
 	type CropRegion,
 	type CursorVisualSettings,
@@ -116,7 +117,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	showBlur: false,
 	motionBlurAmount: 0.2,
 	borderRadius: 40,
-	padding: 50,
+	padding: DEFAULT_EDITOR_LAYOUT_SETTINGS.padding,
 	cropRegion: DEFAULT_CROP_REGION,
 	webcamLayoutPreset: DEFAULT_WEBCAM_LAYOUT_PRESET,
 	webcamMaskShape: DEFAULT_WEBCAM_MASK_SHAPE,
