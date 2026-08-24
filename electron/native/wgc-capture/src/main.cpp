@@ -682,6 +682,16 @@ int main(int argc, char* argv[]) {
     // ordinary hardware, so the stop path can be regression-tested at all.
     const int testStallReadbackMs =
         std::max(0, readEnvInt("OPENSCREEN_WGC_TEST_STALL_READBACK_MS", 0));
+    // Test-only: stall the WGC frame *callback* itself while it holds the
+    // same frame lock, rather than the writer's readback -- the shape
+    // getopenscreen/openscreen#460 actually reproduced on Intel HD 520
+    // ("A WGC frame callback did not finish"). Distinct from
+    // testStallReadbackMs above because quiesceCapture()'s drain only ever
+    // sees the callback side: a stall placed in the writer instead leaves
+    // callbacksInFlight_ at zero and wgcDrained true, which cannot exercise
+    // the video-writer-join skip this stall exists to test.
+    const int testStallFrameCallbackMs =
+        std::max(0, readEnvInt("OPENSCREEN_WGC_TEST_STALL_FRAME_CALLBACK_MS", 0));
 
     std::cout << "{\"event\":\"ready\",\"schemaVersion\":2}" << std::endl;
 
@@ -931,6 +941,18 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Gated on an already-arrived first frame: main() blocks up to 10s
+        // waiting for firstFrameWritten before it will even print
+        // recording-started, a startup budget this stall is meant to outlast
+        // (it needs to still be asleep when `stop` arrives, seconds later).
+        // Stalling the first frame trips that unrelated timeout instead of
+        // reaching the steady-state shutdown path this exists to test, and
+        // does not match the real report either -- getopenscreen/openscreen
+        // #460's diagnostic shows recording-started succeeding before the
+        // hang.
+        if (testStallFrameCallbackMs > 0 && firstFrameWritten.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(testStallFrameCallbackMs));
+        }
         session.context()->CopyResource(latestFrameTexture.Get(), texture);
         latestFrameTimestampHns = timestampHns;
         if (!firstFrameWritten.exchange(true)) {
@@ -1420,8 +1442,47 @@ int main(int argc, char* argv[]) {
     }
     logStopStep("audio-mixer");
     beginStopStep("video-writer-join", stepBudgetMs);
-    stopVideoWriter();
-    logStopStep("video-writer-join");
+    if (wgcDrained) {
+        stopVideoWriter();
+        logStopStep("video-writer-join");
+    } else {
+        // wgc-quiesce already reported the frame callback stuck inside the
+        // driver (getopenscreen/openscreen#460 on Intel HD 520: a
+        // CopyResource that never returns), still holding the same
+        // frame-state `mutex` writeVideoFrames takes for its own
+        // per-iteration wait -- the one it also needs to notice
+        // stopRequested. Joining is not a step that can time out here, it is
+        // one that cannot ever succeed, and this is not the only step that
+        // assumed it would: encoder.finalize() below resets the very D3D
+        // device/context a still-blocked writer thread might resume touching
+        // the moment that lock frees, and quiesceCapture()/stop() already
+        // treat "leave everything alone and let process exit reclaim it" as
+        // the only safe response to exactly this state. So this ends the
+        // process here, on this thread, rather than pretending the rest of a
+        // clean shutdown is reachable -- which cost nothing extra before
+        // today: the same TerminateProcess happened anyway, just
+        // stepBudgetMs later, once this step's own watchdog gave up waiting
+        // on a join that could never return. detach() first, not because
+        // TerminateProcess needs it (it does not touch the C++ runtime, no
+        // std::thread destructor runs), but so nothing between here and the
+        // kill can trip over a still-joinable thread.
+        //
+        // The fragmented sink writes moof+mdat incrementally, roughly once a
+        // second, so this is not a new source of loss: whatever was already
+        // on disk before the callback wedged is on disk regardless of
+        // whether Finalize() ever runs, on this path or the slower one it
+        // replaces.
+        videoWriterThread.detach();
+        std::cerr << "[stop-timing] step=video-writer-join elapsed_ms=" << stopElapsedMs()
+                  << " phase=abandoned encode_stage=" << encoder.encodeStage()
+                  << " audio_stage=" << encoder.audioStage() << " reason=frame-callback-stuck"
+                  << std::endl;
+        std::cout << "{\"event\":\"stop-timeout\",\"schemaVersion\":2,\"step\":\"video-writer-join\"}"
+                  << std::endl;
+        std::cout.flush();
+        std::cerr.flush();
+        TerminateProcess(GetCurrentProcess(), 3);
+    }
     if (usesDxgiInput) {
         std::cerr << "[frame-drops] gpu_bridge_contended=" << contendedFrames.load() << std::endl;
     }
@@ -1430,7 +1491,9 @@ int main(int argc, char* argv[]) {
     // the encoder's GPU readback, and audioMixer->stop() joined the only other
     // thread that writes to it. MFEncoder's own writerMutex_ deliberately does
     // NOT cover copyFrameToBuffer, so finalizing before those joins would race
-    // the staging texture -- do not reorder these.
+    // the staging texture -- do not reorder these. Reaching this line at all
+    // means wgcDrained was true above: the branch that was not is a
+    // TerminateProcess call, not a fallthrough.
     beginStopStep("encoder-finalize", shutdownBudgetMs);
     const bool screenFinalized = encoder.finalize();
     logStopStep("encoder-finalize");
