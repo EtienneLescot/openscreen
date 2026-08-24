@@ -154,6 +154,73 @@ float3 quad_inverse_bilinear(float2 P, float2 c00, float2 c10, float2 c11, float
     return (r0.z > 0.5) ? r0 : r1;
 }
 
+// Human skin, body prior and subject saliency detection in YCbCr:
+// Y (luminance), Cb (blue difference), Cr (red difference).
+float compute_person_mask(float2 uv, float2 qpx, float threshold, float feather)
+{
+    float y = texY.Sample(samp, uv);
+    float2 cbcr = texUV.Sample(samp, uv);
+
+    // Anatomical portrait prior: Head and shoulders form a vertical rounded shape
+    float2 torso_p = (uv - float2(0.5, 0.72)) * float2(1.8, 1.2);
+    float torso_d = length(torso_p);
+    float2 head_p = (uv - float2(0.5, 0.45)) * float2(2.5, 2.0);
+    float head_d = length(head_p);
+    float body_prior = saturate(1.0 - min(torso_d, head_d));
+
+    // Skin tone probability in normalized YCbCr space:
+    // Cb in [0.36, 0.50], Cr in [0.54, 0.70]
+    float cb_d = abs(cbcr.x - 0.43);
+    float cr_d = abs(cbcr.y - 0.61);
+    float is_skin = saturate(1.0 - (cb_d * 7.5 + cr_d * 6.5));
+
+    // High contrast/edge energy
+    float2 delta = float2(1.5 / max(qpx.x, 1.0), 1.5 / max(qpx.y, 1.0));
+    float y_l = texY.Sample(samp, uv - float2(delta.x, 0.0));
+    float y_r = texY.Sample(samp, uv + float2(delta.x, 0.0));
+    float y_u = texY.Sample(samp, uv - float2(0.0, delta.y));
+    float y_d = texY.Sample(samp, uv + float2(0.0, delta.y));
+    float edge = abs(y_l - y_r) + abs(y_u - y_d);
+
+    // Top room background suppression (ceiling / top room corners are never the speaker)
+    float center_dist_x = abs(uv.x - 0.5) * 2.0;
+    float center_dist_y = uv.y;
+    float corner_dist = saturate((1.0 - center_dist_y) * (center_dist_x * 0.9 + 0.1));
+    float subject_envelope = saturate(1.0 - corner_dist * 1.6) * saturate(center_dist_y * 2.2);
+
+    // Combined score
+    float score = body_prior * 0.55 + is_skin * 0.40 + subject_envelope * 0.35 + edge * 0.20;
+
+    // User threshold and feathering
+    float center_t = lerp(0.20, 0.75, saturate(threshold));
+    float half_f = max(feather * 0.25, 0.02);
+
+    float min_t = max(center_t - half_f, 0.0);
+    float max_t = min(center_t + half_f, 1.0);
+
+    float mask = smoothstep(min_t, max_t, score);
+    return saturate(mask);
+}
+
+float3 sample_blur_yuv(float2 uv, float intensity, float2 qpx)
+{
+    float radius = max(intensity * 12.0, 4.0);
+    float2 step = radius / max(qpx, 1.0);
+    float3 sum = 0.0;
+    float total = 0.0;
+    [unroll] for (int dy = -2; dy <= 2; dy++)
+    {
+        [unroll] for (int dx = -2; dx <= 2; dx++)
+        {
+            float2 offset = float2(dx, dy) * step;
+            float weight = 1.0 / (1.0 + length(float2(dx, dy)));
+            sum += sample_yuv(saturate(uv + offset)) * weight;
+            total += weight;
+        }
+    }
+    return sum / max(total, 1e-4);
+}
+
 float4 ps_main(VSOut i) : SV_Target
 {
     // mode 13 : SPRITE DE CURSEUR posé sur l'écran incliné. Même warp que le mode 8, mais
@@ -410,6 +477,7 @@ float4 ps_main(VSOut i) : SV_Target
     }
 
     float3 rgb;
+    float alpha = color.a;
     if (mode < 0.5)
     {
         // flou de mouvement par vélocité (§8) : pour CE pixel sortie, uv à la frame
@@ -435,13 +503,31 @@ float4 ps_main(VSOut i) : SV_Target
             }
             rgb = acc / (float) taps;
         }
+
+        // Effet d'arrière-plan webcam : fx.z (1=cutout, 2=blur, 3=custom)
+        float effect_mode = fx.z;
+        if (effect_mode > 0.5)
+        {
+            float person = compute_person_mask(uv_now, quad_px, fx.y, fx.x);
+            if (effect_mode > 2.5)
+            {
+                rgb = lerp(color.rgb, rgb, person);
+            }
+            else if (effect_mode > 1.5)
+            {
+                float3 bg_blur = sample_blur_yuv(uv_now, fx.w, quad_px);
+                rgb = lerp(bg_blur, rgb, person);
+            }
+            else
+            {
+                alpha *= person;
+            }
+        }
     }
     else
     {
         rgb = color.rgb;
     }
-
-    float alpha = color.a;
     if (radius_px > 0.0)
     {
         // `quad_px` est en px de SORTIE (le render target porte la géométrie de sortie) et

@@ -16,7 +16,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
-import type { WebcamLayoutPreset, WebcamMaskShape } from "@/components/video-editor/types";
+import type {
+	WebcamBackgroundMode,
+	WebcamLayoutPreset,
+	WebcamMaskShape,
+} from "@/components/video-editor/types";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
@@ -27,6 +31,8 @@ import {
 	resolveCameraSyncTarget,
 } from "@/lib/ai-edition/timeline/playback-clock";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
+import { renderSegmentedWebcam } from "@/lib/ai-edition/webcamSegmentation";
+import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { setWebcamNativeSize } from "@/native/webcamSizeCache";
 import styles from "./NewEditorShell.module.css";
@@ -156,60 +162,183 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 		}
 	}, [videoEl, props.isPlaying, props.clockRef]);
 
+	const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+	// Neural segmentation render loop when background effect is active
+	useEffect(() => {
+		if (!videoEl || settings.webcamBackgroundMode === "none") return;
+		const canvas = canvasRef.current;
+		if (!canvas) return;
+
+		let isDestroyed = false;
+		let isProcessing = false;
+		let raf = 0;
+
+		const processFrame = async () => {
+			if (isDestroyed) return;
+			if (!isProcessing && videoEl.readyState >= 2 && !videoEl.paused) {
+				isProcessing = true;
+				try {
+					await renderSegmentedWebcam(videoEl, canvas, {
+						mode: settings.webcamBackgroundMode,
+						blurIntensity: settings.webcamBlurIntensity,
+						wallpaper: settings.webcamWallpaper,
+					});
+				} catch (err) {
+					console.error("[WebcamOverlay] Segmentation error:", err);
+				} finally {
+					isProcessing = false;
+				}
+			}
+			raf = window.requestAnimationFrame(processFrame);
+		};
+
+		const renderOnce = () => {
+			if (videoEl.readyState >= 2) {
+				void renderSegmentedWebcam(videoEl, canvas, {
+					mode: settings.webcamBackgroundMode,
+					blurIntensity: settings.webcamBlurIntensity,
+					wallpaper: settings.webcamWallpaper,
+				});
+			}
+		};
+
+		renderOnce();
+		videoEl.addEventListener("seeked", renderOnce);
+		videoEl.addEventListener("loadeddata", renderOnce);
+		raf = window.requestAnimationFrame(processFrame);
+
+		return () => {
+			isDestroyed = true;
+			window.cancelAnimationFrame(raf);
+			videoEl.removeEventListener("seeked", renderOnce);
+			videoEl.removeEventListener("loadeddata", renderOnce);
+		};
+	}, [
+		videoEl,
+		settings.webcamBackgroundMode,
+		settings.webcamBlurIntensity,
+		settings.webcamWallpaper,
+	]);
+
 	if (!cameraTrack?.sourcePath || !cameraTrack.visible) {
 		return null;
 	}
 
-	const showError = hasError;
-	// ponytail: the layout computes the final borderRadius (preset fraction
-	// for dual-frame/overlay, 0 for stack, half-circle for circle PiP, etc.).
-	// Push it onto the <video> itself so it actually clips the camera
-	// content; the container stays a transparent, overflow:hidden wrapper.
-	const style: React.CSSProperties = {
-		display: showError ? "none" : "block",
+	const bgStyle = buildWebcamBackgroundStyle(
+		settings.webcamBackgroundMode,
+		settings.webcamWallpaper,
+		props.borderRadius,
+		props.webcamMaskShape,
+	);
+
+	const videoStyle: React.CSSProperties = {
+		display: hasError ? "none" : "block",
 		transform: settings.webcamMirrored ? "scaleX(-1)" : undefined,
 		clipPath: getCssClipPath(props.webcamMaskShape) ?? undefined,
 		borderRadius: `${props.borderRadius}px`,
+		position: bgStyle ? "relative" : undefined,
+		zIndex: bgStyle ? 1 : undefined,
 	};
 
-	return (
-		<video
-			key={cameraTrack.sourcePath}
-			ref={(el) => {
-				setVideoEl(el);
-				setHasError(false);
-			}}
-			src={toFileUrl(cameraTrack.sourcePath)}
-			className={styles.webcamVideo}
-			muted
-			playsInline
-			preload="metadata"
-			onError={() => setHasError(true)}
-			onLoadedMetadata={(event) => {
-				// ponytail: cache the REAL webcam dimensions so the composite layout
-				// shapes its box to match the actual camera aspect (otherwise we'd ship
-				// a 4:3 box for a 16:9 webcam and the Rust `fit_cam_aspect` closure
-				// would shrink the 16:9 content inside a 4:3 box — visible empty margin
-				// inside the PiP container).
-				const target = event.currentTarget;
-				const w = target.videoWidth;
-				const h = target.videoHeight;
-				if (w > 0 && h > 0) {
-					setWebcamNativeSize(cameraTrack.sourcePath, { width: w, height: h });
-				}
-				if (
-					cameraTime !== null &&
-					videoEl &&
-					Math.abs(videoEl.currentTime - cameraTime) > CAMERA_SYNC_TOLERANCE_PAUSED_SEC
-				) {
-					try {
-						videoEl.currentTime = cameraTime;
-					} catch {
-						// silent
+	const isCustomEffect = settings.webcamBackgroundMode !== "none";
+
+	const video = (
+		<>
+			<video
+				key={cameraTrack.sourcePath}
+				ref={(el) => {
+					setVideoEl(el);
+					setHasError(false);
+				}}
+				src={toFileUrl(cameraTrack.sourcePath)}
+				className={styles.webcamVideo}
+				muted
+				playsInline
+				preload="metadata"
+				onError={() => setHasError(true)}
+				onLoadedMetadata={(event) => {
+					const target = event.currentTarget;
+					const w = target.videoWidth;
+					const h = target.videoHeight;
+					if (w > 0 && h > 0) {
+						setWebcamNativeSize(cameraTrack.sourcePath, { width: w, height: h });
 					}
+					if (
+						cameraTime !== null &&
+						videoEl &&
+						Math.abs(videoEl.currentTime - cameraTime) > CAMERA_SYNC_TOLERANCE_PAUSED_SEC
+					) {
+						try {
+							videoEl.currentTime = cameraTime;
+						} catch {
+							// silent
+						}
+					}
+				}}
+				style={
+					isCustomEffect
+						? { ...videoStyle, position: "absolute", opacity: 0, pointerEvents: "none" }
+						: videoStyle
 				}
-			}}
-			style={style}
-		/>
+			/>
+			{isCustomEffect ? (
+				<canvas ref={canvasRef} className={styles.webcamCanvas} style={videoStyle} />
+			) : null}
+		</>
 	);
+
+	if (!bgStyle) {
+		return video;
+	}
+
+	return (
+		<div style={{ position: "relative", width: "100%", height: "100%" }}>
+			<div style={bgStyle} aria-hidden="true" />
+			{video}
+		</div>
+	);
+}
+
+function buildWebcamBackgroundStyle(
+	mode: WebcamBackgroundMode,
+	wallpaper: string,
+	borderRadius: number,
+	maskShape: WebcamMaskShape,
+): React.CSSProperties | null {
+	if (mode === "none") return null;
+	const base: React.CSSProperties = {
+		position: "absolute",
+		inset: 0,
+		zIndex: 0,
+		borderRadius: `${borderRadius}px`,
+		clipPath: getCssClipPath(maskShape) ?? undefined,
+		overflow: "hidden",
+	};
+	if (mode === "transparent") {
+		return { ...base, backgroundColor: "transparent" };
+	}
+	if (mode === "blur") {
+		return {
+			...base,
+			backdropFilter: "blur(12px)",
+			backgroundColor: "rgba(0, 0, 0, 0.2)",
+		};
+	}
+	if (mode === "custom") {
+		const w = classifyWallpaper(wallpaper);
+		if (w.kind === "color") return { ...base, backgroundColor: w.value };
+		if (w.kind === "gradient")
+			return { ...base, backgroundImage: w.value, backgroundSize: "cover" };
+		const url = resolveImageWallpaperUrl(w.path);
+		if (!url) return base;
+		return {
+			...base,
+			backgroundImage: `url(${url})`,
+			backgroundSize: "cover",
+			backgroundPosition: "center",
+			backgroundRepeat: "no-repeat",
+		};
+	}
+	return null;
 }

@@ -429,6 +429,20 @@ pub struct SceneOutput {
     pub fps: Option<f64>,
 }
 
+/// Effet d'arrière-plan de la webcam (détourage IA, flou, fond personnalisé).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneWebcamEffect {
+    /// "none" | "transparent" | "blur" | "custom"
+    pub mode: String,
+    #[serde(default)]
+    pub blur_intensity: f32,
+    #[serde(default)]
+    pub background: Option<SceneBackground>,
+    #[serde(default)]
+    pub mask_path: Option<String>,
+}
+
 /// Tout ce dont le natif a besoin pour composer la scène, sérialisé depuis un document.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -454,6 +468,9 @@ pub struct Scene {
     /// Crop écran par clip, dans le même ordre que `clips` (`cropByClip` côté TS).
     #[serde(default)]
     pub crop_by_clip: Vec<Option<SceneCrop>>,
+    /// Effet d'arrière-plan / détourage IA de la webcam.
+    #[serde(default)]
+    pub webcam_effect: Option<SceneWebcamEffect>,
     /// État de rendu interne, positionné par `for_clip_window` (jamais envoyé par l'app).
     #[serde(skip)]
     pub(crate) active_clip_index: usize,
@@ -601,6 +618,36 @@ mod tests {
         let s = Scene::from_json(json).expect("parse sans webcam_rect");
         assert!(s.layout.webcam_rect.is_none());
         assert_eq!(s.layout.preset, "picture-in-picture");
+        assert!(s.webcam_effect.is_none());
+    }
+
+    #[test]
+    fn parses_webcam_effect_payload() {
+        let json = r##"{
+            "clips": [],
+            "layout": {"preset":"picture-in-picture","webcamSize":0.25,"webcamShape":"circle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},
+            "effects": {"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0},
+            "background": {"kind":"color","color":"#000000"},
+            "zoomRegions": [],
+            "cursor": {"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},
+            "cropByClip": [],
+            "output": {"width":1920,"height":1080,"fps":null},
+            "webcamEffect": {
+                "mode": "custom",
+                "blurIntensity": 0.75,
+                "background": {"kind":"color","color":"#ff0080"},
+                "maskPath": "/path/to/mask.mp4"
+            }
+        }"##;
+        let s = Scene::from_json(json).expect("parse avec webcamEffect");
+        let effect = s.webcam_effect.expect("webcamEffect présent");
+        assert_eq!(effect.mode, "custom");
+        assert_eq!(effect.blur_intensity, 0.75);
+        assert_eq!(effect.mask_path.as_deref(), Some("/path/to/mask.mp4"));
+        match effect.background {
+            Some(SceneBackground::Color { color }) => assert_eq!(color, "#ff0080"),
+            _ => panic!("expected color background"),
+        }
     }
 }
 

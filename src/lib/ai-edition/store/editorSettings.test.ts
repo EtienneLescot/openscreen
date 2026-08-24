@@ -239,4 +239,16 @@ describe("patchEditorSettings", () => {
 		expect(snap.webcamCropRegion.x).toBeCloseTo(0.375);
 		expect(snap.webcamCropRegion.y).toBeCloseTo(0.45);
 	});
+
+	it("round-trips webcam background settings through legacyEditor", () => {
+		const patched = patchEditorSettings(baseDoc, {
+			webcamBackgroundMode: "custom",
+			webcamWallpaper: "#ff0080",
+			webcamBlurIntensity: 0.8,
+		});
+		const snap = getEditorSettings(patched);
+		expect(snap.webcamBackgroundMode).toBe("custom");
+		expect(snap.webcamWallpaper).toBe("#ff0080");
+		expect(snap.webcamBlurIntensity).toBe(0.8);
+	});
 });

@@ -401,6 +401,20 @@ export interface SceneDescription {
 	cropByClip: Array<{ x: number; y: number; width: number; height: number } | null>;
 	/** Output frame. `fps` null = use the first clip's source fps. */
 	output: { width: number; height: number; fps: number | null };
+	/** Webcam background / AI cutout effects. */
+	webcamEffect?: SceneWebcamEffect;
+}
+
+/** Webcam background / AI cutout effects. */
+export interface SceneWebcamEffect {
+	/** "none" | "transparent" | "blur" | "custom" | "presegmented" */
+	mode: "none" | "transparent" | "blur" | "custom" | "presegmented";
+	/** 0..1 blur intensity when mode is "blur". */
+	blurIntensity: number;
+	/** Background behind the subject when mode is "custom" (parsed like settings.wallpaper). */
+	background?: SceneBackground;
+	/** Optional pre-computed alpha matte video path. */
+	maskPath?: string;
 }
 
 /** Parse the settings wallpaper string into the discriminated SceneBackground union. */
@@ -913,5 +927,10 @@ export function buildSceneDescription(
 		})),
 		cropByClip,
 		output: { ...pickOutputDims(document, settings.aspectRatio), fps: null },
+		webcamEffect: {
+			mode: settings.webcamBackgroundMode,
+			blurIntensity: settings.webcamBlurIntensity,
+			background: parseWallpaper(settings.webcamWallpaper),
+		},
 	};
 }

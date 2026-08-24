@@ -177,6 +177,54 @@ describe("buildSceneDescription.background", () => {
 	});
 });
 
+describe("buildSceneDescription.webcamEffect", () => {
+	it("serializes default webcamEffect (none mode)", () => {
+		const doc = makeDoc();
+		expect(buildSceneDescription(doc).webcamEffect).toEqual({
+			mode: "none",
+			blurIntensity: 0.5,
+			background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+		});
+	});
+
+	it("serializes transparent cutout mode", () => {
+		const doc = makeDoc({
+			legacyEditor: {
+				webcamBackgroundMode: "transparent",
+			},
+		});
+		expect(buildSceneDescription(doc).webcamEffect?.mode).toBe("transparent");
+	});
+
+	it("serializes blur mode with custom blur intensity", () => {
+		const doc = makeDoc({
+			legacyEditor: {
+				webcamBackgroundMode: "blur",
+				webcamBlurIntensity: 0.85,
+			},
+		});
+		expect(buildSceneDescription(doc).webcamEffect).toEqual({
+			mode: "blur",
+			blurIntensity: 0.85,
+			background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+		});
+	});
+
+	it("serializes custom background mode with color or gradient", () => {
+		const doc = makeDoc({
+			legacyEditor: {
+				webcamBackgroundMode: "custom",
+				webcamWallpaper: "#34b27b",
+			},
+		});
+		expect(buildSceneDescription(doc).webcamEffect).toEqual({
+			mode: "custom",
+			blurIntensity: 0.5,
+			background: { kind: "color", color: "#34b27b" },
+		});
+	});
+});
+
 // --- clips -----------------------------------------------------------------
 
 describe("buildSceneDescription.clips", () => {
