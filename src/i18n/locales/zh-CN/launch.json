@@ -52,6 +52,13 @@
 		"camera": "摄像头",
 		"cameraDevice": "摄像头设备"
 	},
+	"selfView": {
+		"show": "显示自拍画面",
+		"hide": "隐藏自拍画面",
+		"autoShow": "自动显示悬浮自拍画面",
+		"autoShowHint": "开始录制时打开摄像头预览",
+		"unavailable": "悬浮自拍画面不可用"
+	},
 	"cursor": {
 		"useEditableCursor": "使用可编辑光标",
 		"useSystemCursor": "使用系统光标"

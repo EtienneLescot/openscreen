@@ -156,6 +156,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	requestNativeMacCursorAccess: () => {
 		return ipcRenderer.invoke("request-native-mac-cursor-access");
 	},
+	requestFloatingSelfViewAutoOpen: () =>
+		ipcRenderer.invoke("request-floating-self-view-auto-open") as Promise<{
+			success: boolean;
+			error?: string;
+		}>,
 	storeRecordedVideo: (videoData: ArrayBuffer, fileName: string) => {
 		return ipcRenderer.invoke("store-recorded-video", videoData, fileName);
 	},

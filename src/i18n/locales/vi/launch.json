@@ -74,6 +74,13 @@
 		"switch": "Chuyển sang {{language}}",
 		"keepDefault": "Giữ ngôn ngữ hiện tại"
 	},
+	"selfView": {
+		"show": "Hiện hình ảnh của tôi",
+		"hide": "Ẩn hình ảnh của tôi",
+		"autoShow": "Tự động hiện cửa sổ hình ảnh nổi",
+		"autoShowHint": "Mở bản xem trước camera khi bắt đầu ghi",
+		"unavailable": "Không thể dùng cửa sổ hình ảnh nổi"
+	},
 	"cursor": {
 		"useEditableCursor": "Dùng con trỏ có thể chỉnh sửa",
 		"useSystemCursor": "Dùng con trỏ hệ thống"

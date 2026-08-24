@@ -133,6 +133,48 @@
 	margin: 1px 0;
 }
 
+.hudPreferenceRow {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	margin: 8px 6px 4px;
+	padding: 10px;
+	border-radius: 10px;
+	background: rgba(255, 255, 255, 0.035);
+	cursor: pointer;
+}
+
+.hudPreferenceLabel,
+.hudPreferenceHint {
+	display: block;
+}
+
+.hudPreferenceLabel {
+	font-size: 12px;
+	font-weight: 600;
+	color: #e9edf3;
+}
+
+.hudPreferenceHint {
+	margin-top: 2px;
+	font-size: 10px;
+	line-height: 1.35;
+	color: #828c99;
+}
+
+.hudPreferenceCheckbox {
+	width: 16px;
+	height: 16px;
+	flex: 0 0 auto;
+	accent-color: #10b981;
+}
+
+.hudPreferenceCheckbox:focus-visible {
+	outline: 2px solid #10b981;
+	outline-offset: 3px;
+}
+
 /* Device settings. Same shell as the popovers, and deliberately the same width
    as the notice column (HUD_STACK_WIDTH) so opening it only ever changes the
    overlay window's height, never its width. */

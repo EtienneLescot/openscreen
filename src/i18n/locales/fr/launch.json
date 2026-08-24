@@ -52,6 +52,13 @@
 		"camera": "Caméra",
 		"cameraDevice": "Périphérique caméra"
 	},
+	"selfView": {
+		"show": "Afficher l’aperçu caméra",
+		"hide": "Masquer l’aperçu caméra",
+		"autoShow": "Afficher automatiquement l’aperçu flottant",
+		"autoShowHint": "Ouvre l’aperçu de votre caméra au début de l’enregistrement",
+		"unavailable": "L’aperçu caméra flottant est indisponible"
+	},
 	"cursor": {
 		"useEditableCursor": "Utiliser le curseur éditable",
 		"useSystemCursor": "Utiliser le curseur système"

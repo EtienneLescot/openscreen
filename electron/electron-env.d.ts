@@ -23,6 +23,9 @@ declare namespace NodeJS {
 
 // Used in Renderer process, expose in `preload.ts`
 interface Window {
+	__openscreenRequestFloatingSelfView?: () => Promise<
+		import("../src/hooks/useFloatingSelfView").FloatingSelfViewRequestResult
+	>;
 	electronAPI: {
 		invokeNativeBridge: <TData = unknown>(
 			request: import("../src/native/contracts").NativeBridgeRequest,
@@ -82,6 +85,10 @@ interface Window {
 			success: boolean;
 			granted: boolean;
 			status: string;
+			error?: string;
+		}>;
+		requestFloatingSelfViewAutoOpen: () => Promise<{
+			success: boolean;
 			error?: string;
 		}>;
 		assetBaseUrl: string;

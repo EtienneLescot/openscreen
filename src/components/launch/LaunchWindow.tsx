@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { getAvailableLocales, getLocaleName } from "@/i18n/loader";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { nativeBridgeClient } from "@/native";
 import { type CameraDevice, useCameraDevices } from "../../hooks/useCameraDevices";
+import { useFloatingSelfView } from "../../hooks/useFloatingSelfView";
 import { type MicrophoneDevice, useMicrophoneDevices } from "../../hooks/useMicrophoneDevices";
 import { usePortalOwnsSource } from "../../hooks/usePortalOwnsSource";
 import { useScreenRecorder } from "../../hooks/useScreenRecorder";
@@ -20,6 +22,7 @@ import {
 	HudNotice,
 	HudRecordButton,
 	HudRecordingControls,
+	HudSelfViewButton,
 	HudSettingsButton,
 	HudSourceButton,
 	HudStudioButton,
@@ -100,6 +103,7 @@ export function LaunchWindow() {
 		setSystemAudioEnabled,
 		webcamEnabled,
 		setWebcamEnabled,
+		webcamPreviewStream,
 		webcamDeviceId,
 		setWebcamDeviceId,
 		setWebcamDeviceName,
@@ -122,6 +126,21 @@ export function LaunchWindow() {
 	);
 	const [supportsCursorModeToggle, setSupportsCursorModeToggle] = useState(false);
 	const [isLinuxHud, setIsLinuxHud] = useState(false);
+	const isMacHud = window.electronAPI?.getPlatform?.() === "darwin";
+	const [floatingSelfViewEnabled, setFloatingSelfViewEnabled] = useState(
+		() => loadUserPreferences().floatingSelfViewEnabled,
+	);
+	const handleSelfViewUnavailable = useCallback(() => {
+		toast.error(t("selfView.unavailable"));
+	}, [t]);
+	const floatingSelfView = useFloatingSelfView({
+		recording,
+		webcamEnabled,
+		stream: webcamPreviewStream,
+		autoShowEnabled: floatingSelfViewEnabled,
+		isMac: isMacHud,
+		onUnavailable: handleSelfViewUnavailable,
+	});
 	// The running version, and whether this copy may offer an update check at all — a
 	// Store/Flathub/Snap/Nix install is kept current by its package manager and is offered
 	// nothing (electron/install-channel.ts). Asked once: neither answer changes while the app
@@ -690,6 +709,11 @@ export function LaunchWindow() {
 		});
 	}, [closePopovers]);
 
+	const handleFloatingSelfViewPreference = useCallback((enabled: boolean) => {
+		setFloatingSelfViewEnabled(enabled);
+		saveUserPreferences({ floatingSelfViewEnabled: enabled });
+	}, []);
+
 	const toggleSystemAudio = useCallback(() => {
 		if (controlsLocked) return;
 		setSystemAudioEnabled(!systemAudioEnabled);
@@ -897,6 +921,8 @@ export function LaunchWindow() {
 			cameraUnavailable: t("webcam.unavailable"),
 			preview: t("deviceSettings.preview"),
 			previewUnavailable: t("deviceSettings.previewUnavailable"),
+			floatingSelfView: t("selfView.autoShow"),
+			floatingSelfViewHint: t("selfView.autoShowHint"),
 			about: t("deviceSettings.about"),
 			checkForUpdates: tCommon("actions.checkForUpdates"),
 			checkingForUpdates: t("deviceSettings.checkingForUpdates"),
@@ -923,6 +949,15 @@ export function LaunchWindow() {
 			onPointerMove={handleRootPointerMove}
 			onPointerLeave={handlePointerLeave}
 		>
+			{/* The recorder owns this stream. PiP borrows it without ever stopping tracks. */}
+			<video
+				ref={floatingSelfView.videoRef}
+				autoPlay
+				muted
+				playsInline
+				aria-hidden="true"
+				className="pointer-events-none fixed -left-[2px] -top-[2px] h-px w-px opacity-0"
+			/>
 			{/* One bottom-anchored stack: the bar, then whatever floats above it.
 			    Everything is laid out by flexbox relative to the bar, so no popover
 			    needs a measured position and none of them can move the window. */}
@@ -1057,6 +1092,24 @@ export function LaunchWindow() {
 						/>
 					)}
 
+					{isMacHud &&
+						recording &&
+						webcamEnabled &&
+						webcamPreviewStream?.getVideoTracks().some((track) => track.readyState === "live") && (
+							<HudSelfViewButton
+								open={floatingSelfView.open}
+								disabled={saving || !floatingSelfView.supported || !floatingSelfView.ready}
+								label={
+									!floatingSelfView.supported
+										? t("selfView.unavailable")
+										: floatingSelfView.open
+											? t("selfView.hide")
+											: t("selfView.show")
+								}
+								onClick={() => void floatingSelfView.toggle()}
+							/>
+						)}
+
 					{!isLinuxHud && (
 						<HudNotesButton disabled={saving} label={t("tooltips.openNotes")} onClick={openNotes} />
 					)}
@@ -1109,9 +1162,12 @@ export function LaunchWindow() {
 								// main process refuses the check then — an offered button would be dead.
 								canCheckForUpdates={(appInfo?.canCheckForUpdates ?? false) && !recording}
 								checkingForUpdates={isCheckingForUpdates}
+								showFloatingSelfViewSetting={isMacHud}
+								floatingSelfViewEnabled={floatingSelfViewEnabled}
 								onSelectMic={handleSelectMicDevice}
 								onSelectCamera={handleSelectCameraDevice}
 								onCheckForUpdates={handleCheckForUpdates}
+								onFloatingSelfViewEnabledChange={handleFloatingSelfViewPreference}
 								onClose={closeDeviceSettings}
 								panelRef={setPopoverEl}
 							/>

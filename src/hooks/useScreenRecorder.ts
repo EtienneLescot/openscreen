@@ -53,7 +53,7 @@ const AUDIO_BITRATE_SYSTEM = 192_000;
 
 const WEBCAM_TARGET_FRAME_RATE = 30;
 
-type UseScreenRecorderReturn = {
+export type UseScreenRecorderReturn = {
 	recording: boolean;
 	paused: boolean;
 	saving: boolean;
@@ -79,6 +79,8 @@ type UseScreenRecorderReturn = {
 	setSystemAudioEnabled: (enabled: boolean) => void;
 	webcamEnabled: boolean;
 	setWebcamEnabled: (enabled: boolean) => Promise<boolean>;
+	/** The recorder-owned camera stream. Consumers may display it but must never stop its tracks. */
+	webcamPreviewStream: MediaStream | null;
 	cursorCaptureMode: CursorCaptureMode;
 	setCursorCaptureMode: (mode: CursorCaptureMode) => void;
 	softwareEncoderFallbackNoticeVisible: boolean;
@@ -216,6 +218,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [webcamDeviceName, setWebcamDeviceName] = useState<string | undefined>(undefined);
 	const [systemAudioEnabled, setSystemAudioEnabled] = useState(false);
 	const [webcamEnabled, setWebcamEnabledState] = useState(false);
+	const [webcamPreviewStream, setWebcamPreviewStream] = useState<MediaStream | null>(null);
 	const [cursorCaptureMode, setCursorCaptureMode] = useState<CursorCaptureMode>("editable-overlay");
 	const [softwareEncoderFallbackNoticeVisible, setSoftwareEncoderFallbackNoticeVisible] =
 		useState(false);
@@ -356,6 +359,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 	const stopWebcamPreviewStream = useCallback(() => {
 		if (!webcamStream.current) {
+			setWebcamPreviewStream(null);
 			return;
 		}
 
@@ -365,6 +369,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			track.stop();
 		});
 		webcamStream.current = null;
+		setWebcamPreviewStream(null);
 		webcamReady.current = true;
 	}, []);
 
@@ -425,7 +430,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				acquiredStream = stream;
 				stream.getVideoTracks().forEach((track) => {
 					track.onended = () => {
-						webcamStream.current = null;
+						if (webcamStream.current === stream) {
+							webcamStream.current = null;
+							setWebcamPreviewStream(null);
+						}
 						if (!restarting.current) {
 							setWebcamEnabledState(false);
 							toast.error(t("recording.cameraDisconnected"));
@@ -433,11 +441,13 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					};
 				});
 				webcamStream.current = stream;
+				setWebcamPreviewStream(stream);
 				webcamReady.current = true;
 			} catch (cameraError) {
 				if (!cancelled) {
 					console.warn("Failed to get webcam access:", cameraError);
 					setWebcamEnabledState(false);
+					setWebcamPreviewStream(null);
 					const isDeviceError =
 						cameraError instanceof DOMException &&
 						[
@@ -462,7 +472,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					track.onended = null;
 					track.stop();
 				});
-				webcamStream.current = null;
+				if (webcamStream.current === acquiredStream) {
+					webcamStream.current = null;
+					setWebcamPreviewStream(null);
+				}
 			}
 		};
 	}, [webcamEnabled, webcamDeviceId, t]);
@@ -2297,6 +2310,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		setSystemAudioEnabled,
 		webcamEnabled,
 		setWebcamEnabled,
+		webcamPreviewStream,
 		cursorCaptureMode,
 		setCursorCaptureMode,
 		softwareEncoderFallbackNoticeVisible,

@@ -53,6 +53,7 @@ import type { CursorTelemetryReader } from "../ai-edition/deep-agent/service";
 import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "../diagnostics/main-log-buffer";
+import { requestAutoFloatingSelfView } from "../floatingSelfView";
 import { mainT } from "../i18n";
 import { getInstallChannel } from "../install-channel";
 import { RECORDINGS_DIR } from "../main";
@@ -1736,6 +1737,13 @@ export function registerIpcHandlers(
 	onRecordingStateChange?: (recording: boolean, sourceName: string) => void,
 	_switchToHud?: () => void,
 ) {
+	ipcMain.handle("request-floating-self-view-auto-open", async (event) => {
+		if (process.platform !== "darwin") {
+			return { success: false, error: "unsupported-platform" };
+		}
+		return requestAutoFloatingSelfView(event.sender, getMainWindow());
+	});
+
 	async function requestScreenAccess() {
 		if (process.platform !== "darwin") {
 			return { success: true, granted: true, status: "granted" };

@@ -52,6 +52,13 @@
 		"camera": "카메라",
 		"cameraDevice": "카메라 장치"
 	},
+	"selfView": {
+		"show": "셀프 뷰 표시",
+		"hide": "셀프 뷰 숨기기",
+		"autoShow": "플로팅 셀프 뷰 자동 표시",
+		"autoShowHint": "녹화를 시작할 때 카메라 미리보기를 엽니다",
+		"unavailable": "플로팅 셀프 뷰를 사용할 수 없습니다"
+	},
 	"cursor": {
 		"useEditableCursor": "편집 가능한 커서 사용",
 		"useSystemCursor": "시스템 커서 사용"
