@@ -107,45 +107,55 @@ class). Full report in [PR #493](https://github.com/getopenscreen/openscreen/pul
 It passes the gate, but thinly, and +3.01 ms is a *floor*: it excludes the D3D11↔D3D12 interop,
 the NV12→RGB preprocessing and the mask upload that the design actually adds.
 
-### The workload is overhead-bound, not compute-bound
+### It is memory-bandwidth-bound per pixel — the overhead hypothesis was falsified
 
-Parsing the vendored `selfie_segmentation_landscape.tflite` as a flatbuffer settles it without
-further measurement:
+An earlier draft of this document argued the workload was overhead-bound: 66.65 MFLOP against a
+~486 GFLOP/s device is 3.6 % of peak, and 48 of the 136 real ops have a 1x1 spatial output (one
+convolution does 128 MACs in an entire dispatch). The prediction that followed — that shrinking
+the input would *not* speed it up proportionally — was measured and **falsified**
+([round 2](https://github.com/getopenscreen/openscreen/pull/493#issuecomment-5415093217)).
 
-- 246 nodes, of which **110 are `DEQUANTIZE`** — the weights are **already fp16 at rest**;
-- 136 real ops: `CONV_2D` 43, `RELU` 22, `ADD` 14, `HARD_SWISH` 11, `DEPTHWISE_CONV_2D` 11,
-  `LOGISTIC` 11, `MEAN` 10, `MUL` 10, `RESIZE_BILINEAR` 3, and one MediaPipe custom
-  `Convolution2DTransposeBias`. The `MEAN → CONV1×1 → RELU → CONV1×1 → LOGISTIC → MUL` pattern
-  repeats ten times: Squeeze-and-Excitation blocks;
-- **33.325 M MACs = 66.65 MFLOP** per inference;
-- **48 of the 136 ops have a 1×1 spatial output.** Op 15 is `CONV_2D [1,1,1,16] → [1,1,1,8]`:
-  **128 MACs in an entire dispatch.**
+| resolution | pixels vs base | DML p10 | speedup | % of proportional | mask IoU |
+|---|---:|---:|---:|---:|---:|
+| 256x144 (shipped) | 1.00x | 3.092 ms | 1.00x | 100 % | 1.000 |
+| 192x112 | 1.71x fewer | 2.014 ms | 1.53x | 90 % | **0.976** |
+| 128x80 | 3.60x fewer | 1.172 ms | 2.64x | 73 % | 0.949 |
+| 64x48 | 12.0x fewer | 0.639 ms | 4.84x | 40 % | 0.514 — model breaks |
+| 256x256 (square) | 1.78x more | 5.065 ms | 0.61x | **109 %** | — |
 
-Against ~486 GFLOP/s the ALU floor is **0.137 ms**, and the unfused-bandwidth floor 0.37–0.93 ms.
-Measured: 3.803 ms. **3.6 % of peak — 38 % of the dispatches perform 0.1 % of the arithmetic.**
+The clinching point is the row going **up**: 1.78x the pixels for 1.63x the time. Time tracks
+pixels in both directions. A least-squares fit gives a fixed overhead of **0.43 ms on DirectML**
+— 14 % of the shipped-resolution cost, not the ~2-2.5 ms that had been predicted.
 
-Two consequences, both load-bearing:
+The Squeeze-and-Excitation plumbing *is* visible at node level (56 nodes, 14.7 % of node time,
+near-zero arithmetic; 31,104x the MACs for 8.8x the time between the heaviest and lightest
+convolution). But most of that plumbing — Transpose, Mul, Resize, Relu, Add — runs on
+**full-resolution feature maps**, so its cost is per-pixel bandwidth, not per-dispatch overhead.
+That is exactly why it vanishes when the input shrinks.
 
-1. **Quantisation should not be pursued.** It halves 416 KiB of weights that already sit in L2,
-   on a GPU idle 96 % of the time, and removes no dispatch. The model is already fp16 anyway —
-   an apparent int8 "win" would mostly be undoing a conversion artifact.
-2. **DirectML and the CPU EP agreeing within 6.4 % across two unrelated engines** points at a
-   shared additive constant of ~2–2.5 ms *outside both providers*, in ONNX Runtime's per-`Run()`
-   path. If so, the fix is binding/session hygiene, not a model or a kernel.
+**The ALUs idle because the workload is bandwidth-limited, not because it waits on dispatch.**
+"96 % idle" was a real number, read wrongly.
 
-## The levers, in order of expected payoff
+## The levers, in order of measured payoff
 
-| # | Lever | Expected | Cost |
+| # | Lever | Measured | Cost |
 |---|---|---|---|
-| 1 | **Inference at 30 Hz, not 60** | **+1.5 ms headroom** (2.59 → 4.09) | a scheduling change; export already runs at 30 Hz |
-| 2 | **ORT graph capture / session hygiene** | up to ~2 ms | config, if whole-graph fusion was simply off |
-| 3 | **Fuse away the ~19 SE dispatches** | **1.6–2.2 ms** | needs hand-written kernels — no off-the-shelf runtime fuses an SE branch into its preceding conv |
-| 4 | fp16 the ONNX graph | 0.3–1.0 ms | free, zero accuracy cost |
-| 5 | **CPU EP** | keeps the *full* 5.6 ms of GPU headroom | it never touches the contended queue |
-| — | int8 / model swap | ~nothing | do not pursue |
+| 1 | **Input at 192x112** | **1.53x**, IoU 0.976 — visually indistinguishable | an input-shape change; the model is fully convolutional, no retrain |
+| 2 | **Input at 128x80** | **2.64x**, IoU 0.949 | visibly softer edges — a judgement call |
+| 3 | **Inference at 30 Hz** | halves how often the cost is paid | scheduling; stacks multiplicatively with 1-2 |
+| 4 | **fp16 / int8** | reopened — for a bandwidth-bound workload, halving precision halves the dominant cost | must be read against the 110 `DEQUANTIZE` nodes (weights are already fp16 at rest) |
+| 5 | **CPU EP** | **21 % faster than DirectML here** (2.476 vs 3.119 ms p10), and never touches the contended queue | removes the D3D11-D3D12 interop entirely |
 
-Lever 5 deserves attention: the CPU EP is already the faster of the two measured, and it removes
-the D3D11↔D3D12 interop, the cross-queue serialisation and the packaging cost in one move.
+Extrapolating round 1's +3.01 ms contention (it nearly serialises, so it scales with GPU time)
+gives roughly **+1.14 ms/frame at 128x80**. That is an extrapolation, not a measurement.
+
+**Dropped:** ORT session hygiene and a hand-fused SE compute shader. Both were premised on a
+large fixed cost; the real fixed cost is 0.43 ms, so together they cap at ~14 %. Three shading
+languages for a couple of tenths of a millisecond is not a trade worth making.
+
+**Hard constraint found:** both input dimensions must be divisible by 16, or the skip-connection
+`Add`s fail on mismatched extents. And at 64x48 the model stops working rather than degrading —
+it emits an all-background mask.
 
 ## Per platform
 
