@@ -189,6 +189,8 @@ pub struct Compositor {
     seg_rate: RefCell<crate::segmentation::RateLimiter>,
     /// Frame RGB réutilisée d'une capture à l'autre.
     seg_scratch: RefCell<Vec<u8>>,
+    /// Le chargement du modèle a échoué : ne pas réessayer à chaque frame.
+    seg_failed: RefCell<bool>,
     /// Staging NV12 du readback d'ENCODAGE (backend CPU) — même motif de cache par taille
     /// que `live_readback_staging`, mais en NV12 et non en RGBA : l'encodeur logiciel veut
     /// les plans Y/UV, pas des pixels RGBA. Voir `read_nv12_scaled`.
@@ -604,6 +606,7 @@ impl Compositor {
             seg_inbox: std::sync::Arc::new(std::sync::Mutex::new(None)),
             seg_rate: RefCell::new(crate::segmentation::RateLimiter::new(SEGMENTATION_HZ)),
             seg_scratch: RefCell::new(Vec::new()),
+            seg_failed: RefCell::new(false),
             nv12_readback_staging: RefCell::new(None),
         })
     }
@@ -1070,16 +1073,33 @@ impl Compositor {
         wuv: &ID3D11ShaderResourceView,
         valid: [f32; 2],
     ) -> Result<()> {
-        if self.seg_worker.borrow().is_none() {
+        if *self.seg_failed.borrow() {
             return Ok(());
         }
         // Rien à faire si aucun effet n'est demandé : ni capture, ni inférence, ni masque.
         // Le coût de la fonctionnalité est alors exactement nul.
-        let wants_effect = matches!(
-            self.scene.borrow().as_ref().and_then(|s| s.webcam_effect.as_ref()),
-            Some(e) if e.shader_code() > 0.0
-        );
+        let (wants_effect, model_path) = {
+            let scene = self.scene.borrow();
+            match scene.as_ref().and_then(|s| s.webcam_effect.as_ref()) {
+                Some(e) if e.shader_code() > 0.0 => (true, e.model_path.clone()),
+                _ => (false, None),
+            }
+        };
         if !wants_effect {
+            return Ok(());
+        }
+
+        // Démarrage paresseux, piloté par la scène : personne n'a à appeler
+        // `enable_segmentation` à la main, et un modèle introuvable éteint l'effet au lieu
+        // de faire tomber le rendu.
+        if self.seg_worker.borrow().is_none() {
+            let Some(path) = model_path else { return Ok(()) };
+            if let Err(e) = self.enable_segmentation(std::path::Path::new(&path)) {
+                eprintln!("[segmentation] désactivée : {e}");
+                // Une scène qui reste identique retenterait à chaque frame ; on pose un
+                // worker vide plutôt que de journaliser 60 fois par seconde.
+                *self.seg_failed.borrow_mut() = true;
+            }
             return Ok(());
         }
 
