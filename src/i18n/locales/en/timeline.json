@@ -15,6 +15,7 @@
 		"pressZoom": "Press Z to add zoom",
 		"pressTrim": "Press T to add trim",
 		"pressAnnotation": "Press A to add annotation",
+		"pressAudio": "Press M to add audio",
 		"pressSpeed": "Press S to add speed",
 		"pressCameraFullscreen": "Press C to add a Full Camera segment"
 	},

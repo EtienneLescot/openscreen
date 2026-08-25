@@ -1048,6 +1048,13 @@ export function NewEditorShell() {
 				void tl.addAnnotation(newRegionDurationSec());
 				return;
 			}
+			// Unlike its neighbours this opens a file picker rather than dropping a region at
+			// the playhead — there is nothing to size, so it takes no duration (issue #350).
+			if (matchesShortcut(e, shortcuts.addAudio, isMac)) {
+				e.preventDefault();
+				void tl.addAudio();
+				return;
+			}
 			if (matchesShortcut(e, shortcuts.addSpeed, isMac)) {
 				e.preventDefault();
 				void tl.addSpeed(newRegionDurationSec());
