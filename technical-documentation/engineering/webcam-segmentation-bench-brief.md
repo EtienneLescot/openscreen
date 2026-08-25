@@ -1,5 +1,10 @@
 # Brief — segmentation experiment ladder (round 2)
 
+> **Superseded in part.** E0 was run and **falsified** the overhead-bound hypothesis this ladder
+> was built on ([results](https://github.com/getopenscreen/openscreen/pull/493#issuecomment-5415093217)).
+> E2 and E4 are dropped. The live levers are input resolution, fp16/int8, and the CPU EP — see
+> [webcam-segmentation.md](webcam-segmentation.md).
+
 Self-contained brief for an agent on a test machine. Read
 [webcam-segmentation.md](webcam-segmentation.md) for the decision this feeds.
 
@@ -102,9 +107,10 @@ Then: which lever you would pull first, and what you would stop pursuing.
 
 ## Do not pursue
 
-- **int8 in any form**, unless E0 falsifies the overhead-bound finding. The weights are already
-  fp16 at rest (110 `DEQUANTIZE` nodes in the shipped `.tflite`); an apparent int8 win would
-  largely be undoing a conversion artifact.
+- ~~int8 in any form~~ — **E0 falsified the overhead-bound finding, so precision is live again**,
+  and now for a positive reason: the workload is bandwidth-bound per pixel, so halving precision
+  halves the dominant cost. Still read any int8 result against the 110 `DEQUANTIZE` nodes in the
+  shipped `.tflite` — the weights are already fp16 at rest.
 - **RobustVideoMatting** — GPL-3.0 against an MIT app. A licence landmine, before its recurrent
   state is even relevant.
 - MODNet, BiSeNet, SelfieMulticlass, ROI-tracking-as-a-perf-lever. Only **PP-HumanSeg v2 Lite** is
