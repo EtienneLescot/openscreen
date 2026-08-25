@@ -27,6 +27,7 @@ and anything unknown is rejected by the `z.literal(axcutSchemaVersion)` check in
 | `timeline` | `{ clips[], gaps[], trimRanges[], muteRanges[], speedRanges[], captionRanges[] }` | Clips carry their own in/out (`sourceStartSec`/`sourceEndSec`); trims are anchored to a clip (`clipId?`) since v7. See [timeline-model.md](timeline-model.md). |
 | `annotations[]` | `AxcutAnnotationRegion[]` | Text/image/figure/blur overlays, anchored to a clip (`clipId?`). |
 | `zoomRanges[]` | `AxcutZoomRegion[]` | Zoom-in effects, depth 1–6, anchored to a clip (`clipId?`). |
+| `audioTracks[]` | `AxcutAudioTrack[]` | Imported audio (voiceover / BGM / SFX, issue #350) mixed over the programme. NOT clip-anchored — addressed in RAW/document timeline seconds (`timelineStartSec`), with `trimStartSec`/`trimEndSec` windowing the source and `gainDb` its level. Added from the timeline toolbar; the referenced asset has `kind: "audio"`. |
 | `legacyEditor` | OpenScreen v2 `ProjectEditorState` passthrough | Appearance/cursor settings not yet first-class in the AI-edition schema. |
 | `agent` | `{ baseIntent?, pendingQuestions[], suggestions[], lastAppliedOperations[], lastReasoningSummary? }` | LLM agent state. |
 | `preview` | `{ strategy: "seek" \| "mse-proxy", revision: number }` | `revision` is the bump used to invalidate cached frames after an edit. |
