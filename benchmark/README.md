@@ -39,10 +39,26 @@ app actually did the work:
 
 | Check | How | Why it exists |
 |---|---|---|
-| Background applied | the frame's four corners must be the scenario's colour | an app that skipped the background composites far less |
-| Padding | bounding box of everything that is not background | apps' padding controls are on different scales; this measures the real inset |
-| Corner radius | the box's corner is background while its top edge is not | separates a rounded rect from a plain one |
+| Background applied | the frame's corners must be light where the recording is dark | an app that skipped the wallpaper composites far less |
+| Padding | bounding box of the dark recording against the light wallpaper | apps' padding controls are on different scales; this measures the real inset |
+| Corner radius | the box's corner shows wallpaper while its top edge shows content | separates a rounded rect from a plain one |
 | Zooms | frame-to-frame activity must spike inside every zoom window | an ignored zoom list is invisible in metadata |
+| Rendered cursor | motion energy at the telemetry's position, against controls on the same scrolling material | an app can accept a cursor track and draw nothing — Cap does |
+| Webcam inset | skin-tone fraction in the expected corner | nothing else in the composition is near that colour |
+| Motion blur | *not asserted* | every threshold tried passed some correct renders and failed others; reported as configured, never as verified |
+
+**The verifier overrides the driver.** A driver reports what it configured; only the pixels say
+what happened. Cap accepts a cursor track, reports `cursor.hide: false`, and renders no pointer
+at all — that counted as full fidelity until the check existed, and is now `0.9` with `cursor`
+listed as contradicted.
+
+Both new detectors were wrong on their first version, and were caught the same way: by running
+them against Kap and the ffmpeg floor, which draw neither a cursor nor a camera. Both "passed".
+The cursor check had been comparing the pointer's window against the frame's static corners —
+really asking "is this region busier than the edges" — and the webcam threshold sat below the
+fixture's own warm syntax colours. Thresholds are now calibrated against measured positives and
+negatives, and every raw ratio is recorded per run so the margin is auditable rather than
+implied.
 
 A run that fails verification is recorded as a failure, never as a fast time.
 
@@ -76,16 +92,27 @@ only frame rate on which "force identical output" is actually achievable.
 One definition, in `benchmark/scenarios/index.mjs`, translated by each driver into its own app's
 vocabulary:
 
-- background: solid `#C9CDD6`
-- padding: 5 % of the frame's short side
-- corner radius: 40 px
-- drop shadow
+- **wallpaper** background — an image the compositor samples per pixel, not a colour it clears once
+- padding: 5 % of the frame's short side, corner radius 40 px, drop shadow
 - three zooms — 6–12 s at 1.8×, 22–29 s at 2.2×, 41–48 s at 1.6×
+- **motion blur** on the composited frame
+- **a rendered cursor** — themed sprite, smoothing, its own motion blur, click effects
+- **a webcam inset** — bottom-right, rounded, shadowed, at 25 % of the frame
 - output: 1920×1080, 60 fps, H.264, MP4
 
-The colour is deliberately far from anything in the generated source: the verifier finds the
-composited video's edge by colour distance, and a background close to the recording's own dark
-chrome makes that boundary unfindable. (It did, the first time.)
+The first version of this scenario had only the first two lines, and that was a mistake worth
+recording: a screen clip on a flat colour measures decoding and encoding, not what a demo export
+costs. The cursor and the camera are a large share of the work, and neither was running.
+
+**The cursor is data, not pixels.** Every app here hides the system pointer while recording and
+re-draws it at export time from a telemetry sidecar. The fixture used to paint a fake cursor
+into the video, which exercised none of that and would have double-drawn the moment an app
+rendered its own. The trajectory is now generated — eased glides between dwell points with
+clicks at the pauses, the shape smoothing and dwell-based auto-zoom actually react to — written
+in each app's own format, and the screen clip is left clean.
+
+The wallpaper and the webcam come from the same seed as the screen recording, so the whole
+bundle reproduces on another machine and can be checked by hash.
 
 ### Translating the scenario — and why calibration exists
 

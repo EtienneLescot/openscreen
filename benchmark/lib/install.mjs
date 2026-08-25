@@ -13,37 +13,21 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { IS_WIN, appVersion as platformVersion, powershell, signatureStatus } from "./platform.mjs";
 
 const APPLICATIONS = "/Applications";
 
 const run = (bin, args, opts = {}) =>
 	execFileSync(bin, args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, ...opts });
 
-export function appVersion(appPath) {
-	try {
-		return run("/usr/bin/defaults", [
-			"read",
-			join(appPath, "Contents", "Info.plist"),
-			"CFBundleShortVersionString",
-		]).trim();
-	} catch {
-		return null;
-	}
-}
+export const appVersion = platformVersion;
 
-/** Notarisation / signing status, recorded so the report can say what was actually run. */
-export function codesignStatus(appPath) {
-	const res = spawnSync("/usr/sbin/spctl", ["-a", "-t", "exec", "-vv", appPath], {
-		encoding: "utf8",
-	});
-	const text = `${res.stdout ?? ""}${res.stderr ?? ""}`;
-	const team = /origin=(.+)/.exec(text)?.[1]?.trim() ?? null;
-	return { accepted: /: accepted/.test(text), authority: team, raw: text.trim().slice(0, 400) };
-}
+/** Signing / notarisation status, recorded so the report can say what was actually run. */
+export const codesignStatus = signatureStatus;
 
 /** Resolve a GitHub release asset to a concrete URL, so the install is version-pinned. */
 export function resolveGithubAsset(repo, pattern) {
-	const json = run("/usr/bin/curl", [
+	const json = run(IS_WIN ? "curl.exe" : "/usr/bin/curl", [
 		"-fsSL",
 		"--max-time",
 		"40",
@@ -66,11 +50,32 @@ export function resolveGithubAsset(repo, pattern) {
 	};
 }
 
+/**
+ * Run a Windows installer unattended.
+ *
+ * Both vendors in the Windows set ship NSIS packages, where `/S` is the silent switch; an MSI
+ * would need `msiexec /qn` instead. If an installer rejects its silent switch it will sit on a
+ * dialog forever, so this is bounded and reports what it left behind rather than hanging a run.
+ */
+function runWindowsInstaller(installerPath, spec, { log = () => undefined }) {
+	const args = spec.silentArgs ?? ["/S"];
+	log(`  running ${basename(installerPath)} ${args.join(" ")}`);
+	powershell(
+		`$p = Start-Process -FilePath ${JSON.stringify(installerPath)} -ArgumentList @(${args
+			.map((a) => `'${a}'`)
+			.join(",")}) -PassThru -Wait
+		 exit $p.ExitCode`,
+		{ timeoutMs: 20 * 60 * 1000 },
+	);
+}
+
 /** Resumable download. A 400 MB DMG over a flaky link should not restart from zero. */
 export function download(url, destDir, { log = () => undefined } = {}) {
 	mkdirSync(destDir, { recursive: true });
 	// The vendor URL is often a redirect; ask curl for the effective name it lands on.
-	const effective = run("/usr/bin/curl", [
+	const curl = IS_WIN ? "curl.exe" : "/usr/bin/curl";
+	const nul = IS_WIN ? "NUL" : "/dev/null";
+	const effective = run(curl, [
 		"-sIL",
 		"--max-time",
 		"60",
@@ -81,7 +86,8 @@ export function download(url, destDir, { log = () => undefined } = {}) {
 		url,
 	]).trim();
 	let name = basename(new URL(effective).pathname) || basename(new URL(url).pathname);
-	if (!/\.(dmg|zip|pkg)$/i.test(name)) name = `${name || "download"}.dmg`;
+	if (!/\.(dmg|zip|pkg|exe|msi)$/i.test(name))
+		name = `${name || "download"}${IS_WIN ? ".exe" : ".dmg"}`;
 	const dest = join(destDir, decodeURIComponent(name));
 
 	log(`  downloading ${decodeURIComponent(name)}`);
@@ -138,8 +144,10 @@ export function installDmg(dmgPath, appName, { log = () => undefined } = {}) {
  * machine can be checked against it — the whole point of pinning versions and hashes.
  */
 export function installApp(spec, { cacheDir, force = false, log = () => undefined } = {}) {
-	const destApp = join(APPLICATIONS, spec.appName);
-	if (existsSync(destApp) && !force) {
+	// On Windows an app is wherever its installer put it, so the driver resolves it; on macOS
+	// it is always /Applications/<Name>.app.
+	const destApp = IS_WIN ? (spec.resolve?.() ?? null) : join(APPLICATIONS, spec.appName);
+	if (destApp && existsSync(destApp) && !force) {
 		return {
 			id: spec.id,
 			status: "already-installed",
@@ -159,10 +167,26 @@ export function installApp(spec, { cacheDir, force = false, log = () => undefine
 	}
 
 	const dl = download(url, cacheDir, { log });
-	if (!/\.dmg$/i.test(dl.path)) {
-		throw new Error(`only .dmg installs are automated; got ${basename(dl.path)}`);
+
+	let appPath;
+	if (IS_WIN) {
+		if (!/\.(exe|msi)$/i.test(dl.path)) {
+			throw new Error(`expected an .exe or .msi installer; got ${basename(dl.path)}`);
+		}
+		runWindowsInstaller(dl.path, spec, { log });
+		appPath = spec.resolve ? spec.resolve() : null;
+		if (!appPath) {
+			throw new Error(
+				`${spec.appName} installed but its executable was not found where expected. ` +
+					"Add the real path to the driver's winPaths list.",
+			);
+		}
+	} else {
+		if (!/\.dmg$/i.test(dl.path)) {
+			throw new Error(`only .dmg installs are automated on macOS; got ${basename(dl.path)}`);
+		}
+		appPath = installDmg(dl.path, spec.appName, { log });
 	}
-	const appPath = installDmg(dl.path, spec.appName, { log });
 
 	return {
 		id: spec.id,

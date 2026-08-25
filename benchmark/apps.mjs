@@ -32,7 +32,8 @@ export const APPS = {
 	"screen-studio": {
 		// Off by default: export is licence-gated, so an unactivated machine would only ever
 		// record a failure. Enable it explicitly once a licence is activated.
-		driver: "./drivers/screen-studio.mjs",
+		// macOS only, and export is licence-gated even there.
+		driver: { darwin: "./drivers/screen-studio.mjs" },
 		default: false,
 		install: {
 			method: "dmg",
@@ -61,7 +62,7 @@ export const APPS = {
 		},
 	},
 	camtasia: {
-		driver: "./drivers/camtasia.mjs",
+		driver: { darwin: "./drivers/camtasia.mjs", win32: "./drivers/camtasia-win.mjs" },
 		default: true,
 		install: {
 			method: "dmg",
@@ -73,8 +74,11 @@ export const APPS = {
 		},
 	},
 	focusee: {
-		driver: "./drivers/focusee.mjs",
-		default: false, // see drivers/focusee.mjs — import is broken in 2.4.1
+		driver: { darwin: "./drivers/focusee.mjs", win32: "./drivers/focusee-win.mjs" },
+		// On macOS the import is broken in 2.4.1 (see drivers/focusee.mjs); on Windows the
+		// vendor ships the real application rather than a downloader stub, so it is in the
+		// default set there.
+		default: process.platform === "win32",
 		install: {
 			method: "manual",
 			url: "https://focusee.imobie.com/go/download.php?product=fs",
@@ -85,7 +89,8 @@ export const APPS = {
 		},
 	},
 	kap: {
-		driver: "./drivers/kap.mjs",
+		// macOS only — Wulkano ships no Windows build.
+		driver: { darwin: "./drivers/kap.mjs" },
 		default: true,
 		install: {
 			method: "dmg",
@@ -108,15 +113,18 @@ export const APPS = {
 	},
 };
 
-export const DEFAULT_APPS = Object.entries(APPS)
-	.filter(([, a]) => a.default)
-	.map(([id]) => id);
-
 export async function loadDriver(id) {
 	const entry = APPS[id];
 	if (!entry) throw new Error(`Unknown app "${id}". Known: ${Object.keys(APPS).join(", ")}`);
-	const mod = await import(entry.driver);
+	const mod = await import(driverPath(entry, id));
 	return mod.default;
+}
+
+/** Apps that can run at all on this platform — the default set is filtered through this. */
+export function availableOn(platform = process.platform) {
+	return Object.entries(APPS)
+		.filter(([, a]) => typeof a.driver === "string" || !!a.driver?.[platform])
+		.map(([id]) => id);
 }
 
 /** Every distinct thing that has to be downloaded for the given app ids. */
@@ -133,4 +141,20 @@ export function installPlan(appIds) {
 		if (spec) plan.push({ id: target, ...spec });
 	}
 	return plan;
+}
+
+export const DEFAULT_APPS = Object.entries(APPS)
+	.filter(([id, a]) => a.default && availableOn().includes(id))
+	.map(([id]) => id);
+
+/** Which driver file implements this app on this platform. */
+function driverPath(entry, id) {
+	if (typeof entry.driver === "string") return entry.driver;
+	const p = entry.driver?.[process.platform];
+	if (!p) {
+		throw new Error(
+			`"${id}" has no driver for ${process.platform}. Supported: ${Object.keys(entry.driver ?? {}).join(", ") || "none"}.`,
+		);
+	}
+	return p;
 }

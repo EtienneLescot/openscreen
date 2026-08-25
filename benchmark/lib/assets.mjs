@@ -266,3 +266,23 @@ export function writeCapCursor(projectDir, spec) {
 	writeFileSync(path, `${JSON.stringify({ clicks, moves }, null, 0)}\n`);
 	return path;
 }
+
+/**
+ * The wallpaper as a `data:` URI.
+ *
+ * OpenScreen's renderer would not load a `file://` wallpaper from outside its own resources —
+ * the export came out on a black background with no error at all — and a data URI sidesteps
+ * the question entirely: no media-path rule, no protocol handler, and the same string works on
+ * Windows, where a bare drive path is read as a colour rather than a path. At ~37 KB of JPEG
+ * it costs nothing to inline.
+ */
+export function wallpaperDataUri(wallpaper) {
+	const file = wallpaper?.jpeg ?? wallpaper?.path ?? wallpaper;
+	if (typeof file !== "string") {
+		throw new Error(
+			"wallpaperDataUri needs a path, a {path} or a {jpeg} — got an object with neither",
+		);
+	}
+	const mime = /\.png$/i.test(file) ? "image/png" : "image/jpeg";
+	return `data:${mime};base64,${readFileSync(file).toString("base64")}`;
+}
