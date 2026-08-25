@@ -26,7 +26,10 @@ import {
 } from "@/lib/ai-edition/captions";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
-import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
+import {
+	projectRawTimelineSecToPlayback,
+	resolvePlaybackSegments,
+} from "@/lib/ai-edition/document/timeline";
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
@@ -393,10 +396,11 @@ export interface SceneDescription {
 	};
 	/**
 	 * Imported audio tracks (issue #350), mixed over the assembled programme by
-	 * `audio::mix_external_tracks`. `startSec` is the head on the OUTPUT programme;
-	 * it equals the track's raw timeline position, which is exact when the project
-	 * has no trims/speed and an accepted approximation otherwise (the preview
-	 * approximates the same way). `trimEndSec` is always concrete — the compositor
+	 * `audio::mix_external_tracks`. `startSec` is the head on the trim-COMPRESSED output
+	 * programme: the track's raw timeline head projected through the trims via
+	 * `projectRawTimelineSecToPlayback`, so a cut ahead of the track pulls it earlier by the
+	 * removed duration (exactly as the preview already plays it). Exact for trims; speed
+	 * regions stay an approximation. `trimEndSec` is always concrete — the compositor
 	 * preallocates the decode window from it — so it is resolved to the source
 	 * duration when the track's tail isn't trimmed.
 	 */
@@ -476,7 +480,14 @@ export function buildSceneDescription(
 		return [
 			{
 				path: asset.originalPath,
-				startSec: track.timelineStartSec,
+				// The track's head is stored in RAW timeline seconds, but the programme this
+				// mixes onto is trim-compressed — so project raw→output. Passing the raw head
+				// verbatim delayed the track by the total trim duration ahead of it (issue #350).
+				startSec: projectRawTimelineSecToPlayback(
+					document.timeline.clips,
+					document.timeline.trimRanges,
+					track.timelineStartSec,
+				),
 				gainDb: track.gainDb,
 				trimStartSec: track.trimStartSec,
 				trimEndSec,
