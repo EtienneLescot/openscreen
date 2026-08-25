@@ -81,8 +81,24 @@ function tempExports() {
 	return out;
 }
 
-/** Open the source clip in a fresh Kap editor and pin its output fields. */
-async function openEditor(ctx) {
+/**
+ * Open the source clip in a fresh Kap editor and pin its output fields.
+ *
+ * `restart` is what makes a second export possible at all. Kap keeps one editor window and,
+ * once an export completes, leaves it showing a share prompt where the Convert button was.
+ * Opening the same file again only refocuses that window — the app has to go away and come
+ * back. All of this runs before the clock starts.
+ */
+async function openEditor(ctx, { restart = false } = {}) {
+	if (restart) {
+		if (appIsRunning("Kap")) await quitApp("Kap", { force: true });
+		await sleep(2500);
+		execFileSync("/bin/sh", [
+			"-c",
+			`nohup ${JSON.stringify(BIN)} --remote-debugging-port=${PORT} >/dev/null 2>&1 &`,
+		]);
+		await sleep(9000);
+	}
 	execFileSync("/usr/bin/open", ["-a", APP, ctx.source.path]);
 	await sleep(8000);
 	const target = (await listTargets(PORT)).find((t) => t.url.includes("editor.html"));
@@ -200,7 +216,7 @@ export default {
 			.catch(() => "false");
 		if (hasButton !== "true") {
 			s?.close();
-			const reopened = await openEditor(ctx);
+			const reopened = await openEditor(ctx, { restart: true });
 			s = reopened.session;
 			ctx.state.cdp = s;
 		}
