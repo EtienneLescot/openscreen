@@ -485,6 +485,24 @@ export function V4Timeline({
 		shiftPx: number;
 	} | null>(null);
 	const { settings, set: setSettings } = useEditorSettings();
+	const importAudioAsset = useProjectStore((s) => s.importAudioAsset);
+
+	// Import an audio file straight onto the timeline (issue #350). Audio is a
+	// timeline overlay like an annotation, not a media-tab clip, so it is added
+	// from here: pick a file, then `importAudioAsset` adds a kind:"audio" asset and
+	// places a track at the playhead in one step.
+	const handleAddAudio = useCallback(async () => {
+		const picker = await window.electronAPI?.openAudioFilePicker?.();
+		if (!picker?.success || !picker.path) return;
+		try {
+			const label = picker.name || picker.path.split(/[\\/]/).pop() || "Audio";
+			await importAudioAsset(picker.path, label);
+		} catch (err) {
+			toast.error(ts("audioTrack.importFailed"), {
+				description: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}, [importAudioAsset, ts]);
 
 	const [autoEnhanceOpen, setAutoEnhanceOpen] = useState(false);
 	const [autoBusy, setAutoBusy] = useState(false);
@@ -1569,6 +1587,16 @@ export function V4Timeline({
 							onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}
 						>
 							<Maximize2 size={15} />
+						</button>
+						<span className={styles.tlToolSep} aria-hidden />
+						<button
+							type="button"
+							className={styles.tlToolBtn}
+							title={ts("audioTrack.add")}
+							aria-label={ts("audioTrack.add")}
+							onClick={() => void handleAddAudio()}
+						>
+							<Music size={15} />
 						</button>
 					</div>
 				) : (

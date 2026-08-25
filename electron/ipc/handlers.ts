@@ -3626,10 +3626,8 @@ export function registerIpcHandlers(
 		}
 	});
 
-	// "Import media" (issue #350): one picker for video AND audio. It offers both
-	// extension sets and approves whichever the pick is, returning `kind` so the
-	// renderer routes an audio file to an audio asset+track and a video file to a
-	// clip. Keeps its historical name so every existing caller keeps working.
+	// The media tab imports VIDEO (it arranges clips). Audio is imported from the
+	// timeline toolbar instead (issue #350) — see `open-audio-file-picker` below.
 	ipcMain.handle("open-video-file-picker", async () => {
 		try {
 			const dialogOptions = buildDialogOptions(
@@ -3638,30 +3636,55 @@ export function registerIpcHandlers(
 					defaultPath: RECORDINGS_DIR,
 					filters: [
 						{
-							name: mainT("dialogs", "fileDialogs.mediaFiles"),
-							extensions: [
-								"webm",
-								"mp4",
-								"mov",
-								"avi",
-								"mkv",
-								"m4v",
-								"wmv",
-								"flv",
-								"ts",
-								"mp3",
-								"wav",
-								"m4a",
-								"aac",
-								"flac",
-								"ogg",
-								"opus",
-							],
-						},
-						{
 							name: mainT("dialogs", "fileDialogs.videoFiles"),
 							extensions: ["webm", "mp4", "mov", "avi", "mkv", "m4v", "wmv", "flv", "ts"],
 						},
+						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
+					],
+					properties: ["openFile"],
+				},
+				getMainWindow(),
+			);
+			const result = await dialog.showOpenDialog(dialogOptions);
+
+			if (result.canceled || result.filePaths.length === 0) {
+				return { success: false, canceled: true };
+			}
+
+			const normalizedPath = await approveReadableVideoPath(result.filePaths[0]);
+			if (!normalizedPath) {
+				return {
+					success: false,
+					message: "Selected file is not a supported readable video file",
+				};
+			}
+
+			currentProjectPath = null;
+			return {
+				success: true,
+				path: normalizedPath,
+			};
+		} catch (error) {
+			console.error("Failed to open file picker:", error);
+			return {
+				success: false,
+				message: "Failed to open file picker",
+				error: String(error),
+			};
+		}
+	});
+
+	// Import an external audio file (voiceover / BGM / SFX) — issue #350. Driven by
+	// the timeline's "Add audio" tool: audio is a timeline overlay (like an
+	// annotation), not a media-tab clip, so it has its own audio-only picker and the
+	// renderer adds it as a kind:"audio" asset + track at the playhead.
+	ipcMain.handle("open-audio-file-picker", async () => {
+		try {
+			const dialogOptions = buildDialogOptions(
+				{
+					title: mainT("dialogs", "fileDialogs.selectAudio"),
+					defaultPath: RECORDINGS_DIR,
+					filters: [
 						{
 							name: mainT("dialogs", "fileDialogs.audioFiles"),
 							extensions: ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"],
@@ -3678,28 +3701,23 @@ export function registerIpcHandlers(
 				return { success: false, canceled: true };
 			}
 
-			// Try video first, then audio — the extension gate is the only difference,
-			// and the two sets don't overlap, so at most one approves.
-			const videoPath = await approveReadableVideoPath(result.filePaths[0]);
-			const normalizedPath = videoPath ?? (await approveReadableAudioPath(result.filePaths[0]));
+			const normalizedPath = await approveReadableAudioPath(result.filePaths[0]);
 			if (!normalizedPath) {
 				return {
 					success: false,
-					message: "Selected file is not a supported readable media file",
+					message: "Selected file is not a supported readable audio file",
 				};
 			}
 
-			currentProjectPath = null;
 			return {
 				success: true,
 				path: normalizedPath,
-				kind: videoPath ? ("video" as const) : ("audio" as const),
 			};
 		} catch (error) {
-			console.error("Failed to open file picker:", error);
+			console.error("Failed to open audio file picker:", error);
 			return {
 				success: false,
-				message: "Failed to open file picker",
+				message: "Failed to open audio file picker",
 				error: String(error),
 			};
 		}
