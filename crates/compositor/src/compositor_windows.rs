@@ -46,6 +46,10 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 
 
+/// Cadence de l'inférence. Pas 60 : une silhouette ne bouge pas de façon perceptible en
+/// 16 ms, et c'est le seul levier mesuré qui divise le coût par deux sans toucher au modèle.
+const SEGMENTATION_HZ: u32 = 30;
+
 /// Cible RGBA + staging CPU pour l'extraction de la frame webcam qui alimente le modèle.
 struct SegCapture {
     rtv: ID3D11RenderTargetView,
@@ -176,6 +180,15 @@ pub struct Compositor {
     /// segmentation. Créée à la première capture, jamais redimensionnée : le modèle a une
     /// entrée fixe.
     seg_capture: RefCell<Option<SegCapture>>,
+    /// Worker d'inférence, absent tant que `enable_segmentation` n'a pas été appelé.
+    seg_worker: RefCell<Option<crate::segmentation::SegmentationWorker>>,
+    /// Boîte aux lettres du worker. Le masque est déposé depuis le thread d'inférence et
+    /// téléversé depuis le thread de rendu : aucun appel D3D ne traverse de thread, malgré
+    /// le device multithread-protected qui l'autoriserait.
+    seg_inbox: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    seg_rate: RefCell<crate::segmentation::RateLimiter>,
+    /// Frame RGB réutilisée d'une capture à l'autre.
+    seg_scratch: RefCell<Vec<u8>>,
     /// Staging NV12 du readback d'ENCODAGE (backend CPU) — même motif de cache par taille
     /// que `live_readback_staging`, mais en NV12 et non en RGBA : l'encodeur logiciel veut
     /// les plans Y/UV, pas des pixels RGBA. Voir `read_nv12_scaled`.
@@ -587,6 +600,10 @@ impl Compositor {
             resize_target: RefCell::new(None),
             live_readback_staging: RefCell::new(None),
             seg_capture: RefCell::new(None),
+            seg_worker: RefCell::new(None),
+            seg_inbox: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            seg_rate: RefCell::new(crate::segmentation::RateLimiter::new(SEGMENTATION_HZ)),
+            seg_scratch: RefCell::new(Vec::new()),
             nv12_readback_staging: RefCell::new(None),
         })
     }
@@ -1040,6 +1057,81 @@ impl Compositor {
         Ok(())
     }
 
+    /// Un tour de segmentation : téléverse le masque prêt, puis soumet une nouvelle frame si
+    /// la cadence l'autorise.
+    ///
+    /// Les deux moitiés sont volontairement désynchronisées. Le masque téléversé ici vient de
+    /// la frame précédente — une frame de retard sur une silhouette est invisible, alors
+    /// qu'attendre l'inférence bloquerait le rendu, ce qui est exactement le coût que toute
+    /// cette conception cherche à ne pas payer.
+    unsafe fn pump_segmentation(
+        &self,
+        wy: &ID3D11ShaderResourceView,
+        wuv: &ID3D11ShaderResourceView,
+        valid: [f32; 2],
+    ) -> Result<()> {
+        if self.seg_worker.borrow().is_none() {
+            return Ok(());
+        }
+        // Rien à faire si aucun effet n'est demandé : ni capture, ni inférence, ni masque.
+        // Le coût de la fonctionnalité est alors exactement nul.
+        let wants_effect = matches!(
+            self.scene.borrow().as_ref().and_then(|s| s.webcam_effect.as_ref()),
+            Some(e) if e.shader_code() > 0.0
+        );
+        if !wants_effect {
+            return Ok(());
+        }
+
+        if let Some(mask) = self.seg_inbox.lock().unwrap().take() {
+            self.set_webcam_mask(
+                &mask,
+                crate::segmentation::MODEL_WIDTH,
+                crate::segmentation::MODEL_HEIGHT,
+            )?;
+        }
+
+        if !self.seg_rate.borrow_mut().should_run(std::time::Instant::now()) {
+            return Ok(());
+        }
+        let mut scratch = self.seg_scratch.borrow_mut();
+        // La frame ENTIÈRE, pas le sous-rect dessiné : un crop utilisateur serré amputerait
+        // le sujet en entrée du modèle, et le masque serait faux là où il compte le plus.
+        // Le shader ramène ses coordonnées dans cet espace via `fx.xy`.
+        self.capture_webcam_rgb(
+            wy,
+            wuv,
+            [0.0, 0.0, valid[0], valid[1]],
+            crate::segmentation::MODEL_WIDTH,
+            crate::segmentation::MODEL_HEIGHT,
+            &mut scratch,
+        )?;
+        if let Some(w) = self.seg_worker.borrow().as_ref() {
+            w.submit(&scratch);
+        }
+        Ok(())
+    }
+
+    /// Démarre la segmentation du sujet webcam pour ce compositeur.
+    ///
+    /// Idempotent. Tant qu'elle n'est pas appelée, `compose_frame` ne fait rien de plus et
+    /// la webcam se dessine comme avant — c'est ce qui rend l'effet inerte plutôt que cassé
+    /// sur une build sans modèle.
+    pub fn enable_segmentation(&self, model_path: &std::path::Path) -> Result<()> {
+        if self.seg_worker.borrow().is_some() {
+            return Ok(());
+        }
+        let segmenter = crate::segmentation::Segmenter::load(model_path)?;
+        let inbox = std::sync::Arc::clone(&self.seg_inbox);
+        let worker = crate::segmentation::SegmentationWorker::spawn(segmenter, move |mask, _, _| {
+            // Écrase le masque précédent s'il n'a pas encore été téléversé : c'est le plus
+            // récent qui vaut, jamais une file.
+            *inbox.lock().unwrap() = Some(mask.to_vec());
+        });
+        *self.seg_worker.borrow_mut() = Some(worker);
+        Ok(())
+    }
+
     /// Éteint l'effet : la webcam se redessine telle quelle à la frame suivante.
     pub fn clear_webcam_mask(&self) {
         *self.webcam_mask.borrow_mut() = None;
@@ -1296,6 +1388,12 @@ impl Compositor {
         let (wtw, wth) = self.tex_dims(webcam);
         let (scw, sch) = ((*screen).width as f32, (*screen).height as f32);
         let (wcw, wch) = ((*webcam).width as f32, (*webcam).height as f32);
+        // Étendue valide de la texture webcam : les décodeurs allouent des textures alignées,
+        // donc la frame n'occupe pas forcément toute la texture.
+        let w_valid = [wcw / wtw as f32, wch / wth as f32];
+
+        // Segmentation, AVANT `begin()` : la capture réquisitionne la cible de rendu.
+        self.pump_segmentation(&wy, &wuv, w_valid)?;
         let u_max = scw / stw as f32;
         let v_max = sch / sth as f32;
 
@@ -1797,7 +1895,7 @@ impl Compositor {
                     radius_px: w_radius,
                     mode: 0.0,
                     color: bg_color,
-                    fx: [0.0, 0.0, effect_code, blur_intensity],
+                    fx: [w_valid[0], w_valid[1], effect_code, blur_intensity],
                     src_prev: [u0, sv0, u1, sv1], // src fixe (pas de zoom webcam)
                     dst_prev: w_dst_prev,
                     mb: [mb_taps, 1.0, 1.0, 0.0],
