@@ -75,11 +75,8 @@
 		"add": "Add audio track",
 		"importFailed": "Could not add audio",
 		"defaultLabel": "Audio track",
-		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
+		"help": "Volume for this imported audio track. It mixes over the recording in the preview and the export. Drag the track on the timeline to move or trim it.",
 		"volume": "Volume",
-		"offset": "Start (s)",
-		"mute": "Mute",
-		"unmute": "Unmute",
 		"remove": "Remove track"
 	},
 	"effects": {

@@ -16,8 +16,6 @@ import {
 	Music,
 	Sliders,
 	Trash2,
-	Volume2,
-	VolumeX,
 } from "lucide-react";
 import {
 	type ChangeEvent,
@@ -2109,9 +2107,10 @@ type TimelineApi = ReturnType<typeof useTimeline>;
 
 // Per-track controls for the selected imported audio track (issue #350). Shown by
 // the inspector in place of the facet when an audio track is selected (see
-// FloatingInspector). Volume drives a local live value during the drag and only
-// writes (one undo step) on release, the same shape as the global output-gain
-// slider; mute / offset / remove each write once.
+// FloatingInspector). The header is the generic "Audio track"; the body leads
+// with the file name, then the volume (a local live value during the drag,
+// committed as one undo step on release), then a delete button styled like the
+// region panes' (position and mute are edited on the lane itself).
 export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 	const ts = useScopedT("settings");
 	const trackId = tl.selectedAudioTrackId;
@@ -2119,20 +2118,44 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 	const asset = track ? tl.assets.find((a) => a.id === track.assetId) : undefined;
 	// Live-drag value for the volume slider; null means "show the committed gain".
 	const [liveGain, setLiveGain] = useState<number | null>(null);
-	// Draft text for the offset field; null means "show the track's real offset".
-	const [offsetDraft, setOffsetDraft] = useState<string | null>(null);
 	if (!track) return null;
-	const label = track.label || asset?.label || ts("audioTrack.defaultLabel");
+	const fileName = track.label || asset?.label || asset?.originalPath?.split(/[\\/]/).pop() || "";
 
-	const commitOffset = () => {
-		if (offsetDraft === null) return;
-		const parsed = Number.parseFloat(offsetDraft);
-		if (Number.isFinite(parsed)) void tl.moveAudioTrack(track.id, Math.max(0, parsed));
-		setOffsetDraft(null);
+	// Match the region panes' danger-outlined delete button (see SelectionPane).
+	const deleteBtnStyle: CSSProperties = {
+		display: "inline-flex",
+		alignItems: "center",
+		justifyContent: "center",
+		gap: 7,
+		padding: "9px 14px",
+		borderRadius: 10,
+		border: "1px solid var(--danger)",
+		background: "var(--danger-soft)",
+		color: "var(--danger)",
+		font: "600 13px var(--font-display)",
+		cursor: "pointer",
 	};
 
 	return (
-		<Pane title={label} icon={<Music size={14} />} helpText={ts("audioTrack.help")}>
+		<Pane
+			title={ts("audioTrack.defaultLabel")}
+			icon={<Music size={14} />}
+			helpText={ts("audioTrack.help")}
+		>
+			<div
+				title={fileName}
+				style={{
+					fontSize: 13,
+					fontWeight: 600,
+					color: "var(--fg)",
+					overflow: "hidden",
+					textOverflow: "ellipsis",
+					whiteSpace: "nowrap",
+					margin: "0 0 10px",
+				}}
+			>
+				{fileName}
+			</div>
 			<div className={styles.sliderGrid}>
 				<SliderCell
 					label={ts("audioTrack.volume")}
@@ -2142,7 +2165,6 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 					step={0.5}
 					decimals={1}
 					suffix=" dB"
-					disabled={track.mute}
 					onChange={(value) => setLiveGain(value)}
 					onCommit={() => {
 						if (liveGain !== null) void tl.setAudioTrackGain(track.id, liveGain);
@@ -2150,52 +2172,10 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 					}}
 				/>
 			</div>
-			<label
-				style={{
-					display: "flex",
-					alignItems: "center",
-					justifyContent: "space-between",
-					gap: 8,
-					fontSize: 12,
-					color: "var(--meta)",
-					margin: "2px 0 8px",
-				}}
-			>
-				<span>{ts("audioTrack.offset")}</span>
-				<input
-					type="number"
-					min={0}
-					step={0.1}
-					value={offsetDraft ?? track.timelineStartSec.toFixed(2)}
-					onChange={(e) => setOffsetDraft(e.target.value)}
-					onBlur={commitOffset}
-					onKeyDown={(e) => {
-						if (e.key === "Enter") e.currentTarget.blur();
-					}}
-					style={{
-						width: 84,
-						padding: "4px 6px",
-						background: "var(--surface-warm)",
-						border: "1px solid var(--border-soft)",
-						borderRadius: "var(--r-sm)",
-						color: "var(--fg)",
-						font: "12px var(--font-body)",
-						textAlign: "right",
-					}}
-				/>
-			</label>
 			<button
 				type="button"
-				className={styles.secondaryBtn}
-				onClick={() => void tl.toggleAudioTrackMute(track.id)}
-			>
-				{track.mute ? <VolumeX size={14} /> : <Volume2 size={14} />}
-				{track.mute ? ts("audioTrack.unmute") : ts("audioTrack.mute")}
-			</button>
-			<button
-				type="button"
-				className={styles.secondaryBtn}
 				onClick={() => void tl.removeAudioTrack(track.id)}
+				style={deleteBtnStyle}
 			>
 				<Trash2 size={14} />
 				{ts("audioTrack.remove")}
