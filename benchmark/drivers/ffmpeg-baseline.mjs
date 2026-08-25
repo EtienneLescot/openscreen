@@ -8,7 +8,7 @@
  */
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { resolveFfmpeg } from "../lib/env.mjs";
+import { ffmpegVersion, resolveFfmpeg } from "../lib/env.mjs";
 
 export default {
 	id: "ffmpeg-baseline",
@@ -16,15 +16,25 @@ export default {
 	vendor: "reference",
 	kind: "reference",
 	automation: "cli",
-	processName: null,
-	appPath: null,
+	// The sampler matches processes by argv prefix; without this the floor reported 0 CPU
+	// seconds while every other row reported real ones.
+	get appPath() {
+		try {
+			return resolveFfmpeg().ffmpeg;
+		} catch {
+			return null;
+		}
+	},
+	processName: "ffmpeg",
 	bundleId: null,
 	install: null,
 
 	detect() {
 		try {
 			const { ffmpeg, source } = resolveFfmpeg();
-			return { installed: true, version: source, path: ffmpeg };
+			const banner = ffmpegVersion().banner;
+			const v = /ffmpeg version (\S+)/.exec(banner)?.[1] ?? "unknown";
+			return { installed: true, version: `${v} (${source.split(":")[0]})`, path: ffmpeg };
 		} catch (e) {
 			return { installed: false, version: null, path: null, error: e.message };
 		}

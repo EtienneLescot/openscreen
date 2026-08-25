@@ -192,27 +192,35 @@ SIP-protected exec and the inherited variable never survives.
 The LGPL build has no libx264 and no drawtext. The fixture is encoded with
 `h264_videotoolbox` and drawn with `drawbox`; neither `-crf` nor text overlays are available.
 
-### Background load
+### Background load, and the one that matters most
 
-The one precondition that never announces itself. Nothing throttles and nothing warns — every
-export is simply slower. On this machine, reached over a remote-desktop session, the screen
-encoder alone holds 100–200 % of a core permanently, and `doctor` refuses to call the machine
-ready above 60 %.
+The precondition that never announces itself. Nothing throttles and nothing warns — every export
+is simply slower. `doctor` refuses to call a machine ready above 60% foreign CPU, and the figure
+is sampled during every export and reported per row as **Bg load**.
 
-It is sampled during every export and reported per row as **Bg load**.
+**Do not run this over a remote-desktop session.** That is the single largest source of error
+found while building this, and it is not a CPU problem. Parsec, Screen Sharing and ARD all
+encode the screen continuously through `VTEncoderXPCService` — *the same hardware H.264 encoder
+every app in this benchmark uses for its export*. The contention is for the media engine, which
+no CPU measurement sees:
 
-Do not assume it cancels out. It does not affect every app equally — a heavily parallel encoder
-contends for cores that a VideoToolbox-bound one never wanted — and a long run heat-soaks the
-SoC, so an app measured last is not measured under the same conditions as one measured first.
-Cap took 19.6 s on a quiet machine and 40.2 s an hour into a loaded run; the ffmpeg floor moved
-only 17.7 s → 23.9 s over the same change. Same machine, same clip, same settings.
+| | quiet machine | with a remote session live |
+|---|---|---|
+| ffmpeg floor | 17.7 s | 23.7 s (+34%) |
+| Cap | 19.6 s | 43.8 s (+123%) |
 
-That is why every run ends with a **closing control**: the floor workload is measured again
-after all the apps, and the report prints the ratio. At ~1.00 the ordering did not matter. Above
-it, the report says so in bold and the numbers should not be quoted without a re-run on a
-quieter machine or with a longer `--cooldown`.
+Same machine, same clip, same settings, same padding — the padding calibration and the
+background colour were both ruled out by A/B (42.6 s vs 42.5 s, and 42.4 s with the original
+colour). Apps are affected unequally because they lean on the encoder differently, so the load
+does not cancel out and the *ranking* can move, not just the absolute times.
 
-### Repetitions and guards
+Within a single run the numbers are still sound, and the **closing control** is what proves it:
+the floor workload is measured again after all the apps, and the report prints the ratio. In the
+committed run it came back at 23.69 s against an opening 23.68 s — no drift, so every app in
+that run met identical conditions. Comparing across runs on different machines requires the same
+to be true of both.
+
+### Repetitions and guards### Repetitions and guards
 
 Three scoring runs after one discarded warm-up, 45 s of cooldown between them. The warm-up is
 kept in the data but excluded from the statistics — first runs pay for cold caches and
