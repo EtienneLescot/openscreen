@@ -1407,6 +1407,34 @@ describe("useTimeline audio tracks", () => {
 		expect(useProjectStore.getState().document?.audioTracks).toEqual([]);
 	});
 
+	// #350: the toolbar button and the `M` shortcut both call `tl.addAudio`, which opens
+	// the OS file picker and hands the result to `importAudioAsset`. Spy on the store's
+	// import so these assert the wiring (picker → import), not the import itself.
+	it("addAudio imports the picked file, and is a no-op when the picker is cancelled", async () => {
+		const importSpy = vi.fn().mockResolvedValue(null);
+		useProjectStore.setState({ importAudioAsset: importSpy });
+		const pickerMock = vi.fn();
+		Object.defineProperty(window, "electronAPI", {
+			configurable: true,
+			value: { openAudioFilePicker: pickerMock },
+		});
+		const { result } = renderTimeline();
+
+		// Cancelled picker → nothing imported.
+		pickerMock.mockResolvedValueOnce({ success: false });
+		await act(async () => {
+			await result.current.addAudio();
+		});
+		expect(importSpy).not.toHaveBeenCalled();
+
+		// Picked a file → imported with its path and display name.
+		pickerMock.mockResolvedValueOnce({ success: true, path: "/tmp/bgm.mp3", name: "bgm.mp3" });
+		await act(async () => {
+			await result.current.addAudio();
+		});
+		expect(importSpy).toHaveBeenCalledWith("/tmp/bgm.mp3", "bgm.mp3");
+	});
+
 	// #350 regression: a failed import-time probe leaves durationSec at 0, which
 	// makes the playback window zero-length. The on-load backfill re-probes and
 	// stamps the real duration onto the asset AND the track, so it can play again.

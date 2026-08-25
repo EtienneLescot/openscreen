@@ -485,24 +485,6 @@ export function V4Timeline({
 		shiftPx: number;
 	} | null>(null);
 	const { settings, set: setSettings } = useEditorSettings();
-	const importAudioAsset = useProjectStore((s) => s.importAudioAsset);
-
-	// Import an audio file straight onto the timeline (issue #350). Audio is a
-	// timeline overlay like an annotation, not a media-tab clip, so it is added
-	// from here: pick a file, then `importAudioAsset` adds a kind:"audio" asset and
-	// places a track at the playhead in one step.
-	const handleAddAudio = useCallback(async () => {
-		const picker = await window.electronAPI?.openAudioFilePicker?.();
-		if (!picker?.success || !picker.path) return;
-		try {
-			const label = picker.name || picker.path.split(/[\\/]/).pop() || "Audio";
-			await importAudioAsset(picker.path, label);
-		} catch (err) {
-			toast.error(ts("audioTrack.importFailed"), {
-				description: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}, [importAudioAsset, ts]);
 
 	const [autoEnhanceOpen, setAutoEnhanceOpen] = useState(false);
 	const [autoBusy, setAutoBusy] = useState(false);
@@ -1568,7 +1550,7 @@ export function V4Timeline({
 										className={styles.tlToolBtn}
 										title={ts("audioTrack.add")}
 										aria-label={ts("audioTrack.add")}
-										onClick={() => void handleAddAudio()}
+										onClick={() => void tl.addAudio()}
 									>
 										<Music size={15} />
 									</button>
@@ -1709,12 +1691,20 @@ export function V4Timeline({
 										hasAnyCamera ? t("hints.pressCameraFullscreen") : ts("layout.noWebcam"),
 									)}
 								</div>
-								{/* Imported audio tracks (issue #350). Only shown once a track exists —
-								    audio arrives via the media panel's "Import audio", not a keystroke,
-								    so an empty lane would advertise nothing. */}
-								{tl.audioTracks.length > 0 ? (
-									<div className={`${styles.tlLane} ${styles.tlLaneAudio}`}>
-										{tl.audioTracks.map((track) => {
+								{/* Imported audio tracks (issue #350). Always shown, like every other
+								    lane — "Add audio" is a toolbar peer of the region tools now (and
+								    has a keyboard shortcut), so an empty lane advertises the shortcut
+								    that fills it rather than hiding until the first import. */}
+								<div className={`${styles.tlLane} ${styles.tlLaneAudio}`}>
+									{tl.audioTracks.length === 0 ? (
+										<span
+											className={styles.laneEmpty}
+											style={{ left: `${nav.start * 100}%`, width: `${navSpan * 100}%` }}
+										>
+											{t("hints.pressAudio")}
+										</span>
+									) : (
+										tl.audioTracks.map((track) => {
 											const asset = tl.assets.find((a) => a.id === track.assetId);
 											const duration = asset?.durationSec ?? track.durationSec;
 											// While this track is being dragged, lay it out from the live
@@ -1738,9 +1728,9 @@ export function V4Timeline({
 													label={track.label || asset?.label || ts("audioTrack.defaultLabel")}
 												/>
 											);
-										})}
-									</div>
-								) : null}
+										})
+									)}
+								</div>
 							</>
 						) : null}
 

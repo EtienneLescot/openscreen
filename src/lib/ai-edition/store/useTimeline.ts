@@ -4,6 +4,7 @@
 // (a reasonable default for the user to then resize).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
@@ -118,6 +119,7 @@ export function useTimeline() {
 	const selectedAudioTrackId = useProjectStore((s) => s.selectedAudioTrackId);
 	const setSelectedAudioTrackId = useProjectStore((s) => s.setSelectedAudioTrackId);
 	const storeAddAudioTrack = useProjectStore((s) => s.addAudioTrack);
+	const importAudioAsset = useProjectStore((s) => s.importAudioAsset);
 	// Pre-drag snapshots for the two optimistic paths (zoom focus, annotations), so a
 	// failed commit can put the document back instead of leaving an edit on screen that
 	// was never written.
@@ -1276,6 +1278,23 @@ export function useTimeline() {
 		[storeAddAudioTrack],
 	);
 
+	// Import an audio file and drop it on the timeline (issue #350). Lives here — not in
+	// the timeline toolbar — so the toolbar button and the keyboard shortcut (both call
+	// through `tl`) share one path. Opens a file picker, so unlike the region adds it takes
+	// no playhead duration; `importAudioAsset` places the track at the current playhead.
+	const addAudio = useCallback(async () => {
+		const picker = await window.electronAPI?.openAudioFilePicker?.();
+		if (!picker?.success || !picker.path) return;
+		try {
+			const label = picker.name || picker.path.split(/[\\/]/).pop() || "Audio";
+			await importAudioAsset(picker.path, label);
+		} catch (err) {
+			toast.error(ts("audioTrack.importFailed"), {
+				description: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}, [importAudioAsset, ts]);
+
 	const removeAudioTrack = useCallback(
 		async (trackId: string) => {
 			if (!document) return;
@@ -1335,6 +1354,7 @@ export function useTimeline() {
 		removeRegion,
 		removeRegions,
 		addAudioTrack,
+		addAudio,
 		removeAudioTrack,
 		placeAudioTrack,
 		setAudioTrackGain,
