@@ -1,14 +1,4 @@
-import {
-	ArrowLeft,
-	Check,
-	Film,
-	Loader2,
-	MessageSquare,
-	Music,
-	Plus,
-	Search,
-	X,
-} from "lucide-react";
+import { ArrowLeft, Check, Film, Loader2, MessageSquare, Plus, Search, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -169,6 +159,9 @@ export function MediaPane() {
 		? transcriptions[srcTranscriptAsset.id]
 		: undefined;
 
+	// "Import media" imports video OR audio (issue #350) — the picker returns which.
+	// An audio file becomes a kind:"audio" asset AND a timeline track in one action
+	// (importAudioAsset), the way a video becomes a clip.
 	const handleImport = async () => {
 		if (!projectId) {
 			toast.error(t("mediaStage.openProjectFirst"));
@@ -179,34 +172,11 @@ export function MediaPane() {
 		setBusy(true);
 		try {
 			const label = picker.name || basename(picker.path);
-			await addAsset(picker.path, label);
+			if (picker.kind === "audio") await importAudioAsset(picker.path, label);
+			else await addAsset(picker.path, label);
 			toast.success(t("mediaStage.added", { label }));
 		} catch (err) {
 			toast.error(t("mediaStage.couldNotAddAsset"), {
-				description: err instanceof Error ? err.message : String(err),
-			});
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	// Import an external audio file (voiceover / BGM / SFX) — issue #350. Adds the
-	// asset AND places a track at the playhead in one action (importAudioAsset), so
-	// the file lands visibly on the timeline the way importing a video lands a clip.
-	const handleImportAudio = async () => {
-		if (!projectId) {
-			toast.error(t("mediaStage.openProjectFirst"));
-			return;
-		}
-		const picker = await window.electronAPI?.openAudioFilePicker();
-		if (!picker?.success || !picker.path) return;
-		setBusy(true);
-		try {
-			const label = picker.name || basename(picker.path);
-			await importAudioAsset(picker.path, label);
-			toast.success(t("mediaStage.added", { label }));
-		} catch (err) {
-			toast.error(t("mediaStage.couldNotAddAudio"), {
 				description: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
@@ -285,15 +255,6 @@ export function MediaPane() {
 			>
 				<Plus size={14} />
 				{t("mediaStage.importMedia")}
-			</button>
-			<button
-				type="button"
-				className={styles.importBtn}
-				onClick={handleImportAudio}
-				disabled={!projectId || busy}
-			>
-				<Music size={14} />
-				{t("mediaStage.importAudio")}
 			</button>
 			{document?.transcript ? (
 				<div

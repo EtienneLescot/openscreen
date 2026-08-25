@@ -160,9 +160,7 @@
 		"detectedLanguage": "Langue détectée : {{language}}",
 		"noAudioTrack": "Aucune piste audio",
 		"noAudioTrackHint": "Ce média n'a pas de piste audio — il n'y a rien à transcrire.",
-		"noSpeechDetected": "Aucune parole détectée",
-		"couldNotAddAudio": "Could not add audio",
-		"importAudio": "Import audio"
+		"noSpeechDetected": "Aucune parole détectée"
 	},
 	"exportDialog": {
 		"title": "Exporter",

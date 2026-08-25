@@ -160,9 +160,7 @@
 		"detectedLanguage": "Lingua rilevata: {{language}}",
 		"noAudioTrack": "Nessuna traccia audio",
 		"noAudioTrackHint": "Questo contenuto non ha una traccia audio: non c'è nulla da trascrivere.",
-		"noSpeechDetected": "Nessun parlato rilevato",
-		"couldNotAddAudio": "Could not add audio",
-		"importAudio": "Import audio"
+		"noSpeechDetected": "Nessun parlato rilevato"
 	},
 	"exportDialog": {
 		"title": "Esporta",
