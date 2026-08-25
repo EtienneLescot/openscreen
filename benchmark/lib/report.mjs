@@ -102,9 +102,9 @@ export function renderReport(doc) {
 	md.push("## Results");
 	md.push("");
 	md.push(
-		"| # | App | Version | Export (median) | ×realtime | Render fps | vs floor | CPU·s | Peak RSS | Output | Fidelity | How it was driven |",
+		"| # | App | Version | Export (median) | ×realtime | Render fps | vs floor | CPU·s | Peak RSS | Bg load | Output | Fidelity | How it was driven |",
 	);
-	md.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
+	md.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
 	for (const [i, r] of ranked.entries()) {
 		const vsFloor =
 			floor?.medianMs && r.medianMs ? `${(r.medianMs / floor.medianMs).toFixed(2)}×` : "—";
@@ -230,6 +230,7 @@ function renderHtml(doc, rows, ranked, floor, summaryText) {
         <td class="num">${vsFloor}</td>
         <td class="num">${r.cpuSeconds ?? "—"}</td>
         <td class="num">${r.peakRssMiB ? `${r.peakRssMiB}` : "—"}</td>
+        <td class="num">${r.foreignCpuPercent != null ? `${r.foreignCpuPercent}%` : "—"}</td>
         <td class="num">${fmtMB(r.outputSizeBytes)}</td>
         <td>${r.fidelity?.full ? '<span class="ok">full</span>' : `<span class="warn">${escapeHtml(fidelityLabel(r.fidelity))}</span>`}</td>
         <td><code>${escapeHtml(r.automation ?? "—")}</code></td>
@@ -314,7 +315,7 @@ function renderHtml(doc, rows, ranked, floor, summaryText) {
     <table>
       <thead><tr>
         <th>#</th><th>App</th><th>Export (median)</th><th>×RT</th><th>Render fps</th>
-        <th>vs floor</th><th>CPU·s</th><th>Peak MiB</th><th>Output</th><th>Fidelity</th><th>Driven by</th>
+        <th>vs floor</th><th>CPU·s</th><th>Peak MiB</th><th>Bg load</th><th>Output</th><th>Fidelity</th><th>Driven by</th>
       </tr></thead>
       <tbody>${tableRows}</tbody>
     </table>
