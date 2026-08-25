@@ -111,14 +111,20 @@ actually achieved.
 Only two apps in this set can be scripted the ordinary way. What the others expose was
 established by inspection, not assumption:
 
-| App | CLI | AppleScript dictionary | Accessibility tree | Screenshotable | Driven by |
+| Driver | CLI | AppleScript dictionary | Accessibility tree | Screenshotable | Driven by |
 |---|---|---|---|---|---|
-| OpenScreen | **yes** (`openscreen export`) | no | — | — | `cli` |
-| Cap | **yes** (`cap-cli export`) | no | — | — | `cli` |
-| Camtasia | no | **yes** (import, `isExporting`) | yes | yes | `applescript+menu` |
-| Kap | no | no | **no** (empty window) | yes | `cdp` |
-| Screen Studio | no | no | **no** | **no** — see below | `cdp` |
-| FocuSee | no | no | yes | yes | `ax+menu` |
+| `openscreen-cli` | **yes** (`openscreen export`) | no | — | — | `cli` |
+| `openscreen-gui` | — | no | **no** (Electron) | yes | `cdp+menu` |
+| `cap` | **yes** (`cap-cli export`) | no | — | — | `cli` |
+| `camtasia` | no | **yes** (import, `isExporting`) | yes | yes | `applescript+ax` |
+| `kap` | no | no | **no** (empty window) | yes | `cdp` |
+| `screen-studio` | no | no | **no** | **no** — see below | `cdp+menu` |
+| `focusee` | no | no | yes | yes | `ax+menu` |
+
+OpenScreen appears twice on purpose. The CLI leg measures the render engine with no interface in
+the way — the right number to set beside Cap's CLI, and the wrong one to set beside an app that
+can only be clicked. The GUI leg carries the editor's own overhead, because the subject of a
+benchmark should not be the only entrant excused from it.
 
 The ladder each GUI driver climbs, best rung first: a scripting dictionary → a System Events
 menu item by name → a documented keyboard shortcut → an accessibility control by name → the
@@ -149,6 +155,10 @@ That is how a driver gets written, and how it gets repaired when a new version r
 | Kap | MIT, free | GitHub release |
 | Screen Studio | **licence required to export at all** — no trial export | direct DMG |
 | FocuSee | trial, watermarked | vendor downloader stub |
+
+`screen-studio` and `focusee` are **off by default** — on a machine without a Screen Studio
+licence, and against FocuSee 2.4.1, they can only ever record a failure. Enable either
+explicitly with `--apps`.
 
 A watermark does not change render time, so a trial build is a valid measurement. A licence
 *wall* is not — see [Known blockers](#known-blockers).

@@ -13,7 +13,9 @@ export default defineConfig({
 		// docblock the other way round, to escape the global jsdom; that one is now
 		// redundant but harmless.)
 		environment: "node",
-		include: ["{src,electron,scripts,.github}/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}"],
+		include: [
+			"{src,electron,scripts,benchmark,.github}/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}",
+		],
 		// Vitest's 5s default is too tight here and produces red runs that mean nothing.
 		// Measured: with the machine loaded, 11 tests fail and 9 of them are purely
 		// "Test timed out in 5000ms" — ordinary component tests that pass in 200ms on an
