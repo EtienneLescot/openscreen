@@ -446,6 +446,11 @@ pub struct SceneWebcamEffect {
     /// Fond derrière le sujet pour `custom`, parsé comme `settings.wallpaper`.
     #[serde(default)]
     pub background: Option<SceneBackground>,
+    /// Chemin du modèle ONNX de segmentation. Même convention que `SceneCursorSprite::path`
+    /// ou qu'un wallpaper image : c'est l'app qui sait où ses assets sont installés, le
+    /// natif ne devine pas. Absent = pas de segmentation, l'effet reste éteint.
+    #[serde(default)]
+    pub model_path: Option<String>,
 }
 
 impl SceneWebcamEffect {
