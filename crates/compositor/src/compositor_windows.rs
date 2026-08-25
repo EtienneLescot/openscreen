@@ -1538,11 +1538,7 @@ impl Compositor {
                 scene_preset.as_deref(),
                 Some("dual-frame") | Some("vertical-stack"),
             );
-            let is_transparent_cutout = matches!(
-                scene_ref.as_ref().and_then(|s| s.webcam_effect.as_ref()),
-                Some(e) if e.mode == "transparent" || (e.mode == "presegmented" && e.blur_intensity < -0.5)
-            );
-            if cfg.shadow && !webcam_is_block && !is_transparent_cutout && shape_fade > 0.0 {
+            if cfg.shadow && !webcam_is_block && shape_fade > 0.0 {
                 let strength = WEBCAM_SHADOW_OPACITY * shape_fade;
                 self.draw_shadow(
                     w_dst,
@@ -1553,39 +1549,25 @@ impl Compositor {
                     strength,
                 );
             }
-            let (effect_mode_val, blur_val, custom_bg_color) = match scene_ref.as_ref().and_then(|s| s.webcam_effect.as_ref()) {
-                Some(e) if e.mode == "transparent" => (1.0f32, 0.0f32, [0.0, 0.0, 0.0, 1.0]),
-                Some(e) if e.mode == "blur" => (2.0f32, e.blur_intensity, [0.0, 0.0, 0.0, 1.0]),
-                Some(e) if e.mode == "custom" => {
-                    let col = match &e.background {
-                        Some(SceneBackground::Color { color }) => parse_hex(color).unwrap_or([0.0, 0.0, 0.0, 1.0]),
-                        _ => [0.0, 0.0, 0.0, 1.0],
-                    };
-                    (3.0f32, 0.0f32, col)
-                }
-                Some(e) if e.mode == "presegmented" => (0.0f32, 0.0f32, [0.0, 0.0, 0.0, 1.0]),
-                _ => (0.0f32, 0.0f32, [0.0, 0.0, 0.0, 1.0]),
-            };
-
-            if effect_mode_val <= 0.5 {
-                self.draw_video(
-                    &LayerCB {
-                        dst: w_dst,
-                        src: [u0, sv0, u1, sv1],
-                        quad_px: w_px,
-                        radius_px: w_radius,
-                        mode: 0.0,
-                        color: custom_bg_color,
-                        fx: [0.0, 0.0, effect_mode_val, blur_val],
-                        src_prev: [u0, sv0, u1, sv1], // src fixe (pas de zoom webcam)
-                        dst_prev: w_dst_prev,
-                        mb: [mb_taps, 1.0, 1.0, 0.0],
-                        ..Default::default()
-                    },
-                    &wy,
-                    &wuv,
-                );
-            }
+            // La segmentation est PRÉ-RENDUE côté app (MediaPipe) et le natif reçoit déjà la
+            // piste détourée/floutée : il n'y a donc aucun effet à appliquer ici, la webcam se
+            // dessine comme n'importe quelle autre piste.
+            self.draw_video(
+                &LayerCB {
+                    dst: w_dst,
+                    src: [u0, sv0, u1, sv1],
+                    quad_px: w_px,
+                    radius_px: w_radius,
+                    mode: 0.0,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    src_prev: [u0, sv0, u1, sv1], // src fixe (pas de zoom webcam)
+                    dst_prev: w_dst_prev,
+                    mb: [mb_taps, 1.0, 1.0, 0.0],
+                    ..Default::default()
+                },
+                &wy,
+                &wuv,
+            );
         }
 
         // --- annotations : calque le plus haut, comme dans le DOM de la preview (le calque y est

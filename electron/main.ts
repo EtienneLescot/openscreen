@@ -140,11 +140,6 @@ function createWindow() {
 		return;
 	}
 
-	if (process.env.OPENSCREEN_START_EDITOR === "1" || process.env.OPENSCREEN_EDITOR === "1") {
-		mainWindow = createEditorWindow();
-		return;
-	}
-
 	mainWindow = createHudOverlayWindow();
 }
 

@@ -81,6 +81,25 @@ export function NativeCompositorOverlay() {
 
 	// `null` = document pas encore chargé (on attend) ; `{}` = chargé sans asset (→ fixture) ;
 	// `{screenPath,…}` = vraies sources de l'asset primaire.
+	const settings = useMemo(() => getEditorSettings(document), [document]);
+
+	// The real camera path, independent of whether NATIVE is the one drawing it: the scene
+	// still needs it to look up the probed webcam size, which shapes the PiP box.
+	const cameraPath = useMemo(() => {
+		if (!document) return undefined;
+		const primary =
+			document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
+		return primary ? assetCameraSource(primary).path || undefined : undefined;
+	}, [document]);
+
+	// With a background effect on, WebcamOverlay's segmentation canvas paints the camera
+	// (background included) over this slot. Handing the same camera to the native view too
+	// would draw the RAW frame underneath it — invisible behind an opaque blur/custom
+	// result, but plainly visible through the alpha of a transparent cut-out, which made
+	// cut-out mode look like it did nothing. Withholding the source is what makes the app
+	// the sole owner of that layer; `has_webcam` gates only the draw, never the layout.
+	const appOwnsWebcamLayer = settings.webcamBackgroundMode !== "none";
+
 	const sources = useMemo(() => {
 		if (!document) {
 			return null;
@@ -95,13 +114,13 @@ export function NativeCompositorOverlay() {
 		// the one accessor, so it can never disagree with the scene or the export.
 		return {
 			screenPath: primary.originalPath,
-			webcamPath: assetCameraSource(primary).path || undefined,
+			webcamPath: appOwnsWebcamLayer ? undefined : assetCameraSource(primary).path || undefined,
 			// sidecar convention (electron/ipc/handlers.ts readCursorRecordingFile) : la
 			// télémétrie curseur vit à côté de la vidéo tant qu'elle n'a pas bougé. Absente →
 			// le natif ignore juste le curseur (CursorTrack::load échoue silencieusement).
 			cursorPath: `${primary.originalPath}.cursor.json`,
 		};
-	}, [document]);
+	}, [document, appOwnsWebcamLayer]);
 
 	const ready = sources !== null;
 	const { viewId, error } = useNativeCompositorView(canvasRef, {
@@ -132,8 +151,10 @@ export function NativeCompositorOverlay() {
 			return;
 		}
 		try {
-			const activeWebcamPath = sources && "webcamPath" in sources ? sources.webcamPath : undefined;
-			const webcamSourceSize = activeWebcamPath ? getWebcamNativeSize(activeWebcamPath) : null;
+			// Deliberately `cameraPath`, not `sources.webcamPath`: the latter is withheld
+			// while the app owns the webcam layer, and losing the probed size here would
+			// reshape the PiP box out from under the segmentation canvas that fills it.
+			const webcamSourceSize = cameraPath ? getWebcamNativeSize(cameraPath) : null;
 			const scene = buildSceneDescription(document, webcamSourceSize);
 			setNativeScene(JSON.stringify(scene));
 		} catch (error) {
@@ -164,7 +185,6 @@ export function NativeCompositorOverlay() {
 	// n'a pas d'importance. Et ca ne peut pas lutter contre un drag de slider :
 	// `setLive` passe par `setDocument`, donc `document` a deja la NOUVELLE
 	// valeur a chaque tick -- la meme que celle que le handler vient de pousser.
-	const settings = useMemo(() => getEditorSettings(document), [document]);
 	useEffect(() => {
 		const push = () => pushAllNativeParams(settings);
 		push();

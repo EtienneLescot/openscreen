@@ -22,7 +22,7 @@ import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
-import { prepareSegmentedWebcamTrack } from "@/lib/ai-edition/webcamSegmentation";
+import { applySegmentedWebcamTracks } from "@/lib/ai-edition/webcamSegmentation";
 import {
 	type ExportFormat,
 	type ExportProgress,
@@ -310,43 +310,25 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				});
 			});
 			try {
-				let exportClips = clips;
 				const sceneDesc = buildSceneDescription(document);
 				const settings = getEditorSettings(document);
 
-				if (settings.webcamBackgroundMode !== "none") {
-					const processedMap = new Map<string, string>();
-					for (const clip of exportClips) {
-						if (clip.webcamPath && !processedMap.has(clip.webcamPath)) {
-							const processedPath = await prepareSegmentedWebcamTrack(
-								clip.webcamPath,
-								{
-									mode: settings.webcamBackgroundMode,
-									blurIntensity: settings.webcamBlurIntensity,
-									wallpaper: settings.webcamWallpaper,
-								},
-								(prog) => {
-									setProgress({
-										currentFrame: Math.round(prog * 100),
-										totalFrames: 100,
-										percentage: Math.round(prog * 100),
-										estimatedTimeRemaining: 0,
-									});
-								},
-							);
-							processedMap.set(clip.webcamPath, processedPath);
-						}
-					}
-					exportClips = exportClips.map((clip) =>
-						clip.webcamPath && processedMap.has(clip.webcamPath)
-							? { ...clip, webcamPath: processedMap.get(clip.webcamPath)! }
-							: clip,
-					);
-					sceneDesc.webcamEffect = {
-						mode: "presegmented",
-						blurIntensity: settings.webcamBackgroundMode === "transparent" ? -1 : 0,
-					};
-				}
+				const exportClips = await applySegmentedWebcamTracks(
+					clips,
+					{
+						mode: settings.webcamBackgroundMode,
+						blurIntensity: settings.webcamBlurIntensity,
+						wallpaper: settings.webcamWallpaper,
+					},
+					(prog) => {
+						setProgress({
+							currentFrame: Math.round(prog * 100),
+							totalFrames: 100,
+							percentage: Math.round(prog * 100),
+							estimatedTimeRemaining: 0,
+						});
+					},
+				);
 
 				const sceneJson = JSON.stringify(sceneDesc);
 				const outDims = tierOutputDims(quality);
