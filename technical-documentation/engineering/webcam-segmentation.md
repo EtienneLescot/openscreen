@@ -136,26 +136,52 @@ That is exactly why it vanishes when the input shrinks.
 **The ALUs idle because the workload is bandwidth-limited, not because it waits on dispatch.**
 "96 % idle" was a real number, read wrongly.
 
-## The levers, in order of measured payoff
+## Settled: ONNX Runtime CPU EP, 256x144, 30 Hz, two threads
 
-| # | Lever | Measured | Cost |
-|---|---|---|---|
-| 1 | **Input at 192x112** | **1.53x**, IoU 0.976 — visually indistinguishable | an input-shape change; the model is fully convolutional, no retrain |
-| 2 | **Input at 128x80** | **2.64x**, IoU 0.949 | visibly softer edges — a judgement call |
-| 3 | **Inference at 30 Hz** | halves how often the cost is paid | scheduling; stacks multiplicatively with 1-2 |
-| 4 | **fp16 / int8** | reopened — for a bandwidth-bound workload, halving precision halves the dominant cost | must be read against the 110 `DEQUANTIZE` nodes (weights are already fp16 at rest) |
-| 5 | **CPU EP** | **21 % faster than DirectML here** (2.476 vs 3.119 ms p10), and never touches the contended queue | removes the D3D11-D3D12 interop entirely |
+[Round 3](https://github.com/getopenscreen/openscreen/pull/493#issuecomment-5416849856) measured
+all four arms under contention. The result is not the margin, it is the shape:
 
-Extrapolating round 1's +3.01 ms contention (it nearly serialises, so it scales with GPU time)
-gives roughly **+1.14 ms/frame at 128x80**. That is an extrapolation, not a measurement.
+| arm | ratio vs compositor alone | added ms/frame |
+|---|---:|---:|
+| control (pacing only, no inference) | 0.999 | — |
+| DirectML, 256x144 | 0.897 | +1.03 |
+| DirectML, 128x80 | 0.932 | +0.51 |
+| **CPU EP, 256x144** | **0.943** | **+0.47** |
+| CPU EP, 128x80 | 0.941 | +0.47 |
 
-**Dropped:** ORT session hygiene and a hand-fused SE compute shader. Both were premised on a
-large fixed cost; the real fixed cost is 0.43 ms, so together they cap at ~14 %. Three shading
-languages for a couple of tenths of a millisecond is not a trade worth making.
+**DirectML's cost scales with pixels; the CPU EP's does not.** The CPU EP sits at +0.47 ms at
+both resolutions, so **the CPU EP at full resolution is cheaper than DirectML ever gets even at
+reduced resolution**. Against a 9.03 ms compositor frame, that is ~5 %.
 
-**Hard constraint found:** both input dimensions must be divisible by 16, or the skip-connection
-`Add`s fail on mismatched extents. And at 64x48 the model stops working rather than degrading —
-it emits an all-background mask.
+**Thread count must be pinned.** On this 4-core box a default ORT session takes every core and
+produces a p95 of **24.9 ms** — a dropped frame every time it fires. `intra_op_num_threads = 2`
+is within 8 % of the best p10 with less than half the tail, and leaves two cores to the
+compositor. Never ship the default.
+
+**Resolution stays at 256x144.** IoU 0.949 flattered 128x80: as a PiP it is indistinguishable,
+but with the camera fullscreen the mask is upscaled ~15x and soft-edge pixels go 3.1 % -> 8.1 %,
+hair collapses into a ramp and the silhouette picks up a halo. 192x112 would be the safe reduced
+option — but since the CPU EP is flat across resolution, there is no reason to reduce at all.
+
+### Why this is the real prize
+
+Choosing the CPU EP is not a latency decision, it is an architectural one:
+
+- no DirectML means **no D3D12 device, no shared-handle interop, no adapter-LUID matching, no
+  cross-queue fence** — the entire hardest piece of the Windows design disappears;
+- nothing new in packaging;
+- the mask comes back as a 36 KB CPU buffer and goes into `t3` as an ordinary texture **upload**,
+  never a readback, so it never touches the blocking `Map(D3D11_MAP_READ)` that dominates preview
+  cost;
+- **the platform multiplier collapses to one code path.** "ORT has no Vulkan EP" stops mattering
+  when no GPU EP is needed, so **Linux stops being the weak leg**.
+
+### Still open
+
+- **Linux**, where the export path is already CPU-heavy — giving two cores to inference may bite
+  differently. This is the one place the recommendation could still fail, and it is unmeasured.
+- `allow_spinning = false` on the CPU thread pool, the obvious next contention knob.
+- fp16/int8, reopened by round 2 and interacting with the provider choice now settled.
 
 ## Per platform
 
