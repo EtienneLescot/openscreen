@@ -40,7 +40,8 @@
 		"services": "Dịch vụ",
 		"hide": "Ẩn OpenScreen",
 		"hideOthers": "Ẩn ứng dụng khác",
-		"unhide": "Hiển thị tất cả"
+		"unhide": "Hiển thị tất cả",
+		"saveDiagnostics": "Lưu thông tin chẩn đoán"
 	},
 	"updates": {
 		"available": "Đã có OpenScreen {{latestVersion}}. Bạn đang dùng phiên bản {{currentVersion}}.",

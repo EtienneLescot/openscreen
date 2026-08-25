@@ -188,11 +188,11 @@ const waveBarCount = new Function(
 	`return ${lift(/const barCount = ([^;]+);/, "waveform barCount")};`,
 );
 const waveBarHeightPct = new Function(
-	"h",
+	"amplitude",
 	`return ${lift(/height: `\$\{([^}]+)\}%`/, "waveform bar height")};`,
 );
 const waveBarOpacity = new Function(
-	"h",
+	"amplitude",
 	`return ${lift(/opacity: ([^,\n]+),\n/, "waveform bar opacity")};`,
 );
 
