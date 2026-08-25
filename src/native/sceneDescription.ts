@@ -412,6 +412,23 @@ export interface SceneDescription {
 		gainDb: number;
 	};
 	/**
+	 * Imported audio tracks (issue #350), mixed over the assembled programme by
+	 * `audio::mix_external_tracks`. `startSec` is the head on the OUTPUT programme;
+	 * it equals the track's raw timeline position, which is exact when the project
+	 * has no trims/speed and an accepted approximation otherwise (the preview
+	 * approximates the same way). `trimEndSec` is always concrete — the compositor
+	 * preallocates the decode window from it — so it is resolved to the source
+	 * duration when the track's tail isn't trimmed.
+	 */
+	audioTracks: Array<{
+		path: string;
+		startSec: number;
+		gainDb: number;
+		trimStartSec: number;
+		trimEndSec: number;
+		mute: boolean;
+	}>;
+	/**
 	 * Per-clip screen crop (fractions of the frame), or null for the identity
 	 * (full-frame) crop. One entry per clip in the same order as `clips`, so a
 	 * clip that owns its own cropRegion is rendered with that crop and a clip
@@ -487,6 +504,25 @@ export function buildSceneDescription(
 	const settings = getEditorSettings(document);
 
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
+	// Imported audio tracks (issue #350) → the compositor's mix list. Resolve the
+	// asset's file path and a concrete trim-out (the source duration when the tail
+	// isn't trimmed — the compositor preallocates its decode window from it). A
+	// track whose asset or path is missing is dropped rather than sent path-less.
+	const audioTracks = document.audioTracks.flatMap((track) => {
+		const asset = assetById.get(track.assetId);
+		if (!asset?.originalPath) return [];
+		const trimEndSec = track.trimEndSec ?? asset.durationSec ?? track.durationSec;
+		return [
+			{
+				path: asset.originalPath,
+				startSec: track.timelineStartSec,
+				gainDb: track.gainDb,
+				trimStartSec: track.trimStartSec,
+				trimEndSec,
+				mute: track.mute,
+			},
+		];
+	});
 	const visibleClips = resolveVisibleClips(document);
 	const clips: CompositorClipInput[] = visibleClips.flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);
@@ -821,6 +857,7 @@ export function buildSceneDescription(
 		audio: {
 			gainDb: settings.audioGainDb,
 		},
+		audioTracks,
 		background: parseWallpaper(settings.wallpaper),
 		zoomRegions: projectedZoomRegions.map((region) => ({
 			id: region.id,

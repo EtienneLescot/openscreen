@@ -5,7 +5,7 @@
 use crate::ffi::*;
 
 use crate::regions::SpeedSegment;
-use crate::scene::SceneAudio;
+use crate::scene::{SceneAudio, SceneAudioTrack};
 use anyhow::{bail, Result};
 use std::f32::consts::PI;
 use std::ffi::CString;
@@ -1381,6 +1381,71 @@ pub fn assemble_concatenated_pcm(
     output
 }
 
+/// Mix imported audio tracks (issue #350) over the assembled programme.
+///
+/// Each track is decoded across its trim window — already resampled to 48 kHz
+/// stereo by `decode_clip_audio`, the same path a clip's own audio takes — scaled
+/// by its per-track gain (the same `10^(dB/20)` law as `finish_audio`), and summed
+/// into the programme at `start_sec`. The programme length is NOT extended: a
+/// track that runs past the video is truncated to it, so the audio and video
+/// streams stay the same length for the muxer.
+///
+/// A muted track, or one whose file has no decodable audio, is skipped — the same
+/// degradation a stream-less clip gets. `trim_end_sec` must be concrete (the
+/// renderer sends `trimEnd ?? durationSec`): `decode_clip_audio` preallocates from
+/// it, so an unbounded end would try to allocate the whole real line.
+pub fn mix_external_tracks(mut programme: PlanarPcm, tracks: &[SceneAudioTrack]) -> PlanarPcm {
+    let programme_len = programme.first().map(Vec::len).unwrap_or(0);
+    if programme_len == 0 {
+        return programme;
+    }
+    for track in tracks {
+        if track.mute {
+            continue;
+        }
+        let trim_start = track.trim_start_sec.max(0.0);
+        let Some(trim_end) = track.trim_end_sec else {
+            // Without a concrete end there is no safe window to decode (see the doc
+            // comment); the renderer always resolves one, so this only guards a
+            // hand-written scene.
+            continue;
+        };
+        if trim_end <= trim_start {
+            continue;
+        }
+        let decoded = match decode_clip_audio(&track.path, trim_start, trim_end) {
+            Ok(Some(pcm)) => pcm,
+            _ => continue,
+        };
+        let gain = 10.0f32.powf(track.gain_db.clamp(-12.0, 12.0) / 20.0);
+        let offset = (track.start_sec.max(0.0) * AUDIO_OUTPUT_SAMPLE_RATE as f64).round() as usize;
+        overlay_track_pcm(&mut programme, &decoded, offset, gain);
+    }
+    programme
+}
+
+/// Sum one decoded track into the programme at `offset` samples, scaled by `gain`,
+/// truncated at the programme's end. Split out of `mix_external_tracks` so the
+/// placement/gain/clamp math is testable without ffmpeg, exactly like
+/// `mix_aligned_tracks` is split from the decode above.
+fn overlay_track_pcm(programme: &mut PlanarPcm, decoded: &PlanarPcm, offset: usize, gain: f32) {
+    let programme_len = programme.first().map(Vec::len).unwrap_or(0);
+    if offset >= programme_len {
+        return;
+    }
+    let room = programme_len - offset;
+    for channel in 0..AUDIO_OUTPUT_CHANNELS {
+        let Some(source) = decoded.get(channel) else {
+            continue;
+        };
+        let count = source.len().min(room);
+        let dst = &mut programme[channel];
+        for k in 0..count {
+            dst[offset + k] += source[k] * gain;
+        }
+    }
+}
+
 /// Encodeur AAC attaché au muxer avant son header. Les paquets utilisent le même interleaver
 /// que la vidéo ; les pts restent en unités échantillon jusqu'au rescale vers l'AVStream.
 pub(crate) struct AacEncoder {
@@ -1690,6 +1755,58 @@ mod tests {
         let mixed = mix_aligned_tracks(&[(0.0, &track)], 0.0, 3);
         assert_eq!(mixed[0], vec![0.25, -0.5, 0.75]);
         assert_eq!(mixed[1], vec![0.25, -0.5, 0.75]);
+    }
+
+    // Imported audio track overlay (issue #350).
+    #[test]
+    fn overlay_sums_at_offset_with_gain() {
+        let mut programme = planar(&[0.1, 0.1, 0.1, 0.1]);
+        // ×2 gain, placed at sample offset 1.
+        overlay_track_pcm(&mut programme, &planar(&[0.2, 0.2]), 1, 2.0);
+        assert_eq!(programme[0], vec![0.1, 0.5, 0.5, 0.1]);
+        assert_eq!(programme[1], vec![0.1, 0.5, 0.5, 0.1]);
+    }
+
+    #[test]
+    fn overlay_truncates_a_track_that_runs_past_the_programme() {
+        let mut programme = planar(&[0.0, 0.0, 0.0]);
+        // A 4-sample track placed at offset 2 has room for only 1 sample.
+        overlay_track_pcm(&mut programme, &planar(&[1.0, 1.0, 1.0, 1.0]), 2, 1.0);
+        assert_eq!(programme[0], vec![0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn overlay_past_the_end_is_a_no_op() {
+        let mut programme = planar(&[0.3, 0.3]);
+        overlay_track_pcm(&mut programme, &planar(&[1.0]), 5, 1.0);
+        assert_eq!(programme[0], vec![0.3, 0.3]);
+    }
+
+    #[test]
+    fn mix_external_tracks_skips_muted_and_empty_windows() {
+        let programme = planar(&[0.4, 0.4]);
+        let tracks = vec![
+            SceneAudioTrack {
+                path: "/nope.mp3".into(),
+                start_sec: 0.0,
+                gain_db: 0.0,
+                trim_start_sec: 0.0,
+                trim_end_sec: Some(1.0),
+                mute: true,
+            },
+            SceneAudioTrack {
+                path: "/nope.mp3".into(),
+                start_sec: 0.0,
+                gain_db: 0.0,
+                trim_start_sec: 2.0,
+                trim_end_sec: Some(1.0), // end <= start: empty window, never decoded
+                mute: false,
+            },
+        ];
+        // Both tracks are skipped before any decode, so the programme is untouched
+        // even though the path does not exist.
+        let out = mix_external_tracks(programme, &tracks);
+        assert_eq!(out[0], vec![0.4, 0.4]);
     }
 
     #[test]

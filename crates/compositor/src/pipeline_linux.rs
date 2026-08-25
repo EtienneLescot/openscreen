@@ -27,8 +27,8 @@ use std::ffi::CString;
 use std::ptr;
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, finish_audio,
-    AacEncoder, PlanarPcm,
+    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_audio,
+    mix_external_tracks, stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
 };
 use crate::audio_jobs::{decode_and_stretch_clip_audio, ClipAudioJobs};
 use crate::config::Cfg;
@@ -1002,6 +1002,12 @@ pub fn run_composited_multi(
 
     let scene = comp.scene_snapshot();
     let audio_settings = scene.as_ref().map(|scene| scene.audio).unwrap_or_default();
+    // Imported audio tracks (issue #350), cloned out of the borrowed scene so the
+    // mix step below owns them. Empty for a project with no imported audio.
+    let audio_tracks = scene
+        .as_ref()
+        .map(|scene| scene.audio_tracks.clone())
+        .unwrap_or_default();
     // Ring de staging a 2 : l'export ne veut que du debit, une frame de latence
     // ne se voit pas dans un fichier. Voir `Compositor::set_readback_depth` pour
     // la raison pour laquelle la preview, elle, reste a 1.
@@ -1190,7 +1196,10 @@ pub fn run_composited_multi(
         let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
         let octx = mux.octx;
         mux.aac.encode(
-            &finish_audio(assemble_concatenated_pcm(&clip_pcm, &plan), audio_settings),
+            &finish_audio(
+                mix_external_tracks(assemble_concatenated_pcm(&clip_pcm, &plan), &audio_tracks),
+                audio_settings,
+            ),
             octx,
         )?;
         mux.finish()?;
