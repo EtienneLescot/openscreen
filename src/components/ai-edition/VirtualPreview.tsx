@@ -244,6 +244,11 @@ export function VirtualPreview({
 	const audioContextRef = useRef<AudioContext | null>(null);
 	const audioContextCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const audioSourceNodesRef = useRef(new WeakMap<HTMLAudioElement, MediaElementAudioSourceNode>());
+	// Per-track gain nodes for imported audio (issue #350). Keyed by track id so the rAF
+	// can set each track's level live (a boost past 0 dB, which `element.volume` can't do —
+	// same reason the primary/supplemental sum through a gain node). The graph effect owns
+	// their lifecycle; the map is cleared and rebuilt whenever the routing is torn down.
+	const audioTrackGainNodesRef = useRef<Map<string, GainNode>>(new Map());
 	const audioGraphRef = useRef<PreviewAudioGraph | null>(null);
 	const videoFrameRef = useRef<HTMLDivElement | null>(null);
 
@@ -310,10 +315,21 @@ export function VirtualPreview({
 		};
 	}, [activeSource?.filePath]);
 
+	// Which imported-track elements are actually mounted (a track is rendered only once its
+	// asset URL resolves — see the JSX). Re-routing the graph is keyed on this set, NOT on the
+	// tracks' gains: a level change is applied live on the existing node by the rAF, so it must
+	// not tear the graph down. Joined ids change only on a real mount/unmount.
+	const mountedAudioTrackKey = audioTracks
+		.filter((track) => audioSources.some((source) => source.id === track.assetId))
+		.map((track) => track.id)
+		.join(",");
+
 	// Sum the audio elements into one gain node so the output trim can boost past 0 dB,
 	// which `element.volume` cannot do. The primary media element carries track 1; on macOS
 	// the existing IPC helper extracts track 2 (normally the microphone) so both are audible
-	// instead of Chromium silently choosing one.
+	// instead of Chromium silently choosing one. Imported tracks (issue #350) join the same
+	// graph through a per-track gain node so their boost survives the preview too.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mountedAudioTrackKey is the trigger for re-routing tracks; the elements are read from the ref.
 	useEffect(() => {
 		if (!primaryAudioEl || !audioProbeComplete) return;
 		if (supplementalAudioSrc && !supplementalAudioEl) return;
@@ -360,14 +376,48 @@ export function VirtualPreview({
 				// preview outright rather than degrade it.
 			}
 		}
+		// Imported tracks (issue #350): each mounted element gets source → per-track gain →
+		// the output gain, so the effective level is trackGain × outputGain — the same order
+		// the exporter mixes in (mix_external_tracks applies the track gain, finish_audio the
+		// output gain). The rAF sets each node's value; created here at unity as a safe default.
+		const trackGainNodes: GainNode[] = [];
+		audioTrackGainNodesRef.current = new Map();
+		for (const [trackId, element] of audioTrackElsRef.current) {
+			try {
+				let source = audioSourceNodesRef.current.get(element);
+				if (!source) {
+					source = graph.context.createMediaElementSource(element);
+					audioSourceNodesRef.current.set(element, source);
+				}
+				source.disconnect();
+				const trackGain = graph.context.createGain();
+				source.connect(trackGain);
+				trackGain.connect(graph.gain);
+				audioTrackGainNodesRef.current.set(trackId, trackGain);
+				connectedSources.push(source);
+				trackGainNodes.push(trackGain);
+			} catch {
+				// Same rationale as the primary/supplemental loop: routing THIS track failed, so
+				// leave the rest connected. The rAF falls back to `element.volume` for a track
+				// with no gain node (capped at 0 dB, but audible).
+			}
+		}
 		audioGraphRef.current = graph;
 		applyPreviewAudioSettings(graph, elements, audioGainDbRef.current);
 		return () => {
 			audioGraphRef.current = null;
 			for (const source of connectedSources) source.disconnect();
+			for (const trackGain of trackGainNodes) trackGain.disconnect();
+			audioTrackGainNodesRef.current = new Map();
 			graph.gain.disconnect();
 		};
-	}, [primaryAudioEl, supplementalAudioEl, supplementalAudioSrc, audioProbeComplete]);
+	}, [
+		primaryAudioEl,
+		supplementalAudioEl,
+		supplementalAudioSrc,
+		audioProbeComplete,
+		mountedAudioTrackKey,
+	]);
 
 	// Keep one AudioContext for the component. Closing and recreating it on an effect rerun
 	// permanently silences an HTMLAudioElement because createMediaElementSource may only be
@@ -390,6 +440,7 @@ export function VirtualPreview({
 				const context = audioContextRef.current;
 				audioContextRef.current = null;
 				audioSourceNodesRef.current = new WeakMap();
+				audioTrackGainNodesRef.current = new Map();
 				if (context) void context.close();
 			}, 0);
 		};
@@ -522,17 +573,23 @@ export function VirtualPreview({
 			}
 			// Imported audio tracks (issue #350): position each against the RAW
 			// virtual timeline it was placed on, play it only inside its window, and
-			// set its level from the track gain × the global output gain. Using
-			// `.volume` rather than a WebAudio node keeps the delicate
-			// primary/supplemental graph untouched; a boost past 0 dB clamps in the
-			// preview (volume maxes at 1) but is still written to the export.
+			// set its level from the track gain. When the WebAudio graph is up the level
+			// rides a per-track gain node (which CAN boost past 0 dB, and the output node
+			// applies the global gain on top, matching the export); the `.volume` path is
+			// the fallback for when the graph is unavailable — there a boost caps at 0 dB.
 			const globalGain = audioGainScalar(audioGainDbRef.current);
 			for (const track of audioTracksRef.current) {
 				const el = audioTrackElsRef.current.get(track.id);
 				if (!el) continue;
 				const trackTarget = resolveTimelineAudioPlayback(virtualTimeSecRef.current, track);
 				if (el.playbackRate !== v.playbackRate) el.playbackRate = v.playbackRate;
-				el.volume = Math.min(1, audioGainScalar(track.gainDb) * globalGain);
+				const trackGainNode = audioTrackGainNodesRef.current.get(track.id);
+				if (trackGainNode) {
+					trackGainNode.gain.value = audioGainScalar(track.gainDb);
+					if (el.volume !== 1) el.volume = 1;
+				} else {
+					el.volume = Math.min(1, audioGainScalar(track.gainDb) * globalGain);
+				}
 				// Only re-seek on a real discontinuity (a scrub, a trim jump, a first
 				// play), NOT on the sub-frame drift of normal playback. The primary audio
 				// can afford a 25 ms leash because it syncs to the <video>'s own

@@ -295,3 +295,76 @@ describe("VirtualPreview imported audio tracks", () => {
 		expect(audioEl.pause).toHaveBeenCalled();
 	});
 });
+
+// Issue #350 — a track boosted past 0 dB must sound boosted in the preview too, not just
+// in the export. `element.volume` caps at 1, so the boost has to ride a WebAudio gain node.
+// jsdom has no WebAudio, so install a minimal fake context and watch the nodes it mints.
+class FakeAudioNode {
+	connect = vi.fn();
+	disconnect = vi.fn();
+}
+class FakeGainNode extends FakeAudioNode {
+	gain = { value: 1 };
+}
+let createdGains: FakeGainNode[] = [];
+class FakeAudioContext {
+	state = "running";
+	destination = new FakeAudioNode();
+	resume = vi.fn(() => Promise.resolve());
+	close = vi.fn(() => Promise.resolve());
+	createMediaElementSource = vi.fn(() => new FakeAudioNode());
+	createGain = vi.fn(() => {
+		const node = new FakeGainNode();
+		createdGains.push(node);
+		return node;
+	});
+}
+
+describe("VirtualPreview imported audio track boost", () => {
+	beforeEach(() => {
+		createdGains = [];
+		vi.stubGlobal("AudioContext", FakeAudioContext);
+	});
+
+	// +6.0206 dB is exactly ×2 in linear gain — a boost `element.volume` (max 1) could never
+	// reach. The graph mints the output gain first, then one gain per track, so the track's
+	// node is the last one created.
+	const boosted = {
+		id: "trk",
+		assetId: "aud",
+		timelineStartSec: 2,
+		durationSec: 10,
+		trimStartSec: 1,
+		trimEndSec: 3,
+		gainDb: 6.0206,
+		label: "",
+	};
+
+	it("drives a per-track gain node past unity instead of capping element.volume", () => {
+		const sources: VideoSource[] = [{ id: "a1", src: "file:///tmp/a1.mp4", label: "a1" }];
+		const audioSources: VideoSource[] = [{ id: "aud", src: "file:///tmp/vo.mp3", label: "vo" }];
+		const { container } = render(
+			<VirtualPreview
+				videoSources={sources}
+				audioTracks={[boosted]}
+				audioSources={audioSources}
+				clips={[clip("c1", "a1", 0, 10, 0)]}
+				onTimeChange={vi.fn()}
+			/>,
+		);
+		const videoEl = container.querySelector("video");
+		if (!videoEl) throw new Error("no <video>");
+		driveVideo(videoEl as HTMLVideoElement);
+		act(() => fireEvent.loadedMetadata(videoEl));
+		const audioEl = container.querySelector<HTMLAudioElement>(
+			'[data-testid="preview-audio-track-trk"]',
+		);
+		if (!audioEl) throw new Error("no track <audio>");
+		driveAudioEl(audioEl);
+
+		tick(); // let the rAF stamp the live gain onto the node
+		const trackGain = createdGains.at(-1);
+		expect(trackGain?.gain.value).toBeCloseTo(2, 3); // boosted, NOT clamped to 1
+		expect(audioEl.volume).toBe(1); // volume left at unity so it doesn't double-attenuate
+	});
+});
