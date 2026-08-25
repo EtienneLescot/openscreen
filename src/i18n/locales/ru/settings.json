@@ -321,6 +321,8 @@
 		"help": "Настройте уровень звука на выходе. Он одинаково применяется в предпросмотре и при экспорте."
 	},
 	"audioTrack": {
+		"add": "Add audio track",
+		"importFailed": "Could not add audio",
 		"defaultLabel": "Audio track",
 		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
 		"volume": "Volume",

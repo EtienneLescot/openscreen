@@ -47,7 +47,6 @@ export function EditorEmptyState({
 
 	const createProject = useProjectStore((s) => s.createProject);
 	const addAsset = useProjectStore((s) => s.addAsset);
-	const importAudioAsset = useProjectStore((s) => s.importAudioAsset);
 	const loadProject = useProjectStore((s) => s.loadProject);
 
 	const ensureProject = useCallback(async (): Promise<string | null> => {
@@ -64,17 +63,14 @@ export function EditorEmptyState({
 			const projectId = await ensureProject();
 			if (!projectId) return;
 			const label = result.name || result.path.split(/[\\/]/).pop() || "Recording";
-			// The picker imports media (issue #350): audio lands as a kind:"audio"
-			// asset + track, video as a clip.
-			if (result.kind === "audio") await importAudioAsset(result.path, label);
-			else await addAsset(result.path, label);
+			await addAsset(result.path, label);
 		} catch (err) {
 			setDropError("load-failed");
 			// ponytail: surface as a console message only — the dialog above
 			// already tells the user something went wrong.
-			console.error("Failed to import media", err);
+			console.error("Failed to import video", err);
 		}
-	}, [addAsset, importAudioAsset, ensureProject]);
+	}, [addAsset, ensureProject]);
 
 	// A loaded project JSON is either a current AxcutDocument (has its own
 	// `schemaVersion`) or a legacy EditorProjectData that must be migrated.

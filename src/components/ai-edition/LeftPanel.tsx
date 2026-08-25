@@ -147,7 +147,6 @@ export function MediaPane() {
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
-	const importAudioAsset = useProjectStore((s) => s.importAudioAsset);
 	// Transcripts land on their own (transcriptionStore's background pass); the
 	// pane reports where each one is at and offers a per-asset re-run.
 	const transcriptions = useAssetTranscriptions();
@@ -159,9 +158,6 @@ export function MediaPane() {
 		? transcriptions[srcTranscriptAsset.id]
 		: undefined;
 
-	// "Import media" imports video OR audio (issue #350) — the picker returns which.
-	// An audio file becomes a kind:"audio" asset AND a timeline track in one action
-	// (importAudioAsset), the way a video becomes a clip.
 	const handleImport = async () => {
 		if (!projectId) {
 			toast.error(t("mediaStage.openProjectFirst"));
@@ -172,8 +168,7 @@ export function MediaPane() {
 		setBusy(true);
 		try {
 			const label = picker.name || basename(picker.path);
-			if (picker.kind === "audio") await importAudioAsset(picker.path, label);
-			else await addAsset(picker.path, label);
+			await addAsset(picker.path, label);
 			toast.success(t("mediaStage.added", { label }));
 		} catch (err) {
 			toast.error(t("mediaStage.couldNotAddAsset"), {
@@ -184,7 +179,11 @@ export function MediaPane() {
 		}
 	};
 
+	// Only video assets are listed here — the media panel arranges clips. Imported
+	// audio (issue #350) lives on the timeline's audio lane, added from the timeline
+	// toolbar, and is managed there (select its pill to edit / remove).
 	const filtered = (document?.assets ?? []).filter((a) => {
+		if (a.kind === "audio") return false;
 		if (!query) return true;
 		const text = `${a.label} ${a.originalPath}`.toLowerCase();
 		return text.includes(query.toLowerCase());

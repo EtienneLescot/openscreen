@@ -322,6 +322,8 @@
 		"help": "調整音訊輸出電平。它在預覽與匯出中的效果完全一致。"
 	},
 	"audioTrack": {
+		"add": "Add audio track",
+		"importFailed": "Could not add audio",
 		"defaultLabel": "Audio track",
 		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
 		"volume": "Volume",

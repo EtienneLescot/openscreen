@@ -278,16 +278,21 @@ interface Window {
 			message?: string;
 			error?: string;
 		}>;
-		// "Import media" — video or audio (issue #350). `kind` says which was picked
-		// so the caller routes an audio file to an audio asset+track.
 		openVideoFilePicker: () => Promise<{
 			success: boolean;
 			path?: string;
-			kind?: "video" | "audio";
 			// Browser-mode shim only: a blob: URL has no meaningful basename, so
 			// the shim carries the picked File's real name here for the label.
 			name?: string;
 			canceled?: boolean;
+		}>;
+		// Import an external audio file from the timeline toolbar (issue #350).
+		openAudioFilePicker: () => Promise<{
+			success: boolean;
+			path?: string;
+			name?: string;
+			canceled?: boolean;
+			message?: string;
 		}>;
 		setCurrentVideoPath: (path: string) => Promise<{ success: boolean }>;
 		setCurrentRecordingSession: (

@@ -321,6 +321,8 @@
 		"help": "Ajuste o nível de saída do áudio. Ele se aplica da mesma forma na prévia e na exportação."
 	},
 	"audioTrack": {
+		"add": "Add audio track",
+		"importFailed": "Could not add audio",
 		"defaultLabel": "Audio track",
 		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
 		"volume": "Volume",
