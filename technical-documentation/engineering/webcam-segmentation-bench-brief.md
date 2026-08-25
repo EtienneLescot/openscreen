@@ -1,147 +1,111 @@
-# Brief — webcam segmentation feasibility measurement
+# Brief — segmentation experiment ladder (round 2)
 
-Self-contained brief for an agent running on a test machine. Everything needed is here; read
-[webcam-segmentation.md](webcam-segmentation.md) for the surrounding decision.
+Self-contained brief for an agent on a test machine. Read
+[webcam-segmentation.md](webcam-segmentation.md) for the decision this feeds.
+
+Round 1 answered "is realtime affordable?" — *qualified yes, 2.59 ms of headroom against a floor
+estimate*. Its report is in
+[PR #493](https://github.com/getopenscreen/openscreen/pull/493#issuecomment-5410489010).
+
+Round 2 answers a different question: **where do the 3.8 ms actually go, and which lever gets
+them back?** A flatbuffer parse of the vendored model says the GPU is idle 96 % of the time, so
+the time is overhead, not arithmetic. Confirm that, then attack it.
 
 ---
-
-## Mission
-
-Answer one question with admissible numbers:
-
-> **Can the target GPU run a 256×144 segmentation model once per frame while the compositor
-> still holds its frame budget?**
-
-A "yes" unlocks moving AI segmentation into the native compositor. A "no" kills that design and
-we keep segmenting in the renderer. **You are not implementing the feature. You are measuring
-whether it is affordable.**
 
 ## Hard constraints
 
-- **Do not modify any production code.** No changes under `src/`, `electron/`, or
-  `crates/compositor/`. Measurement scaffolding lives in a scratch directory or a throwaway
-  crate you do not commit.
-- **Do not add dependencies to the app.** Nothing enters `package.json`, `Cargo.toml`, or the
-  packaging config. Install what you need on the machine, outside the repo.
-- **Do not push, do not open a PR.** Report back; a human decides.
-- **Do not download model weights without naming the source and getting it approved.** Prefer
-  converting the model already vendored in the repo — see Task 1.
+Unchanged from round 1: **no production code touched** (nothing under `src/`, `electron/`,
+`crates/compositor/`), **no dependency added to the app**, **nothing pushed**, and **no model
+weights downloaded without the source being named and approved.** Everything here uses files
+already in the repo.
 
-## Environment
+Protocol per [rendering-performance.md](rendering-performance.md) §C.2 — warm-up sweep discarded,
+`--repeat 3`, interleaved arms, **any arm above 15 % spread is VOID**, quiet machine, and **only
+within-run ratios transfer**. Round 1 caught a fake result this way (a "60 Hz" load actually
+running at 38 Hz, reporting a reassuring and wrong 0.945); assume the same traps are still there.
 
-Repo: `getopenscreen/openscreen`, branch `feat/webcam-effects`.
+**Report the hardware again**, and if this is not the same box as round 1, say so — the round-1
+absolutes do not transfer to it.
 
-Build wrapper: `crates\x.bat` (`x.bat run --release -- …`) — it sets up vcvars, puts ffmpeg on
-PATH, and calls cargo. Two things break on a fresh machine:
+## E0 — prove the bound *(do this first; it decides the rest)*
 
-- its hardcoded Visual Studio path (`…\Visual Studio\18\Insiders\…`) may not exist — the file's
-  own comment says to adjust it;
-- if you are in a **git worktree**, `crates/thirdparty/` is absent (gitignored). Copy it from a
-  full checkout or nothing builds. Bindgen also needs `LIBCLANG_PATH` pointing at an LLVM `bin`.
+Sweep the input resolution and see whether time tracks pixels.
 
-The bench needs a fixture directory containing `screen.mp4`, `webcam.mp4` and
-`screen.cursor.json`. `crates/fixture/fixture.json` is the frozen manifest; regenerate with
-`-c copy` so the bitstream is untouched.
+- 256×144 (the shipped landscape variant), then 192×108, 128×72, 64×36.
+- The square variant is **already vendored** at
+  `public/mediapipe/selfie_segmentation/selfie_segmentation.tflite` — use it for a 256×256 point,
+  at zero supply-chain cost.
+- **Prediction to falsify:** 64×36 has 16× fewer pixels and will *not* be 16× faster — expect
+  roughly 2.5–3.5 ms against 3.803. If time is flat across the sweep, the workload is
+  overhead-bound and E1–E3 are where the milliseconds live. If it tracks pixels, the hypothesis
+  is wrong, and fp16/int8 become live again.
 
-**Report the hardware.** GPU model, driver version, whether it is integrated or discrete, and
-whether the machine is on battery. This matters more than any number you produce: the design
-targets an **integrated** GPU. If this machine has a discrete GPU, say so prominently — the
-result does not transfer, and you should state that rather than let it read as a green light.
+Also worth one profiler pass: per-node timings. The claim to check is that the ten
+Squeeze-and-Excitation blocks — `MEAN → CONV1×1 → RELU → CONV1×1 → LOGISTIC → MUL`, some doing
+**128 MACs in a whole dispatch** — cost comparable wall time to convolutions doing 2.36 M MACs.
+A ~500× arithmetic difference showing up as ~1× time difference is the signature.
 
-## Measurement discipline — non-negotiable
+## E1 — 30 Hz instead of 60
 
-Governed by `technical-documentation/engineering/rendering-performance.md` §C.2. That document
-records several runs that were **VOID** and explains why. Follow it or your numbers are worthless:
+The largest single win available, and it is a scheduling change, not engineering. A silhouette
+does not meaningfully change in 16 ms. Expected: **+1.5 ms of headroom** (2.59 → 4.09 ms).
 
-- discard one full warm-up sweep before anything you report;
-- `--repeat 3`, and interleave A/B/A/B — never all-A-then-all-B;
-- **spread gate: any arm above 15 % spread declares the run VOID.** Report it as VOID; do not
-  quote it;
-- quiet machine. The documented VOID example had ~40 browser and Electron processes live. Close
-  them;
-- thermal and battery drift have *inverted conclusions* on this hardware before. Re-run if in doubt;
-- **only within-run ratios transfer between machines, never absolute times.** Your deliverable is
-  a ratio.
+Re-run the round-1 contention bench with the load generator at 30 Hz. Verify the achieved rate
+inside every arm — round 1's void was caused by exactly this going unverified.
 
----
+## E2 — ONNX Runtime session hygiene
 
-## Task 1 — isolated inference latency
+DirectML (3.803 ms) and the CPU EP (3.575 ms) agreeing within 6.4 % across two unrelated engines
+points at a shared constant of ~2–2.5 ms **outside both providers**, in ORT's per-`Run()` path.
 
-**Goal:** ms per inference, warm, p50 and p95, batch 1.
+- **Predicted finding, stated so it can be falsified:** whole-graph fusion was *off* in the
+  round-1 run — a run with it on would not report 32 separate `DmlFusedConv` nodes. If that is
+  right, this is a config change worth more than everything else combined.
+- Get the authoritative config keys from `onnxruntime_session_options_config_keys.h` in the
+  installed package. **Do not trust remembered spellings** — an unknown key throws, which is a
+  cheap way to check.
+- Expect the DML EP to want `enable_mem_pattern = False` and `ORT_SEQUENTIAL`; graph capture, if
+  available, additionally wants static shapes (satisfied — this graph is fully static) and
+  pre-bound, address-stable I/O via `IOBinding`.
+- Measure with `IOBinding` to device-resident tensors versus the naive numpy round-trip. The gap
+  is the per-`Run()` overhead.
 
-**Model.** MediaPipe SelfieSegmentation, *landscape* variant. The repo already vendors the
-weights at `public/mediapipe/selfie_segmentation/selfie_segmentation_landscape.tflite`
-(249,792 bytes). This is the runtime configuration in use today
-(`webcamSegmentation.ts`: `modelSelection: 1`).
+## E3 — CPU EP under contention
 
-Preferred route — **convert what we already ship**, so no new supply chain:
+The arm that could keep the **full 5.6 ms** of compositor headroom, because it never touches the
+contended GPU queue — and it removes the D3D11↔D3D12 interop from the design entirely.
 
-1. Install `tensorflow` + `tf2onnx` on the test machine (this is fine here; it is not fine on a
-   dev machine and must never enter the repo's dependencies).
-2. Convert the vendored `.tflite` to ONNX.
-3. **Derive the input/output tensor shapes and dtypes from the converted model — do not assume
-   them.** Report what you find.
-4. Sanity-check correctness on one real webcam frame: run it and confirm the mask actually
-   segments a person. A latency number for a broken graph is worthless.
+Re-run the contention bench with a **CPU-side** inference load instead of a GPU-side one. Keep
+the no-op control arm from round 1: without it, a drop cannot be attributed.
 
-If conversion proves impractical, stop and report that, naming what failed. Do not substitute a
-pre-converted model from the internet without the source being approved first.
+Report how many cores the load occupies, and whether the compositor's own CPU work (decode, mux)
+starts to suffer — on Linux especially, where the export path is already CPU-heavy.
 
-**Measure.** ONNX Runtime with the **DirectML** execution provider. Report:
+## E4 — a hand-fused Squeeze-and-Excitation block
 
-- p50 / p95 ms per inference, warm, over ≥ 200 iterations after ≥ 20 discarded;
-- the same on the **CPU** execution provider, as a floor to compare against;
-- ONNX Runtime version, DirectML version, and the ops that fell back to CPU if any.
+Only if E0 confirms overhead-bound. This decides whether hand-written compute is worth three
+implementations.
 
-## Task 2 — contention
+Write one fused depthwise-separable + SE block as a compute shader (HLSL `cs_5_0` is fine for the
+probe), time it against the same block as the runtime executes it, and extrapolate. The estimate
+to check: fusing away ~19 SE dispatches ≈ **1.6–2.2 ms**, more than fp16 and int8 combined could
+plausibly deliver.
 
-**Goal:** does inference running alongside compositing cost the compositor its budget?
+## What to report
 
-This needs **no integration work**. Two arms:
+The round-1 table shape, plus per experiment: the number, the spread, whether it was admissible,
+and **whether it confirmed or falsified the stated prediction**. A falsified prediction is the
+most valuable thing you can bring back.
 
-- **Arm A:** the C8 bench alone.
-  ```
-  crates\x.bat run --release -- --cfg C8 --fixture fixture --repeat 3 --out out\
-  ```
-- **Arm B:** the same, while a separate process runs the Task 1 inference in a loop at **60 Hz**
-  (one inference every 16.7 ms) on the same GPU.
+Then: which lever you would pull first, and what you would stop pursuing.
 
-Interleave A/B/A/B. Report fps for each arm, the spread per arm, and the **ratio B/A**.
+## Do not pursue
 
-If you have budget, add a third probe: arm B′ with inference running *as fast as possible*
-rather than at 60 Hz. That is an upper bound, not the realistic load, and should be labelled as
-such.
-
-## What to report back
-
-A short written report, in this shape:
-
-| | value |
-|---|---|
-| GPU / driver / integrated or discrete | |
-| Machine representative of the target? | |
-| Inference p50 / p95 (DirectML) | |
-| Inference p50 / p95 (CPU EP) | |
-| Model input / output shapes as measured | |
-| C8 fps — arm A (spread) | |
-| C8 fps — arm B (spread) | |
-| **Ratio B/A** | |
-| Run admissible under §C.2? | |
-
-Then, in prose:
-
-- **the gate**: does the compositor still hold its budget with inference in the loop? Answer
-  yes/no and show the arithmetic;
-- anything that surprised you, and anything you could not measure;
-- every run you discarded and why. A VOID run reported as VOID is a useful result; a VOID run
-  reported as a number is a harmful one.
-
-## What would change the answer
-
-Flag these if you hit them:
-
-- ops falling back to the CPU EP — that changes the latency picture entirely;
-- DirectML failing to initialise on this GPU/driver;
-- the fixture not being representative (resolution, frame rate) of a real recording;
-- the compositor bench not reaching its documented ~126 fps ballpark on arm A, which would mean
-  the machine is not comparable to the reference and the ratio is all you can offer.
+- **int8 in any form**, unless E0 falsifies the overhead-bound finding. The weights are already
+  fp16 at rest (110 `DEQUANTIZE` nodes in the shipped `.tflite`); an apparent int8 win would
+  largely be undoing a conversion artifact.
+- **RobustVideoMatting** — GPL-3.0 against an MIT app. A licence landmine, before its recurrent
+  state is even relevant.
+- MODNet, BiSeNet, SelfieMulticlass, ROI-tracking-as-a-perf-lever. Only **PP-HumanSeg v2 Lite** is
+  worth an hour, and only to count its operators against this model's 136.
