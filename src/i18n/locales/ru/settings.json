@@ -328,10 +328,10 @@
 		"help": "Настройте уровень звука на выходе. Он одинаково применяется в предпросмотре и при экспорте."
 	},
 	"audioTrack": {
-		"add": "Add audio track",
-		"importFailed": "Could not add audio",
-		"defaultLabel": "Audio track",
-		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
-		"remove": "Delete track"
+		"add": "Добавить аудиодорожку",
+		"importFailed": "Не удалось добавить аудио",
+		"defaultLabel": "Аудиодорожка",
+		"help": "Громкость импортированной аудиодорожки. Она микшируется поверх записи в предпросмотре и при экспорте. Перетащите дорожку на шкале времени, чтобы переместить или обрезать её.",
+		"remove": "Удалить дорожку"
 	}
 }

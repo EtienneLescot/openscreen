@@ -328,10 +328,10 @@
 		"help": "Ajuste o nível de saída do áudio. Ele se aplica da mesma forma na prévia e na exportação."
 	},
 	"audioTrack": {
-		"add": "Add audio track",
-		"importFailed": "Could not add audio",
-		"defaultLabel": "Audio track",
-		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
-		"remove": "Delete track"
+		"add": "Adicionar faixa de áudio",
+		"importFailed": "Não foi possível adicionar o áudio",
+		"defaultLabel": "Faixa de áudio",
+		"help": "Volume desta faixa de áudio importada. Ela é mixada sobre a gravação na prévia e na exportação. Arraste a faixa na linha do tempo para movê-la ou cortá-la.",
+		"remove": "Excluir faixa"
 	}
 }

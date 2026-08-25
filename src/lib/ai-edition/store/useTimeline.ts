@@ -26,7 +26,7 @@ import {
 } from "../document/timeline";
 import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
 import { hasAnyClipWithCamera } from "../timeline/camera";
-import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
+import { probeAudioDuration, probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
 	anchorRegionsWithDerivedMs,
 	dropPillsByIds,
@@ -217,6 +217,57 @@ export function useTimeline() {
 								: {}),
 						};
 					}),
+				},
+				{ history: false },
+			);
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [document]);
+
+	// Backfill the real duration of imported audio assets (issue #350), the audio
+	// counterpart of the dimension backfill above. `addAudioAsset` probes once at
+	// import; a transient failure (timeout, a file still being written) would
+	// otherwise leave `durationSec` at 0 forever, and a 0-length window is a track
+	// that never plays and a pill with no width. Re-probe on load — once per asset
+	// per session, success or not — and stamp both the asset AND every track that
+	// caches its duration, with `history: false` so the fix is not an undo step.
+	const probedAudioAssetIdsRef = useRef<Set<string>>(new Set());
+	useEffect(() => {
+		if (!document) return;
+		const usedAssetIds = new Set(document.audioTracks.map((t) => t.assetId));
+		const missing = document.assets.filter(
+			(a) =>
+				a.kind === "audio" &&
+				a.originalPath &&
+				usedAssetIds.has(a.id) &&
+				!(a.durationSec && a.durationSec > 0) &&
+				!probedAudioAssetIdsRef.current.has(a.id),
+		);
+		if (missing.length === 0) return;
+		let cancelled = false;
+		void (async () => {
+			const probed: Record<string, number> = {};
+			for (const a of missing) {
+				probedAudioAssetIdsRef.current.add(a.id);
+				const durationSec = await probeAudioDuration(toFileUrl(a.originalPath));
+				if (durationSec != null && durationSec > 0) probed[a.id] = durationSec;
+			}
+			if (cancelled || Object.keys(probed).length === 0) return;
+			const current = useProjectStore.getState().document;
+			if (!current) return;
+			await useProjectStore.getState().saveDocument(
+				{
+					...current,
+					assets: current.assets.map((a) =>
+						probed[a.id] ? { ...a, durationSec: probed[a.id] } : a,
+					),
+					audioTracks: current.audioTracks.map((t) =>
+						probed[t.assetId] && !(t.durationSec > 0)
+							? { ...t, durationSec: probed[t.assetId] }
+							: t,
+					),
 				},
 				{ history: false },
 			);
@@ -1209,18 +1260,31 @@ export function useTimeline() {
 
 	// Place a new track for an imported audio asset, its head at the playhead (in
 	// output-timeline seconds) unless the caller says otherwise. Delegates to the
-	// store op, which also selects the new track and returns its id (or null).
+	// store op, which also selects the new track and returns its id (or null). On
+	// success, retire the hook-local region/clip selection so the new audio-track
+	// selection isn't held CONCURRENTLY with a stale region/clip one.
 	const addAudioTrack = useCallback(
-		(assetId: string, timelineStartSec?: number): Promise<string | null> =>
-			storeAddAudioTrack(assetId, timelineStartSec ?? playheadSec()),
+		async (assetId: string, timelineStartSec?: number): Promise<string | null> => {
+			const id = await storeAddAudioTrack(assetId, timelineStartSec ?? playheadSec());
+			if (id) {
+				setSelection(null);
+				setMultiSelection([]);
+				setClipSelection(null);
+			}
+			return id;
+		},
 		[storeAddAudioTrack],
 	);
 
 	const removeAudioTrack = useCallback(
 		async (trackId: string) => {
 			if (!document) return;
-			if (selectedAudioTrackId === trackId) setSelectedAudioTrackId(null);
-			await saveDocument(removeAudioTrackInDocument(document, trackId), { history: true });
+			// Clear the inspector selection only AFTER the delete commits. A failed
+			// write leaves the track in the document, so it must keep its selection.
+			const ok = await saveDocument(removeAudioTrackInDocument(document, trackId), {
+				history: true,
+			});
+			if (ok && selectedAudioTrackId === trackId) setSelectedAudioTrackId(null);
 		},
 		[document, saveDocument, selectedAudioTrackId, setSelectedAudioTrackId],
 	);

@@ -267,6 +267,9 @@ const DECLARED: WritePath[] = [
 	// Source-dimension backfill for assets a migration left unprobed. On load, for
 	// every project, whether or not the user touches anything.
 	w("src/lib/ai-edition/store/useTimeline.ts", "useTimeline", "save", "automatic"),
+	// Audio-duration backfill (issue #350) — the same on-load, un-asked-for probe
+	// for imported audio assets whose duration didn't stamp at import.
+	w("src/lib/ai-edition/store/useTimeline.ts", "useTimeline", "save", "automatic"),
 ];
 
 function w(

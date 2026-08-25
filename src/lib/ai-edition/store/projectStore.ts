@@ -426,8 +426,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		const asset = await get().addAudioAsset(path, label);
 		if (!asset) return null;
 		// addAudioAsset already committed the asset (with its probed duration), so
-		// the current document is the one to place the track on.
-		await get().addAudioTrack(asset.id);
+		// the current document is the one to place the track on. If the placement
+		// write fails or is superseded, the import did NOT succeed as a one-shot —
+		// report failure rather than claim success with an asset but no track.
+		const trackId = await get().addAudioTrack(asset.id);
+		if (!trackId) return null;
 		return asset;
 	},
 

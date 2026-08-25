@@ -328,10 +328,10 @@
 		"help": "اضبط مستوى إخراج الصوت. يُطبَّق بالطريقة نفسها في المعاينة وعند التصدير."
 	},
 	"audioTrack": {
-		"add": "Add audio track",
-		"importFailed": "Could not add audio",
-		"defaultLabel": "Audio track",
-		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
-		"remove": "Delete track"
+		"add": "إضافة مسار صوتي",
+		"importFailed": "تعذّر إضافة الصوت",
+		"defaultLabel": "مسار صوتي",
+		"help": "مستوى صوت هذا المسار الصوتي المستورد. يُمزج فوق التسجيل في المعاينة والتصدير. اسحب المسار على المخطط الزمني لتحريكه أو اقتصاصه.",
+		"remove": "حذف المسار"
 	}
 }

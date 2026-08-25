@@ -933,7 +933,10 @@ export function V4Timeline({
 				let nts = origTrimStart;
 				let nte = origTrimEnd;
 				if (mode === "move") {
-					ns = Math.max(0, snap(origStart + dxSec));
+					// Cap so the whole track lands by `total`: no pill past 100%, and the
+					// export (which truncates at the programme end) matches what's shown.
+					const upper = Math.max(0, total - (origTrimEnd - origTrimStart));
+					ns = Math.min(Math.max(0, snap(origStart + dxSec)), upper);
 				} else if (mode === "l") {
 					// The left edge can't cross the right one, and can't reveal more head
 					// than the source has (trimStart floors at 0 → head floors at
@@ -950,7 +953,12 @@ export function V4Timeline({
 					// position of the edge, then map back to a source out-point.
 					const snappedRight = snap(origStart + (origTrimEnd - origTrimStart) + dxSec);
 					const newTrimEnd = origTrimStart + (snappedRight - origStart);
-					nte = Math.min(Math.max(newTrimEnd, origTrimStart + MIN_REGION_SEC), maxEnd);
+					// Cap the out-point at the source length AND the programme end (`total`).
+					nte = Math.min(
+						Math.max(newTrimEnd, origTrimStart + MIN_REGION_SEC),
+						maxEnd,
+						origTrimStart + Math.max(0, total - origStart),
+					);
 				}
 				const next = { id: track.id, start: ns, trimStart: nts, trimEnd: nte };
 				audioDragRef.current = next;

@@ -1390,23 +1390,40 @@ pub fn assemble_concatenated_pcm(
 /// track that runs past the video is truncated to it, so the audio and video
 /// streams stay the same length for the muxer.
 ///
+/// The decode window is capped up front at the room left in the programme after
+/// `start_sec`, and a track starting at/after the end is skipped without decoding.
+/// `decode_clip_audio` preallocates from the window, so this keeps a long track
+/// pinned near a short programme's end from buffering (and clamping away) hours of
+/// PCM. `trim_end_sec` must therefore be concrete — the renderer sends
+/// `trimEnd ?? durationSec`.
+///
 /// A track whose file has no decodable audio is skipped — the same degradation a
-/// stream-less clip gets. `trim_end_sec` must be concrete (the renderer sends
-/// `trimEnd ?? durationSec`): `decode_clip_audio` preallocates from it, so an
-/// unbounded end would try to allocate the whole real line.
+/// stream-less clip gets.
 pub fn mix_external_tracks(mut programme: PlanarPcm, tracks: &[SceneAudioTrack]) -> PlanarPcm {
     let programme_len = programme.first().map(Vec::len).unwrap_or(0);
     if programme_len == 0 {
         return programme;
     }
     for track in tracks {
+        let offset = (track.start_sec.max(0.0) * AUDIO_OUTPUT_SAMPLE_RATE as f64).round() as usize;
+        // A track that starts at or past the programme end contributes nothing —
+        // skip it before decoding anything.
+        if offset >= programme_len {
+            continue;
+        }
         let trim_start = track.trim_start_sec.max(0.0);
-        let Some(trim_end) = track.trim_end_sec else {
+        let Some(trim_end_full) = track.trim_end_sec else {
             // Without a concrete end there is no safe window to decode (see the doc
             // comment); the renderer always resolves one, so this only guards a
             // hand-written scene.
             continue;
         };
+        // Cap the decode window at the room left in the programme. Everything past
+        // `offset` that overflows is discarded by `overlay_track_pcm` anyway, so
+        // decoding it only wastes time and memory — a three-hour track placed at
+        // second 9 of a ten-second export must not buffer three hours of PCM.
+        let remaining_sec = (programme_len - offset) as f64 / AUDIO_OUTPUT_SAMPLE_RATE as f64;
+        let trim_end = trim_end_full.min(trim_start + remaining_sec);
         if trim_end <= trim_start {
             continue;
         }
@@ -1415,7 +1432,6 @@ pub fn mix_external_tracks(mut programme: PlanarPcm, tracks: &[SceneAudioTrack])
             _ => continue,
         };
         let gain = 10.0f32.powf(track.gain_db.clamp(-12.0, 12.0) / 20.0);
-        let offset = (track.start_sec.max(0.0) * AUDIO_OUTPUT_SAMPLE_RATE as f64).round() as usize;
         overlay_track_pcm(&mut programme, &decoded, offset, gain);
     }
     programme
@@ -1791,6 +1807,23 @@ mod tests {
         }];
         // The empty window is skipped before any decode, so the programme is
         // untouched even though the path does not exist.
+        let out = mix_external_tracks(programme, &tracks);
+        assert_eq!(out[0], vec![0.4, 0.4]);
+    }
+
+    #[test]
+    fn mix_external_tracks_skips_a_track_that_starts_past_the_programme() {
+        // 2 samples = ~0.00004 s of programme at 48 kHz; the track starts at 1 s, so
+        // its offset is past the end. It must be skipped before any decode is
+        // attempted (the path does not exist), never buffering its window.
+        let programme = planar(&[0.4, 0.4]);
+        let tracks = vec![SceneAudioTrack {
+            path: "/nope.mp3".into(),
+            start_sec: 1.0,
+            gain_db: 0.0,
+            trim_start_sec: 0.0,
+            trim_end_sec: Some(3600.0),
+        }];
         let out = mix_external_tracks(programme, &tracks);
         assert_eq!(out[0], vec![0.4, 0.4]);
     }

@@ -329,10 +329,10 @@
 		"help": "調整音訊輸出電平。它在預覽與匯出中的效果完全一致。"
 	},
 	"audioTrack": {
-		"add": "Add audio track",
-		"importFailed": "Could not add audio",
-		"defaultLabel": "Audio track",
-		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
-		"remove": "Delete track"
+		"add": "新增音訊軌道",
+		"importFailed": "無法新增音訊",
+		"defaultLabel": "音訊軌道",
+		"help": "此匯入音訊軌道的音量。在預覽與匯出時會疊加混音到錄製內容上。在時間軸上拖曳軌道即可移動或裁剪。",
+		"remove": "刪除軌道"
 	}
 }
