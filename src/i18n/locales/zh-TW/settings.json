@@ -326,7 +326,6 @@
 		"importFailed": "Could not add audio",
 		"defaultLabel": "Audio track",
 		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
-		"volume": "Volume",
 		"remove": "Delete track"
 	}
 }

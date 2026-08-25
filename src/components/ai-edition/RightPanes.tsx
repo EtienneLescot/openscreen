@@ -2159,7 +2159,7 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 			</div>
 			<div className={styles.sliderGrid}>
 				<SliderCell
-					label={ts("audioTrack.volume")}
+					label={ts("audio.outputGain")}
 					value={liveGain ?? track.gainDb}
 					min={-AUDIO_GAIN_DB_LIMIT}
 					max={AUDIO_GAIN_DB_LIMIT}
@@ -2173,6 +2173,16 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 					}}
 				/>
 			</div>
+			<button
+				type="button"
+				className={styles.secondaryBtn}
+				onClick={() => {
+					setLiveGain(null);
+					void tl.setAudioTrackGain(track.id, 0);
+				}}
+			>
+				{ts("audio.reset")}
+			</button>
 			<button
 				type="button"
 				onClick={() => void tl.removeAudioTrack(track.id)}
