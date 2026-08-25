@@ -154,9 +154,7 @@
 		"detectedLanguage": "偵測到的語言：{{language}}",
 		"noAudioTrack": "無音訊軌道",
 		"noAudioTrackHint": "此媒體沒有音訊軌道，沒有可轉錄的內容。",
-		"noSpeechDetected": "未偵測到語音",
-		"couldNotAddAudio": "Could not add audio",
-		"importAudio": "Import audio"
+		"noSpeechDetected": "未偵測到語音"
 	},
 	"exportDialog": {
 		"title": "匯出",

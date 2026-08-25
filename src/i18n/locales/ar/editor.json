@@ -154,9 +154,7 @@
 		"detectedLanguage": "اللغة المكتشفة: {{language}}",
 		"noAudioTrack": "لا يوجد مسار صوتي",
 		"noAudioTrackHint": "لا يحتوي هذا الملف على مسار صوتي — لا يوجد ما يمكن نسخه.",
-		"noSpeechDetected": "لم يتم اكتشاف كلام",
-		"couldNotAddAudio": "Could not add audio",
-		"importAudio": "Import audio"
+		"noSpeechDetected": "لم يتم اكتشاف كلام"
 	},
 	"exportDialog": {
 		"title": "تصدير",

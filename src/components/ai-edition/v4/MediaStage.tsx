@@ -57,6 +57,7 @@ export function MediaStage({
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
+	const importAudioAsset = useProjectStore((s) => s.importAudioAsset);
 	// Transcripts are produced in the background as soon as a media lands here
 	// (see transcriptionStore) — this stage only reports where each one is at,
 	// and lets the user force a re-run in another language.
@@ -102,7 +103,10 @@ export function MediaStage({
 		setBusy(true);
 		try {
 			const label = picker.name || basename(picker.path);
-			await addAsset(picker.path, label);
+			// Audio imports become a kind:"audio" asset + a timeline track (issue #350);
+			// video imports become a clip. The picker says which was chosen.
+			if (picker.kind === "audio") await importAudioAsset(picker.path, label);
+			else await addAsset(picker.path, label);
 			toast.success(t("mediaStage.added", { label }));
 		} catch (err) {
 			toast.error(t("mediaStage.couldNotAddAsset"), {

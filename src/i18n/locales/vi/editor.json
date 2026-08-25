@@ -154,9 +154,7 @@
 		"detectedLanguage": "Ngôn ngữ phát hiện: {{language}}",
 		"noAudioTrack": "Không có bản âm thanh",
 		"noAudioTrackHint": "Media này không có bản âm thanh — không có gì để phiên âm.",
-		"noSpeechDetected": "Không phát hiện giọng nói",
-		"couldNotAddAudio": "Could not add audio",
-		"importAudio": "Import audio"
+		"noSpeechDetected": "Không phát hiện giọng nói"
 	},
 	"exportDialog": {
 		"title": "Xuất",

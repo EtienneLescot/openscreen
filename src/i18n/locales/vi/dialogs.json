@@ -79,13 +79,13 @@
 		"saveGif": "Lưu GIF đã xuất",
 		"saveVideo": "Lưu Video đã xuất",
 		"selectVideo": "Chọn tệp video",
-		"selectAudio": "Select Audio File",
 		"saveProject": "Lưu dự án OpenScreen",
 		"openProject": "Mở dự án OpenScreen",
 		"gifImage": "Hình ảnh GIF",
 		"mp4Video": "Video MP4",
 		"videoFiles": "Tệp Video",
 		"audioFiles": "Audio Files",
+		"mediaFiles": "Media Files",
 		"openscreenProject": "Dự án OpenScreen",
 		"allFiles": "Tất cả các tệp"
 	}

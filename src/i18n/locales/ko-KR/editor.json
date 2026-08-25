@@ -154,9 +154,7 @@
 		"detectedLanguage": "감지된 언어: {{language}}",
 		"noAudioTrack": "오디오 트랙 없음",
 		"noAudioTrackHint": "이 미디어에는 오디오 트랙이 없어 받아쓸 내용이 없습니다.",
-		"noSpeechDetected": "음성이 감지되지 않음",
-		"couldNotAddAudio": "Could not add audio",
-		"importAudio": "Import audio"
+		"noSpeechDetected": "음성이 감지되지 않음"
 	},
 	"exportDialog": {
 		"title": "내보내기",
