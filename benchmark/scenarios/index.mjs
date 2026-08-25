@@ -40,12 +40,14 @@ export const SCENARIOS = {
 	 */
 	"full-demo": {
 		id: "full-demo",
-		label: "Full demo (background + padding + radius + shadow + 3 zooms)",
+		label:
+			"Full demo (wallpaper, padding, radius, shadow, 3 zooms, motion blur, rendered cursor, webcam PiP)",
 		effects: {
-			// Light neutral, deliberately far from every colour in the generated source: the
-			// verifier finds the composited video's edge by colour distance, and a background
-			// close to the recording's own chrome makes that boundary unfindable.
-			background: { kind: "solid", color: "#C9CDD6" },
+			/**
+			 * An image, not a flat colour. A fill is one clear; a wallpaper is a texture fetch
+			 * for every pixel of every frame, which is what these apps actually do.
+			 */
+			background: { kind: "image", asset: "wallpaper" },
 			/** Inset of the recording inside the frame, as a percent of the frame's short side. */
 			paddingPercent: 5,
 			cornerRadiusPx: 40,
@@ -59,10 +61,35 @@ export const SCENARIOS = {
 				{ startSec: 22, endSec: 29, scale: 2.2, focus: { x: 0.62, y: 0.55 } },
 				{ startSec: 41, endSec: 48, scale: 1.6, focus: { x: 0.45, y: 0.7 } },
 			],
-			motionBlur: false,
-			cursorEffects: false,
+			/** Blurs the composited frame along its motion — a full-frame pass per frame. */
+			motionBlur: { enabled: true, amount: 0.5 },
+			/**
+			 * The pointer is rendered by the app from telemetry, not baked into the source: a
+			 * themed sprite, positional smoothing, its own motion blur, and a click effect. This
+			 * is a large share of what a demo export costs and the first version of this
+			 * scenario measured none of it.
+			 */
+			cursor: {
+				enabled: true,
+				sizePercent: 150,
+				smoothing: 0.7,
+				motionBlur: true,
+				clickEffects: true,
+			},
+			/**
+			 * A second video stream to decode, scale, mask and shadow every frame. Apps that
+			 * cannot place a camera inset will report `webcam` missing rather than skip it
+			 * silently.
+			 */
+			webcam: {
+				enabled: true,
+				layout: "picture-in-picture",
+				position: "bottom-right",
+				sizePercent: 25,
+				shape: "rounded",
+				shadow: true,
+			},
 			captions: false,
-			webcam: false,
 		},
 		output: TARGET_OUTPUT,
 	},
@@ -81,10 +108,10 @@ export const SCENARIOS = {
 			cornerRadiusPx: 0,
 			shadow: { enabled: false, intensity: 0 },
 			zooms: [],
-			motionBlur: false,
-			cursorEffects: false,
+			motionBlur: { enabled: false, amount: 0 },
+			cursor: { enabled: false },
+			webcam: { enabled: false },
 			captions: false,
-			webcam: false,
 		},
 		output: TARGET_OUTPUT,
 	},
@@ -108,6 +135,9 @@ export const FEATURES = [
 	"cornerRadius",
 	"shadow",
 	"zooms",
+	"motionBlur",
+	"cursor",
+	"webcam",
 	"targetResolution",
 	"targetFps",
 ];
@@ -121,6 +151,9 @@ export function fidelity(scenario, applied) {
 	if (e.cornerRadiusPx > 0) wanted.add("cornerRadius");
 	if (e.shadow?.enabled) wanted.add("shadow");
 	if (e.zooms?.length) wanted.add("zooms");
+	if (e.motionBlur?.enabled) wanted.add("motionBlur");
+	if (e.cursor?.enabled) wanted.add("cursor");
+	if (e.webcam?.enabled) wanted.add("webcam");
 	wanted.add("targetResolution");
 	wanted.add("targetFps");
 

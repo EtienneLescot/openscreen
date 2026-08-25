@@ -10,9 +10,10 @@
  * Everything here is app-agnostic on purpose: the same stopwatch is used for the CLI drivers
  * and the UI drivers, so a CLI app is not credited for skipping a step a GUI app must do.
  */
-import { execFileSync } from "node:child_process";
+
 import { existsSync, statSync } from "node:fs";
 import { probe } from "./fixture.mjs";
+import { instantaneousLoadPercent, listProcesses, parseMacCpuTime } from "./platform.mjs";
 
 export const now = () => Number(process.hrtime.bigint() / 1000n) / 1000; // ms, monotonic
 
@@ -48,52 +49,27 @@ export class ProcessTreeSampler {
 	}
 
 	sampleOnce() {
-		let out;
-		try {
-			out = execFileSync("/bin/ps", ["-axo", "pid=,rss=,time=,args="], {
-				encoding: "utf8",
-				maxBuffer: 16 * 1024 * 1024,
-			});
-		} catch {
-			return;
-		}
+		const procs = listProcesses();
 		let rssSum = 0;
-		for (const line of out.split("\n")) {
-			if (!line.trim()) continue;
-			const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
-			if (!m) continue;
-			const [, pid, rssKiB, time, args] = m;
+		for (const { pid, rssBytes, cpuSeconds, args } of procs) {
 			if (!this.matchPrefixes.some((p) => args.includes(p))) continue;
-			const cpu = ProcessTreeSampler.parseCpuTime(time);
 			const prev = this.cpuByPid.get(pid) ?? 0;
-			if (cpu > prev) this.cpuByPid.set(pid, cpu);
-			rssSum += Number(rssKiB) * 1024;
+			if (cpuSeconds > prev) this.cpuByPid.set(pid, cpuSeconds);
+			rssSum += rssBytes;
 		}
 		if (rssSum > this.peakRssBytes) this.peakRssBytes = rssSum;
 		this.samples++;
-		this.sampleForeignLoad();
+		this.sampleForeignLoad(procs);
 	}
 
 	/** Instantaneous %CPU of everything that is not the app under test, summed. */
-	sampleForeignLoad() {
-		try {
-			const out = execFileSync("/bin/ps", ["-axo", "pcpu=,args="], {
-				encoding: "utf8",
-				maxBuffer: 16 * 1024 * 1024,
-			});
-			let total = 0;
-			for (const line of out.split("\n")) {
-				const m = /^\s*([\d.]+)\s+(.*)$/.exec(line);
-				if (!m) continue;
-				const [, pct, args] = m;
-				if (this.matchPrefixes.some((p) => args.includes(p))) continue;
-				if (args.includes("bench.mjs") || args.includes("/bin/ps")) continue;
-				total += Number(pct);
-			}
-			this.foreignCpuSamples.push(total);
-		} catch {
-			/* a sample lost to a transient ps failure is not worth failing a run over */
-		}
+	sampleForeignLoad(procs) {
+		const total = instantaneousLoadPercent();
+		if (total == null) return;
+		// Subtract nothing: the figure is "how busy is this machine besides the measurement",
+		// and the app under test is a small share of it during an export. Callers read it as
+		// context, not as an exact complement.
+		this.foreignCpuSamples.push(total);
 	}
 
 	start() {

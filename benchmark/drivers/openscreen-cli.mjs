@@ -13,9 +13,23 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { buildProject } from "../lib/openscreenProject.mjs";
+import { appVersion, IS_WIN, resolveAppPath } from "../lib/platform.mjs";
 
-const APP = "/Applications/Openscreen.app";
-const BIN = `${APP}/Contents/MacOS/Openscreen`;
+export const OPENSCREEN = {
+	macPath: "/Applications/Openscreen.app",
+	winPaths: [
+		"%ProgramFiles%\\Openscreen\\Openscreen.exe",
+		"%LOCALAPPDATA%\\Programs\\Openscreen\\Openscreen.exe",
+		"%LOCALAPPDATA%\\openscreen\\Openscreen.exe",
+	],
+};
+
+/**
+ * The CLI ships inside the normal application bundle on both platforms, so there is nothing
+ * extra to install — only a different place to look.
+ */
+const APP = IS_WIN ? resolveAppPath(OPENSCREEN) : "/Applications/Openscreen.app";
+const BIN = IS_WIN ? APP : `${APP}/Contents/MacOS/Openscreen`;
 
 export default {
 	id: "openscreen-cli",
@@ -68,9 +82,12 @@ export default {
 			outDir,
 			title: ctx.scenario.id,
 			paddingControl: ctx.paddingControl ?? this.defaultPaddingControl(ctx.scenario),
+			assets: ctx.assets ?? {},
+			spec: ctx.source.spec,
 		});
 		ctx.state.projectPath = projectPath;
 
+		const e = ctx.scenario.effects;
 		return {
 			appliedFeatures: [
 				"background",
@@ -78,6 +95,9 @@ export default {
 				"cornerRadius",
 				"shadow",
 				"zooms",
+				...(e.motionBlur?.enabled ? ["motionBlur"] : []),
+				...(e.cursor?.enabled ? ["cursor"] : []),
+				...(e.webcam?.enabled && ctx.assets?.webcam ? ["webcam"] : []),
 				"targetResolution",
 				"targetFps",
 			],

@@ -10,6 +10,12 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "no
 import os from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	diskFreeGiB,
+	IS_WIN,
+	machineFingerprint as platformFingerprint,
+	powerState as platformPower,
+} from "./platform.mjs";
 
 export const BENCH_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const REPO_ROOT = resolve(BENCH_ROOT, "..");
@@ -48,7 +54,8 @@ function findVendoredFfmpegPrefix() {
 		if (!existsSync(root)) continue;
 		for (const entry of readdirSync(root)) {
 			const prefix = join(root, entry);
-			if (/^ffmpeg-/.test(entry) && existsSync(join(prefix, "bin", "ffmpeg"))) return prefix;
+			const bin = join(prefix, "bin", IS_WIN ? "ffmpeg.exe" : "ffmpeg");
+			if (/^ffmpeg-/.test(entry) && existsSync(bin)) return prefix;
 		}
 	}
 	return null;
@@ -86,11 +93,30 @@ export function resolveFfmpeg() {
 		return cachedFfmpeg;
 	}
 
-	const onPath = trySh("command -v ffmpeg");
-	const probeOnPath = trySh("command -v ffprobe");
+	const which = IS_WIN ? "where" : "command -v";
+	const onPath = trySh(`${which} ffmpeg`)?.split("\n")[0]?.trim() || null;
+	const probeOnPath = trySh(`${which} ffprobe`)?.split("\n")[0]?.trim() || null;
 	if (onPath && probeOnPath) {
 		cachedFfmpeg = { ffmpeg: onPath, ffprobe: probeOnPath, source: "PATH" };
 		return cachedFfmpeg;
+	}
+
+	if (IS_WIN) {
+		// The repo vendors ffmpeg for the compositor on Windows too; scripts/fetch-ffmpeg.mjs
+		// puts it under crates/thirdparty. No wrapper is needed — Windows has no DYLD stripping.
+		const prefix = findVendoredFfmpegPrefix();
+		if (prefix) {
+			cachedFfmpeg = {
+				ffmpeg: join(prefix, "bin", "ffmpeg.exe"),
+				ffprobe: join(prefix, "bin", "ffprobe.exe"),
+				source: `vendored:${prefix}`,
+			};
+			return cachedFfmpeg;
+		}
+		throw new Error(
+			"No ffmpeg/ffprobe found. Install one on PATH (winget install Gyan.FFmpeg), " +
+				"or set OSBENCH_FFMPEG and OSBENCH_FFPROBE.",
+		);
 	}
 
 	const prefix = findVendoredFfmpegPrefix();
@@ -120,73 +146,21 @@ export function ffmpegVersion() {
 
 /** Everything about the host that can move a number in the results table. */
 export function machineFingerprint() {
-	const memBytes = Number(trySh("sysctl -n hw.memsize", "0"));
-	const displays = (trySh("system_profiler SPDisplaysDataType", "") || "")
-		.split("\n")
-		.filter((l) => /^\s+(Resolution|UI Looks like):/.test(l))
-		.map((l) => l.trim());
-
-	return {
-		platform: process.platform,
-		arch: process.arch,
-		osProduct: trySh("sw_vers -productName"),
-		osVersion: trySh("sw_vers -productVersion"),
-		osBuild: trySh("sw_vers -buildVersion"),
-		kernel: os.release(),
-		model: trySh("sysctl -n hw.model"),
-		chip: trySh("sysctl -n machdep.cpu.brand_string"),
-		cpuCount: os.cpus().length,
-		performanceCores: Number(trySh("sysctl -n hw.perflevel0.logicalcpu", "0")) || null,
-		efficiencyCores: Number(trySh("sysctl -n hw.perflevel1.logicalcpu", "0")) || null,
-		memoryGiB: memBytes ? +(memBytes / 1024 ** 3).toFixed(1) : null,
-		displays,
-		nodeVersion: process.version,
-	};
+	return platformFingerprint();
 }
 
 /**
- * Preconditions that silently skew an export benchmark: battery power caps the SoC,
- * Low Power Mode caps it harder, and an already-throttled machine reports whatever
- * the previous run left behind.
+ * Preconditions that silently skew an export benchmark: battery power caps the SoC, a
+ * power-saver plan caps it harder, and an already-throttled machine reports whatever the
+ * previous run left behind.
  */
 export function powerState() {
-	const batt = trySh("pmset -g batt", "");
-	const therm = trySh("pmset -g therm", "");
-	const lowPower = trySh("pmset -g | grep -i lowpowermode", "");
-	const cpuSpeedLimit = /CPU_Speed_Limit\s*=\s*(\d+)/.exec(therm);
-	const schedulerLimit = /CPU_Scheduler_Limit\s*=\s*(\d+)/.exec(therm);
-
-	return {
-		onACPower: /AC Power/.test(batt),
-		batteryLine: batt.split("\n").slice(1).join(" ").trim() || null,
-		lowPowerMode: /lowpowermode\s+1/.test(lowPower),
-		cpuSpeedLimit: cpuSpeedLimit ? Number(cpuSpeedLimit[1]) : null,
-		cpuSchedulerLimit: schedulerLimit ? Number(schedulerLimit[1]) : null,
-		thermalPressure: readThermalPressure(),
-	};
-}
-
-/**
- * Thermal pressure, spelled differently on every macOS. `pmset -g therm` prints nothing at
- * all when the SoC is unthrottled, so "no output" is the healthy answer, not a failure.
- */
-function readThermalPressure() {
-	for (const key of ["kern.thermalpressurelevel", "machdep.xcpm.cpu_thermal_level"]) {
-		const v = trySh(`sysctl -n ${key}`);
-		if (v !== null && v !== "") return { key, value: Number(v) };
-	}
-	const therm = trySh("pmset -g therm", "");
-	if (/No thermal warning level has been recorded/i.test(therm)) return { key: "pmset", value: 0 };
-	return { key: "unavailable", value: null };
+	return platformPower();
 }
 
 /** Free space on the volume that will hold the fixture and every export. */
 export function diskState(path = WORK_DIR) {
-	const target = existsSync(path) ? path : os.homedir();
-	const line = trySh(`df -k ${JSON.stringify(target)} | tail -1`, "");
-	const cols = line.split(/\s+/);
-	const availKiB = Number(cols[3] || 0);
-	return { path: target, availableGiB: +(availKiB / 1024 / 1024).toFixed(1) };
+	return diskFreeGiB(path);
 }
 
 export function ensureWorkDirs() {

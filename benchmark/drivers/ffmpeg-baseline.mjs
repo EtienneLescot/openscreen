@@ -9,6 +9,7 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { ffmpegVersion, resolveFfmpeg } from "../lib/env.mjs";
+import { pickH264Encoder } from "../lib/platform.mjs";
 
 export default {
 	id: "ffmpeg-baseline",
@@ -41,11 +42,16 @@ export default {
 	},
 
 	async prepare() {
+		const enc = pickH264Encoder(resolveFfmpeg().ffmpeg);
 		return {
 			// The floor deliberately applies nothing. Listing the two output features it *does*
 			// honour keeps the fidelity score honest rather than showing a bare zero.
 			appliedFeatures: ["targetResolution", "targetFps"],
-			notes: ["No compositing: this row is the encode-only reference, not a product."],
+			notes: [
+				`encoder: ${enc.encoder}${enc.hardware ? " (hardware)" : " (SOFTWARE)"}`,
+				"No compositing: this row is the encode-only reference, not a product.",
+				...(enc.note ? [enc.note] : []),
+			],
 		};
 	},
 
@@ -55,6 +61,7 @@ export default {
 
 	async runExport(ctx) {
 		const { ffmpeg } = resolveFfmpeg();
+		const enc = pickH264Encoder(ffmpeg);
 		const out = this.outputPath(ctx);
 		const t = ctx.scenario.output;
 

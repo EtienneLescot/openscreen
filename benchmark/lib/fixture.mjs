@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { resolveFfmpeg } from "./env.mjs";
+import { pickH264Encoder } from "./platform.mjs";
 
 /** execFileSync, but a non-zero exit surfaces ffmpeg's own message instead of a byte dump. */
 function run(bin, args) {
@@ -139,9 +140,11 @@ function animationFilter(spec, pageHeight) {
 			`drawbox=x=380+mod(floor(t*7)\\,40)*14:y=${44 + Math.floor(visibleH / 2)}:w=3:h=18:color=0xffffff@1:t=fill:enable='lt(mod(t\\,1)\\,0.5)'`,
 			// Selection band sweeping down the pane.
 			`drawbox=x=360:y=${44}+mod(floor(t*2)*36\\,${visibleH - 40}):w=760:h=22:color=0x3b5bdb@0.35:t=fill`,
-			// Cursor arrow, approximated by a small bright square on a Lissajous path.
-			`drawbox=x=${spec.width / 2}+${spec.width / 2 - 140}*sin(2*PI*t/11):y=${spec.height / 2}+${spec.height / 2 - 120}*sin(2*PI*t/7):w=14:h=20:color=0xffffff@0.95:t=fill`,
-			`drawbox=x=${spec.width / 2}+${spec.width / 2 - 140}*sin(2*PI*t/11)-1:y=${spec.height / 2}+${spec.height / 2 - 120}*sin(2*PI*t/7)-1:w=16:h=22:color=0x000000@0.6:t=3`,
+			// No cursor is drawn here on purpose. Every app in this set hides the system pointer
+			// while recording and re-renders it at export time from a telemetry sidecar, with its
+			// own theme, smoothing and motion blur — which is a large part of what an export
+			// costs. Baking one in would exercise none of that and would double-draw once an app
+			// rendered its own. The trajectory lives in lib/assets.mjs → cursorTrack().
 		].join(","),
 	};
 }
@@ -208,6 +211,9 @@ export function buildFixture(
 	{ force = false, log = () => undefined } = {},
 ) {
 	const { ffmpeg } = resolveFfmpeg();
+	// The encoder differs by platform and GPU vendor; picking it here keeps the fixture
+	// generatable everywhere while recording which one produced it.
+	const enc = pickH264Encoder(ffmpeg);
 	const out = fixturePath(workDir, spec);
 	mkdirSync(join(workDir, "fixture"), { recursive: true });
 
@@ -296,7 +302,15 @@ export function buildFixture(
 		"+faststart",
 		out,
 	]);
-	log(`fixture: encoded in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+	log(`fixture: encoded in ${((Date.now() - t0) / 1000).toFixed(1)}s using ${enc.encoder}`);
+	if (enc.note) log(`fixture: ${enc.note}`);
 
-	return { path: out, spec, probe: probe(out), sha256: sha256(out), regenerated: true };
+	return {
+		path: out,
+		spec,
+		probe: probe(out),
+		sha256: sha256(out),
+		regenerated: true,
+		encoder: enc.encoder,
+	};
 }

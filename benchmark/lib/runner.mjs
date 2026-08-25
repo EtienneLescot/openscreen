@@ -5,7 +5,6 @@
  * apps are timed by the same code, completion is decided the same way, and every output is
  * verified against the same target before it is allowed to count.
  */
-import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { fidelity } from "../scenarios/index.mjs";
 import { diskState, machineFingerprint, powerState } from "./env.mjs";
@@ -18,27 +17,10 @@ import {
 	verifyOutput,
 	waitForStableFile,
 } from "./measure.mjs";
+import { instantaneousLoadPercent } from "./platform.mjs";
 import { inspectExport } from "./visualCheck.mjs";
 
 /** Refuse to measure on a machine that is already compromised — the number would be noise. */
-/** Total %CPU across all processes right now, summed over cores. */
-function instantaneousForeignLoad() {
-	try {
-		const out = execFileSync("/bin/ps", ["-axo", "pcpu="], {
-			encoding: "utf8",
-			maxBuffer: 8 * 1024 * 1024,
-		});
-		return +out
-			.split("\n")
-			.map((l) => Number(l.trim()))
-			.filter((n) => Number.isFinite(n))
-			.reduce((a, b) => a + b, 0)
-			.toFixed(0);
-	} catch {
-		return null;
-	}
-}
-
 export function preconditionCheck({ requireAC = true, minDiskGiB = 20 } = {}) {
 	const power = powerState();
 	const disk = diskState();
@@ -53,7 +35,7 @@ export function preconditionCheck({ requireAC = true, minDiskGiB = 20 } = {}) {
 	}
 	// Competing load is the one precondition that does not announce itself: nothing throttles,
 	// nothing warns, every export is simply slower. Worth naming before a run, not after.
-	const foreign = instantaneousForeignLoad();
+	const foreign = instantaneousLoadPercent();
 	if (foreign != null && foreign > 60) {
 		problems.push(
 			`${foreign}% of a core-second is already being used by other processes ` +
@@ -178,7 +160,7 @@ export async function runOnce(driver, ctx) {
 	// export that skipped the compositing would otherwise be recorded as a fast, valid run.
 	if (v.valid) {
 		try {
-			record.visual = inspectExport(out, ctx.scenario, { probe: v.probe });
+			record.visual = inspectExport(out, ctx.scenario, { probe: v.probe, spec: ctx.source.spec });
 		} catch (e) {
 			record.visual = { error: e.message?.slice(0, 400) ?? String(e), allPassed: null };
 		}
@@ -186,6 +168,14 @@ export async function runOnce(driver, ctx) {
 
 	record.ok = v.valid && !exportError;
 	record.effectsVerified = record.visual?.allPassed ?? null;
+	// A driver says what it configured; the pixels say what happened. Where they disagree the
+	// pixels win — Cap accepted a cursor track, reported `cursor.hide: false`, and rendered no
+	// pointer at all, which would otherwise have counted as full fidelity.
+	if (record.visual?.checks) {
+		record.contradicted = Object.entries(record.visual.checks)
+			.filter(([, ok]) => ok === false)
+			.map(([k]) => k);
+	}
 	return record;
 }
 
@@ -224,7 +214,6 @@ export async function runApp(
 		};
 	}
 	const prepareMs = Math.round(now() - tPrep);
-	const fid = fidelity(baseCtx.scenario, prep.appliedFeatures);
 
 	const runs = [];
 	// Run 0 is a warm-up: caches are cold, shaders are uncompiled, and the app may still be
@@ -256,6 +245,16 @@ export async function runApp(
 		await driver.cleanup({ ...baseCtx, state });
 	} catch (e) {
 		log(`  cleanup warning: ${e.message}`);
+	}
+
+	// Fidelity is settled after the runs, not before: a feature the driver configured but the
+	// verifier could not see in the output is not a feature this app applied.
+	const contradicted = new Set(runs.flatMap((r) => r.contradicted ?? []));
+	const claimed = (prep.appliedFeatures ?? []).filter((f) => !contradicted.has(f));
+	const fid = fidelity(baseCtx.scenario, claimed);
+	if (contradicted.size) {
+		fid.contradicted = [...contradicted];
+		log(`  ⚠ configured but not rendered: ${[...contradicted].join(", ")}`);
 	}
 
 	return {

@@ -14,6 +14,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { APPS, DEFAULT_APPS, installPlan, loadDriver } from "./apps.mjs";
+import { buildWallpaper, buildWebcam } from "./lib/assets.mjs";
 import {
 	CALIBRATION_PATH,
 	calibrateApp,
@@ -255,9 +256,16 @@ async function cmdFixture({ flags }) {
 	if (flags.duration) spec.durationSec = Number(flags.duration);
 	if (flags.fps) spec.fps = Number(flags.fps);
 	const r = buildFixture(WORK_DIR, spec, { force: !!flags.force, log });
-	log(`\n${r.path}`);
-	log(`  sha256 ${r.sha256}`);
-	log(`  ${JSON.stringify(r.probe.video)}  ${(r.probe.sizeBytes / 1048576).toFixed(1)} MB`);
+	const wp = buildWallpaper(WORK_DIR, spec);
+	const wc = buildWebcam(WORK_DIR, spec);
+	log(`\nscreen    ${r.path}`);
+	log(`          sha256 ${r.sha256}`);
+	log(`          ${JSON.stringify(r.probe.video)}  ${(r.probe.sizeBytes / 1048576).toFixed(1)} MB`);
+	log(`wallpaper ${wp.path}\n          sha256 ${wp.sha256}`);
+	log(`webcam    ${wc.path}\n          sha256 ${wc.sha256}`);
+	log(
+		"\nCursor telemetry is written per app at prepare time, from the same seed — see lib/assets.mjs.",
+	);
 }
 
 async function cmdRun({ flags }) {
@@ -277,6 +285,15 @@ async function cmdRun({ flags }) {
 				spec,
 			}
 		: buildFixture(WORK_DIR, spec, { log });
+	// A demo export is not just a screen clip: the scenario also needs a wallpaper to sample
+	// and a camera track to composite. Both come from the same seed as the screen recording,
+	// so they travel with it rather than being shipped.
+	const wallpaper = buildWallpaper(WORK_DIR, spec);
+	const assets = {
+		wallpaper: wallpaper.path,
+		jpeg: wallpaper.jpeg,
+		webcam: buildWebcam(WORK_DIR, spec).path,
+	};
 
 	const calibration = loadCalibration();
 	if (calibration.machine) {
@@ -328,6 +345,10 @@ async function cmdRun({ flags }) {
 			sha256: fixture.sha256,
 			spec: fixture.spec,
 			probe: fixture.probe,
+		},
+		assets: {
+			wallpaper: { path: assets.wallpaper, sha256: sha256(assets.wallpaper) },
+			webcam: { path: assets.webcam, sha256: sha256(assets.webcam), probe: probe(assets.webcam) },
 		},
 		calibration: calibration.apps
 			? {
@@ -381,6 +402,7 @@ async function cmdRun({ flags }) {
 			outDir,
 			scenario,
 			source: fixture,
+			assets,
 			log,
 			state,
 			paddingControl: calibrated,
@@ -411,7 +433,15 @@ async function cmdRun({ flags }) {
 	if (!flags["no-control"] && apps.includes("ffmpeg-baseline") && results.length > 1) {
 		log("\nclosing control: re-running the floor to measure drift over the run");
 		const driver = await loadDriver("ffmpeg-baseline");
-		const baseCtx = { workDir: WORK_DIR, outDir, scenario, source: fixture, log, state: {} };
+		const baseCtx = {
+			workDir: WORK_DIR,
+			outDir,
+			scenario,
+			source: fixture,
+			assets,
+			log,
+			state: {},
+		};
 		try {
 			const rec = await runApp(driver, baseCtx, {
 				repetitions: 2,
@@ -451,6 +481,12 @@ async function cmdCalibrate({ flags }) {
 	const apps = listFlag(flags.apps, DEFAULT_APPS);
 	const scenario = getScenario(flags.scenario ?? DEFAULT_SCENARIO);
 	const fixture = calibrationFixture(WORK_DIR, log);
+	const calibWallpaper = buildWallpaper(WORK_DIR, fixture.spec);
+	const calibAssets = {
+		wallpaper: calibWallpaper.path,
+		jpeg: calibWallpaper.jpeg,
+		webcam: buildWebcam(WORK_DIR, fixture.spec).path,
+	};
 	const outDir = join(WORK_DIR, "out", "calibration");
 	mkdirSync(outDir, { recursive: true });
 	log(

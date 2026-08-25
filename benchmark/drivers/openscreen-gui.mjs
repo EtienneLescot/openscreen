@@ -73,6 +73,8 @@ export default {
 			outDir,
 			title: ctx.scenario.id,
 			paddingControl: ctx.paddingControl ?? this.defaultPaddingControl(ctx.scenario),
+			assets: ctx.assets ?? {},
+			spec: ctx.source.spec,
 		});
 		ctx.state.projectPath = projectPath;
 
