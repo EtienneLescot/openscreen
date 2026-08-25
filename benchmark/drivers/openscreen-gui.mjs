@@ -178,6 +178,22 @@ export default {
 		await s.eval(`JSON.stringify(window.__osbench.click("Export", { exact: true }))`);
 		await sleep(2000);
 
+		// Confirm the dialog is actually up. On a repeat run the editor can still be showing the
+		// previous export's completion state, and clicking through a dialog that never opened
+		// leaves the run waiting on a file no one is writing.
+		let dialogUp = false;
+		for (let i = 0; i < 15 && !dialogUp; i++) {
+			const txt = await s.eval("document.body.innerText");
+			dialogUp = /Render the timeline to a file/i.test(txt) && /Export MP4/i.test(txt);
+			if (!dialogUp) {
+				await sleep(1000);
+				// Dismiss whatever is in the way, then ask again.
+				await s.eval(`JSON.stringify(window.__osbench.click("Close"))`).catch(() => undefined);
+				await s.eval(`JSON.stringify(window.__osbench.click("Export", { exact: true }))`);
+			}
+		}
+		if (!dialogUp) throw new Error("OpenScreen: the export dialog never opened");
+
 		// The dialog's controls are plain buttons labelled with their value.
 		for (const label of ["MP4", `${t.height}p`, String(t.fps), "H.264"]) {
 			const r = JSON.parse(

@@ -152,7 +152,17 @@ export function cpuDelta(before, after) {
  */
 export async function waitForStableFile(
 	path,
-	{ timeoutMs = 45 * 60 * 1000, stableMs = 2500, pollMs = 100, minBytes = 4096, onTick } = {},
+	{
+		timeoutMs = 45 * 60 * 1000,
+		// A render that started will put *something* on disk quickly. Nothing after this long
+		// means the export never began — a click that missed, a dialog that did not open — and
+		// waiting out the full render timeout turns one broken run into a lost hour.
+		appearTimeoutMs = 4 * 60 * 1000,
+		stableMs = 2500,
+		pollMs = 100,
+		minBytes = 4096,
+		onTick,
+	} = {},
 ) {
 	const t0 = now();
 	let lastSize = -1;
@@ -174,6 +184,15 @@ export async function waitForStableFile(
 		}
 		onTick?.({ size, elapsedMs: now() - t0 });
 
+		if (appearedAt === null && now() - t0 > appearTimeoutMs) {
+			return {
+				ok: false,
+				reason: "output never appeared",
+				appearedAt: null,
+				sizeBytes: -1,
+				waitedMs: now() - t0,
+			};
+		}
 		if (lastSize >= minBytes && lastGrowthAt !== null && now() - lastGrowthAt >= stableMs) {
 			return {
 				ok: true,
