@@ -12,8 +12,18 @@ path = "src/lib.rs"
 bindgen = "0.70"
 cc = "1"
 
+[features]
+default = []
+# Segmentation IA de la webcam via ONNX Runtime (EP CPU). Désactivée par défaut : elle tire
+# les binaires d'ONNX Runtime au build, ce qui engage le packaging des cinq canaux de
+# distribution. Le chemin masque->shader, lui, est toujours compilé — sans masque l'effet
+# reste simplement éteint.
+segmentation = ["dep:ort", "dep:ndarray"]
+
 [dependencies]
 anyhow.workspace = true
+ort = { workspace = true, optional = true }
+ndarray = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
