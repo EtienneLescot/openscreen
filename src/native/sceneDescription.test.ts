@@ -1789,3 +1789,57 @@ describe("buildSceneDescription.captions", () => {
 		expect(text?.color).toBe("#ffffff");
 	});
 });
+
+// --- imported audio tracks (issue #350) ------------------------------------
+describe("buildSceneDescription.audioTracks", () => {
+	const audioAsset = makeAsset({
+		id: "aud",
+		kind: "audio",
+		originalPath: "/music.mp3",
+		durationSec: 30,
+	});
+	const track = {
+		id: "trk1",
+		assetId: "aud",
+		timelineStartSec: 5,
+		durationSec: 30,
+		trimStartSec: 2,
+		trimEndSec: 12 as number | undefined,
+		gainDb: -3,
+		mute: false,
+		label: "",
+	};
+
+	it("maps a track to the mix list with its resolved path and window", () => {
+		const doc = makeDoc({ assets: [audioAsset], audioTracks: [track] });
+		expect(buildSceneDescription(doc).audioTracks).toEqual([
+			{
+				path: "/music.mp3",
+				startSec: 5,
+				gainDb: -3,
+				trimStartSec: 2,
+				trimEndSec: 12,
+				mute: false,
+			},
+		]);
+	});
+
+	it("resolves the trim-out to the source duration when the tail isn't trimmed", () => {
+		const doc = makeDoc({
+			assets: [audioAsset],
+			audioTracks: [{ ...track, trimEndSec: undefined }],
+		});
+		// trimEndSec must be concrete for the compositor; falls back to durationSec.
+		expect(buildSceneDescription(doc).audioTracks[0]?.trimEndSec).toBe(30);
+	});
+
+	it("drops a track whose asset has no resolvable path", () => {
+		const doc = makeDoc({ assets: [], audioTracks: [track] });
+		expect(buildSceneDescription(doc).audioTracks).toEqual([]);
+	});
+
+	it("is empty for a project with no imported audio", () => {
+		const doc = makeDoc({ assets: [makeAsset({ id: "a", originalPath: "/a.mp4" })] });
+		expect(buildSceneDescription(doc).audioTracks).toEqual([]);
+	});
+});

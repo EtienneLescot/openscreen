@@ -477,16 +477,21 @@ export const zoomRegionSchema = endGteStart(
 );
 
 // External audio import (issue #350) — voiceover / BGM / SFX layered over the
-// assembled programme. Unlike zoom/speed/annotation/trim, an audio track is NOT
-// clip-anchored: it floats over the whole timeline, so it is addressed in OUTPUT
-// (post-trim, post-speed) timeline seconds — the same domain the compositor's
-// concatenated programme PCM lives in (see `SceneAudio` in
-// src/native/sceneDescription.ts and `audio.rs`). That single invariant is what
-// keeps the live preview and the export in sync without a per-track sync offset.
+// programme. Unlike zoom/speed/annotation/trim, an audio track is NOT
+// clip-anchored: it floats over the whole timeline, addressed in RAW/document
+// timeline seconds — the same clock the ruler, playhead and clip
+// `timelineStartSec`/`timelineEndSec` use, and the one `addAudioTrack` seeds from
+// the playhead. The preview positions the track on exactly this clock (see
+// `resolveTimelineAudioPlayback` in VirtualPreview). The export's OUTPUT programme
+// is trim-compressed, so the renderer maps this position to output time when
+// building the scene — an identity map when the project has no trims/speed (the
+// common case), an accepted approximation otherwise, the same way the preview
+// approximates trims by re-seeking. See `SceneAudioTrack` (sceneDescription.ts,
+// audio.rs).
 //
 // `assetId` points at an asset with `kind: "audio"`. `timelineStartSec` places
-// the track's head on the programme; `trimStartSec`/`trimEndSec` window the
-// source file (both in source seconds); `gainDb` + `mute` set its level.
+// the track's head; `trimStartSec`/`trimEndSec` window the source file (both in
+// source seconds); `gainDb` + `mute` set its level.
 export const audioTrackSchema = z
 	.object({
 		id: z.string().min(1),

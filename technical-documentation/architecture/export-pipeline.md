@@ -74,6 +74,19 @@ and **one** encoder + muxer pair:
   The WSOLA stretch is kicked off before the video loop so it overlaps
   the encode and does not add to the wall.
 
+- **Imported audio tracks** (voiceover / BGM / SFX, issue #350) are mixed
+  on top of the assembled programme by `audio.rs::mix_external_tracks`,
+  between `assemble_concatenated_pcm` and `finish_audio`. Each track's
+  trim window is decoded through the same `decode_clip_audio` path a clip
+  uses, scaled by its per-track gain, and summed in at its `startSec`
+  offset; a track running past the video is truncated to it so the two
+  streams stay the same length. `startSec` is resolved renderer-side
+  (`buildSceneDescription`) from the track's raw timeline position — an
+  identity map without trims/speed, an accepted approximation otherwise,
+  matching how the preview approximates trims by re-seeking. The CLI's
+  `openscreen export --audio` remains a separate post-export remux
+  (`voiceoverMix.ts`) for a single track and is unaffected.
+
 - **Output** honours the timeline's selected aspect ratio
   (`resolveAspectRatioValue` over `getEditorSettings(document).aspectRatio` —
   the same typed façade `buildSceneDescription` reads, so the dialog cannot

@@ -4,7 +4,7 @@
 
 use crate::audio::{
     assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_audio,
-    stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
+    mix_external_tracks, stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
 };
 use crate::compositor::{Compositor, OUT_H, OUT_W};
 use crate::config::Cfg;
@@ -1343,6 +1343,11 @@ unsafe fn run_multi_inner(
     // fenêtrage par clip ; `walk_composited_timeline` s'en charge.
     let scene = comp.scene_snapshot();
     let audio_settings = scene.as_ref().map(|scene| scene.audio).unwrap_or_default();
+    // Imported audio tracks (issue #350), cloned out of the borrowed scene.
+    let audio_tracks = scene
+        .as_ref()
+        .map(|scene| scene.audio_tracks.clone())
+        .unwrap_or_default();
 
     // ---- encodeur (choisi à l'exécution, cf. ExportCodec::candidates) + mux ----
     // Backend CPU : pas de pool D3D11 du tout. `av_hwdevice_ctx_init(D3D11VA)` échoue sur
@@ -1467,7 +1472,7 @@ unsafe fn run_multi_inner(
         out_fps as f64,
     );
     let assembled_audio = finish_audio(
-        assemble_concatenated_pcm(&clip_pcm, &audio_plan),
+        mix_external_tracks(assemble_concatenated_pcm(&clip_pcm, &audio_plan), &audio_tracks),
         audio_settings,
     );
     audio_encoder.encode(&assembled_audio, octx)?;

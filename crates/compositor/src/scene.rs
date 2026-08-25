@@ -420,6 +420,31 @@ pub struct SceneAudio {
     pub gain_db: f32,
 }
 
+/// One imported audio track (issue #350) mixed over the assembled programme —
+/// voiceover / BGM / SFX. Deliberately a SEPARATE `Scene` field rather than a
+/// member of `SceneAudio`, so `SceneAudio` stays `Copy` and the pipelines keep
+/// copying it out of a borrow unchanged.
+///
+/// `start_sec` is the track's head on the OUTPUT programme; `trim_start_sec` /
+/// `trim_end_sec` window the source file (both source seconds). The renderer
+/// resolves `start_sec` from the track's raw timeline position — equal to it when
+/// the project has no trims/speed, which is the case this first cut mixes exactly.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneAudioTrack {
+    pub path: String,
+    #[serde(default)]
+    pub start_sec: f64,
+    #[serde(default)]
+    pub gain_db: f32,
+    #[serde(default)]
+    pub trim_start_sec: f64,
+    #[serde(default)]
+    pub trim_end_sec: Option<f64>,
+    #[serde(default)]
+    pub mute: bool,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneOutput {
@@ -451,6 +476,10 @@ pub struct Scene {
     /// Global audio finishing. Default keeps old scene payloads bit-for-bit compatible.
     #[serde(default)]
     pub audio: SceneAudio,
+    /// Imported audio tracks mixed over the programme (issue #350). `#[serde(default)]`:
+    /// absent from every scene written before this, and from a project with none.
+    #[serde(default)]
+    pub audio_tracks: Vec<SceneAudioTrack>,
     /// Crop écran par clip, dans le même ordre que `clips` (`cropByClip` côté TS).
     #[serde(default)]
     pub crop_by_clip: Vec<Option<SceneCrop>>,
