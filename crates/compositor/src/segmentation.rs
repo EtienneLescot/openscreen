@@ -22,6 +22,8 @@
 
 use anyhow::{bail, Result};
 use std::path::Path;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 /// Résolution d'entrée du modèle vendorisé (`selfie_segmentation_landscape.onnx`).
 ///
@@ -166,6 +168,58 @@ mod tests {
         assert!(err.contains("attendus"), "message peu utile : {err}");
     }
 
+    #[test]
+    fn the_rate_limiter_admits_one_frame_per_interval() {
+        let mut rl = RateLimiter::new(30);
+        let t0 = Instant::now();
+        assert!(rl.should_run(t0), "la première frame passe toujours");
+        assert!(!rl.should_run(t0 + Duration::from_millis(10)), "10 ms < 33 ms");
+        assert!(!rl.should_run(t0 + Duration::from_millis(33)), "juste sous l'intervalle");
+        assert!(rl.should_run(t0 + Duration::from_millis(34)), "au-delà de l'intervalle");
+        // Le pas repart du dernier passage accepté, pas du premier : sinon la cadence
+        // dériverait vers le haut après chaque frame refusée.
+        assert!(!rl.should_run(t0 + Duration::from_millis(40)));
+        assert!(rl.should_run(t0 + Duration::from_millis(68)));
+    }
+
+    #[test]
+    fn a_60_hz_render_loop_yields_about_30_inferences_per_second() {
+        let mut rl = RateLimiter::new(30);
+        let t0 = Instant::now();
+        let admitted = (0..60)
+            .filter(|i| rl.should_run(t0 + Duration::from_micros(16_667 * i)))
+            .count();
+        assert_eq!(admitted, 30, "60 frames rendues doivent donner 30 inférences");
+    }
+
+    #[cfg(feature = "segmentation")]
+    #[test]
+    fn the_worker_drops_stale_frames_rather_than_queueing_them() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&seen);
+        let worker = SegmentationWorker::spawn(
+            Segmenter::load(&vendored_model()).expect("chargement du modèle"),
+            move |mask, w, h| {
+                assert_eq!(mask.len(), (w * h) as usize);
+                counter.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+
+        // Cent frames déposées d'affilée : le worker en traite bien moins que cent, puisque
+        // chaque dépôt écrase le précédent non consommé. La borne est large — le test pin le
+        // fait qu'on écrase, pas un débit.
+        let frame = vec![90u8; (MODEL_WIDTH * MODEL_HEIGHT * 3) as usize];
+        for _ in 0..100 {
+            worker.submit(&frame);
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        let done = seen.load(Ordering::SeqCst);
+        assert!(done > 0, "le worker n'a rien traité");
+        assert!(done < 100, "{done} inférences pour 100 dépôts : la file s'accumule");
+    }
+
     #[cfg(feature = "segmentation")]
     #[test]
     fn segments_a_uniform_frame_without_panicking_and_returns_the_right_size() {
@@ -182,5 +236,117 @@ mod tests {
             "{subject} pixels sujet sur {} pour une image unie",
             mask.len()
         );
+    }
+}
+
+/// Cadence l'inférence : 30 Hz, pas la fréquence de rendu.
+///
+/// Une silhouette ne change pas de façon perceptible en 16 ms, et c'est le seul levier
+/// mesuré qui divise le coût par deux sans toucher au modèle ni à sa précision. Le chemin
+/// export tourne déjà à 30 Hz.
+pub struct RateLimiter {
+    interval: Duration,
+    last: Option<Instant>,
+}
+
+impl RateLimiter {
+    pub fn new(hz: u32) -> Self {
+        Self { interval: Duration::from_secs_f64(1.0 / hz.max(1) as f64), last: None }
+    }
+
+    /// `true` si assez de temps s'est écoulé depuis le dernier passage. Prend `now` en
+    /// paramètre plutôt que de lire l'horloge : c'est ce qui rend la cadence testable.
+    pub fn should_run(&mut self, now: Instant) -> bool {
+        match self.last {
+            Some(prev) if now.duration_since(prev) < self.interval => false,
+            _ => {
+                self.last = Some(now);
+                true
+            }
+        }
+    }
+}
+
+/// Boîte d'échange à une place, qui écrase au lieu d'empiler.
+///
+/// Si l'inférence prend du retard, la bonne réponse est de sauter des frames, pas d'en
+/// accumuler : un masque en retard de trois frames est pire qu'un masque sauté, et une file
+/// qui grandit finit par manger la mémoire. `submit` remplace donc silencieusement une frame
+/// non consommée.
+struct Slot {
+    frame: Mutex<Option<Vec<u8>>>,
+    ready: Condvar,
+    stop: Mutex<bool>,
+}
+
+/// Thread d'inférence : reçoit des frames RGB, publie des masques via un callback.
+///
+/// Le callback est appelé depuis le thread du worker, pas depuis celui du rendu — c'est
+/// `Compositor::set_webcam_mask` qui est prévu pour ça, le device étant multithread-protected.
+pub struct SegmentationWorker {
+    slot: Arc<Slot>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SegmentationWorker {
+    /// Démarre le worker. `on_mask` reçoit le masque et ses dimensions à chaque inférence.
+    pub fn spawn(
+        mut segmenter: Segmenter,
+        on_mask: impl Fn(&[u8], u32, u32) + Send + 'static,
+    ) -> Self {
+        let slot = Arc::new(Slot {
+            frame: Mutex::new(None),
+            ready: Condvar::new(),
+            stop: Mutex::new(false),
+        });
+        let worker_slot = Arc::clone(&slot);
+        let handle = std::thread::Builder::new()
+            .name("openscreen-segmentation".into())
+            .spawn(move || loop {
+                let frame = {
+                    let mut guard = worker_slot.frame.lock().unwrap();
+                    while guard.is_none() {
+                        if *worker_slot.stop.lock().unwrap() {
+                            return;
+                        }
+                        let (g, timeout) = worker_slot
+                            .ready
+                            .wait_timeout(guard, Duration::from_millis(100))
+                            .unwrap();
+                        guard = g;
+                        if timeout.timed_out() && guard.is_none() {
+                            if *worker_slot.stop.lock().unwrap() {
+                                return;
+                            }
+                        }
+                    }
+                    guard.take().expect("non vide, la boucle vient de le vérifier")
+                };
+                match segmenter.run(&frame) {
+                    Ok(mask) => on_mask(mask, MODEL_WIDTH, MODEL_HEIGHT),
+                    // Une frame ratée est sautée, pas fatale : le masque précédent reste
+                    // affiché, ce qui vaut mieux qu'un effet qui clignote.
+                    Err(e) => eprintln!("[segmentation] frame ignorée : {e}"),
+                }
+            })
+            .expect("le thread de segmentation doit démarrer");
+        Self { slot, handle: Some(handle) }
+    }
+
+    /// Dépose une frame à segmenter. Écrase celle qui attendait, s'il y en avait une.
+    pub fn submit(&self, rgb: &[u8]) {
+        let mut guard = self.slot.frame.lock().unwrap();
+        *guard = Some(rgb.to_vec());
+        self.slot.ready.notify_one();
+    }
+}
+
+impl Drop for SegmentationWorker {
+    fn drop(&mut self) {
+        *self.slot.stop.lock().unwrap() = true;
+        self.slot.ready.notify_all();
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
     }
 }

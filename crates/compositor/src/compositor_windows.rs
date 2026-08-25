@@ -46,6 +46,15 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 
 
+/// Cible RGBA + staging CPU pour l'extraction de la frame webcam qui alimente le modèle.
+struct SegCapture {
+    rtv: ID3D11RenderTargetView,
+    rt: ID3D11Texture2D,
+    staging: ID3D11Texture2D,
+    width: u32,
+    height: u32,
+}
+
 /// Texture du masque de segmentation, recréée seulement quand la résolution du modèle change.
 struct WebcamMask {
     tex: ID3D11Texture2D,
@@ -163,6 +172,10 @@ pub struct Compositor {
     /// de prévisualisation demandée (variable, contrairement au `staging` fixe à
     /// OUT_W×OUT_H). Recréée quand la taille change — voir `readback_resized`.
     live_readback_staging: RefCell<Option<(u32, u32, ID3D11Texture2D)>>,
+    /// Cible + staging pour extraire la frame webcam à la résolution du modèle de
+    /// segmentation. Créée à la première capture, jamais redimensionnée : le modèle a une
+    /// entrée fixe.
+    seg_capture: RefCell<Option<SegCapture>>,
     /// Staging NV12 du readback d'ENCODAGE (backend CPU) — même motif de cache par taille
     /// que `live_readback_staging`, mais en NV12 et non en RGBA : l'encodeur logiciel veut
     /// les plans Y/UV, pas des pixels RGBA. Voir `read_nv12_scaled`.
@@ -573,6 +586,7 @@ impl Compositor {
             render_size: Cell::new((out_w, out_h)),
             resize_target: RefCell::new(None),
             live_readback_staging: RefCell::new(None),
+            seg_capture: RefCell::new(None),
             nv12_readback_staging: RefCell::new(None),
         })
     }
@@ -858,6 +872,118 @@ impl Compositor {
         let mut srv: Option<ID3D11ShaderResourceView> = None;
         self.dev.CreateShaderResourceView(&tex, None, Some(&mut srv))?;
         Ok((srv.unwrap(), w, h))
+    }
+
+    /// Extrait la frame webcam en RGB8 à la résolution du modèle, dans `out`.
+    ///
+    /// `src` est le rect source de la webcam en UV (le même que celui passé à `draw_video`),
+    /// donc le crop utilisateur et le miroir sont déjà dedans — le modèle voit exactement ce
+    /// que le spectateur verra, et le masque n'a pas à être recadré après coup.
+    ///
+    /// **À appeler AVANT `begin()`** : la méthode réquisitionne la cible de rendu et le
+    /// viewport, et ne les restaure pas. Les appeler dans l'autre ordre dessinerait la scène
+    /// dans une texture de 256x144.
+    ///
+    /// C'est le seul readback GPU->CPU du chemin. Il porte 256x144x4 = 147 Ko, contre la
+    /// frame entière que la preview lit déjà à chaque image ; sur le chemin export, qui lui
+    /// est GPU-résident de bout en bout, c'est en revanche un point de synchronisation neuf
+    /// et c'est là qu'il faudra le mesurer.
+    pub unsafe fn capture_webcam_rgb(
+        &self,
+        wy: &ID3D11ShaderResourceView,
+        wuv: &ID3D11ShaderResourceView,
+        src: [f32; 4],
+        width: u32,
+        height: u32,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        if width == 0 || height == 0 {
+            bail!("capture webcam de dimensions nulles ({width}x{height})");
+        }
+        {
+            let mut slot = self.seg_capture.borrow_mut();
+            if !matches!(slot.as_ref(), Some(c) if c.width == width && c.height == height) {
+                let td = D3D11_TEXTURE2D_DESC {
+                    Width: width,
+                    Height: height,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+                    CPUAccessFlags: 0,
+                    MiscFlags: 0,
+                };
+                let mut rt: Option<ID3D11Texture2D> = None;
+                self.dev.CreateTexture2D(&td, None, Some(&mut rt))?;
+                let rt = rt.unwrap();
+                let mut rtv: Option<ID3D11RenderTargetView> = None;
+                self.dev.CreateRenderTargetView(&rt, None, Some(&mut rtv))?;
+
+                let sd = D3D11_TEXTURE2D_DESC {
+                    Usage: D3D11_USAGE_STAGING,
+                    BindFlags: 0,
+                    CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                    ..td
+                };
+                let mut staging: Option<ID3D11Texture2D> = None;
+                self.dev.CreateTexture2D(&sd, None, Some(&mut staging))?;
+
+                *slot = Some(SegCapture {
+                    rtv: rtv.unwrap(),
+                    rt,
+                    staging: staging.unwrap(),
+                    width,
+                    height,
+                });
+            }
+        }
+
+        let cap = self.seg_capture.borrow();
+        let cap = cap.as_ref().expect("créé juste au-dessus");
+
+        self.bind_compose_state();
+        self.ctx.OMSetBlendState(&self.blend_none, None, 0xffffffff);
+        self.ctx.OMSetRenderTargets(Some(&[Some(cap.rtv.clone())]), None);
+        let vp = D3D11_VIEWPORT {
+            TopLeftX: 0.0, TopLeftY: 0.0,
+            Width: width as f32, Height: height as f32, MinDepth: 0.0, MaxDepth: 1.0,
+        };
+        self.ctx.RSSetViewports(Some(&[vp]));
+        // Plein cadre de la cible, sans coins ni motion blur : le modèle veut l'image, pas
+        // la mise en forme.
+        self.draw_video(
+            &LayerCB {
+                dst: [0.0, 0.0, 1.0, 1.0],
+                src,
+                quad_px: [width as f32, height as f32],
+                mode: 0.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                mb: [1.0, 1.0, 1.0, 0.0],
+                ..Default::default()
+            },
+            wy,
+            wuv,
+        );
+
+        self.ctx.CopyResource(&cap.staging, &cap.rt);
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        self.ctx.Map(&cap.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+        out.clear();
+        out.reserve((width * height * 3) as usize);
+        for row in 0..height as usize {
+            let line = (mapped.pData as *const u8).add(row * mapped.RowPitch as usize);
+            for col in 0..width as usize {
+                let px = line.add(col * 4);
+                // RGBA -> RGB : le modèle n'a pas de canal alpha en entrée.
+                out.push(*px);
+                out.push(*px.add(1));
+                out.push(*px.add(2));
+            }
+        }
+        self.ctx.Unmap(&cap.staging, 0);
+        Ok(())
     }
 
     /// Publie le masque de segmentation du sujet webcam (R8, `width`x`height`, 0 = fond).
