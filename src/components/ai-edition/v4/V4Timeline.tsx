@@ -10,7 +10,6 @@ import {
 	Sparkles,
 	SplitSquareHorizontal,
 	Trash2,
-	VolumeX,
 	Wand2,
 	ZoomIn,
 } from "lucide-react";
@@ -374,7 +373,7 @@ const AudioLanePill = memo(function AudioLanePill({
 			tabIndex={0}
 			className={`${styles.lanePill} ${styles.laneAudio}${
 				selected ? ` ${styles.lanePillSel}` : ""
-			}${track.mute ? ` ${styles.laneAudioMuted}` : ""}`}
+			}`}
 			style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: 3 }}
 			// Body drag moves the track; it also selects and stops the .tlTracks scrub.
 			onPointerDown={(e) => onStartDrag(e, track, "move")}
@@ -399,7 +398,7 @@ const AudioLanePill = memo(function AudioLanePill({
 				gain={audioGainScalar(track.gainDb)}
 			/>
 			<span className={styles.laneAudioLabel}>
-				{track.mute ? <VolumeX size={11} /> : <Music size={11} />}
+				<Music size={11} />
 				{label}
 			</span>
 			<span

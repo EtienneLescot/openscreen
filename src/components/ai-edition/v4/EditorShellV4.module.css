@@ -1509,9 +1509,6 @@
 .laneAudio:active {
 	cursor: pointer;
 }
-.laneAudioMuted {
-	opacity: 0.5;
-}
 /* The label rides above the waveform (which is inset:0 behind it). */
 .laneAudioLabel {
 	position: relative;

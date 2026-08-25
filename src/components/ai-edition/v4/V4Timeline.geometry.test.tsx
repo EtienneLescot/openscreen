@@ -357,7 +357,6 @@ describe("V4Timeline audio lane drag", () => {
 		trimStartSec: 0,
 		trimEndSec: undefined as number | undefined,
 		gainDb: 0,
-		mute: false,
 		label: "vo",
 	});
 

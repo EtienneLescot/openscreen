@@ -10,7 +10,6 @@ import { useScopedT } from "@/contexts/I18nContext";
 import {
 	removeAudioTrack as removeAudioTrackInDocument,
 	setAudioTrackGain as setAudioTrackGainInDocument,
-	setAudioTrackMute as setAudioTrackMuteInDocument,
 	setAudioTrackPlacement as setAudioTrackPlacementInDocument,
 } from "../document/audioTracks";
 import { createId } from "../document/ids";
@@ -1250,18 +1249,6 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
-	const toggleAudioTrackMute = useCallback(
-		async (trackId: string) => {
-			if (!document) return;
-			const track = document.audioTracks.find((t) => t.id === trackId);
-			if (!track) return;
-			await saveDocument(setAudioTrackMuteInDocument(document, trackId, !track.mute), {
-				history: true,
-			});
-		},
-		[document, saveDocument],
-	);
-
 	return {
 		zoomRegions: document?.zoomRanges ?? [],
 		trimRanges: document?.timeline.trimRanges ?? [],
@@ -1287,7 +1274,6 @@ export function useTimeline() {
 		removeAudioTrack,
 		placeAudioTrack,
 		setAudioTrackGain,
-		toggleAudioTrackMute,
 		selectedAudioTrackId,
 		selectAudioTrack,
 		selectRegion,

@@ -247,7 +247,6 @@ describe("VirtualPreview imported audio tracks", () => {
 		trimStartSec: 1,
 		trimEndSec: 3,
 		gainDb: 0,
-		mute: false,
 		label: "",
 	};
 

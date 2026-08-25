@@ -1358,7 +1358,7 @@ describe("useTimeline audio tracks", () => {
 		expect(useProjectStore.getState().document?.audioTracks).toEqual([]);
 	});
 
-	it("place / gain / mute update the track and each is one undo step", async () => {
+	it("place / gain update the track and each is one undo step", async () => {
 		const { result } = renderTimeline();
 		let id = "";
 		await act(async () => {
@@ -1375,9 +1375,6 @@ describe("useTimeline audio tracks", () => {
 		await act(async () => {
 			await result.current.setAudioTrackGain(id, -6);
 		});
-		await act(async () => {
-			await result.current.toggleAudioTrackMute(id);
-		});
 
 		const track = useProjectStore.getState().document?.audioTracks[0];
 		expect(track).toMatchObject({
@@ -1385,14 +1382,13 @@ describe("useTimeline audio tracks", () => {
 			trimStartSec: 1,
 			trimEndSec: 8,
 			gainDb: -6,
-			mute: true,
 		});
 
-		// Four writes (add + three edits) → the mute undoes first.
+		// Three writes (add + place + gain) → the gain edit undoes first.
 		act(() => {
 			expect(undo()).toBe(true);
 		});
-		expect(useProjectStore.getState().document?.audioTracks[0]?.mute).toBe(false);
+		expect(useProjectStore.getState().document?.audioTracks[0]?.gainDb).toBe(0);
 	});
 
 	it("removeAudioTrack deletes the track", async () => {
