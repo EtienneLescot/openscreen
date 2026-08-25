@@ -23,7 +23,16 @@ export const DEFAULT_WEBCAM_MASK_SHAPE: WebcamMaskShape = "rectangle";
 export const DEFAULT_WEBCAM_MIRRORED = false;
 
 /** Background mode for the webcam feed (none, transparent AI cutout, blurred background, custom background). */
-export type WebcamBackgroundMode = "none" | "transparent" | "blur" | "custom";
+export const WEBCAM_BACKGROUND_MODES = ["none", "transparent", "blur", "custom"] as const;
+
+export type WebcamBackgroundMode = (typeof WEBCAM_BACKGROUND_MODES)[number];
+
+/** A `legacyEditor` envelope is user-writable JSON: anything that is not one of the four
+ *  known modes has to fall back, or `renderSegmentedWebcam` matches no branch and encodes
+ *  a blank webcam track. */
+export function isWebcamBackgroundMode(value: unknown): value is WebcamBackgroundMode {
+	return (WEBCAM_BACKGROUND_MODES as readonly unknown[]).includes(value);
+}
 
 export const DEFAULT_WEBCAM_BACKGROUND_MODE: WebcamBackgroundMode = "none";
 
