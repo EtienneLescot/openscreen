@@ -399,6 +399,32 @@ async function cmdRun({ flags }) {
 		state.writeResults({ ...header, finishedAt: null, results });
 	}
 
+	// Closing control. A long run heat-soaks the SoC and the background load drifts, so an app
+	// measured last is not measured under the same conditions as one measured first. Re-running
+	// the floor at the end quantifies that drift instead of leaving it as an unstated caveat: if
+	// the opening and closing controls agree, the ordering did not matter; if they do not, the
+	// report says by how much.
+	if (!flags["no-control"] && apps.includes("ffmpeg-baseline") && results.length > 1) {
+		log("\nclosing control: re-running the floor to measure drift over the run");
+		const driver = await loadDriver("ffmpeg-baseline");
+		const baseCtx = { workDir: WORK_DIR, outDir, scenario, source: fixture, log, state: {} };
+		try {
+			const rec = await runApp(driver, baseCtx, {
+				repetitions: 2,
+				discardFirst: false,
+				cooldownSec,
+				log,
+			});
+			rec.app = "ffmpeg-baseline-close";
+			rec.displayName = "ffmpeg floor (closing control)";
+			rec.isControl = true;
+			results.push(rec);
+			state.event("app-finished", rec);
+		} catch (e) {
+			log(`  closing control failed: ${e.message}`);
+		}
+	}
+
 	const final = { ...header, finishedAt: new Date().toISOString(), results };
 	state.writeResults(final);
 	state.writeStatus({ ...final, phase: "done", completed: results.map((r) => r.app), pending: [] });

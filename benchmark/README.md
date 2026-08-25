@@ -199,10 +199,18 @@ export is simply slower. On this machine, reached over a remote-desktop session,
 encoder alone holds 100–200 % of a core permanently, and `doctor` refuses to call the machine
 ready above 60 %.
 
-It is sampled during every export and reported per row as **Bg load**. Because it is the same
-for every app in one run, the *comparison* survives it; the absolute times do not. Two runs are
-only comparable at similar background load, which is why the figure is in the table rather than
-in a footnote.
+It is sampled during every export and reported per row as **Bg load**.
+
+Do not assume it cancels out. It does not affect every app equally — a heavily parallel encoder
+contends for cores that a VideoToolbox-bound one never wanted — and a long run heat-soaks the
+SoC, so an app measured last is not measured under the same conditions as one measured first.
+Cap took 19.6 s on a quiet machine and 40.2 s an hour into a loaded run; the ffmpeg floor moved
+only 17.7 s → 23.9 s over the same change. Same machine, same clip, same settings.
+
+That is why every run ends with a **closing control**: the floor workload is measured again
+after all the apps, and the report prints the ratio. At ~1.00 the ordering did not matter. Above
+it, the report says so in bold and the numbers should not be quoted without a re-run on a
+quieter machine or with a longer `--cooldown`.
 
 ### Repetitions and guards
 

@@ -63,13 +63,22 @@ export function renderReport(doc) {
 	const rows = (doc.results ?? []).map(summarise);
 	const ran = rows.filter((r) => !r.skipped && r.medianMs != null);
 	const floor = rows.find((r) => r.app === "ffmpeg-baseline");
+	const closingControl = rows.find((r) => r.app === "ffmpeg-baseline-close");
+	// The same workload, measured first and last. Anything but ~1.00 means the machine changed
+	// underneath the run and the app order affected the results.
+	const drift =
+		floor?.medianMs && closingControl?.medianMs
+			? +(closingControl.medianMs / floor.medianMs).toFixed(3)
+			: null;
 	// Full-fidelity rows are ranked against each other; a partial row did less work and is
 	// listed after them so the table cannot be read as "this app is faster".
-	const ranked = [...ran].sort((a, b) => {
-		const af = a.fidelity?.full ? 0 : 1;
-		const bf = b.fidelity?.full ? 0 : 1;
-		return af !== bf ? af - bf : a.medianMs - b.medianMs;
-	});
+	const ranked = [...ran]
+		.filter((r) => r.app !== "ffmpeg-baseline-close")
+		.sort((a, b) => {
+			const af = a.fidelity?.full ? 0 : 1;
+			const bf = b.fidelity?.full ? 0 : 1;
+			return af !== bf ? af - bf : a.medianMs - b.medianMs;
+		});
 
 	const m = doc.machine ?? {};
 	const src = doc.fixture?.probe?.video ?? {};
