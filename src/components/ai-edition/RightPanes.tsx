@@ -13,7 +13,6 @@ import {
 	Layout as LayoutIcon,
 	Loader2,
 	MousePointerClick,
-	Palette,
 	Sliders,
 	Trash2,
 } from "lucide-react";
@@ -215,60 +214,22 @@ export function isSupportedBackgroundImage(type: string, fileName: string): bool
 	return IMAGE_EXTENSIONS.some((extension) => name.endsWith(extension));
 }
 
-// Wallpaper picker — image / solid color / gradient tabs.
-//
-// Wallpapers round-trip through the legacyEditor envelope exactly as they did
-// in the v2 editor: gradient strings stay as-is, colors as `#hex`, and image
-// paths are restricted to `/wallpapers/...` or the user's own data: URLs from
-// the upload custom flow.
-function BackgroundSection() {
+/**
+ * The "upload custom wallpaper" concern: a hidden `<input type=file>` plus the reader
+ * that turns the pick into a `data:` URL.
+ *
+ * A hook rather than part of `WallpaperPicker` because WHERE the input may be mounted is
+ * the caller's problem. `BackgroundSection` renders the picker inside a Popover, and
+ * opening the OS file dialog takes focus, which closes the Popover — an input mounted
+ * inside it would unmount mid-pick and drop the file. That caller mounts `input` outside
+ * the Popover; inline callers mount it next to the picker.
+ */
+function useWallpaperFileInput(onPicked: (dataUrl: string) => void): {
+	pick: () => void;
+	input: ReactNode;
+} {
 	const ts = useScopedT("settings");
-	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
-	const [pickerOpen, setPickerOpen] = useState(false);
-	// Seeded from what the project is actually using, so the picker opens on the tab the
-	// user is already in rather than always on Image.
-	const [tab, setTab] = useState<"image" | "color" | "gradient">(
-		() => classifyWallpaper(settings.wallpaper).kind,
-	);
-	const fileInputRef = useRef<HTMLInputElement | null>(null);
-	const customUrls = useMemoCustomWallpapers(settings.wallpaper);
-
-	// The custom gradient editor emits continuously while the user drags a
-	// color point / angle knob / brightness slider, so mirror the SliderCell
-	// model: preview live with setLive, then persist once the changes settle.
-	const gradientCommitTimer = useRef<number | null>(null);
-	const handleGradientChange = useCallback(
-		(state: GradientEditorState) => {
-			setLive({ wallpaper: buildGradientFromEditor(state) });
-			if (gradientCommitTimer.current !== null) {
-				window.clearTimeout(gradientCommitTimer.current);
-			}
-			gradientCommitTimer.current = window.setTimeout(() => {
-				gradientCommitTimer.current = null;
-				void commit();
-			}, 400);
-		},
-		[setLive, commit],
-	);
-	useEffect(
-		() => () => {
-			if (gradientCommitTimer.current !== null) {
-				window.clearTimeout(gradientCommitTimer.current);
-			}
-		},
-		[],
-	);
-
-	const isSelected = (value: string) => settings.wallpaper === value;
-
-	const handleTabChange = (next: "image" | "color" | "gradient") => {
-		setTab(next);
-	};
-
-	const handlePickFile = () => {
-		if (!hasDocument) return;
-		fileInputRef.current?.click();
-	};
+	const ref = useRef<HTMLInputElement | null>(null);
 
 	const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
@@ -285,11 +246,39 @@ function BackgroundSection() {
 				toast.error(ts("background.imageReadFailed"));
 				return;
 			}
-			void set({ wallpaper: dataUrl });
+			onPicked(dataUrl);
 		};
 		reader.onerror = () => toast.error(ts("background.imageReadFailed"));
 		reader.readAsDataURL(file);
 	};
+
+	return {
+		pick: () => ref.current?.click(),
+		input: (
+			<input
+				ref={ref}
+				type="file"
+				accept={IMAGE_ACCEPT}
+				style={{ display: "none" }}
+				onChange={handleFileSelected}
+			/>
+		),
+	};
+}
+
+// Wallpaper picker — image / solid color / gradient tabs.
+//
+// Wallpapers round-trip through the legacyEditor envelope exactly as they did
+// in the v2 editor: gradient strings stay as-is, colors as `#hex`, and image
+// paths are restricted to `/wallpapers/...` or the user's own data: URLs from
+// the upload custom flow.
+function BackgroundSection() {
+	const ts = useScopedT("settings");
+	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+	const [pickerOpen, setPickerOpen] = useState(false);
+	const { pick: handlePickFile, input: fileInput } = useWallpaperFileInput((dataUrl) =>
+		set({ wallpaper: dataUrl }),
+	);
 
 	return (
 		<>
@@ -329,117 +318,21 @@ function BackgroundSection() {
 					className="w-auto border-0 bg-transparent p-0 shadow-none"
 				>
 					<div className={styles.bgPopover}>
-						{/* role="tab" + aria-selected are what make the tablist above mean
-						    anything: without them a screen reader announces three plain
-						    buttons and never says which one is current. */}
-						<div className={styles.paneTabs} role="tablist">
-							<button
-								type="button"
-								role="tab"
-								aria-selected={tab === "image"}
-								className={tab === "image" ? styles.isActive : ""}
-								onClick={() => handleTabChange("image")}
-							>
-								{ts("background.image")}
-							</button>
-							<button
-								type="button"
-								role="tab"
-								aria-selected={tab === "color"}
-								className={tab === "color" ? styles.isActive : ""}
-								onClick={() => handleTabChange("color")}
-							>
-								{ts("background.color")}
-							</button>
-							<button
-								type="button"
-								role="tab"
-								aria-selected={tab === "gradient"}
-								className={tab === "gradient" ? styles.isActive : ""}
-								onClick={() => handleTabChange("gradient")}
-							>
-								{ts("background.gradient")}
-							</button>
-						</div>
-						{tab === "image" ? (
-							<>
-								<button
-									type="button"
-									className={styles.uploadBtn}
-									disabled={!hasDocument}
-									onClick={handlePickFile}
-								>
-									{ts("background.uploadCustom")}
-								</button>
-								<div className={styles.bgGrid}>
-									{customUrls.map((url) => (
-										<button
-											type="button"
-											key={`custom-${url.slice(-32)}`}
-											className={`${styles.bgThumb} ${isSelected(url) ? styles.isActive : ""}`}
-											style={{ background: `center/cover no-repeat url(${url})` }}
-											aria-label={ts("background.customWallpaper")}
-											disabled={!hasDocument}
-											onClick={() => void set({ wallpaper: url })}
-										/>
-									))}
-									{WALLPAPER_PATHS.map((path, i) => {
-										// Grid swatch paints the small pre-generated thumbnail (see
-										// WALLPAPER_THUMB_PATHS) — selecting it still stores/applies `path`,
-										// the full-res original, unchanged.
-										const previewUrl = resolveImageWallpaperUrl(WALLPAPER_THUMB_PATHS[i]);
-										return (
-											<button
-												type="button"
-												key={path}
-												className={`${styles.bgThumb} ${isSelected(path) ? styles.isActive : ""}`}
-												style={{ background: `center/cover no-repeat url(${previewUrl})` }}
-												aria-label={ts("background.imageLabel", { index: i + 1 })}
-												disabled={!hasDocument}
-												onClick={() => void set({ wallpaper: path })}
-											/>
-										);
-									})}
-								</div>
-							</>
-						) : tab === "color" ? (
-							<BackgroundColorTab
-								value={settings.wallpaper}
-								hasDocument={hasDocument}
-								isSelected={isSelected}
-								onPick={(color) => void set({ wallpaper: color })}
-							/>
-						) : (
-							<>
-								<div className={styles.bgGrid}>
-									{GRAD_PRESETS.map((bg, i) => (
-										<button
-											type="button"
-											key={bg}
-											className={`${styles.bgThumb} ${isSelected(bg) ? styles.isActive : ""}`}
-											style={{ background: bg }}
-											aria-label={ts("background.gradientLabel", { index: i + 1 })}
-											disabled={!hasDocument}
-											onClick={() => void set({ wallpaper: bg })}
-										/>
-									))}
-								</div>
-								{hasDocument ? <GradientEditor onChange={handleGradientChange} /> : null}
-							</>
-						)}
+						<WallpaperPicker
+							value={settings.wallpaper}
+							hasDocument={hasDocument}
+							onChange={(url) => void set({ wallpaper: url })}
+							onLiveChange={(url) => setLive({ wallpaper: url })}
+							onCommit={commit}
+							onPickFile={handlePickFile}
+						/>
 					</div>
 				</PopoverContent>
 			</Popover>
 			{/* Stays mounted OUTSIDE the popover: opening the OS file dialog takes focus,
 			    which closes the popover and would unmount the input mid-pick, dropping the
 			    file. It has no layout to cost us here. */}
-			<input
-				ref={fileInputRef}
-				type="file"
-				accept={IMAGE_ACCEPT}
-				style={{ display: "none" }}
-				onChange={handleFileSelected}
-			/>
+			{fileInput}
 			{/* Reads in the order it acts: pick a background, then blur it. Lived under
 			    "Effects" while that was a separate facet, which is how a control named
 			    "Blur BG" ended up in the tab that doesn't say background. */}
@@ -613,6 +506,9 @@ export interface WallpaperPickerProps {
 	onLiveChange?: (val: string) => void;
 	onCommit?: () => void;
 	updateNativeBackground?: boolean;
+	/** Opens the OS file dialog. The hidden `<input>` it clicks belongs to the caller
+	 *  (see `useWallpaperFileInput`): where it may be mounted depends on the caller. */
+	onPickFile: () => void;
 }
 
 export function WallpaperPicker({
@@ -622,10 +518,14 @@ export function WallpaperPicker({
 	onLiveChange,
 	onCommit,
 	updateNativeBackground = true,
+	onPickFile,
 }: WallpaperPickerProps) {
 	const ts = useScopedT("settings");
-	const [tab, setTab] = useState<"image" | "color" | "gradient">("image");
-	const fileInputRef = useRef<HTMLInputElement | null>(null);
+	// Seeded from what is actually in use, so the picker opens on the tab the user is
+	// already in rather than always on Image.
+	const [tab, setTab] = useState<"image" | "color" | "gradient">(
+		() => classifyWallpaper(value).kind,
+	);
 	const customUrls = useMemoCustomWallpapers(value);
 
 	const gradientCommitTimer = useRef<number | null>(null);
@@ -659,37 +559,16 @@ export function WallpaperPicker({
 		setTab(next);
 	};
 
-	const handlePickFile = () => {
-		if (!hasDocument) return;
-		fileInputRef.current?.click();
-	};
-
-	const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
-		const file = e.target.files?.[0];
-		e.target.value = "";
-		if (!file) return;
-		if (!isSupportedBackgroundImage(file.type, file.name)) {
-			toast.error(ts("background.unsupportedImage"));
-			return;
-		}
-		const reader = new FileReader();
-		reader.onload = () => {
-			const dataUrl = typeof reader.result === "string" ? reader.result : "";
-			if (!dataUrl) {
-				toast.error(ts("background.imageReadFailed"));
-				return;
-			}
-			onChange(dataUrl);
-		};
-		reader.onerror = () => toast.error(ts("background.imageReadFailed"));
-		reader.readAsDataURL(file);
-	};
-
 	return (
 		<>
+			{/* role="tab" + aria-selected are what make the tablist mean anything: without
+			    them a screen reader announces three plain buttons and never says which one
+			    is current. */}
 			<div className={styles.paneTabs} role="tablist">
 				<button
 					type="button"
+					role="tab"
+					aria-selected={tab === "image"}
 					className={tab === "image" ? styles.isActive : ""}
 					onClick={() => handleTabChange("image")}
 				>
@@ -697,6 +576,8 @@ export function WallpaperPicker({
 				</button>
 				<button
 					type="button"
+					role="tab"
+					aria-selected={tab === "color"}
 					className={tab === "color" ? styles.isActive : ""}
 					onClick={() => handleTabChange("color")}
 				>
@@ -704,6 +585,8 @@ export function WallpaperPicker({
 				</button>
 				<button
 					type="button"
+					role="tab"
+					aria-selected={tab === "gradient"}
 					className={tab === "gradient" ? styles.isActive : ""}
 					onClick={() => handleTabChange("gradient")}
 				>
@@ -716,17 +599,10 @@ export function WallpaperPicker({
 						type="button"
 						className={styles.uploadBtn}
 						disabled={!hasDocument}
-						onClick={handlePickFile}
+						onClick={onPickFile}
 					>
 						{ts("background.uploadCustom")}
 					</button>
-					<input
-						ref={fileInputRef}
-						type="file"
-						accept={IMAGE_ACCEPT}
-						style={{ display: "none" }}
-						onChange={handleFileSelected}
-					/>
 					<div className={styles.bgGrid}>
 						{customUrls.map((url) => (
 							<button
@@ -782,33 +658,6 @@ export function WallpaperPicker({
 				</>
 			)}
 		</>
-	);
-}
-
-// Wallpaper picker — image / solid color / gradient tabs.
-//
-// Wallpapers round-trip through the legacyEditor envelope exactly as they did
-// in the v2 editor: gradient strings stay as-is, colors as `#hex`, and image
-// paths are restricted to `/wallpapers/...` or the user's own data: URLs from
-// the upload custom flow.
-export function BackgroundPane() {
-	const ts = useScopedT("settings");
-	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
-
-	return (
-		<Pane
-			title={ts("background.title")}
-			icon={<Palette size={14} />}
-			helpText={ts("background.help")}
-		>
-			<WallpaperPicker
-				value={settings.wallpaper}
-				hasDocument={hasDocument}
-				onChange={(url) => void set({ wallpaper: url })}
-				onLiveChange={(url) => setLive({ wallpaper: url })}
-				onCommit={commit}
-			/>
-		</Pane>
 	);
 }
 
@@ -2083,6 +1932,9 @@ const CAMERA_BACKGROUND_MODES: Array<{
 export function LayoutPane() {
 	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+	const { pick: handlePickWebcamWallpaper, input: webcamWallpaperInput } = useWallpaperFileInput(
+		(dataUrl) => set({ webcamWallpaper: dataUrl }),
+	);
 	const document = useProjectStore((s) => s.document);
 	// A project can hold clips with no camera attached at all (plain imports or a
 	// recording made without a webcam). Keep the saved camera preference for later, but
@@ -2329,27 +2181,16 @@ export function LayoutPane() {
 			</div>
 			{settings.webcamBackgroundMode === "blur" ? (
 				<div className={styles.sliderGrid}>
-					<div className={`${styles.sliderCell} ${styles.full}`}>
-						<div className={styles.head}>
-							<span className={styles.label}>{ts("layout.webcamBlurIntensity")}</span>
-							<span className={styles.val}>{Math.round(settings.webcamBlurIntensity * 100)}%</span>
-						</div>
-						<input
-							type="range"
-							min={0}
-							max={100}
-							step={1}
-							defaultValue={Math.round(settings.webcamBlurIntensity * 100)}
-							disabled={layoutControlsDisabled}
-							onChange={(e) => {
-								const next = Number(e.target.value) / 100;
-								setLive({ webcamBlurIntensity: next });
-							}}
-							onMouseUp={() => void commit()}
-							onTouchEnd={() => void commit()}
-							onKeyUp={() => void commit()}
-						/>
-					</div>
+					<SliderCell
+						label={ts("layout.webcamBlurIntensity")}
+						value={Math.round(settings.webcamBlurIntensity * 100)}
+						min={0}
+						max={100}
+						suffix="%"
+						disabled={layoutControlsDisabled}
+						onChange={(next) => setLive({ webcamBlurIntensity: next / 100 })}
+						onCommit={() => void commit()}
+					/>
 				</div>
 			) : null}
 			{settings.webcamBackgroundMode === "custom" ? (
@@ -2361,7 +2202,9 @@ export function LayoutPane() {
 						onLiveChange={(url) => setLive({ webcamWallpaper: url })}
 						onCommit={commit}
 						updateNativeBackground={false}
+						onPickFile={handlePickWebcamWallpaper}
 					/>
+					{webcamWallpaperInput}
 				</div>
 			) : null}
 			<div className={styles.sectionLabel}>{ts("layout.webcamFraming")}</div>

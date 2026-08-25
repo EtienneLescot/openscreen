@@ -90,6 +90,29 @@ function baseProps(currentTimeSec: number) {
 	};
 }
 
+const baseLegacyEditor = {
+	wallpaper: "#000000",
+	shadowIntensity: 0,
+	borderRadius: 0,
+	padding: 0,
+	showBlur: false,
+	motionBlurAmount: 0,
+	webcamSizePreset: 25,
+	webcamMaskShape: "rectangle",
+	webcamLayoutPreset: "picture-in-picture",
+	webcamMirrored: false,
+	webcamReactiveZoom: false,
+	webcamWallpaper: "#ff0080",
+	webcamBlurIntensity: 0.5,
+	cursorShow: false,
+	cursorSize: 1,
+	cursorSmoothing: 0,
+	cursorMotionBlur: 0,
+	cursorClickBounce: 0,
+	cursorTheme: "default",
+	cursorClipToBounds: false,
+};
+
 describe("WebcamOverlay (per-clip camera resolution)", () => {
 	afterEach(() => {
 		cleanup();
@@ -155,31 +178,13 @@ describe("WebcamOverlay (per-clip camera resolution)", () => {
 		expect(container.querySelector("video")).toBeTruthy();
 	});
 
-	it("renders background container when custom or blur background mode is active", () => {
+	// The background is painted INTO the segmentation canvas (colour, gradient and image
+	// alike), which is also what gets encoded for export — so the canvas being mounted is
+	// what "the effect is on" means. An extra CSS background layer used to sit behind it
+	// and was either invisible or a second, differently-painted copy of the same wallpaper.
+	it("mounts the segmentation canvas when a webcam background mode is active", () => {
 		const doc = makeDocument();
-		doc.legacyEditor = {
-			wallpaper: "#000000",
-			shadowIntensity: 0,
-			borderRadius: 0,
-			padding: 0,
-			showBlur: false,
-			motionBlurAmount: 0,
-			webcamSizePreset: 25,
-			webcamMaskShape: "rectangle",
-			webcamLayoutPreset: "picture-in-picture",
-			webcamMirrored: false,
-			webcamReactiveZoom: false,
-			webcamBackgroundMode: "custom",
-			webcamWallpaper: "#ff0080",
-			webcamBlurIntensity: 0.5,
-			cursorShow: false,
-			cursorSize: 1,
-			cursorSmoothing: 0,
-			cursorMotionBlur: 0,
-			cursorClickBounce: 0,
-			cursorTheme: "default",
-			cursorClipToBounds: false,
-		};
+		doc.legacyEditor = { ...baseLegacyEditor, webcamBackgroundMode: "custom" };
 		useProjectStore.setState({
 			projectId: "proj_test",
 			document: doc,
@@ -193,10 +198,28 @@ describe("WebcamOverlay (per-clip camera resolution)", () => {
 		});
 
 		const { container } = render(<WebcamOverlay {...baseProps(2)} />);
-		const video = container.querySelector("video");
-		expect(video).toBeTruthy();
-		const bg = container.querySelector("[aria-hidden='true']");
-		expect(bg).toBeTruthy();
-		expect((bg as HTMLElement)?.style.backgroundColor).toBe("rgb(255, 0, 128)");
+		// The <video> stays mounted as the decode/clock source even with an effect on.
+		expect(container.querySelector("video")).toBeTruthy();
+		expect(container.querySelector("canvas")).toBeTruthy();
+	});
+
+	it("does not mount the segmentation canvas when the background mode is none", () => {
+		const doc = makeDocument();
+		doc.legacyEditor = { ...baseLegacyEditor, webcamBackgroundMode: "none" };
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: doc,
+			revision: 1,
+			status: "ready",
+			error: null,
+			sourceDurationSec: 0,
+			currentTimeSec: 2,
+			dirty: false,
+			lastSavedAt: new Date(),
+		});
+
+		const { container } = render(<WebcamOverlay {...baseProps(2)} />);
+		expect(container.querySelector("video")).toBeTruthy();
+		expect(container.querySelector("canvas")).toBeNull();
 	});
 });

@@ -25,6 +25,7 @@ import {
 	DEFAULT_WEBCAM_POSITION,
 	DEFAULT_WEBCAM_REACTIVE_ZOOM,
 	DEFAULT_WEBCAM_SIZE_PRESET,
+	isWebcamBackgroundMode,
 	type WebcamBackgroundMode,
 	type WebcamLayoutPreset,
 	type WebcamMaskShape,
@@ -34,6 +35,7 @@ import {
 import { DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { DEFAULT_WALLPAPER } from "@/lib/wallpaper";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
+import { clamp01 } from "@/utils/math";
 import type { AxcutDocument } from "../schema";
 
 // ponytail: avoid dragging in lib/exporter full surface here — we only
@@ -245,12 +247,14 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 			AUDIO_GAIN_DB_LIMIT,
 			Math.max(-AUDIO_GAIN_DB_LIMIT, num(legacy?.audioGainDb, 0)),
 		),
-		webcamBackgroundMode:
-			legacy?.webcamBackgroundMode ?? DEFAULT_EDITOR_SETTINGS.webcamBackgroundMode,
+		webcamBackgroundMode: isWebcamBackgroundMode(legacy?.webcamBackgroundMode)
+			? legacy.webcamBackgroundMode
+			: DEFAULT_EDITOR_SETTINGS.webcamBackgroundMode,
 		webcamWallpaper: str(legacy?.webcamWallpaper, DEFAULT_EDITOR_SETTINGS.webcamWallpaper),
-		webcamBlurIntensity: num(
-			legacy?.webcamBlurIntensity,
-			DEFAULT_EDITOR_SETTINGS.webcamBlurIntensity,
+		// Same 0-1 range the slider offers; unclamped, a stored 1000 reaches
+		// `blur(25000px)` on the preview canvas and wedges the compositing thread.
+		webcamBlurIntensity: clamp01(
+			num(legacy?.webcamBlurIntensity, DEFAULT_EDITOR_SETTINGS.webcamBlurIntensity),
 		),
 		cursor,
 		cursorShow: bool(legacy?.cursorShow, DEFAULT_EDITOR_SETTINGS.cursorShow),

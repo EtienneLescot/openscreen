@@ -104,6 +104,12 @@ const ALLOWED_IMPORT_VIDEO_EXTENSIONS = new Set([
 	".ts",
 ]);
 const PREVIEW_AUDIO_DIR = path.join(app.getPath("userData"), "preview-audio");
+// Derived export artifacts (pre-segmented webcam tracks, …). Deliberately NOT
+// RECORDINGS_DIR: these are regenerable byproducts of one export run, not takes,
+// and `get-recorded-video-path` returns the alphabetically last `.webm` in there —
+// a `webcam-segmented-*.webm` would sort after `recording-*` and be handed back as
+// "the latest recording".
+const DERIVED_MEDIA_DIR = path.join(app.getPath("userData"), "derived-media");
 const nativeMacCaptureEvents = new EventEmitter();
 
 // Enumeration walks every display and window and grabs a thumbnail of each, so it
@@ -3406,6 +3412,54 @@ export function registerIpcHandlers(
 			return {
 				success: false,
 				message: "Failed to store recorded video",
+				error: String(error),
+			};
+		}
+	});
+
+	// A derived export artifact, NOT a take: no recording-session state, no
+	// `.session.json` manifest, no media links, no cursor-telemetry flush.
+	// `store-recorded-video` does all of that (it is the session finaliser) and is
+	// the wrong door for a file an export regenerates every run.
+	ipcMain.handle("write-derived-media", async (_, data: ArrayBuffer, fileName: string) => {
+		try {
+			const trimmed = typeof fileName === "string" ? fileName.trim() : "";
+			if (!trimmed) {
+				return { success: false, message: "Invalid derived media file name" };
+			}
+			// `base` differs from the input for `a/b`, `a\b` and absolute paths — but NOT
+			// for "." or "..", which `path.join` would then resolve back out of the
+			// directory. `resolveRecordingOutputPath` rejects those explicitly; so does this.
+			const parsedName = path.parse(trimmed);
+			if (
+				parsedName.base !== trimmed ||
+				path.isAbsolute(trimmed) ||
+				trimmed === "." ||
+				trimmed === ".."
+			) {
+				return {
+					success: false,
+					message: "Derived media file name must not contain path segments",
+				};
+			}
+
+			await fs.mkdir(DERIVED_MEDIA_DIR, { recursive: true });
+			const outputPath = path.join(DERIVED_MEDIA_DIR, parsedName.base);
+			await fs.writeFile(outputPath, Buffer.from(data));
+			// The file lives outside RECORDINGS_DIR, so the read gate would refuse it.
+			// We just wrote it, so it is approved by construction.
+			approveFilePath(outputPath);
+
+			return {
+				success: true,
+				path: outputPath,
+				message: "Derived media written successfully",
+			};
+		} catch (error) {
+			console.error("Failed to write derived media:", error);
+			return {
+				success: false,
+				message: "Failed to write derived media",
 				error: String(error),
 			};
 		}

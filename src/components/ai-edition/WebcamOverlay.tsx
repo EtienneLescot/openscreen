@@ -16,11 +16,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
-import type {
-	WebcamBackgroundMode,
-	WebcamLayoutPreset,
-	WebcamMaskShape,
-} from "@/components/video-editor/types";
+import type { WebcamLayoutPreset, WebcamMaskShape } from "@/components/video-editor/types";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
@@ -31,8 +27,10 @@ import {
 	resolveCameraSyncTarget,
 } from "@/lib/ai-edition/timeline/playback-clock";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
-import { renderSegmentedWebcam } from "@/lib/ai-edition/webcamSegmentation";
-import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
+import {
+	renderSegmentedWebcam,
+	type SegmentationRenderOptions,
+} from "@/lib/ai-edition/webcamSegmentation";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { setWebcamNativeSize } from "@/native/webcamSizeCache";
 import styles from "./NewEditorShell.module.css";
@@ -164,6 +162,16 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
+	// Same idiom as the playback-clock loop above: the rAF tick reads the latest
+	// settings through a ref so the loop is not re-created on every document mutation.
+	const requestRenderRef = useRef<(() => void) | null>(null);
+	const segmentationOptionsRef = useRef<SegmentationRenderOptions>({
+		mode: settings.webcamBackgroundMode,
+		blurIntensity: settings.webcamBlurIntensity,
+		wallpaper: settings.webcamWallpaper,
+		crop: settings.webcamCropRegion,
+	});
+
 	// Neural segmentation render loop when background effect is active
 	useEffect(() => {
 		if (!videoEl || settings.webcamBackgroundMode === "none") return;
@@ -171,79 +179,116 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 		if (!canvas) return;
 
 		let isDestroyed = false;
-		let isProcessing = false;
 		let raf = 0;
 
-		const processFrame = async () => {
-			if (isDestroyed) return;
-			if (!isProcessing && videoEl.readyState >= 2 && !videoEl.paused) {
-				isProcessing = true;
-				try {
-					await renderSegmentedWebcam(videoEl, canvas, {
-						mode: settings.webcamBackgroundMode,
-						blurIntensity: settings.webcamBlurIntensity,
-						wallpaper: settings.webcamWallpaper,
-					});
-				} catch (err) {
-					console.error("[WebcamOverlay] Segmentation error:", err);
-				} finally {
-					isProcessing = false;
-				}
+		const render = async () => {
+			if (isDestroyed || videoEl.readyState < 2) return;
+			// Read through the ref, not the closure: the loop must survive a document
+			// mutation (a slider drag writes a new document on every tick) without being
+			// torn down and rebuilt.
+			try {
+				await renderSegmentedWebcam(videoEl, canvas, segmentationOptionsRef.current);
+			} catch (err) {
+				console.error("[WebcamOverlay] Segmentation error:", err);
 			}
+		};
+
+		// One frame in flight at a time, with a TRAILING re-run: dropping overlapping
+		// requests outright would leave the canvas on the pre-seek frame while scrubbing
+		// (each `seeked` lands while the previous render is still running, and nothing
+		// re-renders once it finishes because the rAF loop only draws while playing).
+		let inFlight: Promise<void> | null = null;
+		let rerunRequested = false;
+		const requestRender = () => {
+			if (inFlight) {
+				rerunRequested = true;
+				return;
+			}
+			const run = () => {
+				inFlight = render().finally(() => {
+					inFlight = null;
+					if (rerunRequested && !isDestroyed) {
+						rerunRequested = false;
+						run();
+					}
+				});
+			};
+			run();
+		};
+
+		const processFrame = () => {
+			if (isDestroyed) return;
+			if (!videoEl.paused) requestRender();
 			raf = window.requestAnimationFrame(processFrame);
 		};
 
-		const renderOnce = () => {
-			if (videoEl.readyState >= 2) {
-				void renderSegmentedWebcam(videoEl, canvas, {
-					mode: settings.webcamBackgroundMode,
-					blurIntensity: settings.webcamBlurIntensity,
-					wallpaper: settings.webcamWallpaper,
-				});
-			}
-		};
-
-		renderOnce();
-		videoEl.addEventListener("seeked", renderOnce);
-		videoEl.addEventListener("loadeddata", renderOnce);
+		requestRender();
+		// Exposed so the settings effect below can repaint a PAUSED preview: the rAF pump
+		// only draws while playing, so without this, dragging the blur slider or picking a
+		// wallpaper would change nothing on screen until playback resumed.
+		requestRenderRef.current = requestRender;
+		videoEl.addEventListener("seeked", requestRender);
+		videoEl.addEventListener("loadeddata", requestRender);
 		raf = window.requestAnimationFrame(processFrame);
 
 		return () => {
 			isDestroyed = true;
+			requestRenderRef.current = null;
 			window.cancelAnimationFrame(raf);
-			videoEl.removeEventListener("seeked", renderOnce);
-			videoEl.removeEventListener("loadeddata", renderOnce);
+			videoEl.removeEventListener("seeked", requestRender);
+			videoEl.removeEventListener("loadeddata", requestRender);
 		};
+	}, [videoEl, settings.webcamBackgroundMode]);
+
+	// Publish the latest options to the loop, then repaint. Keyed on the SCALAR crop
+	// values rather than `settings.webcamCropRegion`'s identity, which `getEditorSettings`
+	// rebuilds on every document mutation. The repaint matters because the rAF pump only
+	// draws while playing: without it, dragging the blur slider or picking a wallpaper
+	// would change nothing on screen until playback resumed.
+	const { x: cropX, y: cropY, width: cropW, height: cropH } = settings.webcamCropRegion;
+	useEffect(() => {
+		segmentationOptionsRef.current = {
+			mode: settings.webcamBackgroundMode,
+			blurIntensity: settings.webcamBlurIntensity,
+			wallpaper: settings.webcamWallpaper,
+			// Native crops the webcam with `webcam_crop` before the cover-fit; the canvas
+			// has to do the same or a cropped camera previews uncropped.
+			crop: { x: cropX, y: cropY, width: cropW, height: cropH },
+		};
+		requestRenderRef.current?.();
 	}, [
-		videoEl,
 		settings.webcamBackgroundMode,
 		settings.webcamBlurIntensity,
 		settings.webcamWallpaper,
+		cropX,
+		cropY,
+		cropW,
+		cropH,
 	]);
 
 	if (!cameraTrack?.sourcePath || !cameraTrack.visible) {
 		return null;
 	}
 
-	const bgStyle = buildWebcamBackgroundStyle(
-		settings.webcamBackgroundMode,
-		settings.webcamWallpaper,
-		props.borderRadius,
-		props.webcamMaskShape,
-	);
-
+	// ponytail: the layout computes the final borderRadius (preset fraction for
+	// dual-frame/overlay, 0 for stack, half-circle for circle PiP, etc.). Push it onto
+	// the element that actually carries the pixels so it clips the camera content; the
+	// container stays a transparent, overflow:hidden wrapper.
 	const videoStyle: React.CSSProperties = {
 		display: hasError ? "none" : "block",
 		transform: settings.webcamMirrored ? "scaleX(-1)" : undefined,
 		clipPath: getCssClipPath(props.webcamMaskShape) ?? undefined,
 		borderRadius: `${props.borderRadius}px`,
-		position: bgStyle ? "relative" : undefined,
-		zIndex: bgStyle ? 1 : undefined,
 	};
 
+	// With an effect on, the pixels come from the segmentation canvas — background
+	// included, in every mode — so the <video> stays mounted only as the decode/clock
+	// source. There is deliberately no CSS background layer behind it: one existed and
+	// was either invisible (an opaque canvas covers it) or a second, differently-painted
+	// copy of the same wallpaper, which is exactly how preview and export drifted apart.
 	const isCustomEffect = settings.webcamBackgroundMode !== "none";
 
-	const video = (
+	return (
 		<>
 			<video
 				key={cameraTrack.sourcePath}
@@ -287,58 +332,4 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 			) : null}
 		</>
 	);
-
-	if (!bgStyle) {
-		return video;
-	}
-
-	return (
-		<div style={{ position: "relative", width: "100%", height: "100%" }}>
-			<div style={bgStyle} aria-hidden="true" />
-			{video}
-		</div>
-	);
-}
-
-function buildWebcamBackgroundStyle(
-	mode: WebcamBackgroundMode,
-	wallpaper: string,
-	borderRadius: number,
-	maskShape: WebcamMaskShape,
-): React.CSSProperties | null {
-	if (mode === "none") return null;
-	const base: React.CSSProperties = {
-		position: "absolute",
-		inset: 0,
-		zIndex: 0,
-		borderRadius: `${borderRadius}px`,
-		clipPath: getCssClipPath(maskShape) ?? undefined,
-		overflow: "hidden",
-	};
-	if (mode === "transparent") {
-		return { ...base, backgroundColor: "transparent" };
-	}
-	if (mode === "blur") {
-		return {
-			...base,
-			backdropFilter: "blur(12px)",
-			backgroundColor: "rgba(0, 0, 0, 0.2)",
-		};
-	}
-	if (mode === "custom") {
-		const w = classifyWallpaper(wallpaper);
-		if (w.kind === "color") return { ...base, backgroundColor: w.value };
-		if (w.kind === "gradient")
-			return { ...base, backgroundImage: w.value, backgroundSize: "cover" };
-		const url = resolveImageWallpaperUrl(w.path);
-		if (!url) return base;
-		return {
-			...base,
-			backgroundImage: `url(${url})`,
-			backgroundSize: "cover",
-			backgroundPosition: "center",
-			backgroundRepeat: "no-repeat",
-		};
-	}
-	return null;
 }
