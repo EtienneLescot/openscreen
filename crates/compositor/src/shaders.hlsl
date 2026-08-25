@@ -464,13 +464,18 @@ float4 ps_main(VSOut i) : SV_Target
 
         // Effet d'arriere-plan webcam. fx.z : 1 = detourage, 2 = flou, 3 = fond personnalise.
         // `color` porte la couleur de fond du mode 3, fx.w l'intensite du flou du mode 2.
+        // fx.xy porte l'etendue VALIDE de la texture webcam (wcw/wtw, wch/wth) : le masque a
+        // ete produit sur la frame ENTIERE, pas sur le sous-rect dessine, pour que le modele
+        // ne se fasse pas amputer le sujet par un crop utilisateur. Il faut donc ramener uv,
+        // qui vit dans l'espace source, dans cet espace-la.
         // Le masque est absent (texture 1x1 noire) tant que la segmentation n'a pas produit sa
         // premiere frame : `person` vaut alors 0 et le mode 1 rendrait la webcam invisible, donc
         // c'est l'appelant qui ne met fx.z a autre chose que 0 qu'une fois un masque disponible.
         float effect = fx.z;
         if (effect > 0.5)
         {
-            float person = saturate(texMask.Sample(samp, uv_now));
+            float2 mask_uv = uv_now / max(fx.xy, 1e-6);
+            float person = saturate(texMask.Sample(samp, mask_uv));
             if (effect > 2.5)
             {
                 rgb = lerp(color.rgb, rgb, person);
