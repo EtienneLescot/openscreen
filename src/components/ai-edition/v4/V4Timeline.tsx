@@ -15,6 +15,7 @@ import {
 	ZoomIn,
 } from "lucide-react";
 import {
+	Fragment,
 	memo,
 	type PointerEvent as ReactPointerEvent,
 	useCallback,
@@ -1534,34 +1535,38 @@ export function V4Timeline({
 								</div>
 							</PopoverContent>
 						</Popover>
-						<button
-							type="button"
-							className={styles.tlToolBtn}
-							title={ts("audioTrack.add")}
-							aria-label={ts("audioTrack.add")}
-							onClick={() => void handleAddAudio()}
-						>
-							<Music size={15} />
-						</button>
 						<span className={styles.tlToolSep} aria-hidden />
 						{tools.map((tool) => (
-							<button
-								type="button"
-								key={tool.id}
-								className={styles.tlToolBtn}
-								title={tool.label}
-								aria-label={tool.label}
-								onClick={() => {
-									// Read at CLICK time: a render-time value would be one zoom
-									// notch stale when the user zooms and immediately creates.
-									const dur = newRegionDurationSec();
-									if (tool.id === "speed") void tl.addSpeed(dur);
-									if (tool.id === "comment") void tl.addAnnotation(dur);
-									if (tool.id === "cut") void tl.addTrim(dur);
-								}}
-							>
-								{tool.icon}
-							</button>
+							<Fragment key={tool.id}>
+								<button
+									type="button"
+									className={styles.tlToolBtn}
+									title={tool.label}
+									aria-label={tool.label}
+									onClick={() => {
+										// Read at CLICK time: a render-time value would be one zoom
+										// notch stale when the user zooms and immediately creates.
+										const dur = newRegionDurationSec();
+										if (tool.id === "speed") void tl.addSpeed(dur);
+										if (tool.id === "comment") void tl.addAnnotation(dur);
+										if (tool.id === "cut") void tl.addTrim(dur);
+									}}
+								>
+									{tool.icon}
+								</button>
+								{/* Add audio sits right after Add annotation (issue #350). */}
+								{tool.id === "comment" ? (
+									<button
+										type="button"
+										className={styles.tlToolBtn}
+										title={ts("audioTrack.add")}
+										aria-label={ts("audioTrack.add")}
+										onClick={() => void handleAddAudio()}
+									>
+										<Music size={15} />
+									</button>
+								) : null}
+							</Fragment>
 						))}
 						<button
 							type="button"
