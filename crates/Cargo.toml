@@ -34,6 +34,26 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 wgpu = { version = "24", features = ["wgsl"] }
 pollster = "0.4"
 cosmic-text = "0.19"
+# Inference for the webcam segmentation mask. CPU execution provider only: measured on the
+# target integrated GPU it costs +0.47 ms/frame against DirectML's +1.03, its cost does not
+# scale with input resolution, and choosing it deletes the whole D3D11<->D3D12 interop
+# (technical-documentation/engineering/webcam-segmentation.md).
+#
+# Behind the `segmentation` feature and OFF by default: `download-binaries` fetches the
+# ONNX Runtime libs at build time, which is a packaging decision (nix, AUR, MS Store, CI)
+# that has not been taken yet. The default build is unchanged.
+# `load-dynamic` et NON `download-binaries` : ce dernier tire une build STATIQUE d'ONNX
+# Runtime avec DirectML dedans (DirectML.lib, DXCORE.lib et les DmlOperator* apparaissent
+# dans la ligne de lien) — exactement la dépendance que le choix de l'EP CPU sert à
+# supprimer. En chargement dynamique, la lib est résolue à l'exécution, ce qui laisse le
+# packaging la stager par plateforme comme il le fait déjà pour whisper-stt.
+ort = { version = "2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "ndarray",
+    "load-dynamic",
+    "api-27",
+] }
+ndarray = "0.16"
 
 [workspace.dependencies.windows]
 version = "0.58"
