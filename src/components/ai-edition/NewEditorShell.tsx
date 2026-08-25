@@ -434,7 +434,16 @@ export function NewEditorShell() {
 	const handleDropAsset = useCallback(
 		(assetId: string) =>
 			enqueueTimelineWrite(() => {
-				const at = useProjectStore.getState().document?.timeline.clips.length ?? 0;
+				const doc = useProjectStore.getState().document;
+				// An audio asset has no video, so it must never become a clip (issue
+				// #350) — it goes on the audio lane as a track. Adding it "to the
+				// timeline" reuses its existing track if it already has one (importing
+				// already placed one) so the same file can't stack up duplicate lanes.
+				if (doc?.assets.find((a) => a.id === assetId)?.kind === "audio") {
+					if (doc.audioTracks.some((t) => t.assetId === assetId)) return Promise.resolve();
+					return tl.addAudioTrack(assetId).then(() => undefined);
+				}
+				const at = doc?.timeline.clips.length ?? 0;
 				return tl.insertClipAt(assetId, at);
 			}).catch((error) => {
 				toast.error(te("mediaStage.couldNotAddAsset"), {
