@@ -46,6 +46,14 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 
 
+/// Texture du masque de segmentation, recréée seulement quand la résolution du modèle change.
+struct WebcamMask {
+    tex: ID3D11Texture2D,
+    srv: ID3D11ShaderResourceView,
+    width: u32,
+    height: u32,
+}
+
 pub struct Compositor {
     dev: ID3D11Device,
     ctx: ID3D11DeviceContext,
@@ -125,6 +133,11 @@ pub struct Compositor {
     /// Cache des textures wallpaper image (clé = chemin absolu) : décodage/upload une seule
     /// fois, puis réutilisées par frame. (SRV, largeur, hauteur).
     img_cache: RefCell<HashMap<String, (ID3D11ShaderResourceView, u32, u32)>>,
+    /// Masque de segmentation du sujet webcam, R8 à la résolution du modèle. Écrit par
+    /// `set_webcam_mask` depuis le thread d'inférence, lu au moment de dessiner la webcam.
+    /// `None` tant qu'aucune frame n'a été segmentée — l'effet reste alors éteint plutôt que
+    /// de rendre une webcam invisible en mode détourage.
+    webcam_mask: RefCell<Option<WebcamMask>>,
     /// Dimensions du RENDER TARGET en pixels — la taille à laquelle `compose_frame`
     /// rastérise réellement, et donc le dénominateur de TOUTE conversion
     /// normalisé↔px de ce fichier.
@@ -556,6 +569,7 @@ impl Compositor {
             text_cache: RefCell::new(HashMap::new()),
             ann_img_cache: RefCell::new(HashMap::new()),
             img_cache: RefCell::new(HashMap::new()),
+            webcam_mask: RefCell::new(None),
             render_size: Cell::new((out_w, out_h)),
             resize_target: RefCell::new(None),
             live_readback_staging: RefCell::new(None),
@@ -844,6 +858,65 @@ impl Compositor {
         let mut srv: Option<ID3D11ShaderResourceView> = None;
         self.dev.CreateShaderResourceView(&tex, None, Some(&mut srv))?;
         Ok((srv.unwrap(), w, h))
+    }
+
+    /// Publie le masque de segmentation du sujet webcam (R8, `width`x`height`, 0 = fond).
+    ///
+    /// Appelé depuis le thread d'inférence, pas depuis le thread de rendu — d'où le
+    /// `SetMultithreadProtected(true)` posé à la création du device (`d3d_windows.rs`). La
+    /// texture est `DYNAMIC` et réécrite en place ; elle n'est recréée que si la résolution du
+    /// modèle change, ce qui n'arrive pas en régime établi.
+    pub fn set_webcam_mask(&self, data: &[u8], width: u32, height: u32) -> Result<()> {
+        if width == 0 || height == 0 {
+            bail!("masque webcam de dimensions nulles ({width}x{height})");
+        }
+        let expected = (width as usize) * (height as usize);
+        if data.len() < expected {
+            bail!("masque webcam trop court : {} octets pour {width}x{height}", data.len());
+        }
+
+        let mut slot = self.webcam_mask.borrow_mut();
+        let needs_alloc = !matches!(slot.as_ref(), Some(m) if m.width == width && m.height == height);
+        if needs_alloc {
+            let td = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut tex: Option<ID3D11Texture2D> = None;
+            unsafe { self.dev.CreateTexture2D(&td, None, Some(&mut tex))? };
+            let tex = tex.unwrap();
+            let mut srv: Option<ID3D11ShaderResourceView> = None;
+            unsafe { self.dev.CreateShaderResourceView(&tex, None, Some(&mut srv))? };
+            *slot = Some(WebcamMask { tex, srv: srv.unwrap(), width, height });
+        }
+
+        let mask = slot.as_ref().expect("alloué juste au-dessus");
+        unsafe {
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            self.ctx.Map(&mask.tex, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
+            // `RowPitch` n'est pas `width` : le driver aligne les lignes, donc on recopie
+            // ligne à ligne plutôt que d'un bloc.
+            for row in 0..height as usize {
+                let dst = (mapped.pData as *mut u8).add(row * mapped.RowPitch as usize);
+                let src = data.as_ptr().add(row * width as usize);
+                std::ptr::copy_nonoverlapping(src, dst, width as usize);
+            }
+            self.ctx.Unmap(&mask.tex, 0);
+        }
+        Ok(())
+    }
+
+    /// Éteint l'effet : la webcam se redessine telle quelle à la frame suivante.
+    pub fn clear_webcam_mask(&self) {
+        *self.webcam_mask.borrow_mut() = None;
     }
 
     pub fn set_cursor(&self, track: CursorTrack) {
@@ -1538,7 +1611,13 @@ impl Compositor {
                 scene_preset.as_deref(),
                 Some("dual-frame") | Some("vertical-stack"),
             );
-            if cfg.shadow && !webcam_is_block && shape_fade > 0.0 {
+            // L'ombre appartient à la bulle PiP. En détourage il n'y a plus de bulle — une
+            // ombre portée par un rectangle invisible se lit comme un artefact.
+            let is_cutout = matches!(
+                scene_ref.as_ref().and_then(|s| s.webcam_effect.as_ref()),
+                Some(e) if e.shader_code() == 1.0
+            ) && self.webcam_mask.borrow().is_some();
+            if cfg.shadow && !webcam_is_block && !is_cutout && shape_fade > 0.0 {
                 let strength = WEBCAM_SHADOW_OPACITY * shape_fade;
                 self.draw_shadow(
                     w_dst,
@@ -1549,9 +1628,41 @@ impl Compositor {
                     strength,
                 );
             }
-            // La segmentation est PRÉ-RENDUE côté app (MediaPipe) et le natif reçoit déjà la
-            // piste détourée/floutée : il n'y a donc aucun effet à appliquer ici, la webcam se
-            // dessine comme n'importe quelle autre piste.
+            // Effet d'arrière-plan : le mode vient de la scène, le masque par pixel de
+            // l'inférence. Les DEUX sont requis — un mode sans masque rendrait la webcam
+            // invisible en détourage, donc tant que rien n'a été segmenté on dessine la piste
+            // telle quelle. C'est aussi ce qui rend le premier lancement gracieux.
+            let mask = self.webcam_mask.borrow();
+            let effect = scene_ref
+                .as_ref()
+                .and_then(|s| s.webcam_effect.as_ref())
+                .filter(|_| mask.is_some())
+                .map(|e| (e.shader_code(), e))
+                .filter(|(code, _)| *code > 0.0);
+
+            let (effect_code, blur_intensity, bg_color) = match effect {
+                Some((code, e)) if code > 2.5 => {
+                    // Fond personnalisé : seule une couleur plate se peint dans le shader. Un
+                    // dégradé ou une image passeraient par une texture, ce que ce calque ne
+                    // porte pas encore — on retombe alors sur du noir plutôt que sur du hasard.
+                    let col = match &e.background {
+                        Some(SceneBackground::Color { color }) => {
+                            parse_hex(color).unwrap_or([0.0, 0.0, 0.0, 1.0])
+                        }
+                        _ => [0.0, 0.0, 0.0, 1.0],
+                    };
+                    (code, 0.0, col)
+                }
+                Some((code, e)) => (code, e.blur_intensity.clamp(0.0, 1.0), [0.0, 0.0, 0.0, 1.0]),
+                None => (0.0, 0.0, [0.0, 0.0, 0.0, 1.0]),
+            };
+
+            if let Some(m) = mask.as_ref() {
+                // `draw_video` ne lie que les slots 0-1, donc le masque posé ici tient pour
+                // l'appel qui suit. Il est délié juste après pour ne pas fuir sur les calques
+                // d'annotation, qui utilisent eux aussi le slot 2 et au-delà.
+                self.ctx.PSSetShaderResources(3, Some(&[Some(m.srv.clone())]));
+            }
             self.draw_video(
                 &LayerCB {
                     dst: w_dst,
@@ -1559,7 +1670,8 @@ impl Compositor {
                     quad_px: w_px,
                     radius_px: w_radius,
                     mode: 0.0,
-                    color: [0.0, 0.0, 0.0, 1.0],
+                    color: bg_color,
+                    fx: [0.0, 0.0, effect_code, blur_intensity],
                     src_prev: [u0, sv0, u1, sv1], // src fixe (pas de zoom webcam)
                     dst_prev: w_dst_prev,
                     mb: [mb_taps, 1.0, 1.0, 0.0],
@@ -1568,6 +1680,9 @@ impl Compositor {
                 &wy,
                 &wuv,
             );
+            if mask.is_some() {
+                self.ctx.PSSetShaderResources(3, Some(&[None]));
+            }
         }
 
         // --- annotations : calque le plus haut, comme dans le DOM de la preview (le calque y est
