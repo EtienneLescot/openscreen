@@ -2123,7 +2123,8 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 
 	// Match the region panes' danger-outlined delete button (see SelectionPane).
 	const deleteBtnStyle: CSSProperties = {
-		display: "inline-flex",
+		display: "flex",
+		width: "100%",
 		alignItems: "center",
 		justifyContent: "center",
 		gap: 7,
