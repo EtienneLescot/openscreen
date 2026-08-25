@@ -2,12 +2,10 @@ import { describe, expect, it } from "vitest";
 import { createAudioTrack, createEmptyDocument } from "../schema";
 import {
 	appendAudioTrack,
-	moveAudioTrack,
 	removeAudioTrack,
 	setAudioTrackGain,
 	setAudioTrackMute,
 	setAudioTrackPlacement,
-	setAudioTrackTrim,
 } from "./audioTracks";
 
 const emptyDoc = () => createEmptyDocument({ projectId: "p", title: "t" });
@@ -30,28 +28,6 @@ describe("audioTracks document ops (issue #350)", () => {
 		const { doc, track } = docWithTrack();
 		expect(removeAudioTrack(doc, track.id).audioTracks).toEqual([]);
 		expect(removeAudioTrack(doc, "nope").audioTracks).toEqual([track]);
-	});
-
-	it("moveAudioTrack repositions the head and floors negatives at 0", () => {
-		const { doc, track } = docWithTrack();
-		expect(moveAudioTrack(doc, track.id, 9).audioTracks[0]?.timelineStartSec).toBe(9);
-		expect(moveAudioTrack(doc, track.id, -4).audioTracks[0]?.timelineStartSec).toBe(0);
-		expect(moveAudioTrack(doc, track.id, Number.NaN).audioTracks[0]?.timelineStartSec).toBe(0);
-	});
-
-	it("setAudioTrackTrim keeps trimEnd >= trimStart so the result stays schema-valid", () => {
-		const { doc, track } = docWithTrack();
-		const trimmed = setAudioTrackTrim(doc, track.id, { trimStartSec: 4, trimEndSec: 2 });
-		expect(trimmed.audioTracks[0]?.trimStartSec).toBe(4);
-		// trimEnd was pulled up to trimStart rather than left below it.
-		expect(trimmed.audioTracks[0]?.trimEndSec).toBe(4);
-	});
-
-	it("setAudioTrackTrim clears the tail trim when trimEndSec is undefined", () => {
-		const { doc, track } = docWithTrack();
-		const withTail = setAudioTrackTrim(doc, track.id, { trimStartSec: 1, trimEndSec: 10 });
-		const cleared = setAudioTrackTrim(withTail, track.id, { trimStartSec: 1 });
-		expect(cleared.audioTracks[0]?.trimEndSec).toBeUndefined();
 	});
 
 	it("setAudioTrackGain stores a finite dB and defaults NaN to 0", () => {
@@ -97,8 +73,8 @@ describe("audioTracks document ops (issue #350)", () => {
 		const a = createAudioTrack({ assetId: "asset_1", durationSec: 10 });
 		const b = createAudioTrack({ assetId: "asset_2", durationSec: 20 });
 		const doc = appendAudioTrack(appendAudioTrack(emptyDoc(), a), b);
-		const next = moveAudioTrack(doc, b.id, 7);
+		const next = setAudioTrackGain(doc, b.id, -6);
 		expect(next.audioTracks[0]).toEqual(a);
-		expect(next.audioTracks[1]?.timelineStartSec).toBe(7);
+		expect(next.audioTracks[1]?.gainDb).toBe(-6);
 	});
 });

@@ -241,11 +241,10 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "insertClipAt", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "moveClip", "save", "gesture"),
 	// Imported audio tracks (issue #350). Each is a direct user edit — drag/trim the
-	// track, change its level, mute it, or delete it — one undo step apiece.
-	w("src/lib/ai-edition/store/useTimeline.ts", "moveAudioTrack", "save", "gesture"),
+	// track (placeAudioTrack), change its level, mute it, or delete it — one undo
+	// step apiece.
 	w("src/lib/ai-edition/store/useTimeline.ts", "placeAudioTrack", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "removeAudioTrack", "save", "gesture"),
-	w("src/lib/ai-edition/store/useTimeline.ts", "resizeAudioTrack", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "setAudioTrackGain", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "toggleAudioTrackMute", "save", "gesture"),
 	// The round-2 defect: a background duration probe every freshly imported asset
