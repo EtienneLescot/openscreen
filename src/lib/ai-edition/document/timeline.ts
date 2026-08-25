@@ -202,6 +202,52 @@ export function resolvePlaybackSegments(
 	return result;
 }
 
+/**
+ * Project a RAW/document-timeline second (the ruler where trims still occupy their space)
+ * onto the trim-COMPRESSED output programme — the concatenation of the kept segments that
+ * {@link resolvePlaybackSegments} produces and that `audio::mix_external_tracks` overlays on.
+ *
+ * The only thing the programme removes is trimmed content, so the output position of a raw
+ * time `T` is `T` minus however much trimmed span sits before it:
+ *   `output(T) = T − Σ overlap(each trim's raw extent, [0, T])`.
+ * A `T` past a cut lands earlier by exactly the removed duration (the whole point); a `T`
+ * INSIDE a trimmed span collapses to the output edge just before it; and a `T` in a region
+ * with no trim — including a project with no clips at all — passes straight through.
+ *
+ * A trim is stored in SOURCE seconds anchored to a clip (`trimAppliesToClip`, same match as
+ * `resolvePlaybackSegments`), so its raw extent is the clip's `timelineStartSec` plus the
+ * offset of the trimmed sub-range into the clip's own source window. EXACT for trims; like the
+ * rest of the audio-track export path it does not model speed regions, which stay an approximation.
+ *
+ * Issue #350: imported audio tracks store their head in RAW seconds (seeded from the playhead),
+ * but the export mixes onto the compressed programme — passing the raw head through verbatim
+ * delayed every track by the total trim duration ahead of it. The preview already lands them
+ * correctly because its playhead jumps across trims; this makes the render agree.
+ */
+export function projectRawTimelineSecToPlayback(
+	clips: AxcutClip[],
+	trimRanges: AxcutTrimRange[],
+	rawSec: number,
+): number {
+	let removed = 0;
+	for (const clip of clips) {
+		const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+		if (sourceEnd <= clip.sourceStartSec) continue; // unprobed: no trims resolved against it
+		for (const trim of trimRanges) {
+			if (!trimAppliesToClip(trim, clip)) continue;
+			// The trimmed sub-range clamped to THIS clip's source window, then placed on the raw
+			// ruler where source `s` sits at `timelineStartSec + (s − sourceStartSec)`.
+			const s0 = Math.max(trim.startSec, clip.sourceStartSec);
+			const s1 = Math.min(trim.endSec, sourceEnd);
+			if (s1 <= s0) continue;
+			const rawStart = clip.timelineStartSec + (s0 - clip.sourceStartSec);
+			const rawLen = s1 - s0;
+			removed += Math.min(Math.max(rawSec - rawStart, 0), rawLen);
+		}
+	}
+	return rawSec - removed;
+}
+
 export function invertIntervals(intervals: Interval[], durationSec: number): Interval[] {
 	const cuts: Interval[] = [];
 	let cursor = 0;

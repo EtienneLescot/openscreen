@@ -83,7 +83,10 @@ export function resolveAudioTrackPlayback(
  * This is the RAW/document timeline the ruler, playhead and lane all use — NOT
  * the trim-compressed output timeline — because that is where the track was
  * placed (`useTimeline.addAudioTrack` seeds `timelineStartSec` from the playhead).
- * The export mixes on the same RAW positions (see audio.rs), so the two agree.
+ * The preview's playhead JUMPS across a trim, so a track at a raw head past a cut
+ * still fires at the right wall-clock moment here. The export mixes onto the
+ * compressed programme, so it projects the raw head through the trims first
+ * (`projectRawTimelineSecToPlayback` in sceneDescription) to land at the same place.
  */
 export function resolveTimelineAudioPlayback(virtualTimeSec: number, track: AxcutAudioTrack) {
 	const trimStart = Math.max(0, track.trimStartSec);

@@ -13,6 +13,7 @@ import {
 	normalizeIntervals,
 	planTimelineReplacement,
 	primaryAssetDuration,
+	projectRawTimelineSecToPlayback,
 	rederiveRegionMs,
 	removeClip,
 	removeRegion,
@@ -838,6 +839,60 @@ describe("resolvePlaybackSegments", () => {
 				"clip_2_seg2",
 			]);
 		});
+	});
+});
+
+describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", () => {
+	// One 10s clip, an interior trim removing raw 2..4 (2s). Output programme is 8s long.
+	const clip = makeClip({
+		sourceStartSec: 0,
+		sourceEndSec: 10,
+		timelineStartSec: 0,
+		timelineEndSec: 10,
+	});
+	const trim = makeTrim({ startSec: 2, endSec: 4 });
+
+	it("is the identity when there are no trims", () => {
+		expect(projectRawTimelineSecToPlayback([clip], [], 6)).toBeCloseTo(6, 6);
+	});
+
+	it("pulls a raw position after a cut earlier by the removed duration", () => {
+		// Raw 6 sits 2s past the 2s cut → output 4. This is the exact bug: the track was
+		// landing at 6 (delayed by the trim) instead of 4.
+		expect(projectRawTimelineSecToPlayback([clip], [trim], 6)).toBeCloseTo(4, 6);
+	});
+
+	it("is unaffected for a position before the cut", () => {
+		expect(projectRawTimelineSecToPlayback([clip], [trim], 1)).toBeCloseTo(1, 6);
+	});
+
+	it("collapses a position inside the trimmed gap to the end of the kept content before it", () => {
+		// Raw 3 is inside the removed 2..4 span → the next audible sample is at output 2.
+		expect(projectRawTimelineSecToPlayback([clip], [trim], 3)).toBeCloseTo(2, 6);
+	});
+
+	it("sums cuts across multiple clips", () => {
+		const clipA = makeClip({
+			id: "clip_a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const clipB = makeClip({
+			id: "clip_b",
+			sourceStartSec: 10,
+			sourceEndSec: 20,
+			timelineStartSec: 10,
+			timelineEndSec: 20,
+		});
+		// Remove 1s from clip A (raw 5..6) and 2s from clip B (raw 12..14) → 3s total.
+		const trims = [
+			makeTrim({ id: "t1", startSec: 5, endSec: 6 }),
+			makeTrim({ id: "t2", startSec: 12, endSec: 14 }),
+		];
+		// Raw 18 is past both cuts (3s removed) → output 15.
+		expect(projectRawTimelineSecToPlayback([clipA, clipB], trims, 18)).toBeCloseTo(15, 6);
 	});
 });
 

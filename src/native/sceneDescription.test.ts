@@ -2033,6 +2033,34 @@ describe("buildSceneDescription.audioTracks", () => {
 		expect(buildSceneDescription(doc).audioTracks[0]?.trimEndSec).toBe(30);
 	});
 
+	it("projects the head onto the trim-compressed programme (issue #350)", () => {
+		// A 10s screen clip with an interior cut removing raw [2,4] (2s). The audio track's
+		// raw head is 5; on the compressed programme that is 3. Passing 5 through verbatim was
+		// the bug — the track played 2s (the trim) late in the render while the preview, whose
+		// playhead jumps the cut, had it on time.
+		const screen = makeAsset({ id: "scr", originalPath: "/screen.mp4", durationSec: 10 });
+		const doc = makeDoc({
+			assets: [screen, audioAsset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "scr",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "scr", startSec: 2, endSec: 4, reason: "", origin: "user" },
+				],
+			},
+			audioTracks: [track],
+		});
+		expect(buildSceneDescription(doc).audioTracks[0]?.startSec).toBeCloseTo(3, 6);
+	});
+
 	it("drops a track whose asset has no resolvable path", () => {
 		const doc = makeDoc({ assets: [], audioTracks: [track] });
 		expect(buildSceneDescription(doc).audioTracks).toEqual([]);
