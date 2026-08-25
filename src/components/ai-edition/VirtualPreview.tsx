@@ -533,7 +533,17 @@ export function VirtualPreview({
 				const trackTarget = resolveTimelineAudioPlayback(virtualTimeSecRef.current, track);
 				if (el.playbackRate !== v.playbackRate) el.playbackRate = v.playbackRate;
 				el.volume = Math.min(1, audioGainScalar(track.gainDb) * globalGain);
-				if (Math.abs(el.currentTime - trackTarget.targetTimeSec) > 0.025) {
+				// Only re-seek on a real discontinuity (a scrub, a trim jump, a first
+				// play), NOT on the sub-frame drift of normal playback. The primary audio
+				// can afford a 25 ms leash because it syncs to the <video>'s own
+				// authoritative clock; an imported track syncs to `virtualTimeSec`, which is
+				// DERIVED from that clock each frame and so is slightly noisy — at a 25 ms
+				// leash it re-seeks most frames, and each seek briefly stalls the element:
+				// the jitter. A started element already plays at the right rate from the
+				// right offset, so it free-runs in sync; this wide leash just catches the
+				// jumps. BGM/voiceover tolerates it; frame-tight sync is the video's job.
+				const leashSec = !el.paused && trackTarget.shouldPlay ? 0.3 : 0.025;
+				if (Math.abs(el.currentTime - trackTarget.targetTimeSec) > leashSec) {
 					try {
 						el.currentTime = trackTarget.targetTimeSec;
 					} catch {
