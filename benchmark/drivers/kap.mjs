@@ -11,10 +11,15 @@
  * window. Launched with `--remote-debugging-port` its renderer is reachable, and the export
  * button, the settings fields and the progress text are all plain DOM.
  *
- * Output: the export destination is a native popup menu that neither CDP nor the accessibility
- * API can open, so the driver uses Kap's clipboard destination — the same render, writing to a
- * temp directory — and adopts the file it produces. Kap's own "Export complete" is used as the
- * stop signal, so the adoption copy is never counted.
+ * Two things about Kap shape this driver:
+ *
+ * 1. **Its editor is single-use.** Once an export finishes, the Convert button is replaced by a
+ *    share prompt, so a second run has nothing to click. Each run therefore opens the clip
+ *    again — before the clock starts, so it is not measured.
+ * 2. **Its export destination is a native popup menu** that neither CDP nor the accessibility
+ *    API can open. The driver uses Kap's clipboard destination instead — the same render,
+ *    writing to a temp directory — and adopts the file it produces. Kap's own "Export complete"
+ *    is the stop signal, so the adoption copy is never counted.
  */
 import { execFileSync } from "node:child_process";
 import {
@@ -69,11 +74,45 @@ function tempExports() {
 			try {
 				out.set(p, statSync(p).mtimeMs);
 			} catch {
-				/* vanished */
+				/* vanished between readdir and stat */
 			}
 		}
 	}
 	return out;
+}
+
+/** Open the source clip in a fresh Kap editor and pin its output fields. */
+async function openEditor(ctx) {
+	execFileSync("/usr/bin/open", ["-a", APP, ctx.source.path]);
+	await sleep(8000);
+	const target = (await listTargets(PORT)).find((t) => t.url.includes("editor.html"));
+	if (!target) throw new Error("Kap did not open an editor window for the source clip");
+	const session = new CdpSession(target.webSocketDebuggerUrl);
+	await session.open();
+	await session.eval(DOM_HELPERS);
+
+	const t = ctx.scenario.output;
+	const raw = await session.eval(`(() => {
+		const setNative = (el, v) => {
+			const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+			setter.call(el, String(v));
+			el.dispatchEvent(new Event("input", { bubbles: true }));
+			el.dispatchEvent(new Event("change", { bubbles: true }));
+		};
+		const ins = [...document.querySelectorAll("input")];
+		const w = ins.find(i => i.value === "1920") || ins[ins.length - 3];
+		const h = ins.find(i => i.value === "1080") || ins[ins.length - 2];
+		const f = ins[ins.length - 1];
+		if (w) setNative(w, ${t.width});
+		if (h) setNative(h, ${t.height});
+		if (f) setNative(f, ${t.fps});
+		return JSON.stringify({
+			format: (document.querySelector(".format") || {}).innerText,
+			plugin: (document.querySelector(".plugin") || {}).innerText,
+			values: [...document.querySelectorAll("input")].map(i => i.value),
+		});
+	})()`);
+	return { session, state: JSON.parse(raw) };
 }
 
 export default {
@@ -111,7 +150,7 @@ export default {
 
 	async prepare(ctx) {
 		// Kap picks its default format from a usage ledger rather than a setting. Promoting mp4
-		// there is how you make the editor open on MP4 instead of GIF without touching the UI.
+		// there is how the editor opens on MP4 instead of GIF without touching the UI.
 		if (existsSync(HISTORY)) {
 			try {
 				const h = JSON.parse(readFileSync(HISTORY, "utf8"));
@@ -131,42 +170,10 @@ export default {
 		]);
 		await sleep(9000);
 
-		execFileSync("/usr/bin/open", ["-a", APP, ctx.source.path]);
-		await sleep(8000);
+		const { session, state } = await openEditor(ctx);
+		ctx.state.cdp = session;
 
-		const target = (await listTargets(PORT)).find((t) => t.url.includes("editor.html"));
-		if (!target) throw new Error("Kap did not open an editor window for the source clip");
-		const s = new CdpSession(target.webSocketDebuggerUrl);
-		await s.open();
-		await s.eval(DOM_HELPERS);
-		ctx.state.cdp = s;
-
-		const t = ctx.scenario.output;
-		const applied = [];
-		const state = JSON.parse(
-			await s.eval(`(() => {
-				const ins = [...document.querySelectorAll("input")];
-				const setNative = (el, v) => {
-					const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-					setter.call(el, String(v));
-					el.dispatchEvent(new Event("input", { bubbles: true }));
-					el.dispatchEvent(new Event("change", { bubbles: true }));
-				};
-				const w = ins.find(i => i.value === "1920") || ins[ins.length - 3];
-				const h = ins.find(i => i.value === "1080") || ins[ins.length - 2];
-				const f = ins[ins.length - 1];
-				if (w) setNative(w, ${t.width});
-				if (h) setNative(h, ${t.height});
-				if (f) setNative(f, ${t.fps});
-				return JSON.stringify({
-					format: (document.querySelector(".format") || {}).innerText,
-					plugin: (document.querySelector(".plugin") || {}).innerText,
-					values: [...document.querySelectorAll("input")].map(i => i.value),
-				});
-			})()`),
-		);
-		if (/mp4/i.test(state.format ?? "")) applied.push("targetResolution", "targetFps");
-
+		const applied = /mp4/i.test(state.format ?? "") ? ["targetResolution", "targetFps"] : [];
 		return {
 			appliedFeatures: applied,
 			notes: [
@@ -181,10 +188,22 @@ export default {
 	},
 
 	async runExport(ctx) {
-		const s = ctx.state.cdp;
 		const out = this.outputPath(ctx);
 		if (existsSync(out)) rmSync(out);
 		const before = tempExports();
+
+		let s = ctx.state.cdp;
+		const hasButton = await s
+			.eval(
+				'String(!!(document.querySelector("button.start-export") || [...document.querySelectorAll("button")].find((x) => /convert/i.test(x.innerText))))',
+			)
+			.catch(() => "false");
+		if (hasButton !== "true") {
+			s?.close();
+			const reopened = await openEditor(ctx);
+			s = reopened.session;
+			ctx.state.cdp = s;
+		}
 
 		const clicked = await s.eval(`(() => {
 			const b = document.querySelector("button.start-export")
@@ -197,25 +216,19 @@ export default {
 			throw new Error(`Kap: could not find the Convert button (${clicked})`);
 		ctx.commit();
 
-		// Kap reports its own progress and completion in the DOM. That is a better stop signal
-		// than the temp file, which is written before Kap has finished with it.
 		const deadline = now() + 30 * 60 * 1000;
 		let done = false;
 		while (now() < deadline) {
 			await sleep(500);
-			const txt = await s.eval(`document.body.innerText.slice(0, 400)`);
+			const txt = await s.eval("document.body.innerText.slice(0, 400)");
 			if (/export complete|drag and drop to copy/i.test(txt)) {
 				ctx.markComplete();
 				done = true;
 				break;
 			}
-			const m = /Converting\s*—\s*(\d+)s remaining/i.exec(txt);
-			if (m) ctx.progress?.(null, `${m[1]}s remaining`);
 		}
 		if (!done) throw new Error("Kap never reported the export as complete");
 
-		// Adopt whatever appeared in the temp tree. The copy happens after markComplete, so it
-		// is outside the measured interval.
 		const after = tempExports();
 		const fresh = [...after.entries()]
 			.filter(([p, m]) => !before.has(p) || before.get(p) !== m)
