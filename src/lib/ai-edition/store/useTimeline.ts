@@ -8,12 +8,10 @@ import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import {
-	moveAudioTrack as moveAudioTrackInDocument,
 	removeAudioTrack as removeAudioTrackInDocument,
 	setAudioTrackGain as setAudioTrackGainInDocument,
 	setAudioTrackMute as setAudioTrackMuteInDocument,
 	setAudioTrackPlacement as setAudioTrackPlacementInDocument,
-	setAudioTrackTrim as setAudioTrackTrimInDocument,
 } from "../document/audioTracks";
 import { createId } from "../document/ids";
 import {
@@ -1228,27 +1226,6 @@ export function useTimeline() {
 		[document, saveDocument, selectedAudioTrackId, setSelectedAudioTrackId],
 	);
 
-	// Drag-reposition the track's head. `timelineStartSec` is output-timeline time.
-	const moveAudioTrack = useCallback(
-		async (trackId: string, timelineStartSec: number) => {
-			if (!document) return;
-			await saveDocument(moveAudioTrackInDocument(document, trackId, timelineStartSec), {
-				history: true,
-			});
-		},
-		[document, saveDocument],
-	);
-
-	// Edge-drag trim: window the source file (source seconds). Pass
-	// `trimEndSec: undefined` to clear the tail trim.
-	const resizeAudioTrack = useCallback(
-		async (trackId: string, trim: { trimStartSec: number; trimEndSec?: number }) => {
-			if (!document) return;
-			await saveDocument(setAudioTrackTrimInDocument(document, trackId, trim), { history: true });
-		},
-		[document, saveDocument],
-	);
-
 	// The commit for a lane drag: position and trim in one write (one undo step).
 	// A left-edge drag moves both timelineStartSec and trimStartSec, which two
 	// separate ops could not do atomically. See setAudioTrackPlacement.
@@ -1308,8 +1285,6 @@ export function useTimeline() {
 		removeRegions,
 		addAudioTrack,
 		removeAudioTrack,
-		moveAudioTrack,
-		resizeAudioTrack,
 		placeAudioTrack,
 		setAudioTrackGain,
 		toggleAudioTrackMute,

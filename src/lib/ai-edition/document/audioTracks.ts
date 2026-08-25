@@ -37,42 +37,13 @@ function updateAudioTrack(
 	};
 }
 
-/** Reposition a track's head on the programme (output-timeline seconds). */
-export function moveAudioTrack(
-	doc: AxcutDocument,
-	trackId: string,
-	timelineStartSec: number,
-): AxcutDocument {
-	return updateAudioTrack(doc, trackId, (t) => ({
-		...t,
-		timelineStartSec: finiteNonNeg(timelineStartSec),
-	}));
-}
-
-/**
- * Window the source file. `trimStartSec` floors at 0; `trimEndSec`, when given,
- * is pulled up to at least `trimStartSec` so the result always satisfies the
- * schema's `trimEndSec >= trimStartSec` rule. Pass `trimEndSec: undefined` to
- * clear the tail trim (play to the end of the file).
- */
-export function setAudioTrackTrim(
-	doc: AxcutDocument,
-	trackId: string,
-	trim: { trimStartSec: number; trimEndSec?: number },
-): AxcutDocument {
-	const trimStartSec = finiteNonNeg(trim.trimStartSec);
-	const trimEndSec =
-		trim.trimEndSec === undefined
-			? undefined
-			: Math.max(trimStartSec, finiteNonNeg(trim.trimEndSec));
-	return updateAudioTrack(doc, trackId, (t) => ({ ...t, trimStartSec, trimEndSec }));
-}
-
 /**
  * Set position and trim together in one write — what an edge-drag on the lane
  * needs: dragging the left edge moves both `timelineStartSec` and `trimStartSec`
- * at once, and committing that as two ops would be two undo steps. Same guards as
- * {@link moveAudioTrack} and {@link setAudioTrackTrim} so the result stays valid.
+ * at once, and committing that as two ops would be two undo steps. Floors both at
+ * 0 and pulls `trimEndSec` up to at least `trimStartSec` so the result always
+ * satisfies the schema's `trimEndSec >= trimStartSec` rule; `trimEndSec:
+ * undefined` clears the tail trim (play to the end of the file).
  */
 export function setAudioTrackPlacement(
 	doc: AxcutDocument,

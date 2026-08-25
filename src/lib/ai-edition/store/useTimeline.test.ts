@@ -1358,17 +1358,19 @@ describe("useTimeline audio tracks", () => {
 		expect(useProjectStore.getState().document?.audioTracks).toEqual([]);
 	});
 
-	it("move / trim / gain / mute update the track and each is one undo step", async () => {
+	it("place / gain / mute update the track and each is one undo step", async () => {
 		const { result } = renderTimeline();
 		let id = "";
 		await act(async () => {
 			id = (await result.current.addAudioTrack("audio_1", 2)) ?? "";
 		});
+		// A lane drag commits position and trim together (see placeAudioTrack).
 		await act(async () => {
-			await result.current.moveAudioTrack(id, 9);
-		});
-		await act(async () => {
-			await result.current.resizeAudioTrack(id, { trimStartSec: 1, trimEndSec: 8 });
+			await result.current.placeAudioTrack(id, {
+				timelineStartSec: 9,
+				trimStartSec: 1,
+				trimEndSec: 8,
+			});
 		});
 		await act(async () => {
 			await result.current.setAudioTrackGain(id, -6);
@@ -1386,7 +1388,7 @@ describe("useTimeline audio tracks", () => {
 			mute: true,
 		});
 
-		// Five writes (add + four edits) → the mute undoes first.
+		// Four writes (add + three edits) → the mute undoes first.
 		act(() => {
 			expect(undo()).toBe(true);
 		});
