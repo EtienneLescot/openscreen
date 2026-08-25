@@ -1,0 +1,250 @@
+# Export benchmark
+
+How long does it take to turn a 60-second screen recording into a finished 1080p60 MP4, in
+OpenScreen and in the apps it competes with — measured the same way, on the same clip, with the
+same edit applied, and verified frame by frame.
+
+This directory is the whole apparatus: it generates the source clip, installs the competitors,
+translates one scenario into each app's own controls, drives the export, times it, checks that
+what came out is what was asked for, and writes the report. It is meant to be started once and
+left alone.
+
+```bash
+node benchmark/bench.mjs doctor        # is this machine fit to measure?
+node benchmark/bench.mjs preflight     # the one interactive gate — grant everything here
+node benchmark/bench.mjs install       # unattended
+node benchmark/bench.mjs calibrate     # once per machine
+node benchmark/bench.mjs run           # walk away
+node benchmark/bench.mjs report
+```
+
+Driving it from a phone or another machine: [REMOTE.md](./REMOTE.md).
+
+---
+
+## What is being measured
+
+**The clock starts** the instant the export is committed — the click on *Export*, or a CLI's
+first progress event — and **stops when the last byte lands in the output file**. Launching the
+app, loading the project and setting presets happen before the clock starts, for every app
+alike, and are reported separately as `prepareMs` and `launchToCommitMs`.
+
+Two apps in this set (Camtasia, Kap) publish their own completion signal. Where one exists the
+harness takes whichever is *earlier* — the app's or the filesystem's — so an app can shorten its
+own measurement but never lengthen it.
+
+**Every output is then checked twice.** First against the target's metadata: resolution, frame
+rate, codec, duration. Then against its own pixels, because metadata cannot tell you whether the
+app actually did the work:
+
+| Check | How | Why it exists |
+|---|---|---|
+| Background applied | the frame's four corners must be the scenario's colour | an app that skipped the background composites far less |
+| Padding | bounding box of everything that is not background | apps' padding controls are on different scales; this measures the real inset |
+| Corner radius | the box's corner is background while its top edge is not | separates a rounded rect from a plain one |
+| Zooms | frame-to-frame activity must spike inside every zoom window | an ignored zoom list is invisible in metadata |
+
+A run that fails verification is recorded as a failure, never as a fast time.
+
+**Fidelity** records how much of the scenario each app could express. A row marked `partial` did
+less work; its number is a reference, not a ranking. Kap, which has no background, padding,
+corner-radius, shadow or zoom features at all, is always partial — it is in the set as a
+real-app floor, not as a peer.
+
+## The source clip
+
+Not shipped — **generated**, from a spec plus a seed, so that two machines can prove they
+measured the same workload by comparing one hash:
+
+```
+1920×1080, 60 fps, 60 s, 3600 frames, H.264 High + AAC 48 kHz
+sha256 recorded in every results file
+```
+
+It is built to look like a screen recording rather than a test pattern, because that is what
+changes an encoder's job: a dark editor with syntax-coloured "code", a scrolling viewport, a
+blinking caret, a selection band and a moving cursor — large static regions with sharp edges and
+localized motion. `benchmark/lib/fixture.mjs` composes it from ffmpeg primitives; nothing is
+random at run time.
+
+Why 60 fps and not 30: OpenScreen's MP4 export path is fixed at 60 (`MP4_EXPORT_FPS`,
+`src/cli/CliExportRunner.tsx`), and every other app in the set can be told to emit 60. It is the
+only frame rate on which "force identical output" is actually achievable.
+
+## The scenario
+
+One definition, in `benchmark/scenarios/index.mjs`, translated by each driver into its own app's
+vocabulary:
+
+- background: solid `#C9CDD6`
+- padding: 5 % of the frame's short side
+- corner radius: 40 px
+- drop shadow
+- three zooms — 6–12 s at 1.8×, 22–29 s at 2.2×, 41–48 s at 1.6×
+- output: 1920×1080, 60 fps, H.264, MP4
+
+The colour is deliberately far from anything in the generated source: the verifier finds the
+composited video's edge by colour distance, and a background close to the recording's own dark
+chrome makes that boundary unfindable. (It did, the first time.)
+
+### Translating the scenario — and why calibration exists
+
+No two of these apps put their padding control on the same scale. Asked for "5", Cap produced a
+1.85 % inset and OpenScreen a 10 % one — a 44 % difference in how many source pixels each was
+sampling per frame. That is a confound, not a result.
+
+`bench.mjs calibrate` fixes it: for each app it renders a short clip at two padding values,
+measures the inset from the output pixels, solves for the value that hits the scenario's target,
+and writes the answer to `benchmark/calibration.json`. On this machine:
+
+| App | control value | measured inset | content box |
+|---|---|---|---|
+| OpenScreen | `padding: 25` | 5.00 % | 1728×972 |
+| Cap | `padding: 13.56` | 4.81 % | 1734×976 |
+
+Run it once per machine, and again after any app updates. `run` reads the file automatically;
+without it, each driver falls back to its documented default and the report shows the inset it
+actually achieved.
+
+## Automating apps that have no CLI
+
+Only two apps in this set can be scripted the ordinary way. What the others expose was
+established by inspection, not assumption:
+
+| App | CLI | AppleScript dictionary | Accessibility tree | Screenshotable | Driven by |
+|---|---|---|---|---|---|
+| OpenScreen | **yes** (`openscreen export`) | no | — | — | `cli` |
+| Cap | **yes** (`cap-cli export`) | no | — | — | `cli` |
+| Camtasia | no | **yes** (import, `isExporting`) | yes | yes | `applescript+menu` |
+| Kap | no | no | **no** (empty window) | yes | `cdp` |
+| Screen Studio | no | no | **no** | **no** — see below | `cdp` |
+| FocuSee | no | no | yes | yes | `ax+menu` |
+
+The ladder each GUI driver climbs, best rung first: a scripting dictionary → a System Events
+menu item by name → a documented keyboard shortcut → an accessibility control by name → the
+renderer's own DOM over CDP → pixel coordinates. Every driver records which rung it used, in the
+`automation` column of the report, because that is what tells a reader how well a given row will
+reproduce on somebody else's machine. Pixel coordinates are the only rung that does not survive a
+different display, and no driver here needs them.
+
+**Screen Studio cannot be screenshotted at all.** It marks its editor window
+`kCGWindowSharingNone`, so macOS excludes it from every capture API — the window is plainly
+visible to the person sitting there and invisible to `screencapture`, ScreenCaptureKit and any
+agent driving pixels. It publishes no accessibility tree either. Launching it with
+`--remote-debugging-port` is what makes it drivable, and that is a *more* reproducible
+interaction than clicking pixels: elements are found by their visible text, which survives a
+moved window, a different display and a resized UI. The flag opens an inspector and nothing
+else; the renderer and the export pipeline are the shipping ones.
+
+`node benchmark/bench.mjs discover <app>` dumps an installed app's menus and accessibility tree.
+That is how a driver gets written, and how it gets repaired when a new version renames something.
+
+## What is in the set, and what it costs to get
+
+| App | Licence for exporting | Install |
+|---|---|---|
+| OpenScreen | MIT, free, no watermark | GitHub release |
+| Cap | AGPL-3.0, free; sign-in not needed for a local export | direct DMG |
+| Camtasia | 30-day trial, watermarked output | direct DMG |
+| Kap | MIT, free | GitHub release |
+| Screen Studio | **licence required to export at all** — no trial export | direct DMG |
+| FocuSee | trial, watermarked | vendor downloader stub |
+
+A watermark does not change render time, so a trial build is a valid measurement. A licence
+*wall* is not — see [Known blockers](#known-blockers).
+
+## Reproducing on another machine
+
+1. `node benchmark/bench.mjs doctor` — refuses to proceed quietly on battery, in Low Power Mode,
+   under thermal throttling, or with less than 20 GiB free. All four move export times.
+2. `node benchmark/bench.mjs preflight --launch` — prints the whole download list with sizes and
+   licence terms, provokes every macOS permission prompt the run would otherwise hit mid-flight,
+   and opens each GUI app once so its first-launch dialogs can be cleared. **This is the only
+   step that needs a human.**
+3. `node benchmark/bench.mjs install`
+4. `node benchmark/bench.mjs calibrate`
+5. `node benchmark/bench.mjs run --reps 3`
+
+Comparing two machines: the results file carries the source clip's sha256, every app's version,
+the calibration used, the machine's chip/cores/RAM/OS build, and the power and thermal state at
+each repetition. Two runs are comparable when the fixture hashes and the app versions match.
+
+### ffmpeg
+
+Used to build the fixture and to verify outputs — it is measuring instrumentation, not part of
+any app's export path. Resolution order: `OSBENCH_FFMPEG`/`OSBENCH_FFPROBE`, then `ffmpeg` on
+`PATH`, then the repo's LGPL tree under `crates/thirdparty/ffmpeg-*`. That tree is gitignored, so
+it exists only in the checkout that built it; the harness finds it through
+`git rev-parse --git-common-dir` and wraps it in a small script that re-exports
+`DYLD_LIBRARY_PATH` inside its own process, because macOS strips `DYLD_*` across any
+SIP-protected exec and the inherited variable never survives.
+
+The LGPL build has no libx264 and no drawtext. The fixture is encoded with
+`h264_videotoolbox` and drawn with `drawbox`; neither `-crf` nor text overlays are available.
+
+### Background load
+
+The one precondition that never announces itself. Nothing throttles and nothing warns — every
+export is simply slower. On this machine, reached over a remote-desktop session, the screen
+encoder alone holds 100–200 % of a core permanently, and `doctor` refuses to call the machine
+ready above 60 %.
+
+It is sampled during every export and reported per row as **Bg load**. Because it is the same
+for every app in one run, the *comparison* survives it; the absolute times do not. Two runs are
+only comparable at similar background load, which is why the figure is in the table rather than
+in a footnote.
+
+### Repetitions and guards
+
+Three scoring runs after one discarded warm-up, 45 s of cooldown between them. The warm-up is
+kept in the data but excluded from the statistics — first runs pay for cold caches and
+uncompiled shaders. The headline figure is the **median** with a median absolute deviation;
+with n=3 a standard deviation is mostly noise. Preconditions are re-checked before every
+repetition and recorded per run, so a throttled run is visible rather than averaged in.
+
+## Reading the report
+
+`results/<runId>/` holds `results.json` (everything), `report.md`, `report.html`,
+`events.ndjson` (append-only) and `status.json` (atomically rewritten, safe to poll).
+
+- **Export (median)** — commit → last byte.
+- **×realtime** — output duration ÷ export time. Above 1 is faster than playback.
+- **vs floor** — multiples of `ffmpeg (re-encode floor)`, a plain transcode with no compositing.
+  It separates "this encoder is slow on this machine" from "this app's pipeline is slow".
+- **Fidelity** — `full`, or `partial` with the missing features named.
+- **Driven by** — the automation rung.
+
+## Known blockers
+
+Recorded here rather than quietly dropped, because "not measured" and "slow" are very different
+findings.
+
+- **Screen Studio 3.7.5** gates export behind account activation. There is no trial export and no
+  watermark path — clicking *Export* opens an activation wall. The driver is complete and works;
+  supply a licence, activate once during preflight, and `--apps screen-studio` produces a number.
+- **FocuSee 2.4.1** (direct download, macOS 26.5) rejects every MP4 it is given — including a
+  real 2560×1440 H.264 recording — with *"The source file is damaged and cannot be opened."* It is
+  not sandboxed, so this is not a file-access grant. Both its own import panel and `open -a` fail.
+  Its driver is written against the AX tree it does expose; it will start working if a later
+  build fixes the import.
+
+## Layout
+
+```
+bench.mjs              entrypoint
+apps.mjs               registry: what is in the set, where it comes from, what it costs
+scenarios/index.mjs    the scenario and the pinned output target
+lib/env.mjs            machine fingerprint, power/thermal state, ffmpeg resolution
+lib/fixture.mjs        deterministic source generation + ffprobe
+lib/measure.mjs        stopwatch, process sampling, output verification
+lib/visualCheck.mjs    pixel verification of the effects
+lib/calibrate.mjs      solving each app's padding control
+lib/runner.mjs         the shared clock every driver is timed by
+lib/install.mjs        unattended DMG installation
+lib/permissions.mjs    provoking every macOS prompt up front
+lib/uiScript.mjs       AppleScript / System Events / accessibility
+lib/cdp.mjs            Chrome DevTools Protocol, for the Electron apps
+lib/report.mjs         markdown + HTML
+lib/state.mjs          append-only event log and pollable status
+drivers/               one per app — see drivers/README.md for the contract
+```

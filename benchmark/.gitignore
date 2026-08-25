@@ -1,0 +1,4 @@
+.cache/
+results/*/
+results/install.json
+results/preflight.json

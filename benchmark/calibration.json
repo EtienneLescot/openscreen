@@ -1,0 +1,160 @@
+{
+	"generatedAt": "2026-08-25T11:39:37.984Z",
+	"scenario": "full-demo",
+	"targetInsetPercent": 5,
+	"fixture": {
+		"spec": {
+			"name": "calib-1080p60-4s",
+			"width": 1920,
+			"height": 1080,
+			"fps": 60,
+			"durationSec": 4,
+			"seed": 20260825,
+			"sourceBitrateMbps": 12
+		},
+		"sha256": "574cd13f8e130381c7271a0e9b172f765089fbb99abc4f4548f29b4244b011e4"
+	},
+	"apps": {
+		"cap": {
+			"app": "cap",
+			"target": 5,
+			"paddingControl": 13.56,
+			"achievedInsetPercent": 4.81,
+			"achievedBox": {
+				"left": 93,
+				"top": 52,
+				"right": 1826,
+				"bottom": 1027,
+				"width": 1734,
+				"height": 976
+			},
+			"withinTolerance": true,
+			"probes": [
+				{
+					"control": 2.5,
+					"inset": 0.93,
+					"box": {
+						"left": 18,
+						"top": 10,
+						"right": 1901,
+						"bottom": 1069,
+						"width": 1884,
+						"height": 1060
+					}
+				},
+				{
+					"control": 5,
+					"inset": 1.85,
+					"box": {
+						"left": 36,
+						"top": 20,
+						"right": 1883,
+						"bottom": 1059,
+						"width": 1848,
+						"height": 1040
+					}
+				},
+				{
+					"control": 13.56,
+					"inset": 4.81,
+					"box": {
+						"left": 93,
+						"top": 52,
+						"right": 1826,
+						"bottom": 1027,
+						"width": 1734,
+						"height": 976
+					}
+				}
+			]
+		},
+		"openscreen-cli": {
+			"app": "openscreen-cli",
+			"target": 5,
+			"paddingControl": 25,
+			"achievedInsetPercent": 5,
+			"achievedBox": {
+				"left": 96,
+				"top": 54,
+				"right": 1823,
+				"bottom": 1025,
+				"width": 1728,
+				"height": 972
+			},
+			"withinTolerance": true,
+			"probes": [
+				{
+					"control": 25,
+					"inset": 5,
+					"box": {
+						"left": 96,
+						"top": 54,
+						"right": 1823,
+						"bottom": 1025,
+						"width": 1728,
+						"height": 972
+					}
+				},
+				{
+					"control": 50,
+					"inset": 10,
+					"box": {
+						"left": 192,
+						"top": 108,
+						"right": 1727,
+						"bottom": 971,
+						"width": 1536,
+						"height": 864
+					}
+				}
+			]
+		},
+		"openscreen-gui": {
+			"app": "openscreen-gui",
+			"target": 5,
+			"paddingControl": 25,
+			"achievedInsetPercent": 5,
+			"achievedBox": {
+				"left": 96,
+				"top": 54,
+				"right": 1823,
+				"bottom": 1025,
+				"width": 1728,
+				"height": 972
+			},
+			"withinTolerance": true,
+			"probes": [
+				{
+					"control": 25,
+					"inset": 5,
+					"box": {
+						"left": 96,
+						"top": 54,
+						"right": 1823,
+						"bottom": 1025,
+						"width": 1728,
+						"height": 972
+					}
+				},
+				{
+					"control": 50,
+					"inset": 10,
+					"box": {
+						"left": 192,
+						"top": 108,
+						"right": 1727,
+						"bottom": 971,
+						"width": 1536,
+						"height": 864
+					}
+				}
+			],
+			"note": "Seeded from openscreen-cli: the GUI writes and reads the same EditorProjectData document and the same padding scale, so solving it twice would measure the same control through a slower interface."
+		}
+	},
+	"machine": {
+		"chip": "Apple M1",
+		"osVersion": "26.5",
+		"model": "Macmini9,1"
+	}
+}
