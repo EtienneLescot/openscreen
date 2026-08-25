@@ -177,6 +177,42 @@ describe("buildSceneDescription.background", () => {
 	});
 });
 
+describe("buildSceneDescription.webcamEffect", () => {
+	// Omitted rather than sent as {mode:"none"}: the Rust side defaults the field, so every
+	// project without an effect would otherwise carry it for nothing.
+	it("omits the effect entirely when no webcam background is set", () => {
+		expect(buildSceneDescription(makeDoc()).webcamEffect).toBeUndefined();
+	});
+
+	it("carries the mode and its parameters, never pixels", () => {
+		const doc = makeDoc({
+			legacyEditor: { webcamBackgroundMode: "blur", webcamBlurIntensity: 0.85 },
+		});
+		expect(buildSceneDescription(doc).webcamEffect).toEqual({
+			mode: "blur",
+			blurIntensity: 0.85,
+			background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+		});
+	});
+
+	it("parses the custom background the same way the scene wallpaper is parsed", () => {
+		const doc = makeDoc({
+			legacyEditor: { webcamBackgroundMode: "custom", webcamWallpaper: "#34b27b" },
+		});
+		expect(buildSceneDescription(doc).webcamEffect?.background).toEqual({
+			kind: "color",
+			color: "#34b27b",
+		});
+	});
+
+	// An unknown mode is already rejected by `getEditorSettings`, so it can never reach the
+	// scene — this pins that the two guards agree rather than each assuming the other.
+	it("falls back to omitting the effect when the stored mode is not a known one", () => {
+		const doc = makeDoc({ legacyEditor: { webcamBackgroundMode: "hologram" } });
+		expect(buildSceneDescription(doc).webcamEffect).toBeUndefined();
+	});
+});
+
 // --- clips -----------------------------------------------------------------
 
 describe("buildSceneDescription.clips", () => {
