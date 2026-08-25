@@ -346,7 +346,11 @@ async function cmdRun({ flags }) {
 	);
 	log(`fixture ${fixture.path} (${fixture.sha256.slice(0, 12)})\n`);
 
-	const results = [];
+	// Re-running one app into an existing run id is the documented way to pick up after a
+	// failure (see REMOTE.md). Without this it silently discarded everything already measured.
+	const prior = flags.append ? (state.readResults()?.results ?? []) : [];
+	if (prior.length) log(`appending to ${prior.length} existing app result(s) in ${runId}\n`);
+	const results = prior.filter((r) => !apps.includes(r.app));
 	for (const [i, id] of apps.entries()) {
 		let driver;
 		try {
@@ -590,6 +594,8 @@ function cmdHelp() {
   calibrate [--apps a,b]    solve each app's padding control so they composite the same rect
   fixture   [--force] [--duration s] [--fps n]
   run       [--apps a,b] [--scenario id] [--reps 3] [--cooldown 45] [--no-warmup] [--id NAME]
+            [--append]  merge into an existing run id instead of replacing it
+            [--no-control]  skip the closing drift control
   status    [--run ID] [--json]
   report    [--run ID]
   discover  <app-id>        dump menus + accessibility tree (for writing a GUI driver)
