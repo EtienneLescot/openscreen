@@ -1534,6 +1534,15 @@ export function V4Timeline({
 								</div>
 							</PopoverContent>
 						</Popover>
+						<button
+							type="button"
+							className={styles.tlToolBtn}
+							title={ts("audioTrack.add")}
+							aria-label={ts("audioTrack.add")}
+							onClick={() => void handleAddAudio()}
+						>
+							<Music size={15} />
+						</button>
 						<span className={styles.tlToolSep} aria-hidden />
 						{tools.map((tool) => (
 							<button
@@ -1587,16 +1596,6 @@ export function V4Timeline({
 							onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}
 						>
 							<Maximize2 size={15} />
-						</button>
-						<span className={styles.tlToolSep} aria-hidden />
-						<button
-							type="button"
-							className={styles.tlToolBtn}
-							title={ts("audioTrack.add")}
-							aria-label={ts("audioTrack.add")}
-							onClick={() => void handleAddAudio()}
-						>
-							<Music size={15} />
 						</button>
 					</div>
 				) : (
