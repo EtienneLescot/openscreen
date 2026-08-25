@@ -79,13 +79,13 @@
 		"saveGif": "エクスポートしたGIFを保存",
 		"saveVideo": "エクスポートした動画を保存",
 		"selectVideo": "動画ファイルを選択",
-		"selectAudio": "Select Audio File",
+		"selectAudio": "オーディオファイルを選択",
 		"saveProject": "OpenScreen プロジェクトを保存",
 		"openProject": "OpenScreen プロジェクトを開く",
 		"gifImage": "GIF 画像",
 		"mp4Video": "MP4 動画",
 		"videoFiles": "動画ファイル",
-		"audioFiles": "Audio Files",
+		"audioFiles": "オーディオファイル",
 		"openscreenProject": "OpenScreen プロジェクト",
 		"allFiles": "すべてのファイル"
 	}

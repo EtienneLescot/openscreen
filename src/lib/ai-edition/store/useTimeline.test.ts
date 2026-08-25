@@ -20,6 +20,7 @@ const probeVideoDurationMock = vi.hoisted(() => vi.fn());
 const probeVideoDimensionsMock = vi.hoisted(() =>
 	vi.fn().mockResolvedValue({ width: 1920, height: 1080 }),
 );
+const probeAudioDurationMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const toastErrorMock = vi.hoisted(() => vi.fn());
 
 vi.mock("sonner", () => ({ toast: { error: toastErrorMock } }));
@@ -30,6 +31,7 @@ vi.mock("../timeline/duration", async (importOriginal) => {
 		...actual,
 		probeVideoDuration: probeVideoDurationMock,
 		probeVideoDimensions: probeVideoDimensionsMock,
+		probeAudioDuration: probeAudioDurationMock,
 	};
 });
 
@@ -1310,6 +1312,8 @@ describe("useTimeline audio tracks", () => {
 		useProjectStore.getState().clear();
 		clearHistory();
 		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		probeAudioDurationMock.mockReset();
+		probeAudioDurationMock.mockResolvedValue(null);
 		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
 			success: true,
 			document: doc,
@@ -1401,5 +1405,51 @@ describe("useTimeline audio tracks", () => {
 			await result.current.removeAudioTrack(id);
 		});
 		expect(useProjectStore.getState().document?.audioTracks).toEqual([]);
+	});
+
+	// #350 regression: a failed import-time probe leaves durationSec at 0, which
+	// makes the playback window zero-length. The on-load backfill re-probes and
+	// stamps the real duration onto the asset AND the track, so it can play again.
+	it("backfills a missing audio duration on load", async () => {
+		probeAudioDurationMock.mockResolvedValue(12.5);
+		// Asset imported with an unknown duration (probe failed), and a track that
+		// cached the resulting 0.
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: {
+				...sampleDoc,
+				assets: [
+					...sampleDoc.assets,
+					{
+						id: "audio_2",
+						kind: "audio",
+						label: "bgm.mp3",
+						originalPath: "/tmp/bgm.mp3",
+						cameraTrack: null,
+					},
+				],
+				audioTracks: [
+					{
+						id: "trk_2",
+						assetId: "audio_2",
+						timelineStartSec: 0,
+						durationSec: 0,
+						trimStartSec: 0,
+						gainDb: 0,
+						label: "bgm.mp3",
+					},
+				],
+			},
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		renderTimeline();
+		await waitFor(() => {
+			const doc = useProjectStore.getState().document;
+			expect(doc?.assets.find((a) => a.id === "audio_2")?.durationSec).toBe(12.5);
+			expect(doc?.audioTracks[0]?.durationSec).toBe(12.5);
+		});
+		expect(probeAudioDurationMock).toHaveBeenCalledTimes(1);
 	});
 });

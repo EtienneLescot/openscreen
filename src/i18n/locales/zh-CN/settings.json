@@ -321,10 +321,10 @@
 		"help": "调整音频输出电平。它在预览和导出中的效果完全一致。"
 	},
 	"audioTrack": {
-		"add": "Add audio track",
-		"importFailed": "Could not add audio",
-		"defaultLabel": "Audio track",
-		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
-		"remove": "Delete track"
+		"add": "添加音频轨道",
+		"importFailed": "无法添加音频",
+		"defaultLabel": "音频轨道",
+		"help": "此导入音频轨道的音量。在预览和导出中会叠加混合到录制内容上。在时间轴上拖动轨道即可移动或裁剪。",
+		"remove": "删除轨道"
 	}
 }

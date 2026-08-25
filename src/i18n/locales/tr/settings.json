@@ -321,10 +321,10 @@
 		"help": "Ses çıkış seviyesini ayarlayın. Önizlemede ve dışa aktarmada aynı şekilde uygulanır."
 	},
 	"audioTrack": {
-		"add": "Add audio track",
-		"importFailed": "Could not add audio",
-		"defaultLabel": "Audio track",
-		"help": "Volume, position, and mute for this imported audio track. It mixes over the recording in the preview and the export.",
-		"remove": "Delete track"
+		"add": "Ses parçası ekle",
+		"importFailed": "Ses eklenemedi",
+		"defaultLabel": "Ses parçası",
+		"help": "Bu içe aktarılmış ses parçasının ses düzeyi. Önizlemede ve dışa aktarmada kaydın üzerine miksleniyor. Taşımak veya kırpmak için parçayı zaman çizelgesinde sürükleyin.",
+		"remove": "Parçayı sil"
 	}
 }

@@ -341,8 +341,7 @@ describe("useProjectStore", () => {
 			"audio",
 		);
 		// Audio has no camera sidecar — the lookup that addAsset does must not run.
-		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
-		expect((window as any).electronAPI.findRecordingCamera).not.toHaveBeenCalled();
+		expect(vi.mocked(window.electronAPI.findRecordingCamera)).not.toHaveBeenCalled();
 		// Probe returned null, so nothing to stamp: no extra save.
 		expect(bridgeMocks.save).not.toHaveBeenCalled();
 	});

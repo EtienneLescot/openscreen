@@ -405,6 +405,50 @@ describe("DocumentService", () => {
 			expect(after.project.primaryAssetId).toBe(b.assets[1]?.id);
 		});
 
+		// Issue #350 — an audio overlay can never be primary.
+		it("passes primary to the next VIDEO asset, never to an audio asset", async () => {
+			const doc = await service.createProject("P");
+			const video = await service.addAsset(doc.project.id, { path: "/tmp/screen.mp4" });
+			await service.addAsset(doc.project.id, { path: "/tmp/music.mp3", kind: "audio" });
+			const primaryId = video.project.primaryAssetId;
+			expect(primaryId).toBeTruthy();
+			// Removing the only video leaves just the audio asset; primary must clear,
+			// not fall to the audio one.
+			const after = await service.removeAsset(doc.project.id, primaryId ?? "");
+			expect(after.project.primaryAssetId).toBeUndefined();
+			expect(after.assets).toHaveLength(1);
+			expect(after.assets[0]?.kind).toBe("audio");
+		});
+
+		it("drops audioTracks that referenced a removed audio asset", async () => {
+			const doc = await service.createProject("P");
+			await service.addAsset(doc.project.id, { path: "/tmp/screen.mp4" });
+			const withAudio = await service.addAsset(doc.project.id, {
+				path: "/tmp/music.mp3",
+				kind: "audio",
+			});
+			const audioId = withAudio.assets.find((a) => a.kind === "audio")?.id ?? "";
+			expect(audioId).toBeTruthy();
+			const withTrack = await service.saveProject({
+				...withAudio,
+				audioTracks: [
+					{
+						id: "trk_1",
+						assetId: audioId,
+						timelineStartSec: 0,
+						durationSec: 10,
+						trimStartSec: 0,
+						gainDb: 0,
+						label: "music",
+					},
+				],
+			});
+			expect(withTrack.audioTracks).toHaveLength(1);
+			const after = await service.removeAsset(doc.project.id, audioId);
+			expect(after.audioTracks).toEqual([]);
+			expect(after.assets.some((a) => a.id === audioId)).toBe(false);
+		});
+
 		it("resequences other assets and rederives their anchored regions", async () => {
 			const created = await service.createProject("P");
 			const withA = await service.addAsset(created.project.id, { path: "/tmp/a.mp4" });
