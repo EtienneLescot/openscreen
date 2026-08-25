@@ -142,25 +142,31 @@ export default {
 		end tell`);
 		await sleep(10000);
 
-		// Read the composition panel back: this is the app telling us what it thinks it loaded.
-		// This is a gate, not a formality — an editor with no project still exports happily and
-		// writes an empty container, which looks like an instant, wildly fast render.
-		let panel = "";
-		let loaded = false;
-		const wantDuration = new RegExp(
-			`/${Math.floor(ctx.source.probe.durationSec / 60)}:${String(Math.round(ctx.source.probe.durationSec % 60)).padStart(2, "0")}`,
-		);
-		for (let i = 0; i < 20 && !loaded; i++) {
-			panel = await s.eval("document.body.innerText.slice(0, 600)");
-			loaded = panel.includes(ctx.scenario.effects.background.color) && wantDuration.test(panel);
-			if (!loaded) await sleep(1500);
+		// Ask the app which project it has open rather than scraping the panel for a duration
+		// string. This is a gate, not a formality: an editor with no project loaded exports
+		// happily and writes an empty container, which reads as an instant, wildly fast render.
+		let loadedPath = null;
+		for (let i = 0; i < 25 && loadedPath !== projectPath; i++) {
+			await sleep(1500);
+			try {
+				const raw = await s.eval(
+					`(async () => { try { const r = await window.electronAPI.loadCurrentProjectFile(); return JSON.stringify(r ?? null); } catch (e) { return null; } })()`,
+					{ timeoutMs: 15_000 },
+				);
+				const cur = raw ? JSON.parse(raw) : null;
+				if (cur?.path) loadedPath = cur.path;
+			} catch {
+				/* the renderer may be mid-load */
+			}
 		}
-		if (!loaded) {
+		const panel = await s.eval("document.body.innerText.slice(0, 600)");
+		if (loadedPath !== projectPath) {
 			throw new Error(
-				`OpenScreen editor never showed the benchmark project (expected ${ctx.scenario.effects.background.color} ` +
-					`and a ${ctx.source.probe.durationSec}s timeline). Panel read: ${panel.replace(/\n+/g, " | ").slice(0, 200)}`,
+				`OpenScreen has "${loadedPath ?? "no project"}" open, not the benchmark project ` +
+					`(${projectPath}). Panel read: ${panel.replace(/\n+/g, " | ").slice(0, 200)}`,
 			);
 		}
+
 		const applied = ["targetResolution", "targetFps"];
 		const e = ctx.scenario.effects;
 		if (panel.includes(e.background.color)) applied.push("background");
