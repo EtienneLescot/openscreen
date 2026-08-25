@@ -441,8 +441,6 @@ pub struct SceneAudioTrack {
     pub trim_start_sec: f64,
     #[serde(default)]
     pub trim_end_sec: Option<f64>,
-    #[serde(default)]
-    pub mute: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

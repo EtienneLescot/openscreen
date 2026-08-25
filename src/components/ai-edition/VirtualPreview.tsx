@@ -76,9 +76,9 @@ export function resolveAudioTrackPlayback(
  *
  * A track occupies `[timelineStartSec, timelineStartSec + (trimEnd - trimStart)]`
  * on the timeline; its source position is `trimStart` plus however far the
- * playhead is into that span. Outside the span — or when muted — it parks at the
- * nearer trim edge and stays paused, the same discipline `resolveAudioTrackPlayback`
- * uses so the rAF never seeks an element into nothing.
+ * playhead is into that span. Outside the span it parks at the nearer trim edge
+ * and stays paused, the same discipline `resolveAudioTrackPlayback` uses so the
+ * rAF never seeks an element into nothing.
  *
  * This is the RAW/document timeline the ruler, playhead and lane all use — NOT
  * the trim-compressed output timeline — because that is where the track was
@@ -92,7 +92,7 @@ export function resolveTimelineAudioPlayback(virtualTimeSec: number, track: Axcu
 	const local = virtualTimeSec - track.timelineStartSec;
 	return {
 		targetTimeSec: Math.min(Math.max(trimStart, trimStart + local), trimEnd),
-		shouldPlay: !track.mute && local >= 0 && local < windowLen,
+		shouldPlay: local >= 0 && local < windowLen,
 	};
 }
 

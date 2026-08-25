@@ -406,7 +406,6 @@ export interface SceneDescription {
 		gainDb: number;
 		trimStartSec: number;
 		trimEndSec: number;
-		mute: boolean;
 	}>;
 	/**
 	 * Per-clip screen crop (fractions of the frame), or null for the identity
@@ -481,7 +480,6 @@ export function buildSceneDescription(
 				gainDb: track.gainDb,
 				trimStartSec: track.trimStartSec,
 				trimEndSec,
-				mute: track.mute,
 			},
 		];
 	});

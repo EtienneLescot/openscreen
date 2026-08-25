@@ -4,7 +4,6 @@ import {
 	appendAudioTrack,
 	removeAudioTrack,
 	setAudioTrackGain,
-	setAudioTrackMute,
 	setAudioTrackPlacement,
 } from "./audioTracks";
 
@@ -34,14 +33,6 @@ describe("audioTracks document ops (issue #350)", () => {
 		const { doc, track } = docWithTrack();
 		expect(setAudioTrackGain(doc, track.id, -6).audioTracks[0]?.gainDb).toBe(-6);
 		expect(setAudioTrackGain(doc, track.id, Number.NaN).audioTracks[0]?.gainDb).toBe(0);
-	});
-
-	it("setAudioTrackMute toggles mute without touching gain", () => {
-		const { doc, track } = docWithTrack();
-		const withGain = setAudioTrackGain(doc, track.id, -3);
-		const muted = setAudioTrackMute(withGain, track.id, true);
-		expect(muted.audioTracks[0]?.mute).toBe(true);
-		expect(muted.audioTracks[0]?.gainDb).toBe(-3);
 	});
 
 	it("setAudioTrackPlacement writes position and trim together, staying schema-valid", () => {

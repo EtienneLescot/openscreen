@@ -923,19 +923,16 @@ pub fn assemble_concatenated_pcm(
 /// track that runs past the video is truncated to it, so the audio and video
 /// streams stay the same length for the muxer.
 ///
-/// A muted track, or one whose file has no decodable audio, is skipped — the same
-/// degradation a stream-less clip gets. `trim_end_sec` must be concrete (the
-/// renderer sends `trimEnd ?? durationSec`): `decode_clip_audio` preallocates from
-/// it, so an unbounded end would try to allocate the whole real line.
+/// A track whose file has no decodable audio is skipped — the same degradation a
+/// stream-less clip gets. `trim_end_sec` must be concrete (the renderer sends
+/// `trimEnd ?? durationSec`): `decode_clip_audio` preallocates from it, so an
+/// unbounded end would try to allocate the whole real line.
 pub fn mix_external_tracks(mut programme: PlanarPcm, tracks: &[SceneAudioTrack]) -> PlanarPcm {
     let programme_len = programme.first().map(Vec::len).unwrap_or(0);
     if programme_len == 0 {
         return programme;
     }
     for track in tracks {
-        if track.mute {
-            continue;
-        }
         let trim_start = track.trim_start_sec.max(0.0);
         let Some(trim_end) = track.trim_end_sec else {
             // Without a concrete end there is no safe window to decode (see the doc
@@ -1135,28 +1132,17 @@ mod tests {
     }
 
     #[test]
-    fn mix_external_tracks_skips_muted_and_empty_windows() {
+    fn mix_external_tracks_skips_empty_windows() {
         let programme = planar(&[0.4, 0.4]);
-        let tracks = vec![
-            SceneAudioTrack {
-                path: "/nope.mp3".into(),
-                start_sec: 0.0,
-                gain_db: 0.0,
-                trim_start_sec: 0.0,
-                trim_end_sec: Some(1.0),
-                mute: true,
-            },
-            SceneAudioTrack {
-                path: "/nope.mp3".into(),
-                start_sec: 0.0,
-                gain_db: 0.0,
-                trim_start_sec: 2.0,
-                trim_end_sec: Some(1.0), // end <= start: empty window, never decoded
-                mute: false,
-            },
-        ];
-        // Both tracks are skipped before any decode, so the programme is untouched
-        // even though the path does not exist.
+        let tracks = vec![SceneAudioTrack {
+            path: "/nope.mp3".into(),
+            start_sec: 0.0,
+            gain_db: 0.0,
+            trim_start_sec: 2.0,
+            trim_end_sec: Some(1.0), // end <= start: empty window, never decoded
+        }];
+        // The empty window is skipped before any decode, so the programme is
+        // untouched even though the path does not exist.
         let out = mix_external_tracks(programme, &tracks);
         assert_eq!(out[0], vec![0.4, 0.4]);
     }

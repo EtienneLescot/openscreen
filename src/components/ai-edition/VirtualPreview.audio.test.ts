@@ -93,7 +93,6 @@ describe("resolveTimelineAudioPlayback", () => {
 		trimStartSec: 2,
 		trimEndSec: 8,
 		gainDb: 0,
-		mute: false,
 		label: "",
 	};
 
@@ -110,14 +109,6 @@ describe("resolveTimelineAudioPlayback", () => {
 		// Window is 6s (2..8), so timeline 10..16. At 16 it has just ended.
 		expect(resolveTimelineAudioPlayback(16, track)).toEqual({
 			targetTimeSec: 8,
-			shouldPlay: false,
-		});
-	});
-
-	it("never plays while muted, even inside its window", () => {
-		const muted = { ...track, mute: true };
-		expect(resolveTimelineAudioPlayback(13, muted)).toEqual({
-			targetTimeSec: 5,
 			shouldPlay: false,
 		});
 	});

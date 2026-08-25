@@ -72,12 +72,3 @@ export function setAudioTrackGain(
 ): AxcutDocument {
 	return updateAudioTrack(doc, trackId, (t) => ({ ...t, gainDb: finite(gainDb) }));
 }
-
-/** Mute or unmute a track without losing its stored gain. */
-export function setAudioTrackMute(
-	doc: AxcutDocument,
-	trackId: string,
-	mute: boolean,
-): AxcutDocument {
-	return updateAudioTrack(doc, trackId, (t) => ({ ...t, mute }));
-}

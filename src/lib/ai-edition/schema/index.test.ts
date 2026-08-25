@@ -975,7 +975,7 @@ describe("v6 -> v7 trim clip-anchor migration", () => {
 });
 
 describe("audio tracks (issue #350)", () => {
-	it("applies defaults for gain, mute, trim, position, and label", () => {
+	it("applies defaults for gain, trim, position, and label", () => {
 		const track = audioTrackSchema.parse({
 			id: "audio_1",
 			assetId: "asset_1",
@@ -985,7 +985,6 @@ describe("audio tracks (issue #350)", () => {
 		expect(track.trimStartSec).toBe(0);
 		expect(track.trimEndSec).toBeUndefined();
 		expect(track.gainDb).toBe(0);
-		expect(track.mute).toBe(false);
 		expect(track.label).toBe("");
 	});
 

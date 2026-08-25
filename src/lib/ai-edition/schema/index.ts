@@ -491,7 +491,7 @@ export const zoomRegionSchema = endGteStart(
 //
 // `assetId` points at an asset with `kind: "audio"`. `timelineStartSec` places
 // the track's head; `trimStartSec`/`trimEndSec` window the source file (both in
-// source seconds); `gainDb` + `mute` set its level.
+// source seconds); `gainDb` sets its level.
 export const audioTrackSchema = z
 	.object({
 		id: z.string().min(1),
@@ -505,7 +505,6 @@ export const audioTrackSchema = z
 		// the tail so the pill and the export agree on where the track stops.
 		trimEndSec: z.number().nonnegative().optional(),
 		gainDb: z.number().default(0),
-		mute: z.boolean().default(false),
 		label: z.string().default(""),
 	})
 	.refine((data) => data.trimEndSec === undefined || data.trimEndSec >= data.trimStartSec, {
@@ -1042,7 +1041,7 @@ export function ensureDocument(value: unknown): AxcutDocument {
  * Build a timeline audio track for an imported audio asset (issue #350). The
  * head is placed at `timelineStartSec` (output-timeline seconds) and the track
  * spans the whole source file until the user trims it. Parsed through the schema
- * so every default (gain, mute, trim) is applied in one place.
+ * so every default (gain, trim) is applied in one place.
  */
 export function createAudioTrack(input: {
 	assetId: string;

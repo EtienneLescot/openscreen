@@ -1806,7 +1806,6 @@ describe("buildSceneDescription.audioTracks", () => {
 		trimStartSec: 2,
 		trimEndSec: 12 as number | undefined,
 		gainDb: -3,
-		mute: false,
 		label: "",
 	};
 
@@ -1819,7 +1818,6 @@ describe("buildSceneDescription.audioTracks", () => {
 				gainDb: -3,
 				trimStartSec: 2,
 				trimEndSec: 12,
-				mute: false,
 			},
 		]);
 	});
