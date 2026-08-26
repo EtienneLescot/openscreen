@@ -234,8 +234,16 @@ struct osc_pw_session {
      * cleared in osc_on_remove_buffer. A dmabuf frame the consumer holds for a
      * GPU import (issue #507) keeps the pw_buffer pointer, but a renegotiation
      * destroys the buffer set — so osc_pw_requeue_buffer must check the handle is
-     * still here before touching it, or it would queue freed storage. */
+     * still here before touching it, or it would queue freed storage.
+     *
+     * Pointer equality alone is not enough: PipeWire reuses these wrapper slots,
+     * so a renegotiation can register a NEW buffer at the SAME address as one the
+     * consumer still holds. Each registration therefore carries a unique
+     * `generation`, and a retained handle is only re-queued when BOTH the pointer
+     * and its generation match — an ABA guard. `next_generation` never repeats. */
     struct pw_buffer *live_buffers[OSC_MAX_LIVE_BUFFERS];
+    uint64_t live_generations[OSC_MAX_LIVE_BUFFERS];
+    uint64_t next_generation;
 };
 
 struct osc_pw_audio_api osc_audio_api;
@@ -847,18 +855,25 @@ static void osc_dmabuf_sync(int fd, int start)
     }
 }
 
-/* The live-buffer table (session->live_buffers) is only touched on the PipeWire
- * thread (add/remove_buffer) and, in osc_pw_requeue_buffer, under the thread-loop
- * lock which pauses that thread — so these need no locking of their own. */
-static void osc_track_live_buffer(struct osc_pw_session *session, struct pw_buffer *pw_buf)
+/* The live-buffer table is only touched on the PipeWire thread (add/remove_buffer)
+ * and, in osc_pw_requeue_buffer, under the thread-loop lock which pauses that
+ * thread — so these need no locking of their own. */
+
+/* Registers `pw_buf` and returns the unique generation stamped on it, which the
+ * frame carries so a later re-queue can prove it means THIS registration and not
+ * a newer buffer reusing the same slot. 0 is never a valid generation. */
+static uint64_t osc_track_live_buffer(struct osc_pw_session *session, struct pw_buffer *pw_buf)
 {
     size_t i;
+    uint64_t generation = ++session->next_generation;
     for (i = 0; i < OSC_MAX_LIVE_BUFFERS; i++) {
         if (session->live_buffers[i] == NULL) {
             session->live_buffers[i] = pw_buf;
-            return;
+            session->live_generations[i] = generation;
+            return generation;
         }
     }
+    return generation;
 }
 
 static void osc_forget_live_buffer(struct osc_pw_session *session, struct pw_buffer *pw_buf)
@@ -867,17 +882,20 @@ static void osc_forget_live_buffer(struct osc_pw_session *session, struct pw_buf
     for (i = 0; i < OSC_MAX_LIVE_BUFFERS; i++) {
         if (session->live_buffers[i] == pw_buf) {
             session->live_buffers[i] = NULL;
+            session->live_generations[i] = 0;
             return;
         }
     }
 }
 
-static int osc_buffer_is_live(struct osc_pw_session *session, struct pw_buffer *pw_buf)
+/* The generation currently registered for `pw_buf`, or 0 if it is not tracked. */
+static uint64_t osc_live_buffer_generation(struct osc_pw_session *session,
+                                           struct pw_buffer *pw_buf)
 {
     size_t i;
     for (i = 0; i < OSC_MAX_LIVE_BUFFERS; i++) {
         if (session->live_buffers[i] == pw_buf) {
-            return 1;
+            return session->live_generations[i];
         }
     }
     return 0;
@@ -1341,8 +1359,10 @@ static int osc_inspect_buffer(struct osc_pw_session *session, struct pw_buffer *
         session->dmabuf_sync_fd = -1;
         if (osc_read_frame(session, buffer, &frame)) {
             /* The callback needs the pw_buffer to hand back to osc_pw_requeue_buffer
-             * if it takes ownership of a dmabuf frame. */
+             * if it takes ownership of a dmabuf frame, plus its generation so the
+             * re-queue can reject a stale handle after a renegotiation. */
             frame.buffer_handle = pw_buf;
+            frame.buffer_generation = osc_live_buffer_generation(session, pw_buf);
             if (session->callbacks.on_frame(session->callbacks.user, &frame)) {
                 /* Taken: leave it un-queued; the consumer will re-queue it once the
                  * import has copied the pixels. No SYNC bracket is open on this
@@ -1398,16 +1418,21 @@ static void osc_on_process(void *userdata)
 }
 
 /* See the header. Locks the thread loop so a foreign thread can queue safely. */
-void osc_pw_requeue_buffer(struct osc_pw_session *session, void *buffer_handle)
+void osc_pw_requeue_buffer(struct osc_pw_session *session, void *buffer_handle,
+                           uint64_t buffer_generation)
 {
     if (session == NULL || buffer_handle == NULL || session->stream == NULL) {
         return;
     }
     api.thread_loop_lock(session->loop);
     /* Under the lock the PipeWire thread is paused, so the live-buffer table is
-     * stable: only re-queue a handle a renegotiation has not destroyed. A stale
-     * handle is simply dropped — PipeWire already freed that buffer. */
-    if (osc_buffer_is_live(session, (struct pw_buffer *)buffer_handle)) {
+     * stable. Re-queue only when the SAME registration is still live: matching
+     * the generation as well as the pointer rejects both a destroyed buffer and a
+     * newer one PipeWire placed in the same slot after a renegotiation. A stale
+     * handle is simply dropped — PipeWire already owns or freed that buffer. */
+    if (buffer_generation != 0 &&
+        osc_live_buffer_generation(session, (struct pw_buffer *)buffer_handle) ==
+            buffer_generation) {
         api.stream_queue_buffer(session->stream, (struct pw_buffer *)buffer_handle);
     }
     api.thread_loop_unlock(session->loop);

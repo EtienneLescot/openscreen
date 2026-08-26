@@ -61,14 +61,21 @@ pub struct RawFrame {
     /// `osc_pw_requeue_buffer` once the dmabuf import has copied the pixels, if
     /// `on_frame` took ownership of it. Null/unused on the CPU path.
     pub buffer_handle: *mut c_void,
+    /// Registration generation of `buffer_handle`, handed back with it so the
+    /// re-queue can reject a stale pointer a renegotiation reused (see the C side).
+    pub buffer_generation: u64,
 }
 
 /// A `struct pw_buffer *` we are holding out of PipeWire's queue until its dmabuf
-/// content has been imported. Send so it can travel through the mailbox; the raw
-/// pointer is only ever handed back to `osc_pw_requeue_buffer`, never dereferenced
-/// on the Rust side.
+/// content has been imported, tagged with its registration `generation` so the
+/// re-queue can tell it from a newer buffer reusing the same slot. Send so it can
+/// travel through the mailbox; the pointer is only ever handed back to
+/// `osc_pw_requeue_buffer`, never dereferenced on the Rust side.
 #[derive(Debug, Clone, Copy)]
-pub struct BufferHandle(pub *mut c_void);
+pub struct BufferHandle {
+    pub ptr: *mut c_void,
+    pub generation: u64,
+}
 // SAFETY: the pointer is an opaque token owned by libpipewire; Rust neither reads
 // nor writes through it, only returns it to the shim's locked requeue.
 unsafe impl Send for BufferHandle {}
@@ -137,7 +144,11 @@ extern "C" {
         err_len: usize,
     ) -> *mut RawSession;
     fn osc_pw_stop(session: *mut RawSession);
-    fn osc_pw_requeue_buffer(session: *mut RawSession, buffer_handle: *mut c_void);
+    fn osc_pw_requeue_buffer(
+        session: *mut RawSession,
+        buffer_handle: *mut c_void,
+        buffer_generation: u64,
+    );
 }
 
 /// Where stream events go. Called on the PipeWire thread, so it must not block:
@@ -248,7 +259,7 @@ impl Drop for DmabufDesc {
         // queue rather than re-queued here because re-queue must run on the main
         // loop, not the PipeWire thread that supersedes a frame — see
         // FrameMailbox and osc_pw_requeue_buffer.
-        if !self.buffer_handle.0.is_null() {
+        if !self.buffer_handle.ptr.is_null() {
             if let Ok(mut queue) = self.requeue.lock() {
                 queue.push(self.buffer_handle);
             }
@@ -940,7 +951,7 @@ impl Session {
     pub fn requeue(&self, handle: BufferHandle) {
         // SAFETY: `raw` is a live session for the lifetime of `self`; the handle
         // is an opaque pw_buffer token the shim validates and only re-queues.
-        unsafe { osc_pw_requeue_buffer(self.raw, handle.0) };
+        unsafe { osc_pw_requeue_buffer(self.raw, handle.ptr, handle.generation) };
     }
 }
 
@@ -1027,7 +1038,10 @@ extern "C" fn on_frame(user: *mut c_void, frame: *const RawFrame) -> i32 {
                 drm_fourcc: frame.drm_fourcc,
                 modifier: frame.modifier,
                 planes,
-                buffer_handle: BufferHandle(frame.buffer_handle),
+                buffer_handle: BufferHandle {
+                    ptr: frame.buffer_handle,
+                    generation: frame.buffer_generation,
+                },
                 requeue: mailbox.requeue_queue(),
             },
             frame,
