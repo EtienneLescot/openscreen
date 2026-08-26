@@ -121,6 +121,10 @@ struct osc_pw_frame {
      * Passed back to osc_pw_requeue_buffer once the import is done. Only set (and
      * only meaningful) for a dmabuf frame the consumer intends to take. */
     void *buffer_handle;
+    /* The registration generation of `buffer_handle`. Passed back alongside it so
+     * a re-queue can tell this buffer from a later one PipeWire put in the same
+     * slot after a renegotiation. */
+    uint64_t buffer_generation;
 };
 
 /* The negotiated video format. Reported once, from param_changed. */
@@ -249,7 +253,8 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
  * PipeWire thread itself (that would deadlock). The consumer requeues from its
  * own loop, which is a different thread. NULL session or handle is a no-op.
  */
-void osc_pw_requeue_buffer(struct osc_pw_session *session, void *buffer_handle);
+void osc_pw_requeue_buffer(struct osc_pw_session *session, void *buffer_handle,
+                           uint64_t buffer_generation);
 
 /* Stops the thread loop, joins it, and frees everything. Safe with NULL. */
 void osc_pw_stop(struct osc_pw_session *session);
