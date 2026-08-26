@@ -219,11 +219,36 @@ inline float3 quad_inverse_bilinear(float2 P, float2 c00, float2 c10, float2 c11
 // Identique à `ps_main` côté HLSL ligne pour ligne (à la syntaxe MSL près).
 // =================================================================================
 
+// Fond floute du mode "blur" webcam. Miroir de `blur_webcam_bg` cote HLSL : memes 25 taps,
+// memes poids, meme rayon — les deux back-ends doivent rendre le meme pixel.
+inline float3 blur_webcam_bg(float2 uv, float intensity, float2 qpx,
+                             texture2d<float, access::sample> texY,
+                             texture2d<float, access::sample> texUV)
+{
+    float2 step = (max(intensity, 0.0) * 12.0 + 2.0) / max(qpx, float2(1.0));
+    float3 sum = float3(0.0);
+    float total = 0.0;
+    for (int dy = -2; dy <= 2; dy++)
+    {
+        for (int dx = -2; dx <= 2; dx++)
+        {
+            float w = 1.0 / (1.0 + length(float2(dx, dy)));
+            sum += sample_yuv(saturate(uv + float2(dx, dy) * step), texY, texUV) * w;
+            total += w;
+        }
+    }
+    return sum / max(total, 1e-4);
+}
+
 fragment float4 ps_main(VSOut i [[stage_in]],
                         constant Layer &layer [[buffer(0)]],
                         texture2d<float, access::sample> texY [[texture(0)]],
                         texture2d<float, access::sample> texUV [[texture(1)]],
-                        texture2d<float, access::sample> texImg [[texture(2)]])
+                        texture2d<float, access::sample> texImg [[texture(2)]],
+                        // Masque de segmentation du sujet webcam. Non lie tant qu'aucun
+                        // masque n'existe : Metal rend alors 0, ce qui est sans effet
+                        // puisque la branche n'est prise que si layer.fx.z > 0.5.
+                        texture2d<float, access::sample> texMask [[texture(3)]])
 {
     // mode 13 : SPRITE DE CURSEUR posé sur l'écran incliné. Cf. commentaires HLSL.
     if (layer.mode > 12.5)
@@ -467,6 +492,8 @@ fragment float4 ps_main(VSOut i [[stage_in]],
     }
 
     float3 rgb;
+    // 1 sauf en detourage, ou il porte le masque du sujet. Cf. la branche fx.z plus bas.
+    float alpha_mask = 1.0;
     if (layer.mode < 0.5)
     {
         // flou de mouvement par vélocité (§8)
@@ -490,13 +517,35 @@ fragment float4 ps_main(VSOut i [[stage_in]],
             }
             rgb = acc / float(taps);
         }
+
+        // Effet d'arriere-plan webcam. Miroir exact de la branche HLSL : fx.z porte le mode
+        // (1 = detourage, 2 = flou, 3 = fond plat), fx.w l'intensite du flou, fx.xy l'etendue
+        // valide de la texture webcam pour ramener uv dans l'espace du masque.
+        float effect = layer.fx.z;
+        if (effect > 0.5)
+        {
+            float2 mask_uv = uv_now / max(layer.fx.xy, float2(1e-6));
+            float person = saturate(texMask.sample(samp, mask_uv).r);
+            if (effect > 2.5)
+            {
+                rgb = mix(layer.color.rgb, rgb, person);
+            }
+            else if (effect > 1.5)
+            {
+                rgb = mix(blur_webcam_bg(uv_now, layer.fx.w, layer.quad_px, texY, texUV), rgb, person);
+            }
+            else
+            {
+                alpha_mask = person;
+            }
+        }
     }
     else
     {
         rgb = layer.color.rgb;
     }
 
-    float alpha = layer.color.a;
+    float alpha = layer.color.a * alpha_mask;
     if (layer.radius_px > 0.0)
     {
         float2 halfsz = layer.quad_px * 0.5;

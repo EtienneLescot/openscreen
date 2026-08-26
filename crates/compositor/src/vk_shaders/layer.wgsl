@@ -34,6 +34,9 @@ struct Layer {
 @group(0) @binding(1) var texY:  texture_2d<f32>;   // R8Unorm, sample .r
 @group(0) @binding(2) var texUV: texture_2d<f32>;   // Rg8Unorm, sample .rg
 @group(0) @binding(3) var samp:  sampler;
+// Masque de segmentation du sujet webcam, R8. Une vue 1x1 est liee quand aucun masque
+// n'existe : la branche n'est de toute facon prise que si layer.fx.z > 0.5.
+@group(0) @binding(4) var texMask: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -197,10 +200,29 @@ fn quad_inverse_bilinear(P: vec2<f32>, c00: vec2<f32>, c10: vec2<f32>, c11: vec2
     return r1;
 }
 
+// Fond floute du mode "blur" webcam. Miroir de `blur_webcam_bg` cote HLSL et MSL : memes
+// 25 taps, memes poids, meme rayon — les trois back-ends doivent rendre le meme pixel.
+fn blur_webcam_bg(uv: vec2<f32>, intensity: f32, qpx: vec2<f32>) -> vec3<f32> {
+    let step = (max(intensity, 0.0) * 12.0 + 2.0) / max(qpx, vec2<f32>(1.0));
+    var sum = vec3<f32>(0.0);
+    var total = 0.0;
+    for (var dy: i32 = -2; dy <= 2; dy = dy + 1) {
+        for (var dx: i32 = -2; dx <= 2; dx = dx + 1) {
+            let d = vec2<f32>(f32(dx), f32(dy));
+            let w = 1.0 / (1.0 + length(d));
+            sum = sum + sample_yuv(clamp(uv + d * step, vec2<f32>(0.0), vec2<f32>(1.0))) * w;
+            total = total + w;
+        }
+    }
+    return sum / max(total, 1e-4);
+}
+
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     var rgb: vec3<f32>;
     var alpha: f32;
+    // 1 sauf en detourage, ou il porte le masque du sujet. Cf. la branche fx.z plus bas.
+    var alpha_mask = 1.0;
 
     if layer.mode < 0.5 {
         // Mode 0 — vidéo NV12 + flou de mouvement par vélocité (§8), port 1:1 du
@@ -232,6 +254,22 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
                     acc = acc + sample_yuv(uv_prev + duv * (f32(k) * step));
                 }
                 rgb = acc / f32(taps);
+            }
+        }
+
+        // Effet d'arriere-plan webcam. Miroir exact des branches HLSL et MSL : fx.z porte le
+        // mode (1 = detourage, 2 = flou, 3 = fond plat), fx.w l'intensite du flou, fx.xy
+        // l'etendue valide de la texture webcam pour ramener uv dans l'espace du masque.
+        let effect = layer.fx.z;
+        if effect > 0.5 {
+            let mask_uv = i.uv / max(layer.fx.xy, vec2<f32>(1e-6));
+            let person = clamp(textureSample(texMask, samp, mask_uv).r, 0.0, 1.0);
+            if effect > 2.5 {
+                rgb = mix(layer.color.rgb, rgb, person);
+            } else if effect > 1.5 {
+                rgb = mix(blur_webcam_bg(i.uv, layer.fx.w, layer.quad_px), rgb, person);
+            } else {
+                alpha_mask = person;
             }
         }
     } else if layer.mode < 1.5 {
@@ -427,7 +465,7 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(layer.color.rgb * a, a);
     }
 
-    alpha = layer.color.a;
+    alpha = layer.color.a * alpha_mask;
 
     if layer.radius_px > 0.0 {
         // Feather ~1.5 px sur le bord du quad — parité exacte avec le HLSL
