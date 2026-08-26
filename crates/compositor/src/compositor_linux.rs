@@ -238,6 +238,12 @@ impl Compositor {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    // Masque de segmentation du sujet webcam. TOUJOURS declare, meme sans
+                    // masque : wgpu valide le bind group contre le layout, donc une entree
+                    // absente ferait echouer chaque draw et pas seulement ceux qui l'utilisent.
+                    // `dummy_view()` est lie a la place, et la branche du shader n'est de
+                    // toute facon prise que si fx.z > 0.5.
+                    tex_entry(4),
                 ],
             });
         let pipeline_layout = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -944,6 +950,14 @@ impl Compositor {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                // Le portage Linux de la segmentation (capture + televersement du masque)
+                // n'est pas fait : on lie le dummy, ce qui laisse `fx.z` a 0 cote scene et
+                // donc la branche du shader jamais prise. Voir
+                // `technical-documentation/engineering/webcam-segmentation.md`.
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(dummy),
                 },
             ],
         });
