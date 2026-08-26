@@ -207,6 +207,12 @@ struct osc_pw_session {
     struct spa_video_info_raw format;
     int buffer_info_reports;
     int want_video;
+    /* Set by the caller when the VAAPI dmabuf-import pipeline is available, which
+     * makes the stream offer dmabuf BEFORE shm so a tiled monitor buffer is
+     * imported on the GPU instead of copied through throttled shm (issue #507).
+     * shm stays in the offer as the fallback, so a compositor that cannot produce
+     * dmabuf still negotiates. */
+    int prefer_dmabuf;
     /* Set from the negotiated format's SPA_VIDEO_FLAG_MODIFIER, which is what
      * decides whether buffers arrive as dmabuf fds or shared memory. */
     int uses_dmabuf;
@@ -1322,6 +1328,7 @@ static const struct pw_stream_events osc_stream_events = {
 };
 
 struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
+                                    int prefer_dmabuf,
                                     const struct osc_pw_callbacks *callbacks, char *err,
                                     size_t err_len)
 {
@@ -1347,6 +1354,7 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
     }
     session->callbacks = *callbacks;
     session->want_video = want_video;
+    session->prefer_dmabuf = prefer_dmabuf;
     /* calloc zeroes these, and 0 is a legitimate fd — so the "nothing pending"
      * sentinel has to be set explicitly. dmabuf_maps is keyed on ptr != NULL,
      * which calloc does get right. */
@@ -1405,18 +1413,20 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
     params[1] = osc_build_enum_format_dmabuf(&builder);
 
     /*
-     * Test affordance. Every compositor available for local testing — mutter,
-     * sway via xdg-desktop-portal-wlr — offers shm, so params[0] always wins and
-     * the DMA-BUF branch below (osc_map_dmabuf, the DMA_BUF_IOCTL_SYNC bracket,
-     * the dmabuf arm of osc_read_frame) never executes outside niri. Dropping
-     * the shm object leaves the producer no choice, which is the only way to
-     * exercise that code without the compositor from issue #287.
+     * When the GPU import path is available (prefer_dmabuf), offer dmabuf FIRST
+     * and shm SECOND: mutter then hands us a tiled dmabuf we import on the GPU
+     * (issue #507) instead of the shm buffer it throttles for a whole monitor.
+     * shm stays as the fallback, so a compositor that cannot produce dmabuf still
+     * negotiates on the shm object. The env var forces the same swap for testing
+     * on a machine where the probe would say no.
      *
-     * Never set in production: it would break exactly the compatibility the
-     * ordering above exists to preserve.
+     * Without either, the ordering is unchanged — shm first — so nothing moves on
+     * a build or driver without the VAAPI import.
      */
-    if (getenv("OPENSCREEN_PIPEWIRE_FORCE_DMABUF") != NULL) {
+    if (session->prefer_dmabuf || getenv("OPENSCREEN_PIPEWIRE_FORCE_DMABUF") != NULL) {
+        const struct spa_pod *shm = params[0];
         params[0] = params[1];
+        params[1] = shm;
     }
 
     if (params[0] == NULL || params[1] == NULL) {

@@ -506,6 +506,7 @@ fn begin_stream<W: Write>(
     portal_stream: &mut Option<StreamInfo>,
     granted_kind: &mut Option<portal::SourceKind>,
     stream: portal::PortalStream,
+    prefer_dmabuf: bool,
 ) -> Result<(), ()> {
     // The fd is consumed by libpipewire; the rest is kept for the
     // `stream-started` event, emitted once the format is negotiated.
@@ -518,6 +519,7 @@ fn begin_stream<W: Write>(
             let _ = forward.send(Message::Stream(event));
         }),
         frames.clone(),
+        prefer_dmabuf,
     ) {
         Ok(started) => {
             *session = Some(started);
@@ -577,6 +579,18 @@ fn run<W: Write>(
         .output_path
         .as_ref()
         .map(|_| Arc::new(FrameMailbox::default()));
+    // Offer dmabuf ahead of shm (issue #507) only for a video session AND only
+    // when the VAAPI import pipeline actually builds on this GPU. Probed once
+    // here — it constructs a VAAPI device and filtergraph — so a machine that
+    // cannot import (no VAAPI, or a driver that will not map) simply keeps the
+    // shm path with no per-recording cost.
+    let prefer_dmabuf = frames.is_some() && crate::dmabuf_import::available();
+    if frames.is_some() {
+        let _ = emitter.emit(&Event::Debug {
+            code: "dmabuf-import".to_owned(),
+            data: json_map([("available", prefer_dmabuf.into())]),
+        });
+    }
     let mut capture: Option<Capture> = None;
     // Started before the portal picker so the streams are warm and the graph
     // has settled by the time the first video frame arrives. Everything they
@@ -798,6 +812,7 @@ fn run<W: Write>(
                         &mut portal_stream,
                         &mut granted_kind,
                         stream,
+                        prefer_dmabuf,
                     ) {
                         exit_code = 1;
                         break;
@@ -856,6 +871,7 @@ fn run<W: Write>(
                         &mut portal_stream,
                         &mut granted_kind,
                         stream,
+                        prefer_dmabuf,
                     ) {
                         exit_code = 1;
                         break;

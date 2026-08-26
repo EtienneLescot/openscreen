@@ -217,9 +217,14 @@ const char *osc_pw_library_version(void);
  * buffer types; without it neither happens, and a cursor-only session never pays
  * to map a full-screen framebuffer per frame.
  *
+ * `prefer_dmabuf` offers dmabuf before shm so a tiled monitor buffer is imported
+ * on the GPU rather than copied through throttled shm (issue #507); set it only
+ * when the VAAPI import pipeline is available. shm remains the fallback.
+ *
  * Returns NULL on failure, with a message in `err`.
  */
 struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
+                                    int prefer_dmabuf,
                                     const struct osc_pw_callbacks *callbacks, char *err,
                                     size_t err_len);
 

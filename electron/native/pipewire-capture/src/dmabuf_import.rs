@@ -59,6 +59,17 @@ fn sw_format_for_fourcc(drm_fourcc: u32) -> Option<ff::AVPixelFormat> {
     }
 }
 
+/// Whether the zero-copy VAAPI dmabuf-import pipeline can be built on this
+/// machine. Constructs a nominal importer, which exercises the DRM→VAAPI device
+/// creation, the frames contexts and the `scale_vaapi` graph — everything that
+/// fails on a non-VAAPI GPU or a driver that cannot map a dmabuf. Success does
+/// not depend on the exact dimensions, so a fixed probe size is representative.
+/// When this is true the stream prefers dmabuf; when false it stays on shm.
+pub fn available() -> bool {
+    const XRGB8888: u32 = 0x34325258;
+    DmabufImporter::new(1920, 1080, XRGB8888).is_ok()
+}
+
 pub struct DmabufImporter {
     width: i32,
     height: i32,

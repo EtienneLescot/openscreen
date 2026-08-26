@@ -117,6 +117,7 @@ extern "C" {
         fd: i32,
         node_id: u32,
         want_video: i32,
+        prefer_dmabuf: i32,
         callbacks: *const RawCallbacks,
         err: *mut c_char,
         err_len: usize,
@@ -827,8 +828,12 @@ impl Session {
         node_id: u32,
         sink: Sink,
         frames: Option<std::sync::Arc<FrameMailbox>>,
+        // Offer dmabuf before shm for a whole-monitor GPU import (issue #507).
+        // Only honoured for a video session; ignored for cursor-only.
+        prefer_dmabuf: bool,
     ) -> Result<Self, String> {
         let want_video = i32::from(frames.is_some());
+        let prefer_dmabuf = i32::from(want_video != 0 && prefer_dmabuf);
         let state = Box::new(CallbackState { sink, frames });
         let user = &*state as *const CallbackState as *mut c_void;
         let callbacks = RawCallbacks {
@@ -848,6 +853,7 @@ impl Session {
                 fd.into_raw_fd(),
                 node_id,
                 want_video,
+                prefer_dmabuf,
                 &callbacks,
                 err.as_mut_ptr(),
                 ERR_LEN,

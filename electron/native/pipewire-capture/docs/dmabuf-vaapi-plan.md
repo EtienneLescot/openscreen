@@ -136,8 +136,17 @@ Key architecture calls:
   buffersrc then set params (hw_frames_ctx) then init, since a HW pix_fmt is
   rejected at init otherwise; (4) wrap the DRM descriptor in an AVBufferRef so the
   source frame is ref-counted for `av_hwframe_map`.
-- [ ] Once proven: make dmabuf preference automatic when the backend is VAAPI
-  (drop the FORCE env gate) + window/crop via VPP + non-VAAPI fallback guard.
+- [x] **Auto-enable + fallback** (validated, no env). `dmabuf_import::available()`
+  probes once at session start by building a nominal importer; when it succeeds
+  the stream offers dmabuf BEFORE shm (`osc_pw_start(prefer_dmabuf)`), else stays
+  on shm. shm remains in the offer as the negotiation fallback, so a compositor
+  that cannot produce dmabuf — or a GPU where the importer will not build — keeps
+  today's path with no regression. Confirmed: full-monitor scroll records 39.8
+  distinct fps with `convertMs 0.0` and no force flag. `OPENSCREEN_PIPEWIRE_FORCE_DMABUF`
+  still forces the swap for testing.
+- [ ] Follow-ups: window/crop via VPP (v1 is whole-monitor); per-frame import
+  failure after a successful probe still errors (rare) rather than renegotiating
+  to shm; test on Intel/NVIDIA-vaapi.
 - [ ] Test on AMD/GNOME: confirm `uses_dmabuf=1`, distinct-fps ≈ OBS (~24),
   crop correct for window captures, cursor unaffected. Regression-check
   software encode and a wlroots/niri compositor.
