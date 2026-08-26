@@ -178,48 +178,31 @@ describe("WebcamOverlay (per-clip camera resolution)", () => {
 		expect(container.querySelector("video")).toBeTruthy();
 	});
 
-	// The background is painted INTO the segmentation canvas (colour, gradient and image
-	// alike), which is also what gets encoded for export — so the canvas being mounted is
-	// what "the effect is on" means. An extra CSS background layer used to sit behind it
-	// and was either invisible or a second, differently-painted copy of the same wallpaper.
-	it("mounts the segmentation canvas when a webcam background mode is active", () => {
-		const doc = makeDocument();
-		doc.legacyEditor = { ...baseLegacyEditor, webcamBackgroundMode: "custom" };
-		useProjectStore.setState({
-			projectId: "proj_test",
-			document: doc,
-			revision: 1,
-			status: "ready",
-			error: null,
-			sourceDurationSec: 0,
-			currentTimeSec: 2,
-			dirty: false,
-			lastSavedAt: new Date(),
-		});
+	// The webcam background effect is composited by the native compositor from the scene,
+	// not by this component: the mask reaches the shader as a texture. So the overlay renders
+	// the same thing whatever the mode — a <video> that exists to drive decode and the
+	// playback clock. It used to mount a <canvas> and paint the effect here, which is what
+	// made preview and export two different implementations of the same layer.
+	it("renders only the video element, whatever the background mode", () => {
+		for (const mode of ["none", "blur", "custom", "transparent"] as const) {
+			const doc = makeDocument();
+			doc.legacyEditor = { ...baseLegacyEditor, webcamBackgroundMode: mode };
+			useProjectStore.setState({
+				projectId: "proj_test",
+				document: doc,
+				revision: 1,
+				status: "ready",
+				error: null,
+				sourceDurationSec: 0,
+				currentTimeSec: 2,
+				dirty: false,
+				lastSavedAt: new Date(),
+			});
 
-		const { container } = render(<WebcamOverlay {...baseProps(2)} />);
-		// The <video> stays mounted as the decode/clock source even with an effect on.
-		expect(container.querySelector("video")).toBeTruthy();
-		expect(container.querySelector("canvas")).toBeTruthy();
-	});
-
-	it("does not mount the segmentation canvas when the background mode is none", () => {
-		const doc = makeDocument();
-		doc.legacyEditor = { ...baseLegacyEditor, webcamBackgroundMode: "none" };
-		useProjectStore.setState({
-			projectId: "proj_test",
-			document: doc,
-			revision: 1,
-			status: "ready",
-			error: null,
-			sourceDurationSec: 0,
-			currentTimeSec: 2,
-			dirty: false,
-			lastSavedAt: new Date(),
-		});
-
-		const { container } = render(<WebcamOverlay {...baseProps(2)} />);
-		expect(container.querySelector("video")).toBeTruthy();
-		expect(container.querySelector("canvas")).toBeNull();
+			const { container, unmount } = render(<WebcamOverlay {...baseProps(2)} />);
+			expect(container.querySelector("video"), mode).toBeTruthy();
+			expect(container.querySelector("canvas"), mode).toBeNull();
+			unmount();
+		}
 	});
 });

@@ -114,6 +114,11 @@ function resolveCursorSpritePaths(
 	return resolved;
 }
 
+/** Where the segmentation model sits under `public/`, and therefore under `dist/` once Vite
+ *  has copied it. Resolved here rather than in the renderer: the compositor runs in this
+ *  process, and the renderer has no business knowing the on-disk layout. */
+const SEGMENTATION_MODEL_ASSET = "mediapipe/selfie_segmentation/selfie_segmentation_landscape.onnx";
+
 export function resolveSceneAssetPaths(sceneJson: string): string {
 	try {
 		const scene = JSON.parse(sceneJson) as {
@@ -122,6 +127,7 @@ export function resolveSceneAssetPaths(sceneJson: string): string {
 				theme?: string;
 				cursorSprites?: Record<string, { path: string; hotspotX: number; hotspotY: number }>;
 			};
+			webcamEffect?: { mode?: string; modelPath?: string };
 		};
 		let changed = false;
 		const bg = scene.background;
@@ -136,6 +142,17 @@ export function resolveSceneAssetPaths(sceneJson: string): string {
 		if (scene.cursor && typeof scene.cursor.theme === "string") {
 			scene.cursor.cursorSprites = resolveCursorSpritePaths(scene.cursor.theme);
 			changed = true;
+		}
+		// The scene asks for an effect; this process says where the model is. A model that
+		// does not resolve leaves `modelPath` unset, which turns the effect off in the
+		// compositor rather than failing the scene — same contract as a missing cursor sprite.
+		const effect = scene.webcamEffect;
+		if (effect && typeof effect.mode === "string" && effect.mode !== "none") {
+			const resolved = resolveSceneAssetPath(SEGMENTATION_MODEL_ASSET);
+			if (resolved) {
+				effect.modelPath = resolved;
+				changed = true;
+			}
 		}
 		return changed ? JSON.stringify(scene) : sceneJson;
 	} catch {
@@ -335,6 +352,37 @@ function ensureFfmpegSharedDllsOnPath(appRoot: string): void {
 	process.env.PATH = `${dir}${path.delimiter}${current}`;
 }
 
+/** The ONNX Runtime shared library's file name for this platform. */
+function ortLibName(): string {
+	if (process.platform === "win32") return "onnxruntime.dll";
+	if (process.platform === "darwin") return "libonnxruntime.dylib";
+	return "libonnxruntime.so";
+}
+
+/**
+ * Points `ORT_DYLIB_PATH` at the staged ONNX Runtime, which the addon loads dynamically for
+ * the webcam segmentation mask.
+ *
+ * It lives in the same arch-tagged `electron/native/bin/<tag>/` directory the addon itself
+ * ships from, next to the ffmpeg DLLs — the convention `whisper-stt` already established for
+ * native sidecars. The crate links `ort` with `load-dynamic`, so the library is resolved at
+ * runtime rather than at build time: absent, `Segmenter::load` fails, the compositor logs one
+ * line and draws the webcam unsegmented. That is why this is best-effort and never throws.
+ */
+function ensureOnnxRuntimeOnPath(appRoot: string): void {
+	if (process.env.ORT_DYLIB_PATH) {
+		return;
+	}
+	const lib = ortLibName();
+	for (const dir of ffmpegSharedBinCandidates(appRoot)) {
+		const candidate = path.join(dir, lib);
+		if (fs.existsSync(candidate)) {
+			process.env.ORT_DYLIB_PATH = candidate;
+			return;
+		}
+	}
+}
+
 function tryLoadAddon(candidates: string[]): CompositorViewAddon | null {
 	for (const candidate of candidates) {
 		try {
@@ -382,6 +430,7 @@ export class CompositorViewService {
 		const isPackaged = this.options.isPackaged ?? defaultIsPackaged();
 
 		ensureFfmpegSharedDllsOnPath(appRoot);
+		ensureOnnxRuntimeOnPath(appRoot);
 		const candidates = buildCandidatePaths(appRoot, isPackaged, envOverride);
 		const loaded = tryLoadAddon(candidates);
 		if (!loaded) {
