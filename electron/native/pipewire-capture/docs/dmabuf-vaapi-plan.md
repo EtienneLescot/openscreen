@@ -120,12 +120,20 @@ Key architecture calls:
   no unref between the clock-driven re-encodes).
 
 ### Remaining
-- [ ] `dmabuf_import.rs`: the map + scale_vaapi VPP → NV12 module (above).
-- [ ] `shim.rs`: `DmabufDesc` (OwnedFd planes) + `Frame.dmabuf` + `on_frame` dup +
-  mailbox variant (no memcpy).
-- [ ] `encoder.rs`: shared device + deferred open + `stage_hw`/`hw_staged` path.
-- [ ] `capture.rs`: dmabuf branch → importer → `stage_hw`.
-- [ ] Shm fallback guard + error paths; then on-device record/check/fix.
+- [x] `dmabuf_import.rs`: the map + scale_vaapi VPP → NV12 module.
+- [x] `shim.rs`: `DmabufDesc` (OwnedFd planes) + `Frame.dmabuf` + `on_frame` dup +
+  mailbox `put_dmabuf` (no memcpy).
+- [x] `encoder.rs`: `open_importing` (shared device + external NV12 pool) +
+  `stage_hw`/`hw_staged` path (held across re-encodes) + Drop.
+- [x] `capture.rs`: dmabuf branch → importer → `stage_hw`; deferred encoder open.
+- [x] Whole pipeline compiles and links; full helper builds, libavfilter staged.
+- [ ] **On-device record/check/fix.** Test via `OPENSCREEN_PIPEWIRE_FORCE_DMABUF=1`
+  (dmabuf still opt-in until proven). Expect a NON-garbled full-monitor recording
+  at distinct-fps ≈ OBS (~24). Likely first-try failure points: `av_hwframe_map`
+  wanting `buf[0]` on the DRM_PRIME source; scale_vaapi output pool size; the
+  DRM/VAAPI derive on radeonsi.
+- [ ] Once proven: make dmabuf preference automatic when the backend is VAAPI
+  (drop the FORCE env gate) + window/crop via VPP + non-VAAPI fallback guard.
 - [ ] Test on AMD/GNOME: confirm `uses_dmabuf=1`, distinct-fps ≈ OBS (~24),
   crop correct for window captures, cursor unaffected. Regression-check
   software encode and a wlroots/niri compositor.

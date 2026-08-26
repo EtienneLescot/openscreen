@@ -693,6 +693,7 @@ fn run<W: Write>(
                                 config.bitrate,
                                 config.forced_encoder,
                                 std::mem::take(&mut audio_sources),
+                                frame.dmabuf.as_ref(),
                             ) {
                                 Ok((started, selection)) => {
                                     let _ = emitter.emit(&Event::EncoderSelection {

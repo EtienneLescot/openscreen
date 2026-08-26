@@ -192,6 +192,11 @@ pub struct Summary {
 
 pub struct Capture {
     encoder: VideoEncoder,
+    /// The dmabuf → VAAPI importer, present only on the zero-copy path (issue
+    /// #507). When set, [`Self::stage`] imports the frame's descriptor into an
+    /// NV12 surface instead of running swscale, and the encoder was opened
+    /// against this importer's pool.
+    importer: Option<crate::dmabuf_import::DmabufImporter>,
     video_track: TrackId,
     audio: Option<AudioMix>,
     /// `None` only between [`Self::finish`] taking it and the struct dropping.
@@ -233,14 +238,45 @@ impl Capture {
         bitrate: Option<i64>,
         forced: Option<Backend>,
         audio_sources: Vec<AudioSource>,
+        // Present when the first frame is a tiled dmabuf: the encoder is then
+        // opened to consume the importer's NV12 pool directly (issue #507).
+        dmabuf: Option<&shim::DmabufDesc>,
     ) -> Result<(Self, Selection), String> {
         let bitrate = bitrate.unwrap_or_else(|| default_bitrate(width, height, fps));
         let mut rejected = Vec::new();
-        let encoder = VideoEncoder::open(
-            VideoParams { width, height, fps, bitrate },
-            forced,
-            |backend, error| rejected.push(format!("{}: {error}", backend.as_str())),
-        )?;
+        let (encoder, importer) = match dmabuf {
+            Some(desc) => {
+                // v1 targets the whole monitor: the importer and encoder are
+                // sized to the full stream (no crop). The encoder is FORCED to
+                // VAAPI because that is the only backend that can consume the
+                // mapped surface; a non-VAAPI machine should never have
+                // negotiated dmabuf in the first place.
+                let importer = crate::dmabuf_import::DmabufImporter::new(
+                    desc.width,
+                    desc.height,
+                    desc.drm_fourcc,
+                )?;
+                // SAFETY: the importer's device and NV12 frames context are live
+                // for as long as the returned encoder, which the Capture owns
+                // alongside it below.
+                let encoder = unsafe {
+                    VideoEncoder::open_importing(
+                        VideoParams { width: desc.width, height: desc.height, fps, bitrate },
+                        importer.device(),
+                        importer.output_frames_ctx(),
+                    )?
+                };
+                (encoder, Some(importer))
+            }
+            None => {
+                let encoder = VideoEncoder::open(
+                    VideoParams { width, height, fps, bitrate },
+                    forced,
+                    |backend, error| rejected.push(format!("{}: {error}", backend.as_str())),
+                )?;
+                (encoder, None)
+            }
+        };
         let selection = Selection { backend: encoder.backend(), rejected };
 
         // Every track must exist before the header: MP4 fixes its track list
@@ -274,6 +310,7 @@ impl Capture {
         Ok((
             Self {
                 encoder,
+                importer,
                 video_track,
                 audio,
                 muxer: Some(muxer),
@@ -323,6 +360,38 @@ impl Capture {
     /// Converts a captured frame into the encoder's staging buffer. Nothing is
     /// written until [`Self::advance`] runs.
     pub fn stage(&mut self, frame: &shim::Frame) -> Result<(), String> {
+        // Zero-copy dmabuf path: import the tiled GPU buffer into an NV12 VAAPI
+        // surface and hand it to the encoder as-is — no swscale, no crop math
+        // (v1 is whole-monitor only). See issue #507.
+        if let Some(desc) = &frame.dmabuf {
+            use std::os::fd::AsRawFd;
+            let importer = self
+                .importer
+                .as_mut()
+                .ok_or_else(|| "dmabuf frame arrived but no importer was built".to_owned())?;
+            let planes: Vec<crate::dmabuf_import::DmabufPlane> = desc
+                .planes
+                .iter()
+                .map(|plane| crate::dmabuf_import::DmabufPlane {
+                    fd: plane.fd.as_raw_fd(),
+                    offset: plane.offset,
+                    stride: plane.stride,
+                })
+                .collect();
+            let nv12 = importer.import(&crate::dmabuf_import::DmabufFrame {
+                width: desc.width,
+                height: desc.height,
+                drm_fourcc: desc.drm_fourcc,
+                modifier: desc.modifier,
+                planes: &planes,
+            })?;
+            // SAFETY: `nv12` is a VAAPI NV12 frame from the pool the encoder was
+            // opened against; the encoder takes ownership.
+            unsafe { self.encoder.stage_hw(nv12) };
+            self.mark_started();
+            return Ok(());
+        }
+
         let format = pixel_format(frame.video_format)?;
 
         // Address the crop by moving the START of the slice, and hand swscale the
@@ -341,21 +410,28 @@ impl Capture {
             .ok_or_else(|| format!("crop offset {offset} is past the end of the frame"))?;
 
         self.encoder.stage(pixels, frame.stride, format)?;
-        if self.epoch.is_none() {
-            self.epoch = Some(Instant::now());
-            // Audio has been accumulating since the process started, while the
-            // portal picker was up and the format was being negotiated. None of
-            // it belongs to the recording: video frame 0 is now, so audio
-            // sample 0 is now too. Keeping the backlog would shift the whole
-            // track earlier by however long the user took to click.
-            if let Some(mix) = &mut self.audio {
-                for input in &mut mix.inputs {
-                    input.ring.clear();
-                    input.pending.clear();
-                }
+        self.mark_started();
+        Ok(())
+    }
+
+    /// Starts the timeline on the first staged frame and drops the audio backlog.
+    ///
+    /// Audio has been accumulating since the process started, while the portal
+    /// picker was up and the format was being negotiated. None of it belongs to
+    /// the recording: video frame 0 is now, so audio sample 0 is now too. Keeping
+    /// the backlog would shift the whole track earlier by however long the user
+    /// took to click.
+    fn mark_started(&mut self) {
+        if self.epoch.is_some() {
+            return;
+        }
+        self.epoch = Some(Instant::now());
+        if let Some(mix) = &mut self.audio {
+            for input in &mut mix.inputs {
+                input.ring.clear();
+                input.pending.clear();
             }
         }
-        Ok(())
     }
 
     /// Whether a picture has been staged, which is also whether the timeline has
