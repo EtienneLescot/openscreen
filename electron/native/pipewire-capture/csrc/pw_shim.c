@@ -114,6 +114,11 @@ static uint32_t osc_spa_format_to_drm_fourcc(uint32_t spa_format)
  */
 #define OSC_MAX_DMABUF_MAPS 32
 
+/* The negotiated buffer pool is at most 16 (SPA_PARAM_BUFFERS below), plus a
+ * transient overlap while a renegotiation swaps the set. 32 covers it with room
+ * to spare, and a full table only means a held buffer is treated as stale. */
+#define OSC_MAX_LIVE_BUFFERS 32
+
 struct osc_dmabuf_map {
     int fd;
     void *ptr;
@@ -225,6 +230,12 @@ struct osc_pw_session {
      * The bracket has to span the on_frame callback, not just osc_read_frame,
      * because the callback is where the pixels are actually read. */
     int dmabuf_sync_fd;
+    /* Every pw_buffer the stream currently owns, added in osc_on_add_buffer and
+     * cleared in osc_on_remove_buffer. A dmabuf frame the consumer holds for a
+     * GPU import (issue #507) keeps the pw_buffer pointer, but a renegotiation
+     * destroys the buffer set — so osc_pw_requeue_buffer must check the handle is
+     * still here before touching it, or it would queue freed storage. */
+    struct pw_buffer *live_buffers[OSC_MAX_LIVE_BUFFERS];
 };
 
 struct osc_pw_audio_api osc_audio_api;
@@ -836,6 +847,42 @@ static void osc_dmabuf_sync(int fd, int start)
     }
 }
 
+/* The live-buffer table (session->live_buffers) is only touched on the PipeWire
+ * thread (add/remove_buffer) and, in osc_pw_requeue_buffer, under the thread-loop
+ * lock which pauses that thread — so these need no locking of their own. */
+static void osc_track_live_buffer(struct osc_pw_session *session, struct pw_buffer *pw_buf)
+{
+    size_t i;
+    for (i = 0; i < OSC_MAX_LIVE_BUFFERS; i++) {
+        if (session->live_buffers[i] == NULL) {
+            session->live_buffers[i] = pw_buf;
+            return;
+        }
+    }
+}
+
+static void osc_forget_live_buffer(struct osc_pw_session *session, struct pw_buffer *pw_buf)
+{
+    size_t i;
+    for (i = 0; i < OSC_MAX_LIVE_BUFFERS; i++) {
+        if (session->live_buffers[i] == pw_buf) {
+            session->live_buffers[i] = NULL;
+            return;
+        }
+    }
+}
+
+static int osc_buffer_is_live(struct osc_pw_session *session, struct pw_buffer *pw_buf)
+{
+    size_t i;
+    for (i = 0; i < OSC_MAX_LIVE_BUFFERS; i++) {
+        if (session->live_buffers[i] == pw_buf) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
 {
     struct osc_pw_session *session = userdata;
@@ -847,6 +894,9 @@ static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
     if (pw_buf == NULL || pw_buf->buffer == NULL || pw_buf->buffer->n_datas < 1) {
         return;
     }
+    /* Record the buffer as live before anything else, so a handle the consumer
+     * holds can be validated against destruction in osc_pw_requeue_buffer. */
+    osc_track_live_buffer(session, pw_buf);
     data = &pw_buf->buffer->datas[0];
     if (data->type != SPA_DATA_DmaBuf) {
         return;
@@ -895,6 +945,9 @@ static void osc_on_remove_buffer(void *userdata, struct pw_buffer *pw_buf)
     if (pw_buf == NULL || pw_buf->buffer == NULL || pw_buf->buffer->n_datas < 1) {
         return;
     }
+    /* The buffer is being destroyed: a consumer still holding it for a GPU import
+     * must not re-queue it. Forgetting it here makes osc_pw_requeue_buffer skip it. */
+    osc_forget_live_buffer(session, pw_buf);
     data = &pw_buf->buffer->datas[0];
     for (i = 0; i < OSC_MAX_DMABUF_MAPS; i++) {
         if (session->dmabuf_maps[i].ptr == NULL ||
@@ -1351,7 +1404,12 @@ void osc_pw_requeue_buffer(struct osc_pw_session *session, void *buffer_handle)
         return;
     }
     api.thread_loop_lock(session->loop);
-    api.stream_queue_buffer(session->stream, (struct pw_buffer *)buffer_handle);
+    /* Under the lock the PipeWire thread is paused, so the live-buffer table is
+     * stable: only re-queue a handle a renegotiation has not destroyed. A stale
+     * handle is simply dropped — PipeWire already freed that buffer. */
+    if (osc_buffer_is_live(session, (struct pw_buffer *)buffer_handle)) {
+        api.stream_queue_buffer(session->stream, (struct pw_buffer *)buffer_handle);
+    }
     api.thread_loop_unlock(session->loop);
 }
 
