@@ -94,6 +94,26 @@ struct osc_pw_frame {
      * both draw the line in exactly this place.
      */
     int has_crop;
+
+    /*
+     * Zero-copy dmabuf hand-off (issue #507). When `is_dmabuf` is 1, `data` is
+     * NULL and the frame is not CPU-readable — a tiled compositor buffer that
+     * lives on the GPU. The consumer imports it as a VAAPI surface from the
+     * descriptor below instead of reading `data`. When 0, the CPU path above
+     * applies unchanged (shm, or a linear/implicit dmabuf we could mmap).
+     *
+     * The fds are BORROWED for the callback's duration only, exactly like
+     * `data`: the buffer re-queues to the compositor when the callback returns,
+     * so the import (map + GPU copy into an owned surface) must complete before
+     * then. `modifier`/`drm_fourcc` describe the tiling and pixel layout.
+     */
+    int is_dmabuf;
+    uint64_t modifier;   /* DRM format modifier of the buffer */
+    uint32_t drm_fourcc; /* DRM fourcc matching `video_format` */
+    int32_t n_planes;    /* number of populated plane_* entries (1..4) */
+    int plane_fd[4];
+    int32_t plane_offset[4];
+    int32_t plane_stride[4];
 };
 
 /* The negotiated video format. Reported once, from param_changed. */

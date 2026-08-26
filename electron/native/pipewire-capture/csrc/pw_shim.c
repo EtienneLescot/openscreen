@@ -45,6 +45,7 @@
 #include <spa/utils/result.h>
 
 #include "pw_shim.h"
+#include "dmabuf_modifiers.h"
 
 /* Defined next to osc_map_dmabuf; used earlier, at format negotiation. */
 static int osc_debug_enabled(void);
@@ -61,15 +62,42 @@ static int osc_debug_enabled(void);
  * header would put libdrm-dev in the build path of every contributor and CI
  * runner for two integers. That is the same trade the dlopen above makes.
  *
- * These two are the ONLY modifiers this helper advertises, and the reason is
- * osc_map_dmabuf(): a linear or implicit buffer can be read through a plain
- * mmap of the dmabuf fd, while a tiled or compression-enabled one cannot — its
- * bytes are not in raster order, so handing them to the encoder would produce a
- * scrambled recording rather than an error. Anything else needs a real GPU
- * import (EGL/gbm), which this helper deliberately does not link.
+ * LINEAR and INVALID are the universal fallbacks: a linear or implicit buffer
+ * can be read through a plain mmap of the dmabuf fd (osc_map_dmabuf). Tiled or
+ * compression-enabled buffers cannot — their bytes are not in raster order — so
+ * they require a real GPU import, which is being added for the VAAPI path (see
+ * issue #507 and docs/dmabuf-vaapi-plan.md). The additional importable modifiers
+ * are enumerated at runtime via EGL (osc_query_dmabuf_modifiers).
  */
 #define OSC_DRM_FORMAT_MOD_LINEAR 0ULL
 #define OSC_DRM_FORMAT_MOD_INVALID 0x00ffffffffffffffULL
+
+/* DRM fourccs for the 32-bit RGB formats we offer. XRGB8888 = fourcc('X','R',
+ * '2','4'); the others follow the same little-endian spelling. Used to enumerate
+ * importable modifiers and to describe a dmabuf to the GPU importer. Spelled out
+ * for the same reason as the modifiers above. */
+#define OSC_DRM_FORMAT_XRGB8888 0x34325258u /* SPA BGRx */
+#define OSC_DRM_FORMAT_ARGB8888 0x34325241u /* SPA BGRA */
+#define OSC_DRM_FORMAT_XBGR8888 0x34324258u /* SPA RGBx */
+#define OSC_DRM_FORMAT_ABGR8888 0x34324241u /* SPA RGBA */
+
+/* SPA video format (byte order B,G,R,x ...) → the matching DRM fourcc (a
+ * little-endian 32-bit word), for the GPU dmabuf import. 0 = unmapped. */
+static uint32_t osc_spa_format_to_drm_fourcc(uint32_t spa_format)
+{
+    switch (spa_format) {
+    case SPA_VIDEO_FORMAT_BGRx:
+        return OSC_DRM_FORMAT_XRGB8888;
+    case SPA_VIDEO_FORMAT_BGRA:
+        return OSC_DRM_FORMAT_ARGB8888;
+    case SPA_VIDEO_FORMAT_RGBx:
+        return OSC_DRM_FORMAT_XBGR8888;
+    case SPA_VIDEO_FORMAT_RGBA:
+        return OSC_DRM_FORMAT_ABGR8888;
+    default:
+        return 0;
+    }
+}
 
 /*
  * Mapped dmabuf fds, keyed by fd.
@@ -182,6 +210,10 @@ struct osc_pw_session {
     /* Set from the negotiated format's SPA_VIDEO_FLAG_MODIFIER, which is what
      * decides whether buffers arrive as dmabuf fds or shared memory. */
     int uses_dmabuf;
+    /* Latched when a dmabuf buffer cannot be CPU-mmap'd (a tiled buffer on, e.g.,
+     * AMD/mutter). Frames then travel as raw dmabuf descriptors for a GPU import
+     * (issue #507) instead of the shared-memory path. */
+    int import_dmabuf;
     struct osc_dmabuf_map dmabuf_maps[OSC_MAX_DMABUF_MAPS];
     /* fd whose DMA_BUF_SYNC_START has not been closed by its END yet, or -1.
      * The bracket has to span the on_frame callback, not just osc_read_frame,
@@ -415,9 +447,22 @@ static const struct spa_pod *osc_build_enum_format_dmabuf(struct spa_pod_builder
      * tolerating the key. */
     spa_pod_builder_prop(builder, SPA_FORMAT_VIDEO_modifier, SPA_POD_PROP_FLAG_MANDATORY);
     spa_pod_builder_push_choice(builder, &choice_frame, SPA_CHOICE_Enum, 0);
-    /* Default first, then every alternative — the default is repeated, same
+    /* Advertise the modifiers our GPU's EGL can import, so a tiled compositor
+     * buffer — the common case on AMD/mutter — negotiates as dmabuf instead of
+     * falling back to the throttled shm path (issue #507). LINEAR and INVALID
+     * stay as universal fallbacks. Modifiers match across the 32-bit RGB formats
+     * we offer, so enumerating XRGB8888 is representative.
+     *
+     * Default first, then every alternative — the default is repeated, same
      * idiom as SPA_POD_CHOICE_ENUM_Id above. */
-    spa_pod_builder_long(builder, (int64_t)OSC_DRM_FORMAT_MOD_LINEAR);
+    uint64_t egl_mods[128];
+    int egl_mod_count = osc_query_dmabuf_modifiers(OSC_DRM_FORMAT_XRGB8888, egl_mods, 128);
+    int64_t default_mod =
+        egl_mod_count > 0 ? (int64_t)egl_mods[0] : (int64_t)OSC_DRM_FORMAT_MOD_LINEAR;
+    spa_pod_builder_long(builder, default_mod);
+    for (int i = 0; i < egl_mod_count; i++) {
+        spa_pod_builder_long(builder, (int64_t)egl_mods[i]);
+    }
     spa_pod_builder_long(builder, (int64_t)OSC_DRM_FORMAT_MOD_LINEAR);
     spa_pod_builder_long(builder, (int64_t)OSC_DRM_FORMAT_MOD_INVALID);
     spa_pod_builder_pop(builder, &choice_frame);
@@ -805,23 +850,17 @@ static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
         maplen = data->maxsize;
         session->dmabuf_maps[i].ptr = osc_map_dmabuf((int)data->fd, &maplen, &why);
         if (session->dmabuf_maps[i].ptr == NULL) {
-            /* Reported once, through the buffer-info channel that already exists
-             * for describing what the compositor handed us — a mapping failure
-             * here means no frames at all, and silence would read as a hang.
-             *
-             * The reason is carried up rather than assumed: this used to say the
-             * driver refused CPU mapping no matter what actually went wrong, and
-             * that message sent the one real investigation of this path looking
-             * at the GPU for a size the compositor had simply left at 0. */
-            if (session->callbacks.on_buffer_info != NULL &&
-                session->buffer_info_reports < OSC_BUFFER_INFO_REPORTS) {
-                char detail[256];
-
-                snprintf(detail, sizeof(detail), "dmabuf import failed: %s; capture cannot proceed",
-                         why);
-                session->buffer_info_reports++;
-                session->callbacks.on_buffer_info(session->callbacks.user, data->type,
-                                                  pw_buf->buffer->n_datas, 0, 0, detail);
+            /*
+             * A mmap failure on a dmabuf is the tiled-buffer case (e.g. a whole
+             * monitor on AMD/mutter): the bytes are not in raster order and the
+             * driver refuses CPU access. That is no longer fatal — the frame
+             * instead travels as a raw dmabuf descriptor for a GPU import (see
+             * osc_read_frame and issue #507). Latch the mode; osc_read_frame will
+             * populate the descriptor from the same fd. No mapping is stored.
+             */
+            session->import_dmabuf = 1;
+            if (osc_debug_enabled()) {
+                fprintf(stderr, "[osc-dmabuf] mmap failed (%s) — using GPU import path\n", why);
             }
             return;
         }
@@ -985,6 +1024,7 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
     uint32_t size;
     int32_t stride;
     int32_t height;
+    int is_dmabuf_import = 0;
 
     const uint8_t *base;
 
@@ -1008,7 +1048,12 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
          */
         base = osc_find_dmabuf_map(session, (int)data->fd);
         if (base == NULL) {
-            return 0;
+            if (!session->import_dmabuf) {
+                return 0;
+            }
+            /* Tiled dmabuf: no CPU mapping exists. It travels up as a raw
+             * descriptor for a GPU import instead of being read here. */
+            is_dmabuf_import = 1;
         }
     } else if (data->data == NULL) {
         /*
@@ -1025,36 +1070,74 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
         return 0;
     }
 
-    offset = SPA_MIN(data->chunk->offset, data->maxsize);
-    size = SPA_MIN(data->chunk->size, data->maxsize - offset);
-
     height = (int32_t)session->format.size.height;
     stride = data->chunk->stride;
-    if (stride <= 0 || height <= 0) {
-        return 0;
-    }
-    /* One short row is one row of garbage in the recording; refuse the whole
-     * frame instead, and let the caller count it as dropped. */
-    if ((uint64_t)stride * (uint64_t)height > (uint64_t)size) {
+    if (height <= 0) {
         return 0;
     }
 
-    /*
-     * Open the CPU-access window on a dmabuf and leave it open: the pixels are
-     * read by the on_frame callback, not here, so the matching SYNC_END lives in
-     * osc_inspect_buffer once that callback has returned.
-     */
-    if (data->type == SPA_DATA_DmaBuf) {
-        session->dmabuf_sync_fd = (int)data->fd;
-        osc_dmabuf_sync(session->dmabuf_sync_fd, 1);
-    }
+    if (is_dmabuf_import) {
+        /*
+         * GPU import path. The buffer is not CPU-readable, so the raster bounds
+         * checks below do not apply — the modifier is what makes the producer's
+         * strides/offsets meaningful, and the importer validates the rest. We
+         * hand up the fd(s), modifier and fourcc; no SYNC bracket is opened
+         * because nothing here touches the pixels. n_datas is the plane count for
+         * a dmabuf (one per plane); our RGB formats are single-plane.
+         */
+        uint32_t fourcc = osc_spa_format_to_drm_fourcc(session->format.format);
+        int32_t import_stride =
+            stride > 0 ? stride : (int32_t)session->format.size.width * 4;
+        int32_t p;
+        if (fourcc == 0) {
+            return 0;
+        }
+        out->is_dmabuf = 1;
+        out->data = NULL;
+        out->size = 0;
+        out->stride = import_stride;
+        out->width = (int32_t)session->format.size.width;
+        out->height = height;
+        out->video_format = session->format.format;
+        out->modifier = session->format.modifier;
+        out->drm_fourcc = fourcc;
+        out->n_planes = (int32_t)buffer->n_datas > 4 ? 4 : (int32_t)buffer->n_datas;
+        for (p = 0; p < out->n_planes; p++) {
+            const struct spa_data *pd = &buffer->datas[p];
+            out->plane_fd[p] = (int)pd->fd;
+            out->plane_offset[p] = pd->chunk != NULL ? (int32_t)pd->chunk->offset : 0;
+            out->plane_stride[p] =
+                (pd->chunk != NULL && pd->chunk->stride > 0) ? pd->chunk->stride : import_stride;
+        }
+    } else {
+        offset = SPA_MIN(data->chunk->offset, data->maxsize);
+        size = SPA_MIN(data->chunk->size, data->maxsize - offset);
+        if (stride <= 0) {
+            return 0;
+        }
+        /* One short row is one row of garbage in the recording; refuse the whole
+         * frame instead, and let the caller count it as dropped. */
+        if ((uint64_t)stride * (uint64_t)height > (uint64_t)size) {
+            return 0;
+        }
 
-    out->data = SPA_PTROFF(base, offset, const uint8_t);
-    out->size = size;
-    out->stride = stride;
-    out->width = (int32_t)session->format.size.width;
-    out->height = height;
-    out->video_format = session->format.format;
+        /*
+         * Open the CPU-access window on a dmabuf and leave it open: the pixels
+         * are read by the on_frame callback, not here, so the matching SYNC_END
+         * lives in osc_inspect_buffer once that callback has returned.
+         */
+        if (data->type == SPA_DATA_DmaBuf) {
+            session->dmabuf_sync_fd = (int)data->fd;
+            osc_dmabuf_sync(session->dmabuf_sync_fd, 1);
+        }
+
+        out->data = SPA_PTROFF(base, offset, const uint8_t);
+        out->size = size;
+        out->stride = stride;
+        out->width = (int32_t)session->format.size.width;
+        out->height = height;
+        out->video_format = session->format.format;
+    }
 
     header = spa_buffer_find_meta_data(buffer, SPA_META_Header, sizeof(*header));
     if (header != NULL) {
