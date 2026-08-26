@@ -207,17 +207,17 @@ export function resolvePlaybackSegments(
  * onto the trim-COMPRESSED output programme — the concatenation of the kept segments that
  * {@link resolvePlaybackSegments} produces and that `audio::mix_external_tracks` overlays on.
  *
- * The only thing the programme removes is trimmed content, so the output position of a raw
- * time `T` is `T` minus however much trimmed span sits before it:
- *   `output(T) = T − Σ overlap(each trim's raw extent, [0, T])`.
- * A `T` past a cut lands earlier by exactly the removed duration (the whole point); a `T`
- * INSIDE a trimmed span collapses to the output edge just before it; and a `T` in a region
- * with no trim — including a project with no clips at all — passes straight through.
+ * Built from the SAME kept intervals as `resolvePlaybackSegments` (trims subtracted per clip
+ * via `subtractInterval`, then concatenated with a shared output cursor), so it agrees with the
+ * assembled programme in the two cases a naïve "raw − Σ trimmed-before" got wrong: OVERLAPPING
+ * trims (set subtraction counts the union once, not each trim) and RAW GAPS between clips (the
+ * cursor only advances on kept content, so a gap is removed just as the programme removes it).
  *
- * A trim is stored in SOURCE seconds anchored to a clip (`trimAppliesToClip`, same match as
- * `resolvePlaybackSegments`), so its raw extent is the clip's `timelineStartSec` plus the
- * offset of the trimmed sub-range into the clip's own source window. EXACT for trims; like the
- * rest of the audio-track export path it does not model speed regions, which stay an approximation.
+ * `output(T)` = how much kept content precedes `T`. A `T` inside a trimmed span (or an inter-clip
+ * gap) collapses to the output edge of the kept content just before it; a `T` past the last kept
+ * frame carries its raw overhang through unchanged, so a project with no clips is the identity and
+ * a track parked past the programme stays past it (the mixer then skips it). EXACT for trims; like
+ * the rest of the audio-track export path it does not model speed regions, which stay an approximation.
  *
  * Issue #350: imported audio tracks store their head in RAW seconds (seeded from the playhead),
  * but the export mixes onto the compressed programme — passing the raw head through verbatim
@@ -229,23 +229,51 @@ export function projectRawTimelineSecToPlayback(
 	trimRanges: AxcutTrimRange[],
 	rawSec: number,
 ): number {
-	let removed = 0;
-	for (const clip of clips) {
+	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
+	let outCursor = 0; // output length of the kept content walked so far
+	let lastRawEnd = 0; // raw end of the last kept segment, for the trailing overhang
+	let landed: number | null = null; // output(rawSec), once it falls in/before a kept segment
+
+	// Each kept segment as a raw extent `{ rawStart, dur }`; its output duration equals `dur`
+	// (trims only remove, they don't scale — speed is the separate approximation noted above).
+	const keptSegments = (clip: AxcutClip): Array<{ rawStart: number; dur: number }> => {
 		const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
-		if (sourceEnd <= clip.sourceStartSec) continue; // unprobed: no trims resolved against it
+		if (sourceEnd <= clip.sourceStartSec) {
+			// Duration not probed yet — the whole raw clip passes through unnarrowed, matching
+			// `resolvePlaybackSegments`' own pass-through branch.
+			return [
+				{ rawStart: clip.timelineStartSec, dur: clip.timelineEndSec - clip.timelineStartSec },
+			];
+		}
+		let ivs: Interval[] = [{ startSec: clip.sourceStartSec, endSec: sourceEnd }];
 		for (const trim of trimRanges) {
 			if (!trimAppliesToClip(trim, clip)) continue;
-			// The trimmed sub-range clamped to THIS clip's source window, then placed on the raw
-			// ruler where source `s` sits at `timelineStartSec + (s − sourceStartSec)`.
-			const s0 = Math.max(trim.startSec, clip.sourceStartSec);
-			const s1 = Math.min(trim.endSec, sourceEnd);
-			if (s1 <= s0) continue;
-			const rawStart = clip.timelineStartSec + (s0 - clip.sourceStartSec);
-			const rawLen = s1 - s0;
-			removed += Math.min(Math.max(rawSec - rawStart, 0), rawLen);
+			ivs = subtractInterval(ivs, { startSec: trim.startSec, endSec: trim.endSec });
+		}
+		// Source time `s` sits at `timelineStartSec + (s − sourceStartSec)` on the raw ruler.
+		return ivs.map((iv) => ({
+			rawStart: clip.timelineStartSec + (iv.startSec - clip.sourceStartSec),
+			dur: iv.endSec - iv.startSec,
+		}));
+	};
+
+	for (const clip of ordered) {
+		for (const seg of keptSegments(clip)) {
+			if (seg.dur <= 0) continue;
+			const rawEnd = seg.rawStart + seg.dur;
+			if (landed === null && rawSec < rawEnd) {
+				// `rawSec` is inside this segment, or before it in a trimmed/gap region (then
+				// `within` clamps to 0 → the output edge just before the gap).
+				const within = Math.min(Math.max(rawSec - seg.rawStart, 0), seg.dur);
+				landed = outCursor + within;
+			}
+			outCursor += seg.dur;
+			lastRawEnd = rawEnd;
 		}
 	}
-	return rawSec - removed;
+	// Past every kept frame: programme end plus whatever raw time hangs off the end (identity when
+	// there are no clips at all). A value ≥ programme length just means the mixer skips the track.
+	return landed ?? outCursor + Math.max(0, rawSec - lastRawEnd);
 }
 
 export function invertIntervals(intervals: Interval[], durationSec: number): Interval[] {

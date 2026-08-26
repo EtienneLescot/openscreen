@@ -1283,11 +1283,23 @@ export function useTimeline() {
 	// through `tl`) share one path. Opens a file picker, so unlike the region adds it takes
 	// no playhead duration; `importAudioAsset` places the track at the current playhead.
 	const addAudio = useCallback(async () => {
-		const picker = await window.electronAPI?.openAudioFilePicker?.();
-		if (!picker?.success || !picker.path) return;
 		try {
+			// Inside the try so a rejected picker (an IPC failure, not a cancel) still reaches the
+			// localized toast instead of surfacing as an unhandled rejection. A cancel resolves with
+			// `success: false` and is a silent early return, not an error.
+			const picker = await window.electronAPI?.openAudioFilePicker?.();
+			if (!picker?.success || !picker.path) return;
 			const label = picker.name || picker.path.split(/[\\/]/).pop() || "Audio";
-			await importAudioAsset(picker.path, label);
+			const asset = await importAudioAsset(picker.path, label);
+			// `importAudioAsset` selects the new track in the store, but the region/clip
+			// selections are hook-local state it can't touch — clear them here so an import
+			// doesn't leave a stale annotation/clip selected alongside the new track (the same
+			// exclusivity `addAudioTrack` keeps). Only on success: a failed import changes nothing.
+			if (asset) {
+				setSelection(null);
+				setMultiSelection([]);
+				setClipSelection(null);
+			}
 		} catch (err) {
 			toast.error(ts("audioTrack.importFailed"), {
 				description: err instanceof Error ? err.message : String(err),

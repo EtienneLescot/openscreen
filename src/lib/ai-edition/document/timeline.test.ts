@@ -871,6 +871,36 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 		expect(projectRawTimelineSecToPlayback([clip], [trim], 3)).toBeCloseTo(2, 6);
 	});
 
+	it("counts overlapping trims once (union, not sum)", () => {
+		// Trims [2,5] and [3,4] — the second nested in the first — remove 3s total, not 4.
+		// Raw 6 → output 3. The old per-trim accumulation double-counted and returned 2.
+		const trims = [
+			makeTrim({ id: "t1", startSec: 2, endSec: 5 }),
+			makeTrim({ id: "t2", startSec: 3, endSec: 4 }),
+		];
+		expect(projectRawTimelineSecToPlayback([clip], trims, 6)).toBeCloseTo(3, 6);
+	});
+
+	it("removes a raw gap between clips (concatenated, like the programme)", () => {
+		// Clip A ends at raw 10; clip B starts at raw 15 — a 5s gap with no content. The
+		// programme concatenates B straight after A, so raw 20 (5s into B) → output 15, NOT 20.
+		const clipA = makeClip({
+			id: "clip_a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const clipB = makeClip({
+			id: "clip_b",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 15,
+			timelineEndSec: 25,
+		});
+		expect(projectRawTimelineSecToPlayback([clipA, clipB], [], 20)).toBeCloseTo(15, 6);
+	});
+
 	it("sums cuts across multiple clips", () => {
 		const clipA = makeClip({
 			id: "clip_a",
