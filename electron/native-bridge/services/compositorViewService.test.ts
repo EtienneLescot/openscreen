@@ -259,6 +259,9 @@ describe("resolveSceneAssetPaths", () => {
 		resources = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-scene-assets-"));
 		fs.mkdirSync(path.join(resources, "wallpapers"), { recursive: true });
 		fs.writeFileSync(path.join(resources, "wallpapers", "wallpaper1.jpg"), "jpg");
+		const modelDir = path.join(resources, "mediapipe", "selfie_segmentation");
+		fs.mkdirSync(modelDir, { recursive: true });
+		fs.writeFileSync(path.join(modelDir, "selfie_segmentation_landscape.onnx"), "onnx");
 		const assetPaths = [
 			...Object.values(themed?.assets ?? {}).map((a) => a.assetPath),
 			...Object.values(DEFAULT_CURSOR_SPRITES).map((s) => s.assetPath),
@@ -298,6 +301,34 @@ describe("resolveSceneAssetPaths", () => {
 	/** What `resolveSceneAssetPaths` writes into `cursor.cursorSprites` — same shape the
 	 *  service declares for the sprite map it builds. */
 	type ResolvedSprite = { path: string; hotspotX: number; hotspotY: number };
+
+	// The renderer asks for an effect and knows nothing about the disk; this process answers
+	// where the model is. Same division as the wallpaper and the cursor sprites above.
+	it("fills in the segmentation model path when the scene asks for an effect", () => {
+		const out = resolved({ webcamEffect: { mode: "blur", blurIntensity: 0.5 } });
+		expect(out.webcamEffect.modelPath).toBe(
+			path.join(
+				resources,
+				"mediapipe",
+				"selfie_segmentation",
+				"selfie_segmentation_landscape.onnx",
+			),
+		);
+	});
+
+	it("leaves the model path alone when no effect is requested", () => {
+		expect(resolved({ webcamEffect: { mode: "none" } }).webcamEffect.modelPath).toBeUndefined();
+		expect(resolved({ background: { kind: "color", color: "#000" } }).webcamEffect).toBeUndefined();
+	});
+
+	// A model that does not resolve must turn the effect off in the compositor, not fail the
+	// scene — the same contract a missing cursor sprite has.
+	it("leaves the model path unset rather than inventing one when the file is absent", () => {
+		fs.rmSync(path.join(resources, "mediapipe"), { recursive: true, force: true });
+		const out = resolved({ webcamEffect: { mode: "transparent" } });
+		expect(out.webcamEffect.modelPath).toBeUndefined();
+		expect(out.webcamEffect.mode).toBe("transparent");
+	});
 
 	it("resolves a bundled wallpaper to the extraResources copy, not the unreadable asar path", () => {
 		const out = resolved({ background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" } });

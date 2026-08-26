@@ -92,14 +92,6 @@ export function NativeCompositorOverlay() {
 		return primary ? assetCameraSource(primary).path || undefined : undefined;
 	}, [document]);
 
-	// With a background effect on, WebcamOverlay's segmentation canvas paints the camera
-	// (background included) over this slot. Handing the same camera to the native view too
-	// would draw the RAW frame underneath it — invisible behind an opaque blur/custom
-	// result, but plainly visible through the alpha of a transparent cut-out, which made
-	// cut-out mode look like it did nothing. Withholding the source is what makes the app
-	// the sole owner of that layer; `has_webcam` gates only the draw, never the layout.
-	const appOwnsWebcamLayer = settings.webcamBackgroundMode !== "none";
-
 	const sources = useMemo(() => {
 		if (!document) {
 			return null;
@@ -114,13 +106,13 @@ export function NativeCompositorOverlay() {
 		// the one accessor, so it can never disagree with the scene or the export.
 		return {
 			screenPath: primary.originalPath,
-			webcamPath: appOwnsWebcamLayer ? undefined : assetCameraSource(primary).path || undefined,
+			webcamPath: assetCameraSource(primary).path || undefined,
 			// sidecar convention (electron/ipc/handlers.ts readCursorRecordingFile) : la
 			// télémétrie curseur vit à côté de la vidéo tant qu'elle n'a pas bougé. Absente →
 			// le natif ignore juste le curseur (CursorTrack::load échoue silencieusement).
 			cursorPath: `${primary.originalPath}.cursor.json`,
 		};
-	}, [document, appOwnsWebcamLayer]);
+	}, [document]);
 
 	const ready = sources !== null;
 	const { viewId, error } = useNativeCompositorView(canvasRef, {
@@ -151,9 +143,6 @@ export function NativeCompositorOverlay() {
 			return;
 		}
 		try {
-			// Deliberately `cameraPath`, not `sources.webcamPath`: the latter is withheld
-			// while the app owns the webcam layer, and losing the probed size here would
-			// reshape the PiP box out from under the segmentation canvas that fills it.
 			const webcamSourceSize = cameraPath ? getWebcamNativeSize(cameraPath) : null;
 			const scene = buildSceneDescription(document, webcamSourceSize);
 			setNativeScene(JSON.stringify(scene));

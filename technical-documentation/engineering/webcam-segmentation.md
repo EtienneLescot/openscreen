@@ -21,28 +21,49 @@ not because two implementations are kept in step by hand.
 
 ## What ships today
 
-The camera is segmented by **MediaPipe SelfieSegmentation running in the renderer**
-(`src/lib/ai-edition/webcamSegmentation.ts`), on Chromium's ANGLE device or the WASM CPU
-fallback. What happens next differs by path:
+The camera is segmented **inside the native compositor**, on the same device that composites
+it, and the mask reaches the pixel shader as a texture. Preview and export run the same code,
+so they are identical by construction rather than by two implementations kept in step.
 
-| Path | Who composites the camera | How the mask travels |
-|---|---|---|
-| Preview | a DOM `<canvas>` over the native canvas | never leaves the renderer |
-| Export | the shader, via `draw_video` | baked into a video, then decoded back |
+| stage | where |
+|---|---|
+| capture | `Compositor::capture_webcam_rgb` renders the webcam NV12 into a 256x144 RGBA target and reads it back |
+| inference | `segmentation.rs`, ONNX Runtime CPU EP, own thread, 30 Hz, `intra_op_num_threads = 2` |
+| upload | `Compositor::set_webcam_mask`, from the render thread, into a DYNAMIC R8 texture |
+| composite | `ps_main`, `t3` / `texture(3)` / `@binding(4)`, branch on `fx.z` |
 
-So the layer has **two compositors**, and the export half round-trips the composite through a
-codec. `NativeCompositorOverlay` withholds `webcamPath` from the native view while an effect is
-active, so exactly one of them owns the layer at a time — but they remain two implementations.
+The model is `public/mediapipe/selfie_segmentation/selfie_segmentation_landscape.onnx`, derived
+from the vendored `.tflite` by `scripts/convert-selfie-segmentation-to-onnx.py`. Its path is
+resolved by the **main process** in `resolveSceneAssetPaths`, the same place the wallpaper and
+the cursor sprites are resolved: the renderer asks for an effect and knows nothing about the
+disk.
 
-### The known limitation
+Everything is inert until both a mode and a mask exist. No effect requested means no capture, no
+inference and no upload — the feature costs exactly zero when off. A model that fails to load
+turns the effect off with one log line rather than failing the frame.
 
-Transparent (cutout) **export** cannot work. The pre-rendered track is VP9-with-alpha in WebM,
-and the native decode path is ffmpeg → NV12: `draw_video(&wy, &wuv)` binds a Y plane and a UV
-plane, and there is no third plane. Alpha is dropped at decode, so the subject lands on an
-opaque black rectangle. Blur and custom background are unaffected — their tracks are opaque, so
-NV12 loses nothing.
+### What this replaced
 
-This is structural, not a bug to patch: it is what "bake the composite" costs.
+MediaPipe used to run in the renderer, and the layer had **two compositors**: a DOM `<canvas>`
+in preview, and a composite baked into a video track for export. That is gone — the JS solution,
+its two ~5.6 MB WASM builds, the `@mediapipe/selfie_segmentation` dependency, the export
+pre-render and the `write-derived-media` IPC it needed. The `.tflite` files stay because the
+`.onnx` is derived from them.
+
+It also removes the limitation that made transparent export impossible: the mask is a texture,
+not an alpha channel, so nothing has to survive a codec that cannot carry one.
+
+### Not done
+
+- **macOS and Linux have the shader half only.** All three back-ends carry the same branch, but
+  only Windows captures and uploads a mask, so `fx.z` never leaves 0 on the other two and the
+  effect is inert there. That is deliberate: the shader is the part that must not drift.
+- **ONNX Runtime is not staged.** The crate links `ort` with `load-dynamic`, so nothing is needed
+  to *build*; at runtime `ensureOnnxRuntimeOnPath` looks for the library next to the addon in
+  `electron/native/bin/<tag>/`, the convention `whisper-stt` already uses. Until a CI job puts it
+  there — the `build-whisper-stt.yml` pattern, roughly 15 MB per platform — the effect stays off.
+  `onnxruntime-node` was considered and rejected: 296 MB unpacked, which would roughly triple the
+  installer for three platforms' worth of providers we do not use.
 
 ## The constraint that shapes any fix
 

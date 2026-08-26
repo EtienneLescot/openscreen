@@ -845,16 +845,6 @@
 	visibility: hidden;
 	display: block;
 }
-.webcamSlot .webcamCanvas {
-	width: 100%;
-	height: 100%;
-	object-fit: cover;
-	visibility: visible;
-	display: block;
-	position: absolute;
-	inset: 0;
-	z-index: 1;
-}
 /* ─── transport bar (lives inside .timelineHead, next to the tool icons) ─ */
 .transport {
 	display: flex;

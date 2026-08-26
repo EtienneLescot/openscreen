@@ -27,7 +27,6 @@ import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { DEFAULT_ZOOM_DEPTH, ZOOM_DEPTH_SCALES } from "@/lib/ai-edition/timeline/zoom-scale";
 import { buildAutoZoomSuggestions } from "@/lib/ai-edition/timeline/zoom-suggestions";
-import { applySegmentedWebcamTracks } from "@/lib/ai-edition/webcamSegmentation";
 import type { CliDoneResult, CliExportRequest } from "@/lib/cliContracts";
 import { GIF_SIZE_PRESETS, type GifSizePreset } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
@@ -269,24 +268,10 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 		throw new Error("The project's timeline has no visible clips to export");
 	}
 	const sceneDesc = buildSceneDescription(axcutDocument);
-	const settings = getEditorSettings(axcutDocument);
 
-	const clips = await applySegmentedWebcamTracks(
-		builtClips,
-		{
-			mode: settings.webcamBackgroundMode,
-			blurIntensity: settings.webcamBlurIntensity,
-			wallpaper: settings.webcamWallpaper,
-		},
-		(prog) => {
-			window.electronAPI.cliProgress({
-				percentage: Math.min(100, prog * 100),
-				currentFrame: Math.round(prog * 100),
-				totalFrames: 100,
-				estimatedTimeRemaining: 0,
-			});
-		},
-	);
+	// The webcam background effect is applied by the compositor from the scene, so the clip
+	// list needs no pre-rendering pass.
+	const clips = builtClips;
 	const sceneJson = JSON.stringify(sceneDesc);
 
 	// Progress: native pushes raw encoded-frame counts; totals and pacing are

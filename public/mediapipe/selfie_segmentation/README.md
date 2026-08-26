@@ -1,15 +1,13 @@
-# MediaPipe JavaScript Solutions
+# MediaPipe Selfie Segmentation — model weights
 
-MediaPipe offers out of the box solutions to use our ML technology with live and streaming media.
+Only the model weights live here. The MediaPipe **JavaScript** solution (the `.js` glue and the
+two ~5.6 MB `.wasm` builds) was removed when segmentation moved into the native compositor: the
+renderer no longer runs inference at all, so nothing loaded them.
 
-Visit us as [mediapipe.dev]()
+Upstream: <https://google.github.io/mediapipe/solutions/selfie_segmentation>, Apache-2.0.
 
-See live demos of our JavaScript solutions at [code.mediapipe.dev/codepen]()
-
-For more information on each of the solutions and how to use them, visit https://google.github.io/mediapipe/getting_started/javascript.
-
-
----
+The `.tflite` files are kept because the `.onnx` below is **derived from them** — they are the
+provenance, not dead weight.
 
 ## `selfie_segmentation_landscape.onnx` — derived, not vendored
 

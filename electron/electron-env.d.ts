@@ -95,15 +95,6 @@ interface Window {
 			message?: string;
 			error?: string;
 		}>;
-		writeDerivedMedia: (
-			data: ArrayBuffer,
-			fileName: string,
-		) => Promise<{
-			success: boolean;
-			path?: string;
-			message?: string;
-			error?: string;
-		}>;
 		storeRecordedSession: (
 			payload: import("../src/lib/recordingSession").StoreRecordedSessionInput,
 		) => Promise<{
