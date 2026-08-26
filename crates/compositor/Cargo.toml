@@ -13,11 +13,13 @@ bindgen = "0.70"
 cc = "1"
 
 [features]
-default = []
-# Segmentation IA de la webcam via ONNX Runtime (EP CPU). Désactivée par défaut : elle tire
-# les binaires d'ONNX Runtime au build, ce qui engage le packaging des cinq canaux de
-# distribution. Le chemin masque->shader, lui, est toujours compilé — sans masque l'effet
-# reste simplement éteint.
+default = ["segmentation"]
+# Segmentation IA de la webcam via ONNX Runtime (EP CPU).
+#
+# Activée par défaut, ce qui ne coûte rien au build : `ort` est lié en `load-dynamic`, donc
+# aucune bibliothèque n'est nécessaire pour COMPILER. Elle l'est pour tourner — absente,
+# `Segmenter::load` échoue, le compositeur écrit une ligne et dessine la webcam telle quelle.
+# La désactiver reste possible pour une build qui ne veut pas du tout du code d'inférence.
 segmentation = ["dep:ort", "dep:ndarray"]
 
 [dependencies]

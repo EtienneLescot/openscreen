@@ -159,11 +159,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	storeRecordedVideo: (videoData: ArrayBuffer, fileName: string) => {
 		return ipcRenderer.invoke("store-recorded-video", videoData, fileName);
 	},
-	/** Derived export artifact (pre-segmented webcam track, …) → userData/derived-media.
-	 *  Unlike storeRecordedVideo this touches no recording-session state. */
-	writeDerivedMedia: (data: ArrayBuffer, fileName: string) => {
-		return ipcRenderer.invoke("write-derived-media", data, fileName);
-	},
 	storeRecordedSession: (payload: StoreRecordedSessionInput) => {
 		return ipcRenderer.invoke("store-recorded-session", payload);
 	},
