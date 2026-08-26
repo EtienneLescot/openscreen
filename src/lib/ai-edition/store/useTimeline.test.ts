@@ -1435,6 +1435,52 @@ describe("useTimeline audio tracks", () => {
 		expect(importSpy).toHaveBeenCalledWith("/tmp/bgm.mp3", "bgm.mp3");
 	});
 
+	it("addAudio clears region/clip selections after a successful import", async () => {
+		// importAudioAsset must resolve an asset for the success path to run.
+		useProjectStore.setState({ importAudioAsset: vi.fn().mockResolvedValue({ id: "audio_1" }) });
+		Object.defineProperty(window, "electronAPI", {
+			configurable: true,
+			value: {
+				openAudioFilePicker: vi
+					.fn()
+					.mockResolvedValue({ success: true, path: "/tmp/bgm.mp3", name: "bgm.mp3" }),
+			},
+		});
+		const { result } = renderTimeline();
+
+		// A clip selected before the import (selectClip and selectRegion are mutually
+		// exclusive, so a clip is enough to prove the import wipes the local selection)…
+		act(() => result.current.selectClip("clip_1"));
+		expect(result.current.clipSelection).toBe("clip_1");
+
+		await act(async () => {
+			await result.current.addAudio();
+		});
+		// …is gone after it (the imported track becomes the sole selection).
+		expect(result.current.selection).toBeNull();
+		expect(result.current.multiSelection).toEqual([]);
+		expect(result.current.clipSelection).toBeNull();
+	});
+
+	it("addAudio toasts when the file picker itself rejects", async () => {
+		toastErrorMock.mockClear();
+		const importSpy = vi.fn();
+		useProjectStore.setState({ importAudioAsset: importSpy });
+		Object.defineProperty(window, "electronAPI", {
+			configurable: true,
+			value: { openAudioFilePicker: vi.fn().mockRejectedValueOnce(new Error("ipc down")) },
+		});
+		const { result } = renderTimeline();
+
+		await act(async () => {
+			await result.current.addAudio();
+		});
+		// A picker rejection reaches the localized toast, not an unhandled rejection, and never
+		// attempts an import.
+		expect(importSpy).not.toHaveBeenCalled();
+		expect(toastErrorMock).toHaveBeenCalledTimes(1);
+	});
+
 	// #350 regression: a failed import-time probe leaves durationSec at 0, which
 	// makes the playback window zero-length. The on-load backfill re-probes and
 	// stamps the real duration onto the asset AND the track, so it can play again.
