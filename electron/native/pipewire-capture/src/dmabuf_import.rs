@@ -12,7 +12,6 @@
 //! `avcodec_send_frame` accepts directly. See docs/dmabuf-vaapi-plan.md.
 
 use crate::ffmpeg as ff;
-use std::ffi::CString;
 use std::ptr;
 
 /// `av_frame_free` wants a `**AVFrame`; wrap the pointer in a local so the null
@@ -21,6 +20,10 @@ unsafe fn free_frame(frame: *mut ff::AVFrame) {
     let mut p = frame;
     ff::av_frame_free(&mut p);
 }
+
+/// The AVBufferRef around the DRM descriptor owns nothing heap-allocated (the
+/// descriptor is a stack local that outlives the map), so freeing it is a no-op.
+unsafe extern "C" fn noop_buffer_free(_opaque: *mut std::ffi::c_void, _data: *mut u8) {}
 
 /// One dmabuf plane. `fd` is borrowed for the duration of [`DmabufImporter::import`]
 /// only — VAAPI dups it during surface creation, so the caller may close it after.
@@ -96,30 +99,32 @@ impl DmabufImporter {
                 buffersink_ctx: ptr::null_mut(),
             };
 
-            // A standalone VAAPI device (the encoder will share it). Default
-            // device selection matches how the encoder opens VAAPI today.
+            // Order matters: create the DRM device on the render node FIRST, then
+            // derive VAAPI from it. The reverse (DRM derived from VAAPI) returns
+            // ENOSYS on radeonsi — VAAPI knows how to open on a DRM fd, but not the
+            // other way round. The DRM device backs the DRM_PRIME source frames;
+            // the derived VAAPI device backs the mapped surface and the encoder.
+            let node = c"/dev/dri/renderD128";
             let created = ff::av_hwdevice_ctx_create(
-                &mut me.va_device,
-                ff::AV_HWDEVICE_TYPE_VAAPI,
-                ptr::null(),
+                &mut me.drm_device,
+                ff::AV_HWDEVICE_TYPE_DRM,
+                node.as_ptr(),
                 ptr::null_mut(),
                 0,
             );
             if created < 0 {
-                return Err(format!("av_hwdevice_ctx_create(VAAPI): {}", ff::err_to_string(created)));
+                return Err(format!("av_hwdevice_ctx_create(DRM): {}", ff::err_to_string(created)));
             }
 
-            // DRM device derived from the same GPU, so the mapped surface and the
-            // VAAPI device share a backing.
             let derived = ff::av_hwdevice_ctx_create_derived(
-                &mut me.drm_device,
-                ff::AV_HWDEVICE_TYPE_DRM,
-                me.va_device,
+                &mut me.va_device,
+                ff::AV_HWDEVICE_TYPE_VAAPI,
+                me.drm_device,
                 0,
             );
             if derived < 0 {
                 return Err(format!(
-                    "av_hwdevice_ctx_create_derived(DRM): {}",
+                    "av_hwdevice_ctx_create_derived(VAAPI): {}",
                     ff::err_to_string(derived)
                 ));
             }
@@ -147,10 +152,12 @@ impl DmabufImporter {
         (*ctx).sw_format = self.sw_format;
         (*ctx).width = self.width;
         (*ctx).height = self.height;
-        // A small pool: the mapped surface is short-lived (consumed by the VPP in
-        // the same call). DRM_PRIME frames are imported, not pooled, so the count
-        // is nominal there.
-        (*ctx).initial_pool_size = 4;
+        // Pool size 0: these contexts only WRAP/MAP externally-supplied surfaces
+        // (the DRM_PRIME source is our imported dmabuf; the VAAPI context is filled
+        // by av_hwframe_map DIRECT). Asking for a pre-allocated pool makes
+        // av_hwframe_ctx_init reject the format with EINVAL, since neither has an
+        // allocator for these RGB layouts.
+        (*ctx).initial_pool_size = 0;
         let init = ff::av_hwframe_ctx_init(frames);
         if init < 0 {
             let mut f = frames;
@@ -174,38 +181,31 @@ impl DmabufImporter {
             return Err("a required filter (buffer/buffersink/scale_vaapi) is missing".to_owned());
         }
 
-        // buffersrc: the input is a VAAPI surface, so pix_fmt is VAAPI and the
-        // real (sw) format rides on the hw_frames_ctx set below.
-        let args = CString::new(format!(
-            "video_size={}x{}:pix_fmt={}:time_base=1/1000000:pixel_aspect=1/1",
-            self.width,
-            self.height,
-            ff::AV_PIX_FMT_VAAPI as i32
-        ))
-        .map_err(|_| "buffersrc args contained a NUL".to_owned())?;
-
-        let rc = ff::avfilter_graph_create_filter(
-            &mut self.buffersrc_ctx,
-            buffersrc,
-            c"in".as_ptr(),
-            args.as_ptr(),
-            ptr::null_mut(),
-            self.graph,
-        );
-        if rc < 0 {
-            return Err(format!("create buffersrc: {}", ff::err_to_string(rc)));
+        // buffersrc: the input is a VAAPI surface. Allocate WITHOUT initialising
+        // (avfilter_graph_alloc_filter, not ..._create_filter): a hardware pix_fmt
+        // is rejected at init unless hw_frames_ctx is already set, and only
+        // av_buffersrc_parameters_set can set it. So: alloc → set params → init.
+        self.buffersrc_ctx = ff::avfilter_graph_alloc_filter(self.graph, buffersrc, c"in".as_ptr());
+        if self.buffersrc_ctx.is_null() {
+            return Err("avfilter_graph_alloc_filter(buffersrc) failed".to_owned());
         }
-
-        // Attach the VAAPI (BGRx) frames context the mapped surfaces come from.
         let par = ff::av_buffersrc_parameters_alloc();
         if par.is_null() {
             return Err("av_buffersrc_parameters_alloc failed".to_owned());
         }
+        (*par).format = ff::AV_PIX_FMT_VAAPI as i32;
+        (*par).width = self.width;
+        (*par).height = self.height;
+        (*par).time_base = ff::AVRational { num: 1, den: 1_000_000 };
         (*par).hw_frames_ctx = ff::av_buffer_ref(self.va_map_frames);
         let set = ff::av_buffersrc_parameters_set(self.buffersrc_ctx, par);
         ff::av_free(par as *mut _);
         if set < 0 {
             return Err(format!("av_buffersrc_parameters_set: {}", ff::err_to_string(set)));
+        }
+        let inited = ff::avfilter_init_str(self.buffersrc_ctx, ptr::null());
+        if inited < 0 {
+            return Err(format!("avfilter_init_str(buffersrc): {}", ff::err_to_string(inited)));
         }
 
         let rc = ff::avfilter_graph_create_filter(
@@ -296,7 +296,22 @@ impl DmabufImporter {
             (*src).format = ff::AV_PIX_FMT_DRM_PRIME as i32;
             (*src).width = self.width;
             (*src).height = self.height;
-            (*src).data[0] = &mut desc as *mut _ as *mut u8;
+            // av_hwframe_map rejects a source frame that is not ref-counted, so
+            // wrap the descriptor in an AVBufferRef (freed as a no-op — `desc`
+            // lives on the stack until this function returns, past the map).
+            let buf = ff::av_buffer_create(
+                &mut desc as *mut _ as *mut u8,
+                std::mem::size_of::<ff::AVDRMFrameDescriptor>(),
+                Some(noop_buffer_free),
+                ptr::null_mut(),
+                0,
+            );
+            if buf.is_null() {
+                free_frame(src);
+                return Err("av_buffer_create(drm descriptor) failed".to_owned());
+            }
+            (*src).buf[0] = buf;
+            (*src).data[0] = (*buf).data;
             (*src).hw_frames_ctx = ff::av_buffer_ref(self.drm_frames);
 
             // Map the dmabuf into a VAAPI (BGRx) surface, zero-copy.

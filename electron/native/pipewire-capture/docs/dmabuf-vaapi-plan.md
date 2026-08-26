@@ -127,11 +127,15 @@ Key architecture calls:
   `stage_hw`/`hw_staged` path (held across re-encodes) + Drop.
 - [x] `capture.rs`: dmabuf branch → importer → `stage_hw`; deferred encoder open.
 - [x] Whole pipeline compiles and links; full helper builds, libavfilter staged.
-- [ ] **On-device record/check/fix.** Test via `OPENSCREEN_PIPEWIRE_FORCE_DMABUF=1`
-  (dmabuf still opt-in until proven). Expect a NON-garbled full-monitor recording
-  at distinct-fps ≈ OBS (~24). Likely first-try failure points: `av_hwframe_map`
-  wanting `buf[0]` on the DRM_PRIME source; scale_vaapi output pool size; the
-  DRM/VAAPI derive on radeonsi.
+- [x] **On-device validated** (AMD/radeonsi + mutter, via `FORCE_DMABUF`).
+  Full-monitor editor scroll: **42.4 distinct fps** (was ~2 on shm; OBS ~24),
+  `convertMs 0.0`, `uploadMs ~0.002` — the frame never touches the CPU. Four
+  runtime fixes were needed and are in: (1) create the DRM device on the render
+  node and derive VAAPI from it — the reverse is ENOSYS on radeonsi; (2)
+  `initial_pool_size = 0` on the map-only frames contexts; (3) allocate the
+  buffersrc then set params (hw_frames_ctx) then init, since a HW pix_fmt is
+  rejected at init otherwise; (4) wrap the DRM descriptor in an AVBufferRef so the
+  source frame is ref-counted for `av_hwframe_map`.
 - [ ] Once proven: make dmabuf preference automatic when the backend is VAAPI
   (drop the FORCE env gate) + window/crop via VPP + non-VAAPI fallback guard.
 - [ ] Test on AMD/GNOME: confirm `uses_dmabuf=1`, distinct-fps ≈ OBS (~24),
