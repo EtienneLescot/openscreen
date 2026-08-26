@@ -143,7 +143,7 @@ function stageFfmpeg(dir) {
 	// Only the sonames the helper actually links, and only the real files —
 	// the tree also holds unversioned `.so` symlinks that the loader never
 	// consults at runtime.
-	const wanted = /^lib(avcodec|avformat|avutil|swscale|swresample)\.so\.\d+$/;
+	const wanted = /^lib(avcodec|avformat|avutil|avfilter|swscale|swresample)\.so\.\d+$/;
 	let copied = 0;
 	for (const entry of fs.readdirSync(source)) {
 		if (!wanted.test(entry)) {

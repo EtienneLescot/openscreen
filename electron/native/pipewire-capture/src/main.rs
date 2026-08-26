@@ -26,6 +26,7 @@
 
 mod bitmap;
 mod capture;
+mod dmabuf_import;
 mod encoder;
 mod events;
 mod ffmpeg;
