@@ -21,9 +21,12 @@ unsafe fn free_frame(frame: *mut ff::AVFrame) {
     ff::av_frame_free(&mut p);
 }
 
-/// The AVBufferRef around the DRM descriptor owns nothing heap-allocated (the
-/// descriptor is a stack local that outlives the map), so freeing it is a no-op.
-unsafe extern "C" fn noop_buffer_free(_opaque: *mut std::ffi::c_void, _data: *mut u8) {}
+/// Frees the heap-allocated `AVDRMFrameDescriptor` when its AVBufferRef drops —
+/// which is after the mapped frame that retained the source (and thus this
+/// buffer) is released.
+unsafe extern "C" fn drm_descriptor_free(_opaque: *mut std::ffi::c_void, data: *mut u8) {
+    ff::av_free(data as *mut std::ffi::c_void);
+}
 
 /// One dmabuf plane. `fd` is borrowed for the duration of [`DmabufImporter::import`]
 /// only — VAAPI dups it during surface creation, so the caller may close it after.
@@ -272,11 +275,12 @@ impl DmabufImporter {
         (*scale_ctx).hw_device_ctx = ff::av_buffer_ref(self.va_device);
 
         let rc = ff::avfilter_link(self.buffersrc_ctx, 0, scale_ctx, 0);
-        if rc >= 0 {
-            ff::avfilter_link(scale_ctx, 0, self.buffersink_ctx, 0);
-        }
         if rc < 0 {
-            return Err(format!("avfilter_link: {}", ff::err_to_string(rc)));
+            return Err(format!("avfilter_link(in->vpp): {}", ff::err_to_string(rc)));
+        }
+        let rc = ff::avfilter_link(scale_ctx, 0, self.buffersink_ctx, 0);
+        if rc < 0 {
+            return Err(format!("avfilter_link(vpp->out): {}", ff::err_to_string(rc)));
         }
 
         let rc = ff::avfilter_graph_config(self.graph, ptr::null_mut());
@@ -311,44 +315,58 @@ impl DmabufImporter {
         if frame.planes.is_empty() || frame.planes.len() > 4 {
             return Err(format!("dmabuf has {} planes", frame.planes.len()));
         }
-        // SAFETY: the descriptor outlives the map call it is passed to; every
-        // allocated frame is unref'd on the error paths and on success ownership
-        // of the NV12 frame passes to the caller.
+        // All planes must share one fd: we build a single DRM object from
+        // planes[0].fd and point every plane at it, so a buffer whose planes span
+        // multiple fds would make VAAPI read the wrong memory. Our RGB formats are
+        // single-plane; guard the assumption rather than rely on it.
+        if frame.planes.iter().any(|plane| plane.fd != frame.planes[0].fd) {
+            return Err("dmabuf planes span multiple fds, which this importer does not handle".to_owned());
+        }
+        // SAFETY: every allocated frame/buffer is freed on the error paths and on
+        // success ownership of the NV12 frame passes to the caller.
         unsafe {
-            // Build the DRM PRIME descriptor. One object per unique fd; our RGB
-            // formats are a single object with a single layer and plane.
-            let mut desc: ff::AVDRMFrameDescriptor = std::mem::zeroed();
-            desc.nb_objects = 1;
-            desc.objects[0].fd = frame.planes[0].fd;
-            desc.objects[0].size = 0; // recovered by the driver from the fd
-            desc.objects[0].format_modifier = frame.modifier;
-            desc.nb_layers = 1;
-            desc.layers[0].format = frame.drm_fourcc;
-            desc.layers[0].nb_planes = frame.planes.len() as i32;
+            // The DRM descriptor must outlive the mapped frame: av_hwframe_map
+            // retains `src` (ref-counted) until the mapping is released, so a
+            // stack descriptor would dangle once this function returns. Allocate
+            // it on the heap and free it from the AVBufferRef's own callback.
+            let desc = ff::av_mallocz(std::mem::size_of::<ff::AVDRMFrameDescriptor>())
+                as *mut ff::AVDRMFrameDescriptor;
+            if desc.is_null() {
+                return Err("av_mallocz(drm descriptor) failed".to_owned());
+            }
+            (*desc).nb_objects = 1;
+            (*desc).objects[0].fd = frame.planes[0].fd;
+            (*desc).objects[0].size = 0; // recovered by the driver from the fd
+            (*desc).objects[0].format_modifier = frame.modifier;
+            (*desc).nb_layers = 1;
+            (*desc).layers[0].format = frame.drm_fourcc;
+            (*desc).layers[0].nb_planes = frame.planes.len() as i32;
             for (i, plane) in frame.planes.iter().enumerate() {
-                desc.layers[0].planes[i].object_index = 0;
-                desc.layers[0].planes[i].offset = plane.offset as isize;
-                desc.layers[0].planes[i].pitch = plane.stride as isize;
+                (*desc).layers[0].planes[i].object_index = 0;
+                (*desc).layers[0].planes[i].offset = plane.offset as isize;
+                (*desc).layers[0].planes[i].pitch = plane.stride as isize;
             }
 
             let src = ff::av_frame_alloc();
             if src.is_null() {
+                ff::av_free(desc as *mut std::ffi::c_void);
                 return Err("av_frame_alloc(src) failed".to_owned());
             }
             (*src).format = ff::AV_PIX_FMT_DRM_PRIME as i32;
             (*src).width = self.src_width;
             (*src).height = self.src_height;
-            // av_hwframe_map rejects a source frame that is not ref-counted, so
-            // wrap the descriptor in an AVBufferRef (freed as a no-op — `desc`
-            // lives on the stack until this function returns, past the map).
+            // av_hwframe_map needs a ref-counted source; wrap the heap descriptor
+            // in an AVBufferRef that frees it when the last reference drops (which
+            // is after the mapped frame that retains `src` is released).
             let buf = ff::av_buffer_create(
-                &mut desc as *mut _ as *mut u8,
+                desc as *mut u8,
                 std::mem::size_of::<ff::AVDRMFrameDescriptor>(),
-                Some(noop_buffer_free),
+                Some(drm_descriptor_free),
                 ptr::null_mut(),
                 0,
             );
             if buf.is_null() {
+                ff::av_free(desc as *mut std::ffi::c_void);
                 free_frame(src);
                 return Err("av_buffer_create(drm descriptor) failed".to_owned());
             }
