@@ -127,7 +127,9 @@ fn link_ffmpeg(root: &Path) {
     );
 
     println!("cargo:rustc-link-search=native={}", lib.display());
-    for name in ["avcodec", "avformat", "avutil", "swscale", "swresample"] {
+    // avfilter is for the VAAPI VPP (scale_vaapi) that converts an imported
+    // dmabuf surface to NV12 for the encoder — see the dmabuf import path.
+    for name in ["avcodec", "avformat", "avutil", "avfilter", "swscale", "swresample"] {
         println!("cargo:rustc-link-lib={name}");
     }
     // A SUBDIRECTORY, NOT `$ORIGIN`. The helper is staged into
@@ -170,6 +172,9 @@ fn link_ffmpeg(root: &Path) {
             #include <libavutil/hwcontext_drm.h>
             #include <libavutil/imgutils.h>
             #include <libavutil/opt.h>
+            #include <libavfilter/avfilter.h>
+            #include <libavfilter/buffersrc.h>
+            #include <libavfilter/buffersink.h>
             #include <libswresample/swresample.h>
             #include <libswscale/swscale.h>
             "#,
@@ -182,6 +187,9 @@ fn link_ffmpeg(root: &Path) {
         .allowlist_function("avcodec_.*")
         .allowlist_function("avformat_.*")
         .allowlist_function("avio_.*")
+        .allowlist_function("avfilter_.*")
+        .allowlist_function("av_buffersrc_.*")
+        .allowlist_function("av_buffersink_.*")
         .allowlist_function("sws_.*")
         .allowlist_function("swr_.*")
         .allowlist_type("AV.*")

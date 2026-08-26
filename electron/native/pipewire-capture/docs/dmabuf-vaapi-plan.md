@@ -91,10 +91,41 @@ Key architecture calls:
   `osc_on_add_buffer` latches `import_dmabuf` on mmap failure instead of erroring;
   fourcc mapping added. shm/linear-dmabuf paths unchanged. `on_frame` currently
   skips dmabuf frames (data==null) — safe no-op until the importer lands.
-- [ ] Mailbox + requeue-handle rework (no memcpy for dmabuf).
-- [ ] Encoder: DRM_PRIME → `av_hwframe_map` → VAAPI VPP (crop) → NV12 pool
-  surface; `encode_staged` direct.
-- [ ] Shm fallback guard + error paths.
+- [x] Build foundation for the importer: vendored **libavfilter** wired in
+  (bindgen headers `avfilter.h`/`buffersrc.h`/`buffersink.h` + allowlist, link,
+  and staged into `helper-ffmpeg/` by the build script). `av_hwframe_map`,
+  `av_hwdevice_ctx_create_derived`, `AVDRMFrameDescriptor`, `AV_PIX_FMT_DRM_PRIME`,
+  `avfilter_graph_*`, `av_buffersrc/sink_*` all generate and link. Builds green.
+
+### Importer design decisions (settled while scoping)
+
+- **v1 buffer lifetime**: `on_frame` (PW thread) `dup()`s the plane fds into
+  `OwnedFd`s (std, no libc), puts the descriptor in the mailbox, and requeues the
+  PW buffer normally. The map+VPP+encode runs on the **main loop** — all VAAPI on
+  one thread, no cross-thread device or mutex. The fds keep the dmabuf alive for
+  the import; content-tear risk (compositor reusing the requeued buffer before the
+  main loop imports, ~1 tick later) is low with a 4–16 buffer pool and is the one
+  thing to watch. Upgrade to buffer-holding only if tearing shows.
+- **Device & pool ownership**: create ONE standalone VAAPI `AVHWDeviceContext`;
+  derive a DRM device from it for the DRM_PRIME source frames ctx. Build the
+  `scale_vaapi` filtergraph (buffersrc VAAPI-BGR0 → `format=nv12` → buffersink)
+  and take the buffersink's **output NV12 hw_frames_ctx** as the encoder's
+  `codec_ctx->hw_frames_ctx`. That means for the dmabuf path the **encoder is
+  opened AFTER the importer/filtergraph is built**, so their pools match and
+  `avcodec_send_frame` accepts the surface directly.
+- **Per frame**: build `AVDRMFrameDescriptor` (1 object: fd/size/modifier; 1
+  layer: fourcc; 1 plane: offset/pitch) → DRM_PRIME AVFrame → `av_hwframe_map`
+  DIRECT|READ → VAAPI BGR0 → buffersrc→scale_vaapi→buffersink → NV12 VAAPI →
+  `encoder.stage_hw()` (held as `hw_staged`; `encode_staged` sends it with pts,
+  no unref between the clock-driven re-encodes).
+
+### Remaining
+- [ ] `dmabuf_import.rs`: the map + scale_vaapi VPP → NV12 module (above).
+- [ ] `shim.rs`: `DmabufDesc` (OwnedFd planes) + `Frame.dmabuf` + `on_frame` dup +
+  mailbox variant (no memcpy).
+- [ ] `encoder.rs`: shared device + deferred open + `stage_hw`/`hw_staged` path.
+- [ ] `capture.rs`: dmabuf branch → importer → `stage_hw`.
+- [ ] Shm fallback guard + error paths; then on-device record/check/fix.
 - [ ] Test on AMD/GNOME: confirm `uses_dmabuf=1`, distinct-fps ≈ OBS (~24),
   crop correct for window captures, cursor unaffected. Regression-check
   software encode and a wlroots/niri compositor.
