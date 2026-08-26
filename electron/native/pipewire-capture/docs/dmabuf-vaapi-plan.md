@@ -144,9 +144,16 @@ Key architecture calls:
   today's path with no regression. Confirmed: full-monitor scroll records 39.8
   distinct fps with `convertMs 0.0` and no force flag. `OPENSCREEN_PIPEWIRE_FORCE_DMABUF`
   still forces the swap for testing.
-- [ ] Follow-ups: window/crop via VPP (v1 is whole-monitor); per-frame import
-  failure after a successful probe still errors (rare) rather than renegotiating
-  to shm; test on Intel/NVIDIA-vaapi.
+- [x] **Window crop via VPP** (validated). The importer now takes a source size
+  (the full stream) and an output size (the committed crop); `scale_vaapi` outputs
+  the crop size and `import` sets the mapped surface's crop_left/top/right/bottom
+  per frame so the VA source region is the window rect — cropped and format-
+  converted on the GPU, no scaling (region == output). Confirmed: a 724×576 GNOME
+  window records at 724×576, sharp, convertMs 0.0, 26.6 distinct fps. (The black
+  margin some CSD windows show is the shadow/decoration in mutter's crop rect —
+  same on any capture tool, not introduced here.)
+- [ ] Follow-ups: per-frame import failure after a successful probe still errors
+  (rare) rather than renegotiating to shm; test on Intel/NVIDIA-vaapi.
 - [ ] Test on AMD/GNOME: confirm `uses_dmabuf=1`, distinct-fps ≈ OBS (~24),
   crop correct for window captures, cursor unaffected. Regression-check
   software encode and a wlroots/niri compositor.
