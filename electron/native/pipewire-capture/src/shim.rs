@@ -191,6 +191,30 @@ pub struct Frame {
     /// "invalid meta" and "meta covering everything" alike — none of which is a
     /// reason to crop, and none of which may be guessed apart.
     pub has_crop: bool,
+    /// Set for a tiled dmabuf frame (issue #507): `pixels` is empty and the
+    /// content is on the GPU, described here for a VAAPI import instead. The
+    /// owned fds close when the frame is dropped or superseded.
+    pub dmabuf: Option<DmabufDesc>,
+}
+
+/// A tiled dmabuf handed up for GPU import. Owns duplicated plane fds so the
+/// descriptor outlives the PipeWire buffer it came from.
+#[derive(Debug)]
+pub struct DmabufDesc {
+    pub width: i32,
+    pub height: i32,
+    pub drm_fourcc: u32,
+    pub modifier: u64,
+    pub planes: Vec<DmabufPlaneOwned>,
+}
+
+/// One dmabuf plane: an owned (dup'd) fd plus its layout. The fd is closed when
+/// this drops.
+#[derive(Debug)]
+pub struct DmabufPlaneOwned {
+    pub fd: std::os::fd::OwnedFd,
+    pub offset: i32,
+    pub stride: i32,
 }
 
 /// A rectangle inside a captured frame, in stream pixels.
@@ -268,6 +292,43 @@ impl FrameMailbox {
                 height: meta.crop_height,
             },
             has_crop: meta.has_crop != 0,
+            dmabuf: None,
+        });
+        self.received.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Stores a tiled dmabuf frame — the descriptor only, no pixel copy. Same
+    /// newest-wins discipline as [`Self::put`]; a superseded frame's owned fds
+    /// close when its `Frame` drops here.
+    fn put_dmabuf(&self, desc: DmabufDesc, meta: &RawFrame) {
+        use std::sync::atomic::Ordering;
+
+        let Ok(mut inner) = self.inner.lock() else {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        let pixels = match inner.pending.take() {
+            Some(stale) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                stale.pixels
+            }
+            None => inner.spare.take().unwrap_or_default(),
+        };
+        inner.pending = Some(Frame {
+            pixels,
+            stride: meta.stride as usize,
+            width: meta.width,
+            height: meta.height,
+            video_format: meta.video_format,
+            pts_ns: meta.pts_ns,
+            crop: CropRect {
+                x: meta.crop_x,
+                y: meta.crop_y,
+                width: meta.crop_width,
+                height: meta.crop_height,
+            },
+            has_crop: meta.has_crop != 0,
+            dmabuf: Some(desc),
         });
         self.received.fetch_add(1, Ordering::Relaxed);
     }
@@ -854,6 +915,49 @@ extern "C" fn on_frame(user: *mut c_void, frame: *const RawFrame) {
         }
         // SAFETY: non-NULL for the duration of the callback, by contract.
         let frame = unsafe { &*frame };
+
+        // Tiled dmabuf: no pixels to copy. Duplicate the plane fds (cheap, and it
+        // keeps the buffer's content reachable after the PW buffer re-queues) and
+        // hand the descriptor to the main loop for a GPU import.
+        if frame.is_dmabuf != 0 {
+            use std::os::fd::{AsRawFd, BorrowedFd};
+            let n = frame.n_planes.clamp(0, 4) as usize;
+            if n == 0 {
+                return;
+            }
+            let mut planes = Vec::with_capacity(n);
+            for i in 0..n {
+                let raw = frame.plane_fd[i];
+                if raw < 0 {
+                    return;
+                }
+                // SAFETY: `raw` is valid for the callback's duration; try_clone
+                // dups it (F_DUPFD_CLOEXEC) into an fd we own.
+                let borrowed = unsafe { BorrowedFd::borrow_raw(raw) };
+                let Ok(owned) = borrowed.try_clone_to_owned() else {
+                    return;
+                };
+                debug_assert!(owned.as_raw_fd() >= 0);
+                planes.push(DmabufPlaneOwned {
+                    fd: owned,
+                    offset: frame.plane_offset[i],
+                    stride: frame.plane_stride[i],
+                });
+            }
+            mailbox.put_dmabuf(
+                DmabufDesc {
+                    width: frame.width,
+                    height: frame.height,
+                    drm_fourcc: frame.drm_fourcc,
+                    modifier: frame.modifier,
+                    planes,
+                },
+                frame,
+            );
+            (state.sink)(StreamEvent::FrameReady);
+            return;
+        }
+
         if frame.data.is_null() || frame.stride <= 0 || frame.height <= 0 {
             return;
         }
