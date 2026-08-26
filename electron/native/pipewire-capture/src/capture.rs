@@ -246,14 +246,16 @@ impl Capture {
         let mut rejected = Vec::new();
         let (encoder, importer) = match dmabuf {
             Some(desc) => {
-                // v1 targets the whole monitor: the importer and encoder are
-                // sized to the full stream (no crop). The encoder is FORCED to
-                // VAAPI because that is the only backend that can consume the
-                // mapped surface; a non-VAAPI machine should never have
-                // negotiated dmabuf in the first place.
+                // The importer maps the full stream (`desc`) and its VPP crops to
+                // the committed record size (`width`/`height`): equal to the source
+                // for a monitor, or the window's crop rectangle for a window. The
+                // encoder is FORCED to VAAPI — the only backend that can consume the
+                // mapped surface; a non-VAAPI machine never negotiates dmabuf.
                 let importer = crate::dmabuf_import::DmabufImporter::new(
                     desc.width,
                     desc.height,
+                    width,
+                    height,
                     desc.drm_fourcc,
                 )?;
                 // SAFETY: the importer's device and NV12 frames context are live
@@ -261,7 +263,7 @@ impl Capture {
                 // alongside it below.
                 let encoder = unsafe {
                     VideoEncoder::open_importing(
-                        VideoParams { width: desc.width, height: desc.height, fps, bitrate },
+                        VideoParams { width, height, fps, bitrate },
                         importer.device(),
                         importer.output_frames_ctx(),
                     )?
@@ -361,10 +363,15 @@ impl Capture {
     /// written until [`Self::advance`] runs.
     pub fn stage(&mut self, frame: &shim::Frame) -> Result<(), String> {
         // Zero-copy dmabuf path: import the tiled GPU buffer into an NV12 VAAPI
-        // surface and hand it to the encoder as-is — no swscale, no crop math
-        // (v1 is whole-monitor only). See issue #507.
-        if let Some(desc) = &frame.dmabuf {
+        // surface (the VPP crops a window to its committed rectangle) and hand it
+        // to the encoder as-is — no swscale. See issue #507.
+        if frame.dmabuf.is_some() {
             use std::os::fd::AsRawFd;
+            // The crop origin, clamped to stay inside the buffer — same rule as the
+            // CPU path. Computed before the mutable importer borrow. For a monitor
+            // this is (0, 0).
+            let (crop_x, crop_y) = self.read_origin(frame);
+            let desc = frame.dmabuf.as_ref().expect("checked is_some above");
             let importer = self
                 .importer
                 .as_mut()
@@ -378,13 +385,17 @@ impl Capture {
                     stride: plane.stride,
                 })
                 .collect();
-            let nv12 = importer.import(&crate::dmabuf_import::DmabufFrame {
-                width: desc.width,
-                height: desc.height,
-                drm_fourcc: desc.drm_fourcc,
-                modifier: desc.modifier,
-                planes: &planes,
-            })?;
+            let nv12 = importer.import(
+                &crate::dmabuf_import::DmabufFrame {
+                    width: desc.width,
+                    height: desc.height,
+                    drm_fourcc: desc.drm_fourcc,
+                    modifier: desc.modifier,
+                    planes: &planes,
+                },
+                crop_x,
+                crop_y,
+            )?;
             // SAFETY: `nv12` is a VAAPI NV12 frame from the pool the encoder was
             // opened against; the encoder takes ownership.
             unsafe { self.encoder.stage_hw(nv12) };

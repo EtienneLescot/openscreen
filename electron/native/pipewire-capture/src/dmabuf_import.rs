@@ -67,12 +67,18 @@ fn sw_format_for_fourcc(drm_fourcc: u32) -> Option<ff::AVPixelFormat> {
 /// When this is true the stream prefers dmabuf; when false it stays on shm.
 pub fn available() -> bool {
     const XRGB8888: u32 = 0x34325258;
-    DmabufImporter::new(1920, 1080, XRGB8888).is_ok()
+    DmabufImporter::new(1920, 1080, 1920, 1080, XRGB8888).is_ok()
 }
 
 pub struct DmabufImporter {
-    width: i32,
-    height: i32,
+    /// Size of the incoming dmabuf (the whole stream). For a window this is the
+    /// monitor; for a monitor it equals the output size.
+    src_width: i32,
+    src_height: i32,
+    /// Size of the NV12 the graph emits — the recorded size. For a window this is
+    /// the committed crop rectangle; for a monitor it equals the source size.
+    out_width: i32,
+    out_height: i32,
     sw_format: ff::AVPixelFormat,
     /// VAAPI device, shared with the encoder (whose `hw_frames_ctx` comes from
     /// [`Self::output_frames_ctx`]).
@@ -89,17 +95,27 @@ pub struct DmabufImporter {
 }
 
 impl DmabufImporter {
-    /// Builds the device, frames contexts and `scale_vaapi` graph for a stream of
-    /// `width`×`height` `drm_fourcc` buffers.
-    pub fn new(width: i32, height: i32, drm_fourcc: u32) -> Result<Self, String> {
+    /// Builds the device, frames contexts and `scale_vaapi` graph. `src` is the
+    /// incoming dmabuf size (the whole stream); `out` is the recorded size — equal
+    /// to `src` for a monitor, or the window's crop rectangle for a window (the
+    /// graph then crops the source region down to it, on the GPU).
+    pub fn new(
+        src_width: i32,
+        src_height: i32,
+        out_width: i32,
+        out_height: i32,
+        drm_fourcc: u32,
+    ) -> Result<Self, String> {
         let sw_format =
             sw_format_for_fourcc(drm_fourcc).ok_or_else(|| format!("unsupported dmabuf fourcc {drm_fourcc:#x}"))?;
 
         // SAFETY: every pointer is checked before use and freed in Drop.
         unsafe {
             let mut me = DmabufImporter {
-                width,
-                height,
+                src_width,
+                src_height,
+                out_width,
+                out_height,
                 sw_format,
                 va_device: ptr::null_mut(),
                 drm_device: ptr::null_mut(),
@@ -161,8 +177,8 @@ impl DmabufImporter {
         let ctx = (*frames).data as *mut ff::AVHWFramesContext;
         (*ctx).format = hw_format;
         (*ctx).sw_format = self.sw_format;
-        (*ctx).width = self.width;
-        (*ctx).height = self.height;
+        (*ctx).width = self.src_width;
+        (*ctx).height = self.src_height;
         // Pool size 0: these contexts only WRAP/MAP externally-supplied surfaces
         // (the DRM_PRIME source is our imported dmabuf; the VAAPI context is filled
         // by av_hwframe_map DIRECT). Asking for a pre-allocated pool makes
@@ -205,8 +221,8 @@ impl DmabufImporter {
             return Err("av_buffersrc_parameters_alloc failed".to_owned());
         }
         (*par).format = ff::AV_PIX_FMT_VAAPI as i32;
-        (*par).width = self.width;
-        (*par).height = self.height;
+        (*par).width = self.src_width;
+        (*par).height = self.src_height;
         (*par).time_base = ff::AVRational { num: 1, den: 1_000_000 };
         (*par).hw_frames_ctx = ff::av_buffer_ref(self.va_map_frames);
         let set = ff::av_buffersrc_parameters_set(self.buffersrc_ctx, par);
@@ -231,12 +247,20 @@ impl DmabufImporter {
             return Err(format!("create buffersink: {}", ff::err_to_string(rc)));
         }
 
+        // Output size = the recorded (out) size. For a monitor that equals the
+        // source; for a window it is the crop rectangle, and the per-frame crop
+        // fields set in `import` pick which region of the source is scaled into it.
+        let scale_args = std::ffi::CString::new(format!(
+            "w={}:h={}:format=nv12",
+            self.out_width, self.out_height
+        ))
+        .map_err(|_| "scale_vaapi args contained a NUL".to_owned())?;
         let mut scale_ctx: *mut ff::AVFilterContext = ptr::null_mut();
         let rc = ff::avfilter_graph_create_filter(
             &mut scale_ctx,
             scale,
             c"vpp".as_ptr(),
-            c"format=nv12".as_ptr(),
+            scale_args.as_ptr(),
             ptr::null_mut(),
             self.graph,
         );
@@ -275,8 +299,15 @@ impl DmabufImporter {
     }
 
     /// Maps one dmabuf and returns an NV12 VAAPI frame (caller unrefs it). The
-    /// plane fds are only touched during this call.
-    pub fn import(&mut self, frame: &DmabufFrame) -> Result<*mut ff::AVFrame, String> {
+    /// plane fds are only touched during this call. `crop_x`/`crop_y` are the
+    /// origin of the recorded region within the source; the region size is the
+    /// importer's output size. For a monitor both are 0 and out == src (no crop).
+    pub fn import(
+        &mut self,
+        frame: &DmabufFrame,
+        crop_x: i32,
+        crop_y: i32,
+    ) -> Result<*mut ff::AVFrame, String> {
         if frame.planes.is_empty() || frame.planes.len() > 4 {
             return Err(format!("dmabuf has {} planes", frame.planes.len()));
         }
@@ -305,8 +336,8 @@ impl DmabufImporter {
                 return Err("av_frame_alloc(src) failed".to_owned());
             }
             (*src).format = ff::AV_PIX_FMT_DRM_PRIME as i32;
-            (*src).width = self.width;
-            (*src).height = self.height;
+            (*src).width = self.src_width;
+            (*src).height = self.src_height;
             // av_hwframe_map rejects a source frame that is not ref-counted, so
             // wrap the descriptor in an AVBufferRef (freed as a no-op — `desc`
             // lives on the stack until this function returns, past the map).
@@ -344,6 +375,15 @@ impl DmabufImporter {
                 free_frame(mapped);
                 return Err(format!("av_hwframe_map: {}", ff::err_to_string(mrc)));
             }
+
+            // Crop the source down to the recorded region at the live origin.
+            // scale_vaapi reads these fields to set the VA source rectangle, so a
+            // window is cropped on the GPU before scaling. A monitor leaves them
+            // at 0 (crop_x/y are 0 and out == src), so nothing is cropped.
+            (*mapped).crop_left = crop_x.max(0) as usize;
+            (*mapped).crop_top = crop_y.max(0) as usize;
+            (*mapped).crop_right = (self.src_width - crop_x - self.out_width).max(0) as usize;
+            (*mapped).crop_bottom = (self.src_height - crop_y - self.out_height).max(0) as usize;
 
             // Push through scale_vaapi → NV12.
             let pushed = ff::av_buffersrc_add_frame(self.buffersrc_ctx, mapped);
