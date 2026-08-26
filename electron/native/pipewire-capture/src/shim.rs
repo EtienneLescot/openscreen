@@ -46,6 +46,17 @@ pub struct RawFrame {
     pub crop_width: i32,
     pub crop_height: i32,
     pub has_crop: i32,
+    /// Zero-copy dmabuf hand-off (issue #507). When non-zero, `data` is null and
+    /// the frame is a tiled GPU buffer described by the fields below — imported
+    /// as a VAAPI surface rather than read from `data`. Layout mirrors
+    /// `struct osc_pw_frame` in pw_shim.h exactly.
+    pub is_dmabuf: i32,
+    pub modifier: u64,
+    pub drm_fourcc: u32,
+    pub n_planes: i32,
+    pub plane_fd: [i32; 4],
+    pub plane_offset: [i32; 4],
+    pub plane_stride: [i32; 4],
 }
 
 #[repr(C)]
