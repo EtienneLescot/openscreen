@@ -244,7 +244,11 @@ impl Capture {
     ) -> Result<(Self, Selection), String> {
         let bitrate = bitrate.unwrap_or_else(|| default_bitrate(width, height, fps));
         let mut rejected = Vec::new();
-        let (encoder, importer) = match dmabuf {
+        // The dmabuf import can only feed VAAPI, so a user forcing `software` or
+        // `vulkan` must skip it — otherwise the documented `forced` workaround
+        // (VideoEncoder::open) would be silently ignored on the dmabuf path.
+        let use_dmabuf = matches!(forced, None | Some(Backend::Vaapi));
+        let (encoder, importer) = match dmabuf.filter(|_| use_dmabuf) {
             Some(desc) => {
                 // The importer maps the full stream (`desc`) and its VPP crops to
                 // the committed record size (`width`/`height`): equal to the source
@@ -366,7 +370,6 @@ impl Capture {
         // surface (the VPP crops a window to its committed rectangle) and hand it
         // to the encoder as-is — no swscale. See issue #507.
         if frame.dmabuf.is_some() {
-            use std::os::fd::AsRawFd;
             // The crop origin, clamped to stay inside the buffer — same rule as the
             // CPU path. Computed before the mutable importer borrow. For a monitor
             // this is (0, 0).
@@ -380,7 +383,7 @@ impl Capture {
                 .planes
                 .iter()
                 .map(|plane| crate::dmabuf_import::DmabufPlane {
-                    fd: plane.fd.as_raw_fd(),
+                    fd: plane.fd,
                     offset: plane.offset,
                     stride: plane.stride,
                 })
@@ -633,6 +636,7 @@ mod tests {
             pts_ns: -1,
             crop: shim::CropRect { x: 0, y: 0, width, height },
             has_crop: false,
+            dmabuf: None,
         }
     }
 
@@ -677,7 +681,7 @@ mod tests {
     fn the_timeline_does_not_start_until_the_first_frame_is_staged() {
         let output = std::env::temp_dir().join("openscreen-capture-epoch.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
                 .expect("start");
         assert!(!capture.started());
         // Nothing staged: advance must not write a frame of uninitialised memory.
@@ -696,7 +700,7 @@ mod tests {
         // further arrivals, and the file must still fill with frames.
         let output = std::env::temp_dir().join("openscreen-capture-static.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
                 .expect("start");
         capture
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))
@@ -721,7 +725,7 @@ mod tests {
     fn a_window_is_staged_from_its_crop_inside_a_larger_frame() {
         let output = std::env::temp_dir().join("openscreen-capture-crop.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
                 .expect("start");
 
         // A 1920x1080 stream carrying a 320x240 window at (100, 50).
@@ -752,7 +756,7 @@ mod tests {
     fn a_crop_against_the_right_edge_is_not_rejected_as_truncated() {
         let output = std::env::temp_dir().join("openscreen-capture-edge.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
                 .expect("start");
 
         let staged = capture.stage(&cropped_frame(
@@ -775,7 +779,7 @@ mod tests {
     fn a_shrunken_window_is_read_from_inside_the_frame() {
         let output = std::env::temp_dir().join("openscreen-capture-shrunk.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
                 .expect("start");
 
         // Origin so close to the edge that a 320x240 read from it would overrun.
@@ -801,7 +805,7 @@ mod tests {
         let output = std::env::temp_dir().join("openscreen-capture-odd.mp4");
         // 321x241 rounds to the 320x240 the encoder is opened at.
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
                 .expect("start");
 
         let frame = cropped_frame(
@@ -820,7 +824,7 @@ mod tests {
     fn an_uncropped_frame_reports_no_divergence() {
         let output = std::env::temp_dir().join("openscreen-capture-nocrop.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
                 .expect("start");
 
         assert!(!capture.crop_diverged(&frame(320, 240, shim::constants().video_format_bgrx)));
@@ -832,7 +836,7 @@ mod tests {
     fn paused_time_does_not_advance_the_timeline() {
         let output = std::env::temp_dir().join("openscreen-capture-pause.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
                 .expect("start");
         capture
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))
@@ -872,6 +876,7 @@ mod tests {
             Some(1_000_000),
             Some(Backend::Software),
             vec![AudioSource { label: "system", ring: ring.clone(), gain: 1.0, bitrate: 128_000 }],
+            None,
         )
         .expect("start");
 
@@ -908,6 +913,7 @@ mod tests {
             Some(1_000_000),
             Some(Backend::Software),
             vec![AudioSource { label: "system", ring: ring.clone(), gain: 1.0, bitrate: 128_000 }],
+            None,
         )
         .expect("start");
         capture
@@ -950,6 +956,7 @@ mod tests {
             Some(1_000_000),
             Some(Backend::Software),
             vec![AudioSource { label: "microphone", ring, gain: 4.0, bitrate: 128_000 }],
+            None,
         )
         .expect("start");
         capture
@@ -989,6 +996,7 @@ mod tests {
                 AudioSource { label: "system", ring: system.clone(), gain: 1.0, bitrate: 128_000 },
                 AudioSource { label: "microphone", ring: mic.clone(), gain: 1.0, bitrate: 128_000 },
             ],
+            None,
         )
         .expect("start");
 
@@ -1038,6 +1046,7 @@ mod tests {
                 AudioSource { label: "system", ring: system.clone(), gain: 1.0, bitrate: 128_000 },
                 AudioSource { label: "microphone", ring: dead, gain: 1.0, bitrate: 128_000 },
             ],
+            None,
         )
         .expect("start");
         capture
@@ -1061,7 +1070,7 @@ mod tests {
     fn catch_up_is_bounded_so_a_stall_cannot_block_stop() {
         let output = std::env::temp_dir().join("openscreen-capture-catchup.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 60, Some(1_000_000), Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 60, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
                 .expect("start");
         capture
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))

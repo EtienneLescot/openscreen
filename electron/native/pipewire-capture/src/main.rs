@@ -609,6 +609,18 @@ fn run<W: Write>(
     let mut exit_code = 0;
 
     loop {
+        // Return PipeWire buffers whose dmabuf imports completed last iteration
+        // (or that were superseded on the capture thread). This MUST run on this
+        // loop, not the PipeWire thread — `Session::requeue` takes the thread-loop
+        // lock, which would deadlock from inside the loop. The one-tick delay is
+        // harmless: the import has already copied the pixels, so the buffer is
+        // free, and the pool has other buffers in flight meanwhile.
+        if let (Some(session), Some(mailbox)) = (session.as_ref(), frames.as_ref()) {
+            for handle in mailbox.drain_requeue() {
+                session.requeue(handle);
+            }
+        }
+
         match receiver.recv_timeout(config.tick) {
             Ok(Message::Stop) => break,
 

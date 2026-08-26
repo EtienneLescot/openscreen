@@ -432,7 +432,8 @@ static const struct spa_pod *osc_build_enum_format(struct spa_pod_builder *build
  * which needs a GPU query, so letting the producer fixate is both simpler and
  * one fewer round trip that can go wrong.
  */
-static const struct spa_pod *osc_build_enum_format_dmabuf(struct spa_pod_builder *builder)
+static const struct spa_pod *osc_build_enum_format_dmabuf(struct spa_pod_builder *builder,
+                                                          int prefer_dmabuf)
 {
     struct spa_pod_frame object_frame;
     struct spa_pod_frame choice_frame;
@@ -459,10 +460,17 @@ static const struct spa_pod *osc_build_enum_format_dmabuf(struct spa_pod_builder
      * stay as universal fallbacks. Modifiers match across the 32-bit RGB formats
      * we offer, so enumerating XRGB8888 is representative.
      *
+     * ONLY when prefer_dmabuf: the tiled modifiers are advertised solely when the
+     * VAAPI import pipeline is available. Otherwise a producer that offers no shm
+     * format (some wlroots/portal setups) could select a tiled buffer we cannot
+     * read, where before it would have fallen to a CPU-mappable LINEAR/INVALID
+     * dmabuf. Offering just those two keeps that path intact.
+     *
      * Default first, then every alternative — the default is repeated, same
      * idiom as SPA_POD_CHOICE_ENUM_Id above. */
     uint64_t egl_mods[128];
-    int egl_mod_count = osc_query_dmabuf_modifiers(OSC_DRM_FORMAT_XRGB8888, egl_mods, 128);
+    int egl_mod_count =
+        prefer_dmabuf ? osc_query_dmabuf_modifiers(OSC_DRM_FORMAT_XRGB8888, egl_mods, 128) : 0;
     int64_t default_mod =
         egl_mod_count > 0 ? (int64_t)egl_mods[0] : (int64_t)OSC_DRM_FORMAT_MOD_LINEAR;
     spa_pod_builder_long(builder, default_mod);
@@ -577,7 +585,9 @@ int osc_pw_enum_format_accepts_dmabuf_producer(int with_modifier, int64_t produc
     const struct spa_pod *consumer;
     const struct spa_pod *producer;
 
-    consumer = with_modifier ? osc_build_enum_format_dmabuf(&ours) : osc_build_enum_format(&ours);
+    /* The unit test exercises the full tiled offer, so enumerate unconditionally. */
+    consumer =
+        with_modifier ? osc_build_enum_format_dmabuf(&ours, 1) : osc_build_enum_format(&ours);
     if (consumer == NULL) {
         return -1;
     }
@@ -1241,8 +1251,11 @@ static void osc_describe_metas(const struct spa_buffer *buffer, char *out, size_
     }
 }
 
-static void osc_inspect_buffer(struct osc_pw_session *session, const struct spa_buffer *buffer)
+/* Returns 1 when the on_frame callback took ownership of `pw_buf` (a dmabuf frame
+ * held for GPU import); the caller must then NOT re-queue it. 0 otherwise. */
+static int osc_inspect_buffer(struct osc_pw_session *session, struct pw_buffer *pw_buf)
 {
+    const struct spa_buffer *buffer = pw_buf->buffer;
     struct osc_pw_cursor cursor;
     uint32_t meta_size = 0;
 
@@ -1274,7 +1287,15 @@ static void osc_inspect_buffer(struct osc_pw_session *session, const struct spa_
 
         session->dmabuf_sync_fd = -1;
         if (osc_read_frame(session, buffer, &frame)) {
-            session->callbacks.on_frame(session->callbacks.user, &frame);
+            /* The callback needs the pw_buffer to hand back to osc_pw_requeue_buffer
+             * if it takes ownership of a dmabuf frame. */
+            frame.buffer_handle = pw_buf;
+            if (session->callbacks.on_frame(session->callbacks.user, &frame)) {
+                /* Taken: leave it un-queued; the consumer will re-queue it once the
+                 * import has copied the pixels. No SYNC bracket is open on this
+                 * path (the import path does not CPU-read), so nothing to close. */
+                return 1;
+            }
         }
         /* Closes the DMA_BUF_SYNC_START osc_read_frame opened, if any. Placed
          * here rather than inside it because the callback above is what actually
@@ -1284,6 +1305,7 @@ static void osc_inspect_buffer(struct osc_pw_session *session, const struct spa_
             session->dmabuf_sync_fd = -1;
         }
     }
+    return 0;
 }
 
 static void osc_on_process(void *userdata)
@@ -1313,9 +1335,24 @@ static void osc_on_process(void *userdata)
      * throw away the cursor metadata riding on the same buffers.
      */
     while ((b = api.stream_dequeue_buffer(session->stream)) != NULL) {
-        osc_inspect_buffer(session, b->buffer);
-        api.stream_queue_buffer(session->stream, b);
+        /* A dmabuf frame the consumer takes is held out of the queue until it has
+         * imported the pixels — see osc_pw_requeue_buffer. Everything else (shm,
+         * cursor-only buffers, declined frames) re-queues immediately. */
+        if (!osc_inspect_buffer(session, b)) {
+            api.stream_queue_buffer(session->stream, b);
+        }
     }
+}
+
+/* See the header. Locks the thread loop so a foreign thread can queue safely. */
+void osc_pw_requeue_buffer(struct osc_pw_session *session, void *buffer_handle)
+{
+    if (session == NULL || buffer_handle == NULL || session->stream == NULL) {
+        return;
+    }
+    api.thread_loop_lock(session->loop);
+    api.stream_queue_buffer(session->stream, (struct pw_buffer *)buffer_handle);
+    api.thread_loop_unlock(session->loop);
 }
 
 static const struct pw_stream_events osc_stream_events = {
@@ -1410,7 +1447,7 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
      * previously failed the whole negotiation with "no more input formats".
      */
     params[0] = osc_build_enum_format(&builder);
-    params[1] = osc_build_enum_format_dmabuf(&builder);
+    params[1] = osc_build_enum_format_dmabuf(&builder, session->prefer_dmabuf);
 
     /*
      * When the GPU import path is available (prefer_dmabuf), offer dmabuf FIRST
