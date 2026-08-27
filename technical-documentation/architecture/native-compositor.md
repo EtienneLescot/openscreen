@@ -31,7 +31,7 @@ and without that flag the runtime corruption is silent.
 | [`crates/compositor/src/scene.rs`](../../crates/compositor/src/scene.rs) | the `Scene` struct parsed from the app's `SceneDescription` JSON |
 | [`crates/compositor/src/regions.rs`](../../crates/compositor/src/regions.rs) | zoom / speed / Full Camera regions — envelope shapes and per-frame state sampling |
 | [`crates/compositor/src/pipeline.rs`](../../crates/compositor/src/pipeline_windows.rs) | demux + `D3D11VA` decode + composite + AMF encode + mux (`run_c0` for decode/encode only, `run_composited` for the full path) |
-| [`crates/compositor/src/audio.rs`](../../crates/compositor/src/audio.rs) | per-clip audio decode, swresample → f32 planar 48 kHz stereo, WSOLA speed stretch, multi-track mix, AAC encoder |
+| [`crates/compositor/src/audio.rs`](../../crates/compositor/src/audio.rs) | per-clip audio decode, swresample → f32 planar 48 kHz stereo, libavfilter `atempo` speed stretch (WSOLA fallback), multi-track mix, AAC encoder |
 | [`crates/compositor/src/cursor.rs`](../../crates/compositor/src/cursor.rs) | `.cursor.json` parser + interpolated cursor track (position, click bounces, adaptive follow samples) |
 | [`crates/compositor/src/text.rs`](../../crates/compositor/src/text_windows.rs) | DirectWrite + Direct2D text rasterisation for annotation labels, cached per (content, style, box) |
 | [`crates/compositor/src/text_anim.rs`](../../crates/compositor/src/text_anim.rs) | text-annotation appearance animations (port of the TS animation curves, in fractions of the output short side) |
@@ -199,9 +199,28 @@ each track is recut to the same `[source_start_sec, source_end_sec)` —
 pads in front for late-starting tracks, trims the pre-roll for early-decoded
 ones — so a summing mixer is enough and a real mix matrix is not needed.
 
-Speed regions apply after decode: WSOLA stretches each speed sub-segment to
-its output frame count, sharing search positions across channels from a
-mono down-mix (so the stereo image does not wander between channels).
+Speed regions apply after decode: `stretch_pcm_to_length` stretches each
+speed sub-segment to its output frame count through a libavfilter
+`abuffer → atempo… → abuffersink` graph built in-process
+(`avfilter_atempo_stretch`). The graph is pinned to the fltp / 48 kHz /
+stereo format `decode_clip_audio` already produces, and `atempo` preserves
+format, channels and rate, so no conversion is involved; the result is
+recut to the exact target length by truncation or zero-padding. `atempo`
+only accepts a factor in `[0.5, 100.0]`, so `atempo_factors` chains
+several instances whose product is the requested speed (0.2 →
+`[0.5, 0.5, 0.8]`).
+
+The in-tree WSOLA stretcher remains as the fallback, taken whenever
+`avfilter_atempo_stretch` returns `None` — the graph could not be built or
+configured, a buffersrc/buffersink call failed, or the chain drained fewer
+than 90% of the target samples, which is what happens on a span too short
+for `atempo`'s analysis window (a few tens of milliseconds between two
+speed regions). WSOLA shares its search positions across channels from a
+mono down-mix, so the stereo image does not wander between them. The move
+to `atempo` is a cost change, not a quality one: WSOLA is
+O(grain × radius) per rendered sample, minutes of a full core on a long
+clip, against `atempo`'s O(n) with ffmpeg's SIMD routines.
+
 Across segments, `build_audio_concat_plan` sizes each segment's PCM by
 **integer accumulation of the per-segment rounded sample count**, never
 `round(cumulativeSec * sampleRate)` — that single change is what keeps A/V
