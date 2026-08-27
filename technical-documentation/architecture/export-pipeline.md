@@ -61,9 +61,9 @@ and **one** encoder + muxer pair:
   per-segment rounded frame counts into a single output frame counter;
   audio follows the same integer accumulation (`AudioConcatPlan`).
 
-- **Audio and video junctions are seamless.** Audio is decoded per
-  segment up front (`audio.rs::decode_clip_audio`), WSOLA stretches each
-  speed sub-segment to its output sample count, and
+- **Audio and video junctions are seamless.** Audio is decoded per clip
+  (`audio.rs::decode_clip_audio`), a libavfilter `atempo` chain stretches
+  each speed sub-segment to its output sample count, and
   `assemble_concatenated_pcm` concatenates the per-segment PCM at the
   integer sample offsets the video loop just produced — never
   `round(cumulativeSec * sampleRate)`, because that compounds per-segment
@@ -71,8 +71,20 @@ and **one** encoder + muxer pair:
   timeline. A short equal-power fade (`cos` on the tail, `sin` on the
   head, `cos² + sin² = 1`) covers each internal boundary to suppress the
   click where two recordings meet butt-joined, without shifting timing.
-  The WSOLA stretch is kicked off before the video loop so it overlaps
-  the encode and does not add to the wall.
+  The in-tree WSOLA stretcher is still there, but only as the fallback
+  `stretch_pcm_to_length` takes when the filter chain cannot be built or
+  yields too little audio (see [Audio](native-compositor.md#audio)).
+
+- **The stretch is not overlapped with the encode.** Decode and stretch
+  run inside `walk_composited_timeline`'s `on_clip_end` callback
+  (`pipeline.rs`), which fires once per clip *after* that clip's frames
+  have been composed and encoded, on the same thread — so the stretch
+  time is added to the export wall, not hidden behind it. `progress()` is
+  driven only by encoded video frames, so nothing moves while it runs and
+  a long clip parks the export at whatever percentage the last frame
+  reported. That is why the `atempo` path matters: it is O(n) where WSOLA
+  is O(grain × radius) per rendered sample, which on a long clip meant
+  minutes of an apparently frozen export.
 
 - **Output** honours the timeline's selected aspect ratio
   (`resolveAspectRatioValue` over `getEditorSettings(document).aspectRatio` —
