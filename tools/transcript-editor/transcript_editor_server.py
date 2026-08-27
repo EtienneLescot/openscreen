@@ -13,23 +13,40 @@
 - 零依赖：只用 Python 标准库，双击就能跑。
 
 用法：python transcript_editor_server.py，浏览器打开 http://127.0.0.1:8765。
-也可以设置环境变量 OPENSCREEN_PROJECTS_DIR 覆盖 OpenScreen 项目目录
-（默认 ~/AppData/Roaming/openscreen/projects），用于非默认安装或其它系统。
+也可以设置环境变量 OPENSCREEN_PROJECTS_DIR 覆盖 OpenScreen 项目目录，
+用于非默认安装。默认按平台定位：Windows 是 ~/AppData/Roaming/openscreen/projects，
+macOS 是 ~/Library/Application Support/openscreen/projects，
+Linux 是 $XDG_CONFIG_HOME/openscreen/projects（未设置时为 ~/.config/openscreen/projects）。
 """
 import json
 import os
 import shutil
+import sys
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 
-# OpenScreen 的项目文件目录。默认按平台惯例定位；可用环境变量覆盖，
-# 这样非默认安装位置或其它平台（macOS ~/Library/Application Support/...）也能用。
-DEFAULT_PROJECTS_TRIES = [
-    os.path.expanduser("~/AppData/Roaming/openscreen/projects"),
-    os.path.expanduser("~/Library/Application Support/openscreen/projects"),
-]
+# OpenScreen 的项目文件目录，即 Electron 的 app.getPath("userData") + "/projects"。
+# 应用名取 package.json 的 name（没有 productName），所以三个平台分别是：
+_WINDOWS_PROJECTS = os.path.expanduser("~/AppData/Roaming/openscreen/projects")
+_MACOS_PROJECTS = os.path.expanduser("~/Library/Application Support/openscreen/projects")
+# Linux 上 userData 是 $XDG_CONFIG_HOME/openscreen，环境变量没设置时退回 ~/.config/openscreen。
+_LINUX_PROJECTS = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+    "openscreen",
+    "projects",
+)
+# 本平台的位置必须排第一：三个都探测不到时会回退到 DEFAULT_PROJECTS_TRIES[0]，
+# main() 又照着它建目录——顺序错了就会在 Linux 家目录里造出 ~/AppData 这种
+# 别的平台形状的空目录，而项目下拉框还是空的。
+if sys.platform == "win32":
+    DEFAULT_PROJECTS_TRIES = [_WINDOWS_PROJECTS, _MACOS_PROJECTS, _LINUX_PROJECTS]
+elif sys.platform == "darwin":
+    DEFAULT_PROJECTS_TRIES = [_MACOS_PROJECTS, _WINDOWS_PROJECTS, _LINUX_PROJECTS]
+else:
+    DEFAULT_PROJECTS_TRIES = [_LINUX_PROJECTS, _WINDOWS_PROJECTS, _MACOS_PROJECTS]
+# 可用环境变量覆盖，这样非默认安装位置也能用。
 PROJECTS_DIR = os.environ.get("OPENSCREEN_PROJECTS_DIR") or next(
     (p for p in DEFAULT_PROJECTS_TRIES if os.path.isdir(p)), DEFAULT_PROJECTS_TRIES[0]
 )
