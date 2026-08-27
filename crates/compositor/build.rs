@@ -388,13 +388,33 @@ fn drop_unusable_libclang_path() {
     }
 }
 
-/// Les noms de fichier que clang-sys reconnaît sous Linux, sa règle et pas la nôtre :
-/// `libclang.so`, `libclang-<v>.so`, `libclang.so.<v>`, `libclang-<v>.so.<v>`.
+/// Les motifs EXACTS que clang-sys cherche sous Linux : `libclang.so`,
+/// `libclang-<v>.so`, `libclang.so.<v>`, `libclang-<v>.so.<v>`.
 ///
-/// `libclang-cpp.*` en est exclu, parce que clang-sys l'exclut lui-même
-/// (`filename.contains("-cpp.")`) : `libclang_shared` a été renommé `libclang-cpp` à
-/// partir de Clang 10 et se fait sinon happer par les motifs cherchant `libclang`. Le
-/// garder ici reviendrait à conserver un chemin que clang-sys refusera ensuite.
+/// Coller aux motifs, et pas seulement au préfixe, parce que `search_libclang_directories`
+/// s'arrête net sur `LIBCLANG_PATH` quand la variable est posée — « Search only the path
+/// indicated by the relevant environment variable » — sans jamais retomber sur
+/// `llvm-config`, le PATH ou les répertoires connus. Conserver un chemin qui ne contient
+/// qu'un `libclang_extra.so` ou un `libclang.software` reviendrait donc à condamner le
+/// build, exactement comme le faisait la valeur Windows.
+///
+/// `libclang-cpp.*` est écarté d'entrée : clang-sys l'écarte lui-même
+/// (`filename.contains("-cpp.")`), `libclang_shared` ayant été renommé `libclang-cpp` à
+/// partir de Clang 10.
 fn is_libclang_filename(name: &str) -> bool {
-    name.starts_with("libclang") && name.contains(".so") && !name.contains("-cpp.")
+    if name.contains("-cpp.") {
+        return false;
+    }
+    let Some(rest) = name.strip_prefix("libclang") else {
+        return false;
+    };
+    // Soit `libclang.so…`, soit `libclang-<v>.so…` avec un `<v>` non vide.
+    let rest = match rest.strip_prefix('-') {
+        Some(versioned) => match versioned.find(".so") {
+            None | Some(0) => return false,
+            Some(i) => &versioned[i..],
+        },
+        None => rest,
+    };
+    rest == ".so" || rest.starts_with(".so.")
 }
