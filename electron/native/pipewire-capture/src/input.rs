@@ -35,16 +35,33 @@ pub fn is_left_button_press(event_type: EventType, code: u16, value: i32) -> boo
     event_type == EventType::KEY && code == KeyCode::BTN_LEFT.0 && value == 1
 }
 
+/// What [`spawn_readers`] settled on — the caller uses it to tell the log why
+/// Linux clicks are or are not being captured.
+///
+/// The two ways of ending up without clicks are NOT the same event: no readable
+/// node is a permission the operator may still want to grant, while `DISABLE_ENV`
+/// is one they explicitly declined — recommending the `input` group there answers
+/// a question nobody asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickCapture {
+    /// Turned off by `OPENSCREEN_DISABLE_CLICK_CAPTURE`; nothing was opened.
+    Disabled,
+    /// No readable `/dev/input` node reports `BTN_LEFT` — the common case, when
+    /// the user is not in the `input` group.
+    NoDevice,
+    /// At least one device is open, with a reader thread running on it.
+    Active,
+}
+
 /// Opens every readable pointer device that reports `BTN_LEFT` and spawns a
-/// reader thread per device. Returns whether at least one was opened — the caller
-/// uses that to tell the log why Linux clicks are or are not being captured.
+/// reader thread per device.
 ///
 /// Never fails: an unreadable node (the common case, when the user is not in the
 /// `input` group) is skipped by `evdev::enumerate`, and no readable node at all
 /// simply means every sample stays `"move"`, exactly as before this existed.
-pub fn spawn_readers(sender: &Sender<Message>) -> bool {
+pub fn spawn_readers(sender: &Sender<Message>) -> ClickCapture {
     if std::env::var_os(DISABLE_ENV).is_some() {
-        return false;
+        return ClickCapture::Disabled;
     }
     let mut opened = 0usize;
     for (_path, device) in evdev::enumerate() {
@@ -55,7 +72,11 @@ pub fn spawn_readers(sender: &Sender<Message>) -> bool {
         let forward = sender.clone();
         thread::spawn(move || read_device(device, forward));
     }
-    opened > 0
+    if opened > 0 {
+        ClickCapture::Active
+    } else {
+        ClickCapture::NoDevice
+    }
 }
 
 fn device_reports_left_button(device: &Device) -> bool {

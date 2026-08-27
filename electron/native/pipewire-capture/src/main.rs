@@ -291,11 +291,16 @@ fn main() {
     let (sender, receiver) = mpsc::channel::<Message>();
     spawn_stdin_reader(sender.clone());
     spawn_portal(sender.clone(), cursor_mode);
-    // Left-button telemetry from evdev. Absent when the user is not in the
-    // `input` group; a session that paints no cursor has no use for it either.
-    // Warn in that case so a "clicks do nothing on Linux" report is answerable
-    // from the log alone rather than looking like a capture bug.
-    if !input::spawn_readers(&sender) && cursor_mode.reports_cursor() {
+    // Left-button telemetry from evdev. Gated on the cursor mode FIRST: a session
+    // that paints no cursor emits no samples to tag, so opening every pointer node
+    // and blocking a thread on each would buy nothing. Warn only when the devices
+    // are unreadable — never when the operator opted out through the env var,
+    // which would recommend the permission they just declined — so a "clicks do
+    // nothing on Linux" report is answerable from the log alone rather than
+    // looking like a capture bug.
+    if cursor_mode.reports_cursor()
+        && input::spawn_readers(&sender) == input::ClickCapture::NoDevice
+    {
         let _ = emitter.emit(&Event::Warning {
             code: "click-capture-unavailable".to_owned(),
             message: "no readable /dev/input pointer device — add this user to the 'input' \

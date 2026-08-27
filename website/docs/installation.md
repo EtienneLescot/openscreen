@@ -24,7 +24,7 @@ Download the latest installer for your platform from the [download page](/downlo
 |---|---|---|
 | **Windows** | Windows 10 version 1903 (build 18362) or later, Intel 8th Gen / AMD Ryzen 2000 series or newer | Windows 11, Intel 12th Gen / AMD Ryzen 4000 series or newer |
 | **macOS** | macOS 12.3 (Monterey) — required by ScreenCaptureKit for native capture | macOS 14 or later |
-| **Linux** | `xdg-desktop-portal` and PipeWire for native capture and system audio (default on Ubuntu 22.04+, Fedora 34+) — recording still works without them through the [browser-capture fallback](#platform-differences), with fewer capabilities | Same, kept up to date |
+| **Linux** | `xdg-desktop-portal` and PipeWire for native capture and system audio (default on Ubuntu 22.04+, Fedora 34+) — recording still works without them through the [browser-capture fallback](#platform-differences), with fewer capabilities. Recording mouse clicks on Wayland additionally needs your user in the `input` group — see [Mouse clicks on Wayland](#mouse-clicks-on-wayland) | Same, kept up to date |
 | **RAM** | 8 GB | 16 GB |
 
 :::note Older integrated graphics on Windows
@@ -110,6 +110,18 @@ As a NixOS system module:
 Home Manager users can use `openscreen.homeManagerModules.default` with the same `programs.openscreen.enable = true;`.
 
 You may need to grant screen-recording permission depending on your desktop environment.
+
+### Mouse clicks on Wayland
+
+Wayland exposes no portal for input events, so OpenScreen reads left-button presses straight from the kernel's evdev interface (`/dev/input/event*`) instead. Those device nodes are owned by `root:input`, so a recording only distinguishes a click from ordinary cursor movement when your user is in the `input` group:
+
+```bash
+sudo usermod -aG input $USER
+```
+
+Log out and back in for the new group to take effect. Nothing breaks without it — recording works exactly as it did before, and every cursor sample is simply recorded as a move.
+
+The scope is deliberately narrow: only the left mouse button (`BTN_LEFT`) is ever read, never keystrokes. To turn the reader off entirely even where the permission exists, set `OPENSCREEN_DISABLE_CLICK_CAPTURE=1` in the environment OpenScreen is launched from.
 
 ## Platform differences
 
