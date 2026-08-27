@@ -1,6 +1,13 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { BrowserWindow, ipcMain, screen } from "electron";
+import { app, BrowserWindow, ipcMain, screen } from "electron";
+import {
+	clampRectToWorkArea,
+	loadEditorWindowState,
+	resolveEditorCreation,
+	saveEditorWindowState,
+	shouldTrackEditorWindow,
+} from "./editorWindowState";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -392,10 +399,18 @@ export function createHudOverlayWindow(): BrowserWindow {
  */
 export function createEditorWindow(query: Record<string, string> = {}): BrowserWindow {
 	const isMac = process.platform === "darwin";
+	const persist = shouldTrackEditorWindow(query);
+	const loaded = persist ? loadEditorWindowState(app.getPath("userData")) : null;
+	const saved = loaded
+		? {
+				...clampRectToWorkArea(loaded, screen.getDisplayMatching(loaded).workArea),
+				maximized: loaded.maximized,
+			}
+		: null;
+	const creation = resolveEditorCreation({ isBench: query.windowType === "bench", saved });
 
 	const win = new BrowserWindow({
-		width: 1200,
-		height: 800,
+		...creation.bounds,
 		minWidth: 800,
 		minHeight: 600,
 		// Seamless titlebar on every platform: the app's own topbar IS the titlebar
@@ -425,7 +440,23 @@ export function createEditorWindow(query: Record<string, string> = {}): BrowserW
 		},
 	});
 
-	win.maximize();
+	if (creation.maximize) win.maximize();
+	if (creation.persist) {
+		const persistState = () => {
+			if (win.isDestroyed()) return;
+			const bounds = win.getNormalBounds();
+			saveEditorWindowState(app.getPath("userData"), {
+				x: bounds.x,
+				y: bounds.y,
+				width: bounds.width,
+				height: bounds.height,
+				maximized: win.isMaximized(),
+			});
+		};
+		win.on("moved", persistState);
+		win.on("resized", persistState);
+		win.on("close", persistState);
+	}
 
 	// The editor renders its own File/Edit/View menu bar in the custom titlebar,
 	// so hide the native OS menu bar on Windows/Linux (it stays reachable via Alt).
