@@ -53,6 +53,52 @@ function makeDoc(): AxcutDocument {
 	};
 }
 
+describe("transcribeAsset status sequence", () => {
+	it("does not emit transcribing between extract and the worker", async () => {
+		const phases: string[] = [];
+		transcribeMock.mockImplementationOnce(async (_samples, options) => {
+			options?.onStatus?.({ phase: "model" });
+			options?.onStatus?.({
+				phase: "transcribe",
+				completedSec: 1,
+				totalSec: 10,
+			});
+			return { segments: [], granularity: "phrase" as const, detectedLanguage: "en" };
+		});
+
+		await transcribeAsset(makeDoc(), "asset_1", {
+			onStatus: (status) => phases.push(status.phase),
+		});
+
+		expect(phases[0]).toBe("extracting-audio");
+		expect(phases[1]).toBe("loading-model");
+		expect(phases.indexOf("transcribing")).toBeGreaterThan(1);
+		expect(phases.slice(0, phases.indexOf("transcribing"))).not.toContain("transcribing");
+	});
+
+	it("forwards model download bytes onto loading-model status", async () => {
+		const events: Array<{ phase: string; downloadedBytes?: number; totalBytes?: number }> = [];
+		transcribeMock.mockImplementationOnce(async (_samples, options) => {
+			options?.onStatus?.({
+				phase: "model",
+				downloadedBytes: 10,
+				totalBytes: 100,
+			});
+			return { segments: [], granularity: "phrase" as const, detectedLanguage: "en" };
+		});
+
+		await transcribeAsset(makeDoc(), "asset_1", {
+			onStatus: (status) => events.push(status),
+		});
+
+		expect(events).toContainEqual({
+			phase: "loading-model",
+			downloadedBytes: 10,
+			totalBytes: 100,
+		});
+	});
+});
+
 describe("transcribeAsset language handling", () => {
 	it("forwards a forced language to the worker and stores it on the transcript", async () => {
 		transcribeMock.mockResolvedValueOnce({

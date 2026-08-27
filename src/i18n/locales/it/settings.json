@@ -283,7 +283,6 @@
 		"show": "Mostra sottotitoli",
 		"noTranscript": "I sottotitoli vengono letti dalla trascrizione del media. Trascrivi questo video per attivarli.",
 		"transcribe": "Trascrivi video",
-		"transcribing": "Trascrizione…",
 		"derivedFromTranscript": "{{count}} righe di sottotitoli, derivate dal vivo dalla trascrizione.",
 		"hiddenHint": "I sottotitoli provengono dalla trascrizione di questo media. Attivali per vederli nell'anteprima e nelle esportazioni.",
 		"legacyAnnotations": "Questo progetto contiene ancora annotazioni di sottotitoli della vecchia funzione ({{count}}). Vengono disegnate sopra il livello dei sottotitoli.",

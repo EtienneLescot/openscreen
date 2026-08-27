@@ -107,7 +107,9 @@ describe("captions pane gating", () => {
 				<CaptionsPane />
 			</I18nProvider>,
 		);
-		expect(screen.getByRole("button", { name: "Transcribing…" })).toBeDisabled();
+		// A phase-less running job renders the shared busy label ("Transcribing",
+		// mediaStage.transcribing) rather than the pane's old private copy.
+		expect(screen.getByRole("button", { name: "Transcribing" })).toBeDisabled();
 	});
 
 	it("kills the retry on a media with no audio track and explains it", () => {

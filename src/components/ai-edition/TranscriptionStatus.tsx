@@ -12,6 +12,7 @@ import { useScopedT } from "@/contexts/I18nContext";
 import {
 	type AssetTranscriptionView,
 	isCpuBackend,
+	isModelDownloadInFlight,
 	progressFraction,
 	realtimeSpeed,
 } from "@/lib/ai-edition/transcription/status";
@@ -30,7 +31,11 @@ export function useTranscriptionLabel(): (view: AssetTranscriptionView) => strin
 				// screen to explain it, so it gets its own words rather than being
 				// labelled "Transcribing" — this is the phase most often mistaken for
 				// a hang, and the one `phase` was carried through the store for.
-				if (view.phase === "loading-model") return t("mediaStage.downloadingModel");
+				if (view.phase === "loading-model") {
+					return isModelDownloadInFlight(view)
+						? t("mediaStage.downloadingModel")
+						: t("mediaStage.initializingModel");
+				}
 				// Transcribing a long recording runs for minutes. A bare
 				// "Transcribing…" for that whole time is indistinguishable from a
 				// hang, so append the percentage as soon as the main process reports

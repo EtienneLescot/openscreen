@@ -145,6 +145,7 @@
 		"notGeneratedHint": "Chưa được tạo — chọn ngôn ngữ và nhấp vào tạo lại.",
 		"transcribing": "Đang phiên âm",
 		"downloadingModel": "Đang tải mô hình giọng nói",
+		"initializingModel": "Đang khởi động mô hình giọng nói",
 		"transcribingEllipsis": "Đang phiên âm…",
 		"pendingTranscription": "Đang chờ phiên âm",
 		"transcriptionFailed": "Phiên âm thất bại",

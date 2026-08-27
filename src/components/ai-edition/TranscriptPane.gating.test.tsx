@@ -77,8 +77,9 @@ describe("transcript pane gating", () => {
 
 	it("shows the background run in progress instead of an idle button", () => {
 		renderPane({ isTranscribing: true });
-		const button = screen.getByRole("button", { name: "Transcribing…" });
+		const button = screen.getByRole("button", { name: "Starting speech model" });
 		expect(button).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Transcribing…" })).toBeNull();
 	});
 
 	it("disables the button when the timeline's media have no audio track, and says why", () => {

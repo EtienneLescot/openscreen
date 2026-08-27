@@ -63,7 +63,11 @@ import {
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
-import type { TranscriptGateReason } from "@/lib/ai-edition/transcription/status";
+import {
+	type AssetTranscriptionView,
+	firstBusyView,
+	type TranscriptGateReason,
+} from "@/lib/ai-edition/transcription/status";
 import { getAssetPath } from "@/lib/assetPath";
 import { resolveWebcamLayoutPreset, supportsWebcamReactiveZoom } from "@/lib/compositeLayout";
 import { supportsCursorClickEffects } from "@/lib/cursor/cursorCapabilities";
@@ -87,6 +91,8 @@ import {
 } from "@/utils/aspectRatioUtils";
 import { useCanSegmentCamera } from "../../native/hooks/useSegmentationSupport";
 import styles from "./NewEditorShell.module.css";
+import { useTranscriptionLabel } from "./TranscriptionStatus";
+import { transcriptionBusyLabel } from "./transcriptionBusyLabel";
 
 interface PaneProps {
 	title: string;
@@ -705,6 +711,7 @@ export function TranscriptPane({
 	assets,
 	trimRanges,
 	busyAssetIds,
+	transcriptions,
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
@@ -723,6 +730,7 @@ export function TranscriptPane({
 	 *  stream silently swallow Backspace and hover-bin clicks for the whole
 	 *  background pass, with nothing on screen to say why. */
 	busyAssetIds: readonly string[];
+	transcriptions?: Record<string, AssetTranscriptionView>;
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
@@ -770,6 +778,12 @@ export function TranscriptPane({
 	// Only silence is a dead end: every other reason (a retryable failure, no
 	// engine, nothing attempted) leaves the button worth pressing.
 	const silentMedia = blocked?.reason === "no-audio";
+	const transcriptionLabel = useTranscriptionLabel();
+	const paneBusyLabel = transcriptionBusyLabel(
+		firstBusyView(Object.values(transcriptions ?? {})) ??
+			(isTranscribing ? { assetId: "", status: "running", phase: "loading-model" } : undefined),
+		transcriptionLabel,
+	);
 
 	if (clips.length === 0 || !hasAnyTranscript) {
 		return (
@@ -795,7 +809,7 @@ export function TranscriptPane({
 						{clips.length === 0
 							? ts("transcript.noClips")
 							: isTranscribing
-								? ts("transcript.transcribing")
+								? (paneBusyLabel ?? ts("transcript.transcribing"))
 								: silentMedia
 									? ts("transcript.noAudio")
 									: ts("transcript.noTranscript")}
@@ -813,7 +827,7 @@ export function TranscriptPane({
 						// fail on the same missing track every time.
 						disabled={!canTranscribe || isTranscribing || silentMedia}
 					>
-						{isTranscribing ? ts("transcript.transcribing") : ts("transcript.transcribeNow")}
+						{paneBusyLabel ?? ts("transcript.transcribeNow")}
 					</button>
 				</div>
 			</Pane>
@@ -832,6 +846,10 @@ export function TranscriptPane({
 						index={idx}
 						section={section}
 						busy={busyAssetIds.includes(section.clip.assetId)}
+						busyLabel={
+							transcriptionBusyLabel(transcriptions?.[section.clip.assetId], transcriptionLabel) ??
+							undefined
+						}
 						cueWordId={cueWordId}
 						onSeek={onSeek}
 						onAddTrimRange={onAddTrimRange}
@@ -859,6 +877,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	index,
 	section,
 	busy,
+	busyLabel,
 	cueWordId,
 	onSeek,
 	onAddTrimRange,
@@ -867,6 +886,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	index: number;
 	section: ClipSection;
 	busy: boolean;
+	busyLabel?: string;
 	cueWordId: string | null;
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
@@ -1159,7 +1179,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						}}
 					>
 						<Loader2 size={12} className="animate-spin" />
-						{ts("transcript.transcribing")}
+						{busyLabel ?? ts("transcript.transcribing")}
 					</span>
 				) : null}
 			</span>
@@ -1173,7 +1193,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						fontStyle: "italic",
 					}}
 				>
-					{busy ? ts("transcript.transcribing") : ts("transcript.noClipTranscript")}
+					{busy ? (busyLabel ?? ts("transcript.transcribing")) : ts("transcript.noClipTranscript")}
 				</p>
 			) : (
 				<div

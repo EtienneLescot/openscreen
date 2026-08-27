@@ -284,7 +284,6 @@
 		"show": "顯示字幕",
 		"noTranscript": "字幕取自媒體的逐字稿。請先為這部影片產生逐字稿以啟用字幕。",
 		"transcribe": "為影片產生逐字稿",
-		"transcribing": "轉錄中…",
 		"derivedFromTranscript": "{{count}} 行字幕，即時由逐字稿產生。",
 		"hiddenHint": "字幕來自這個媒體的逐字稿。開啟後即可在預覽與匯出中看到。",
 		"legacyAnnotations": "此專案仍含有舊字幕功能留下的字幕註解（{{count}} 個）。它們會繪製在字幕圖層之上。",

@@ -145,6 +145,7 @@
 		"notGeneratedHint": "Henüz oluşturulmadı — bir dil seçin ve yeniden oluştur'a tıklayın.",
 		"transcribing": "Metne dökülüyor",
 		"downloadingModel": "Konuşma modeli indiriliyor",
+		"initializingModel": "Konuşma modeli başlatılıyor",
 		"transcribingEllipsis": "Metne dökülüyor…",
 		"pendingTranscription": "Metne dökme bekliyor",
 		"transcriptionFailed": "Metne dökme başarısız oldu",

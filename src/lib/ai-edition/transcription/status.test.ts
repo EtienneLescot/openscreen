@@ -4,7 +4,9 @@ import {
 	type AssetTranscriptionView,
 	classifyTranscriptionError,
 	deriveAssetStatus,
+	firstBusyView,
 	isCpuBackend,
+	isModelDownloadInFlight,
 	isPermanentFailure,
 	progressFraction,
 	realtimeSpeed,
@@ -322,6 +324,22 @@ describe("isCpuBackend", () => {
 		expect(isCpuBackend("whispercpp-metal")).toBe(false);
 		expect(isCpuBackend("whispercpp-cuda")).toBe(false);
 		expect(isCpuBackend(undefined)).toBe(false);
+	});
+});
+
+describe("model download bytes", () => {
+	it("is in-flight only when totalBytes is positive and download is incomplete", () => {
+		expect(isModelDownloadInFlight({ downloadedBytes: 10, totalBytes: 100 })).toBe(true);
+		expect(isModelDownloadInFlight({ downloadedBytes: 100, totalBytes: 100 })).toBe(false);
+		expect(isModelDownloadInFlight({})).toBe(false);
+	});
+
+	it("prefers a running view over a queued one for pane copy", () => {
+		const busy = firstBusyView([
+			view("a", "queued"),
+			{ assetId: "b", status: "running", phase: "loading-model" },
+		]);
+		expect(busy?.assetId).toBe("b");
 	});
 });
 

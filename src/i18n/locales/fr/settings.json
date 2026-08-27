@@ -283,7 +283,6 @@
 		"show": "Afficher les sous-titres",
 		"noTranscript": "Les sous-titres sont issus de la transcription du média. Transcrivez cette vidéo pour les activer.",
 		"transcribe": "Transcrire la vidéo",
-		"transcribing": "Transcription…",
 		"derivedFromTranscript": "{{count}} lignes de sous-titres, dérivées de la transcription en direct.",
 		"hiddenHint": "Les sous-titres proviennent de la transcription de ce média. Activez-les pour les voir dans l'aperçu et à l'export.",
 		"legacyAnnotations": "Ce projet contient encore des annotations de sous-titres issues de l'ancienne fonctionnalité ({{count}}). Elles s'affichent par-dessus les sous-titres.",

@@ -283,7 +283,6 @@
 		"show": "Hiện phụ đề",
 		"noTranscript": "Phụ đề được lấy từ bản chép lời của media. Hãy chép lời video này để bật phụ đề.",
 		"transcribe": "Chép lời video",
-		"transcribing": "Đang chép lời…",
 		"derivedFromTranscript": "{{count}} dòng phụ đề, được tạo trực tiếp từ bản chép lời.",
 		"hiddenHint": "Phụ đề đến từ bản chép lời của media này. Bật lên để thấy chúng trong bản xem trước và khi xuất.",
 		"legacyAnnotations": "Dự án này vẫn còn chú thích phụ đề từ tính năng phụ đề cũ ({{count}}). Chúng hiển thị đè lên lớp phụ đề.",

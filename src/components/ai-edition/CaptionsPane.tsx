@@ -20,14 +20,18 @@ import {
 } from "@/lib/ai-edition/captions";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
+	useAssetTranscriptions,
 	useTimelineTranscriptGate,
 	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { useCaptions } from "@/lib/ai-edition/store/useCaptions";
+import { firstBusyView } from "@/lib/ai-edition/transcription/status";
 import { nativeBridgeClient } from "@/native";
 import { ColorField } from "./ColorField";
 import styles from "./NewEditorShell.module.css";
 import { SliderCell, Toggle } from "./RightPanes";
+import { useTranscriptionLabel } from "./TranscriptionStatus";
+import { transcriptionBusyLabel } from "./transcriptionBusyLabel";
 
 /** The families `src/index.css` already loads for on-canvas text — anything else
  *  would render in the preview but fall back to a default in the export canvas. */
@@ -98,7 +102,14 @@ export function CaptionsPane() {
 	// actual footage had speech.
 	const gate = useTimelineTranscriptGate();
 	const requestTimelineTranscripts = useTranscriptionStore((s) => s.requestTimelineTranscripts);
+	const transcriptions = useAssetTranscriptions();
+	const transcriptionLabel = useTranscriptionLabel();
 	const isTranscribing = gate.state === "pending";
+	const busyLabel = transcriptionBusyLabel(
+		firstBusyView(Object.values(transcriptions)) ??
+			(isTranscribing ? { assetId: "", status: "running", phase: "loading-model" } : undefined),
+		transcriptionLabel,
+	);
 	const silentMedia = gate.state === "blocked" && gate.reason === "no-audio";
 	const engineError = gate.state === "blocked" && gate.reason === "failed" ? gate.message : null;
 
@@ -232,7 +243,7 @@ export function CaptionsPane() {
 							onClick={() => void requestTimelineTranscripts()}
 						>
 							{isTranscribing ? <Loader2 size={14} className="animate-spin" /> : null}
-							{isTranscribing ? t("captions.transcribing") : t("captions.transcribe")}
+							{busyLabel ?? t("captions.transcribe")}
 						</button>
 					</div>
 				) : (

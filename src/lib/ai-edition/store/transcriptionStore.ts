@@ -59,6 +59,8 @@ export interface TranscriptionJob {
 	 */
 	backend?: string;
 	rtf?: number;
+	downloadedBytes?: number;
+	totalBytes?: number;
 	/** `"auto"` unless the user forced a language from the media card. */
 	language: string;
 	failure?: TranscriptionFailure;
@@ -386,6 +388,10 @@ async function runJob(assetId: string, job: TranscriptionJob): Promise<void> {
 					// first chunk (audio extraction, the model download) carry neither.
 					...(status.backend !== undefined ? { backend: status.backend } : {}),
 					...(status.rtf !== undefined ? { rtf: status.rtf } : {}),
+					...(status.downloadedBytes !== undefined
+						? { downloadedBytes: status.downloadedBytes }
+						: {}),
+					...(status.totalBytes !== undefined ? { totalBytes: status.totalBytes } : {}),
 				}),
 		});
 		if (controller.signal.aborted) {

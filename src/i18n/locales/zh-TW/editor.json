@@ -145,6 +145,7 @@
 		"notGeneratedHint": "尚未產生 — 選擇語言並點擊重新產生。",
 		"transcribing": "轉錄中",
 		"downloadingModel": "正在下載語音模型",
+		"initializingModel": "正在啟動語音模型",
 		"transcribingEllipsis": "轉錄中…",
 		"pendingTranscription": "等待轉錄",
 		"transcriptionFailed": "轉錄失敗",
