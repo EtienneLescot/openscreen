@@ -1127,6 +1127,24 @@ fn finish_capture<W: Write>(
                     ),
                 });
             }
+            // The video timeline should equal real elapsed wall-clock time. With
+            // wall-clock PTS it does by construction; a divergence beyond a frame
+            // or two means frames are being stamped off the clock again (#511) —
+            // surface it loudly rather than shipping a silently time-compressed
+            // file that plays ahead of audio, webcam and the cursor overlay.
+            const TIMELINE_SKEW_EPSILON_MS: i64 = 100;
+            let skew = summary.duration_ms as i64 - summary.wall_clock_ms as i64;
+            if skew.abs() > TIMELINE_SKEW_EPSILON_MS {
+                let _ = emitter.emit(&Event::Warning {
+                    code: "timeline-divergence".to_owned(),
+                    message: format!(
+                        "the recorded video timeline is {} ms but the recording ran {} ms of \
+                         wall-clock time (off by {} ms); the screen track may be out of sync \
+                         with audio, webcam and the cursor overlay. See issue #511.",
+                        summary.duration_ms, summary.wall_clock_ms, skew.abs()
+                    ),
+                });
+            }
             let _ = emitter.emit(&Event::CaptureStopped {
                 timestamp_ms: timestamp_ms(),
                 path: summary.path.display().to_string(),
