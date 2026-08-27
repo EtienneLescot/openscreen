@@ -30,6 +30,13 @@ import {
 	installSelfUpdate,
 	type UpdateOutcome,
 } from "./auto-updater";
+import {
+	BACKGROUND_UPDATE_INTERVAL_MS,
+	planBackgroundUpdate,
+	runUnblockedDownloadAndInstall,
+	shouldStartBackgroundUpdateTimer,
+	type UpdateMode,
+} from "./background-update";
 import { parseCliArgs } from "./cli/args";
 import { runCli } from "./cli/cliMain";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "./diagnostics/main-log-buffer";
@@ -40,7 +47,12 @@ import {
 	unregisterAllGlobalShortcuts,
 } from "./globalShortcut";
 import { mainT, setMainLocale } from "./i18n";
-import { getInstallChannel, offersUpdateCheck, platformOwnsUpdates } from "./install-channel";
+import {
+	getInstallChannel,
+	offersUpdateCheck,
+	ownsItsUpdates,
+	platformOwnsUpdates,
+} from "./install-channel";
 import {
 	exportDiagnosticFile,
 	getSelectedDesktopSource,
@@ -49,6 +61,7 @@ import {
 import { installMainProcessErrorGuards } from "./main-process-errors";
 import { registerSttIpc, shutdownStt } from "./stt";
 import { checkLatestRelease } from "./update-checker";
+import { loadUpdateMode, saveUpdateMode } from "./update-settings";
 import {
 	createCountdownOverlayWindow,
 	createEditorWindow,
@@ -578,29 +591,63 @@ function runSaveDiagnostics() {
  *  and on Windows it physically cannot, because the capture helpers spawn from inside the
  *  install directory and NSIS cannot overwrite a running .exe. */
 let isRecording = false;
+let currentUpdateMode: UpdateMode = "notify";
+let backgroundUpdateTimer: ReturnType<typeof setInterval> | null = null;
+
+function showUpdateSettingsMenu(): boolean {
+	return app.isPackaged && ownsItsUpdates(getInstallChannel());
+}
+
+function persistUpdateMode(mode: UpdateMode) {
+	currentUpdateMode = mode;
+	saveUpdateMode(app.getPath("userData"), mode);
+	updateTrayMenu(isRecording);
+}
 
 async function downloadAndInstall(latestVersion: string) {
-	const downloaded = await downloadSelfUpdate();
-	if (downloaded.kind === "failed") {
+	const result = await runUnblockedDownloadAndInstall({
+		download: downloadSelfUpdate,
+		blocked: () =>
+			blockedFromInstalling({
+				recording: isRecording,
+				inApplicationsFolder:
+					process.platform === "darwin" ? (app.isInApplicationsFolder?.() ?? true) : true,
+				platform: process.platform,
+			}),
+		confirmRestart: async () => {
+			const restart = await showMessageBox({
+				type: "info",
+				title: PRODUCT_NAME,
+				message: mainT("common", "updates.readyToInstall", { latestVersion }),
+				buttons: [
+					mainT("common", "actions.restartNow") || "Restart Now",
+					mainT("common", "actions.cancel") || "Cancel",
+				],
+				defaultId: 0,
+				cancelId: 1,
+			});
+			return restart.response;
+		},
+		install: installSelfUpdate,
+	});
+	if (result.status === "failed") {
 		await showMessageBox({
 			type: "error",
 			title: PRODUCT_NAME,
 			// Not `updates.failed`: the CHECK succeeded — that is how we got here — and telling
 			// the user we could not check for updates sends them looking in the wrong place.
 			message: mainT("common", "updates.downloadFailed"),
-			detail: downloaded.error.message,
+			detail: result.error.message,
 		});
 		return;
 	}
-
-	const blocked = blockedFromInstalling({
-		recording: isRecording,
-		// macOS-only API; absent elsewhere, and irrelevant there.
-		inApplicationsFolder:
-			process.platform === "darwin" ? (app.isInApplicationsFolder?.() ?? true) : true,
-		platform: process.platform,
-	});
-	if (blocked) {
+	if (result.status === "blocked") {
+		const blocked = blockedFromInstalling({
+			recording: isRecording,
+			inApplicationsFolder:
+				process.platform === "darwin" ? (app.isInApplicationsFolder?.() ?? true) : true,
+			platform: process.platform,
+		});
 		await showMessageBox({
 			type: "info",
 			title: PRODUCT_NAME,
@@ -609,21 +656,78 @@ async function downloadAndInstall(latestVersion: string) {
 				blocked === "recording" ? "updates.blockedRecording" : "updates.blockedLocation",
 			),
 		});
-		return;
 	}
+}
 
-	const restart = await showMessageBox({
+async function presentAvailableUpdate(latestVersion: string) {
+	const choice = await showMessageBox({
 		type: "info",
 		title: PRODUCT_NAME,
-		message: mainT("common", "updates.readyToInstall", { latestVersion }),
+		message: mainT("common", "updates.available", {
+			currentVersion: app.getVersion(),
+			latestVersion,
+		}),
 		buttons: [
-			mainT("common", "actions.restartNow") || "Restart Now",
+			mainT("common", "actions.downloadUpdate") || "Download Update",
 			mainT("common", "actions.cancel") || "Cancel",
 		],
 		defaultId: 0,
 		cancelId: 1,
 	});
-	if (restart.response === 0) await installSelfUpdate();
+	if (choice.response === 0) await downloadAndInstall(latestVersion);
+}
+
+async function runBackgroundUpdateCheck() {
+	if (updateCheckInFlight || !canOfferUpdateCheck()) return;
+	updateCheckInFlight = true;
+	try {
+		const outcome = await probeSelfUpdate();
+		const plan = planBackgroundUpdate({ outcome, mode: currentUpdateMode });
+		if (plan.action === "none") return;
+		if (plan.action === "notify-available") {
+			await presentAvailableUpdate(plan.version);
+			return;
+		}
+		if (plan.action === "download") {
+			const downloaded = await downloadSelfUpdate();
+			if (downloaded.kind === "failed") {
+				await showMessageBox({
+					type: "error",
+					title: PRODUCT_NAME,
+					message: mainT("common", "updates.downloadFailed"),
+					detail: downloaded.error.message,
+				});
+				return;
+			}
+			await showMessageBox({
+				type: "info",
+				title: PRODUCT_NAME,
+				message: mainT("common", "updates.downloaded", { latestVersion: plan.version }),
+			});
+			return;
+		}
+		await downloadAndInstall(plan.version);
+	} catch (error) {
+		console.error("[updates] background check failed", error);
+	} finally {
+		updateCheckInFlight = false;
+	}
+}
+
+function startBackgroundUpdateTimer() {
+	if (backgroundUpdateTimer) return;
+	if (
+		!shouldStartBackgroundUpdateTimer({
+			isPackaged: app.isPackaged,
+			ownsItsUpdates: ownsItsUpdates(getInstallChannel()),
+		})
+	) {
+		return;
+	}
+	backgroundUpdateTimer = setInterval(() => {
+		void runBackgroundUpdateCheck();
+	}, BACKGROUND_UPDATE_INTERVAL_MS);
+	backgroundUpdateTimer.unref?.();
 }
 
 /** `onVerdict` fires as soon as we know whether an update exists — before any of the dialogs
@@ -768,6 +872,29 @@ function updateTrayMenu(recording: boolean = false) {
 							{
 								label: mainT("common", "actions.checkForUpdates") || "Check for Updates",
 								click: runUpdateCheck,
+							},
+						]
+					: []),
+				...(showUpdateSettingsMenu()
+					? [
+							{
+								label: mainT("common", "actions.updateSettings") || "Update Settings",
+								submenu: (
+									[
+										["notify", "updateModeNotify", "Notify when an update is available"],
+										["download", "updateModeDownload", "Download updates automatically"],
+										[
+											"download-and-install",
+											"updateModeDownloadAndInstall",
+											"Download and install updates automatically",
+										],
+									] as const
+								).map(([mode, key, fallback]) => ({
+									label: mainT("common", `actions.${key}`) || fallback,
+									type: "radio" as const,
+									checked: currentUpdateMode === mode,
+									click: () => persistUpdateMode(mode),
+								})),
 							},
 						]
 					: []),
@@ -1136,8 +1263,14 @@ appReady?.then(async () => {
 		});
 	});
 
+	// Deliberately no updater touch here: importing electron-updater costs
+	// startup time and the channels that cannot use it must not pay for it at
+	// all (see auto-updater.ts getUpdater) — every real update path applies
+	// its settings lazily on first use.
+	currentUpdateMode = loadUpdateMode(app.getPath("userData"));
 	createTray();
 	updateTrayMenu();
+	startBackgroundUpdateTimer();
 	configureAboutPanel();
 	setupApplicationMenu();
 	await ensureRecordingsDir();
