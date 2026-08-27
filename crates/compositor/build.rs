@@ -364,19 +364,37 @@ fn vendored_ffmpeg_tree(name: &str) -> Option<String> {
 /// gagner l'environnement réel sur la config, et on ne casse pas un choix explicite.
 fn drop_unusable_libclang_path() {
     println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
-    let Ok(dir) = env::var("LIBCLANG_PATH") else {
+    let Ok(value) = env::var("LIBCLANG_PATH") else {
         return;
     };
-    // `libclang.so`, `libclang.so.1`, `libclang-14.so` : les distributions ne
-    // s'accordent pas sur le suffixe, seul le préfixe est stable.
-    let holds_libclang = std::fs::read_dir(&dir).is_ok_and(|entries| {
-        entries.flatten().any(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            name.starts_with("libclang") && name.contains(".so")
+    // clang-sys accepte DEUX formes : un fichier bibliothèque, ou un répertoire qui en
+    // contient un (`search_libclang_directories` : « Check if the path is a matching
+    // file », puis « … a directory containing a matching file »). Ne traiter que le
+    // répertoire retirerait un `LIBCLANG_PATH` parfaitement valide pointant sur
+    // `/usr/lib/llvm-N/lib/libclang.so.1`.
+    let path = Path::new(&value);
+    let usable = if path.is_file() {
+        path.file_name()
+            .is_some_and(|n| is_libclang_filename(&n.to_string_lossy()))
+    } else {
+        std::fs::read_dir(path).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|e| is_libclang_filename(&e.file_name().to_string_lossy()))
         })
-    });
-    if !holds_libclang {
+    };
+    if !usable {
         env::remove_var("LIBCLANG_PATH");
     }
+}
+
+/// Les noms de fichier que clang-sys reconnaît sous Linux, sa règle et pas la nôtre :
+/// `libclang.so`, `libclang-<v>.so`, `libclang.so.<v>`, `libclang-<v>.so.<v>`.
+///
+/// `libclang-cpp.*` en est exclu, parce que clang-sys l'exclut lui-même
+/// (`filename.contains("-cpp.")`) : `libclang_shared` a été renommé `libclang-cpp` à
+/// partir de Clang 10 et se fait sinon happer par les motifs cherchant `libclang`. Le
+/// garder ici reviendrait à conserver un chemin que clang-sys refusera ensuite.
+fn is_libclang_filename(name: &str) -> bool {
+    name.starts_with("libclang") && name.contains(".so") && !name.contains("-cpp.")
 }
