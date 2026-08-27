@@ -478,7 +478,10 @@ impl Capture {
         // index so the file's last PTS reflects real elapsed time even when the
         // loop's final heartbeat landed a few ticks before stop — otherwise a
         // recording that ended during a quiet spell would be short by that gap.
-        if self.paused_at.is_none() && self.encoder.has_staged_frame() {
+        // Runs even when stopped while PAUSED: `current_index()` freezes at the
+        // pause boundary, so the active time up to the pause still reaches the
+        // timeline (a stop can follow a pause with no resume in between).
+        if self.encoder.has_staged_frame() {
             let target = self.current_index();
             if target >= self.next_index {
                 let track = self.video_track;
@@ -1061,6 +1064,42 @@ mod tests {
             summary.frames <= 3,
             "the stall must not be backfilled with duplicates, encoded {} frames",
             summary.frames
+        );
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn finishing_while_paused_still_records_the_active_time_before_the_pause() {
+        // Stop can arrive while paused — the user pauses, then decides to stop
+        // without resuming. The active time between the last heartbeat and the
+        // pause must still reach the timeline; dropping it would compress the
+        // file and desync the screen from audio (#511), the same class of bug.
+        // current_index() freezes at the pause boundary, so the tail write is
+        // both safe and required while paused.
+        let output = std::env::temp_dir().join("openscreen-capture-pause-finish.mp4");
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 60, Some(1_000_000), Some(Backend::Software), Vec::new())
+                .expect("start");
+        capture
+            .stage(&frame(320, 240, shim::constants().video_format_bgrx))
+            .expect("stage");
+
+        // ~200 ms of active time passes WITHOUT a heartbeat servicing it (loop
+        // starved), then the user pauses and stops.
+        std::thread::sleep(Duration::from_millis(200));
+        capture.pause();
+        let summary = capture.finish().expect("finish");
+
+        assert!(
+            summary.duration_ms >= 180,
+            "the ~200 ms active before the pause must reach the timeline, got {} ms",
+            summary.duration_ms
+        );
+        let skew = (summary.duration_ms as i64 - summary.wall_clock_ms as i64).abs();
+        assert!(
+            skew <= 60,
+            "duration {} ms and wall-clock {} ms diverged by {} ms",
+            summary.duration_ms, summary.wall_clock_ms, skew
         );
         let _ = std::fs::remove_file(&output);
     }
