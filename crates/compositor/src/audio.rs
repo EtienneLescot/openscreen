@@ -24,6 +24,9 @@ const MIN_FRAME_SEC: f64 = 0.005;
 const DEFAULT_SEARCH_SEC: f64 = 0.01;
 const TARGET_GRAINS: usize = 8;
 const PASSTHROUGH_EPSILON: f64 = 1e-3;
+const DECODE_BUDGET_SLACK: f64 = 8.0;
+const MIN_DECODE_BUDGET_SEC: u64 = 60;
+const MAX_DECODE_BUDGET_SEC: u64 = 3600 * 8;
 
 pub type PlanarPcm = Vec<Vec<f32>>;
 
@@ -348,11 +351,15 @@ unsafe fn decode_clip_audio_inner(
     // `decoder_eof` never propagates and the loop spins at 100% CPU forever.
     // A TIME budget, not an iteration count: `av_read_frame` can be slow on a
     // corrupt stream, so a count would either never fire or cut healthy long
-    // clips short. The budget scales with the requested window (x8, floor 60 s,
-    // hard ceiling so a WebM reporting duration = Infinity cannot disable it).
+    // clips short. The budget scales with the requested window
+    // (`DECODE_BUDGET_SLACK`), with a floor (`MIN_DECODE_BUDGET_SEC`) and a hard
+    // ceiling (`MAX_DECODE_BUDGET_SEC`, so a WebM reporting duration = Infinity
+    // cannot disable it).
     let loop_start = std::time::Instant::now();
     let span_sec = (source_end_sec - decode_start_sec).max(0.0);
-    let loop_budget_secs = ((span_sec * 8.0) as u64).max(60).min(3600 * 8);
+    let loop_budget_secs = ((span_sec * DECODE_BUDGET_SLACK) as u64)
+        .max(MIN_DECODE_BUDGET_SEC)
+        .min(MAX_DECODE_BUDGET_SEC);
     let loop_budget = std::time::Duration::from_secs(loop_budget_secs);
 
     let mut packet = av_packet_alloc();
