@@ -447,7 +447,7 @@ export function MediaStage({
 								) : (
 									<span style={{ color: "var(--muted)" }}>
 										{selectedBusy
-											? t("mediaStage.transcribingEllipsis")
+											? transcriptionLabel(selectedTranscription)
 											: selectedTranscription.status === "failed"
 												? t("mediaStage.generationFailedHint")
 												: t("mediaStage.notGeneratedHint")}

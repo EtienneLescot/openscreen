@@ -275,7 +275,6 @@
 		"show": "显示字幕",
 		"noTranscript": "字幕来自媒体的转录。请先转录此视频以启用字幕。",
 		"transcribe": "转录视频",
-		"transcribing": "转录中…",
 		"derivedFromTranscript": "{{count}} 行字幕，实时由转录生成。",
 		"hiddenHint": "字幕来自此媒体的转录。开启后可在预览和导出中看到。",
 		"legacyAnnotations": "此项目仍包含旧字幕功能生成的字幕批注（{{count}} 条）。它们会绘制在字幕图层之上。",

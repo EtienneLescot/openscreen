@@ -145,6 +145,7 @@
 		"notGeneratedHint": "まだ生成されていません — 言語を選んで再生成をクリックしてください。",
 		"transcribing": "文字起こし中",
 		"downloadingModel": "音声モデルをダウンロード中",
+		"initializingModel": "音声モデルを起動しています",
 		"transcribingEllipsis": "文字起こし中…",
 		"pendingTranscription": "文字起こし待機中",
 		"transcriptionFailed": "文字起こしに失敗しました",

@@ -145,6 +145,7 @@
 		"notGeneratedHint": "아직 생성되지 않음 — 언어를 선택하고 재생성을 클릭하세요.",
 		"transcribing": "받아쓰는 중",
 		"downloadingModel": "음성 모델 다운로드 중",
+		"initializingModel": "음성 모델 시작 중",
 		"transcribingEllipsis": "받아쓰는 중…",
 		"pendingTranscription": "받아쓰기 대기 중",
 		"transcriptionFailed": "받아쓰기 실패",

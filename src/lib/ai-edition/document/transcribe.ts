@@ -22,6 +22,10 @@ export interface TranscribeStatus {
 	backend?: string;
 	/** Real-time factor for the run so far — wall-clock / audio, lower is faster. */
 	rtf?: number;
+	/** Bytes of the speech model fetched so far. Only during `"loading-model"`. */
+	downloadedBytes?: number;
+	/** Total bytes of the in-flight model download. */
+	totalBytes?: number;
 }
 
 export interface TranscribeAssetOptions {
@@ -47,7 +51,10 @@ export async function transcribeAsset(
 		signal: options.signal,
 	});
 
-	options.onStatus?.({ phase: "transcribing" });
+	// Stay on loading-model until the main process reports inference chunks.
+	// Emitting "transcribing" here used to label the cold `server.start()` wait
+	// as if recognition had begun.
+	options.onStatus?.({ phase: "loading-model" });
 	// Only pass `language` to the worker when the caller forced a specific
 	// code. `"auto"` (or any falsy value) leaves Whisper to detect from
 	// the audio. The pipeline tags every chunk with the language it used
@@ -72,6 +79,10 @@ export async function transcribeAsset(
 				// case a user cannot otherwise diagnose.
 				backend: status.backend,
 				rtf: status.rtf,
+				...(status.downloadedBytes !== undefined
+					? { downloadedBytes: status.downloadedBytes }
+					: {}),
+				...(status.totalBytes !== undefined ? { totalBytes: status.totalBytes } : {}),
 			}),
 	});
 

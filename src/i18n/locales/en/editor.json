@@ -140,6 +140,7 @@
 		"transcriptReady": "Transcript ready",
 		"transcribing": "Transcribing",
 		"downloadingModel": "Downloading speech model",
+		"initializingModel": "Starting speech model",
 		"transcribingEllipsis": "Transcribing…",
 		"pendingTranscription": "Pending transcription",
 		"transcriptionFailed": "Transcription failed",

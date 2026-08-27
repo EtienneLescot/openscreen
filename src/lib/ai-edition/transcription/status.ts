@@ -66,6 +66,22 @@ export function isCpuBackend(backend: string | undefined): boolean {
 	return backend === "whispercpp-cpu";
 }
 
+/** True while a model file is still arriving — not merely "the model is loading". */
+export function isModelDownloadInFlight(view: {
+	downloadedBytes?: number;
+	totalBytes?: number;
+}): boolean {
+	return (view.totalBytes ?? 0) > 0 && (view.downloadedBytes ?? 0) < (view.totalBytes ?? 0);
+}
+
+/** First running job, else first queued one — the pane spinner's source of copy. */
+export function firstBusyView(
+	views: Iterable<AssetTranscriptionView>,
+): AssetTranscriptionView | undefined {
+	const list = [...views];
+	return list.find((v) => v.status === "running") ?? list.find((v) => v.status === "queued");
+}
+
 /**
  * A media that has no audio track (or one Whisper cannot read) will fail the
  * same way on every attempt, so that verdict is worth remembering: it is
@@ -128,6 +144,10 @@ export interface AssetTranscriptionView {
 	backend?: string;
 	/** Real-time factor for the run so far; pair with `realtimeSpeed()` to display. */
 	rtf?: number;
+	/** Bytes of the speech model fetched so far. Only during `"loading-model"`. */
+	downloadedBytes?: number;
+	/** Total bytes of the in-flight model download. */
+	totalBytes?: number;
 }
 
 /** In-flight (or last-failed) state of one asset's job. Mirrors the store entry. */
@@ -138,6 +158,8 @@ export interface TranscriptionJobLike {
 	failure?: TranscriptionFailure;
 	backend?: string;
 	rtf?: number;
+	downloadedBytes?: number;
+	totalBytes?: number;
 }
 
 export function findAssetTranscript(
@@ -187,6 +209,8 @@ export function deriveAssetStatus(input: {
 			progress: job.progress,
 			backend: job.backend,
 			rtf: job.rtf,
+			downloadedBytes: job.downloadedBytes,
+			totalBytes: job.totalBytes,
 		};
 	}
 	if (transcript) {

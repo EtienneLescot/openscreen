@@ -275,7 +275,6 @@
 		"show": "Altyazıları göster",
 		"noTranscript": "Altyazılar medyanın dökümünden okunur. Açmak için bu videonun dökümünü çıkarın.",
 		"transcribe": "Videonun dökümünü çıkar",
-		"transcribing": "Döküm çıkarılıyor…",
 		"derivedFromTranscript": "{{count}} altyazı satırı, dökümden canlı olarak türetildi.",
 		"hiddenHint": "Altyazılar bu medyanın dökümünden gelir. Önizlemede ve dışa aktarımlarda görmek için açın.",
 		"legacyAnnotations": "Bu proje hâlâ eski altyazı özelliğinden kalan altyazı açıklamaları içeriyor ({{count}}). Altyazı katmanının üstünde çizilirler.",

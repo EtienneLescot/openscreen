@@ -275,7 +275,6 @@
 		"show": "Mostrar legendas",
 		"noTranscript": "As legendas são lidas da transcrição da mídia. Transcreva este vídeo para ativá-las.",
 		"transcribe": "Transcrever vídeo",
-		"transcribing": "Transcrevendo…",
 		"derivedFromTranscript": "{{count}} linhas de legenda, derivadas ao vivo da transcrição.",
 		"hiddenHint": "As legendas vêm da transcrição desta mídia. Ative-as para vê-las na prévia e nas exportações.",
 		"legacyAnnotations": "Este projeto ainda contém anotações de legenda do recurso antigo ({{count}}). Elas são desenhadas sobre a camada de legendas.",

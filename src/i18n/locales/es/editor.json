@@ -145,6 +145,7 @@
 		"notGeneratedHint": "Aún no generada — elige un idioma y haz clic en regenerar.",
 		"transcribing": "Transcribiendo",
 		"downloadingModel": "Descargando modelo de voz",
+		"initializingModel": "Iniciando el modelo de voz",
 		"transcribingEllipsis": "Transcribiendo…",
 		"pendingTranscription": "Transcripción pendiente",
 		"transcriptionFailed": "Error de transcripción",

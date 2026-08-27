@@ -61,11 +61,24 @@ describe("useTranscriptionLabel telemetry suffix", () => {
 		);
 	});
 
-	// The model download has its own words and no device to report yet.
-	it("leaves the model-download phase alone", () => {
+	// Cold start / already-cached model: loading-model with no byte counters is
+	// the helper booting, not a download, so the copy must not say "Downloading".
+	it("names initializing when loading-model has no in-flight bytes", () => {
 		expect(labelOf(running({ phase: "loading-model", backend: "whispercpp-cpu", rtf: 1.1 }))).toBe(
-			"mediaStage.downloadingModel",
+			"mediaStage.initializingModel",
 		);
+	});
+
+	it("names downloading when loading-model reports an in-flight byte count", () => {
+		expect(
+			labelOf(
+				running({
+					phase: "loading-model",
+					downloadedBytes: 40_000_000,
+					totalBytes: 253_000_000,
+				}),
+			),
+		).toBe("mediaStage.downloadingModel");
 	});
 });
 

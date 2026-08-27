@@ -275,7 +275,6 @@
 		"show": "Mostrar subtítulos",
 		"noTranscript": "Los subtítulos se leen de la transcripción del recurso. Transcribe este vídeo para activarlos.",
 		"transcribe": "Transcribir vídeo",
-		"transcribing": "Transcribiendo…",
 		"derivedFromTranscript": "{{count}} líneas de subtítulos, derivadas en vivo de la transcripción.",
 		"hiddenHint": "Los subtítulos provienen de la transcripción de este recurso. Actívalos para verlos en la vista previa y en las exportaciones.",
 		"legacyAnnotations": "Este proyecto todavía contiene anotaciones de subtítulos de la función antigua ({{count}}). Se dibujan encima de la capa de subtítulos.",

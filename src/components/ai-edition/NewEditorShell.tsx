@@ -1148,6 +1148,7 @@ export function NewEditorShell() {
 		assets: document?.assets ?? [],
 		trimRanges: document?.timeline?.trimRanges ?? [],
 		busyAssetIds,
+		transcriptions,
 		onSeek: handleSeek,
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,

@@ -281,7 +281,6 @@
 		"show": "Show captions",
 		"noTranscript": "Captions are read from the media transcript. Transcribe this video to turn them on.",
 		"transcribe": "Transcribe video",
-		"transcribing": "Transcribing…",
 		"derivedFromTranscript": "{{count}} caption lines, derived live from the transcript.",
 		"hiddenHint": "Captions come from this media's transcript. Turn them on to see them in the preview and in exports.",
 		"legacyAnnotations": "This project still contains caption annotations from the old captions feature ({{count}}). They render on top of the caption layer.",

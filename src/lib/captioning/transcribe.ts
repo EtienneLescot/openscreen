@@ -45,6 +45,10 @@ export interface SttRendererStatus {
 	backend?: string;
 	/** Real-time factor for the run so far — wall-clock / audio, lower is faster. */
 	rtf?: number;
+	/** Bytes of the speech model fetched so far. Only during `"model"`. */
+	downloadedBytes?: number;
+	/** Total bytes of the in-flight model download. */
+	totalBytes?: number;
 }
 
 interface RendererSttApi {
