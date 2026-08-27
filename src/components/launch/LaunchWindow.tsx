@@ -1083,20 +1083,17 @@ export function LaunchWindow() {
 						/>
 					)}
 
+					{/* This guard already spells out floatingSelfView.supported (isMacHud, which can
+					    only be true when window.electronAPI answered getPlatform) and .ready (the same
+					    live-video test the hook runs), so the button below re-checks neither. */}
 					{isMacHud &&
 						recording &&
 						webcamEnabled &&
 						webcamPreviewStream?.getVideoTracks().some((track) => track.readyState === "live") && (
 							<HudSelfViewButton
 								open={floatingSelfView.open}
-								disabled={saving || !floatingSelfView.supported || !floatingSelfView.ready}
-								label={
-									!floatingSelfView.supported
-										? t("selfView.unavailable")
-										: floatingSelfView.open
-											? t("selfView.hide")
-											: t("selfView.show")
-								}
+								disabled={saving}
+								label={floatingSelfView.open ? t("selfView.hide") : t("selfView.show")}
 								onClick={() => void floatingSelfView.toggle()}
 							/>
 						)}

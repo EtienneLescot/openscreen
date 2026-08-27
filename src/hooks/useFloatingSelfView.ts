@@ -111,9 +111,14 @@ export function useFloatingSelfView({
 		if (!recording) {
 			pendingAutoOpen.current = false;
 			autoOpenAttempted.current = false;
+		}
+		// One hide for every reason the self-view can no longer be shown. Splitting this
+		// across two effects ran hideInternal() twice in the same commit when recording
+		// stopped, and sent a second, unconditional hide on a plain HUD mount.
+		if (!recording || !webcamEnabled || !hasLiveVideo(stream)) {
 			void hide();
 		}
-	}, [autoShowEnabled, hide, recording]);
+	}, [autoShowEnabled, hide, recording, stream, webcamEnabled]);
 
 	useEffect(() => {
 		if (
@@ -132,10 +137,6 @@ export function useFloatingSelfView({
 		pendingAutoOpen.current = false;
 		void show();
 	}, [ready, recording, show, stream, supported, webcamEnabled]);
-
-	useEffect(() => {
-		if (!recording || !webcamEnabled || !hasLiveVideo(stream)) void hide();
-	}, [hide, recording, stream, webcamEnabled]);
 
 	useEffect(() => () => void hide(), [hide]);
 

@@ -959,8 +959,12 @@ app.on("activate", () => {
 		}
 
 		const url = window.webContents.getURL();
-		const isCountdownOverlayWindow = url.includes("windowType=countdown-overlay");
-		return !isCountdownOverlayWindow;
+		// Auxiliary windows do not count as "the app is on screen": a dock click with the
+		// countdown running, or with only the floating self-view up, must still bring the
+		// minimized HUD back.
+		const isAuxiliaryWindow =
+			url.includes("windowType=countdown-overlay") || url.includes("windowType=floating-self-view");
+		return !isAuxiliaryWindow;
 	});
 	if (!hasVisibleWindow) {
 		showMainWindow();
