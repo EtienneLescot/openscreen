@@ -1261,10 +1261,12 @@ export function useTimeline() {
 	// anchoring — each just writes `document.audioTracks` through the pure ops.
 
 	// Place a new track for an imported audio asset, its head at the playhead (in
-	// output-timeline seconds) unless the caller says otherwise. Delegates to the
-	// store op, which also selects the new track and returns its id (or null). On
-	// success, retire the hook-local region/clip selection so the new audio-track
-	// selection isn't held CONCURRENTLY with a stale region/clip one.
+	// RAW/document timeline seconds — the clock the ruler and playhead use, NOT the
+	// trim-compressed output programme the export mixes onto) unless the caller says
+	// otherwise. Delegates to the store op, which also selects the new track and
+	// returns its id (or null). On success, retire the hook-local region/clip
+	// selection so the new audio-track selection isn't held CONCURRENTLY with a
+	// stale region/clip one.
 	const addAudioTrack = useCallback(
 		async (assetId: string, timelineStartSec?: number): Promise<string | null> => {
 			const id = await storeAddAudioTrack(assetId, timelineStartSec ?? playheadSec());

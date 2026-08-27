@@ -1037,9 +1037,12 @@ export function ensureDocument(value: unknown): AxcutDocument {
 
 /**
  * Build a timeline audio track for an imported audio asset (issue #350). The
- * head is placed at `timelineStartSec` (output-timeline seconds) and the track
- * spans the whole source file until the user trims it. Parsed through the schema
- * so every default (gain, trim) is applied in one place.
+ * head is placed at `timelineStartSec` (RAW/document timeline seconds — the same
+ * clock the ruler, playhead and clip `timelineStartSec` use, NOT the
+ * trim-compressed output programme; the export projects it with
+ * `projectRawTimelineSecToPlayback`) and the track spans the whole source file
+ * until the user trims it. Parsed through the schema so every default (gain,
+ * trim) is applied in one place.
  */
 export function createAudioTrack(input: {
 	assetId: string;
