@@ -380,7 +380,13 @@ fn drop_unusable_libclang_path() {
         std::fs::read_dir(path).is_ok_and(|entries| {
             entries
                 .flatten()
-                .any(|e| is_libclang_filename(&e.file_name().to_string_lossy()))
+                // `is_file()` autant que le nom : `read_dir` rend aussi les
+                // sous-répertoires et les fichiers spéciaux, et un répertoire qui
+                // s'appellerait `libclang.so` passerait le seul test de nom — clang-sys
+                // le retiendrait puis échouerait à le charger, sans repli possible.
+                .any(|e| {
+                    e.path().is_file() && is_libclang_filename(&e.file_name().to_string_lossy())
+                })
         })
     };
     if !usable {
