@@ -132,7 +132,18 @@ rustPlatform.buildRustPackage {
     # Copy each library under its soname and read its symbol table. awk rather
     # than sed with a backreference: the third field is the name, and anything
     # after an @ is the version tag.
-    for lib in ${ffmpegLgpl.lib}/lib/lib{avformat,avcodec,avutil,swscale,swresample}.so.*; do
+    #
+    # The list must hold every library crates/compositor/build.rs emits a
+    # cargo:rustc-link-lib for -- all six of them, avfilter included since the
+    # speed-region stretch runs through atempo. Miss one and the build either
+    # dies on `cannot find -lavfilter` (no unversioned symlink is staged for it
+    # below) or links the store's UN-renamed copy, and a cdylib tolerating
+    # undefined symbols means the failure surfaces only at require() time as
+    # "undefined symbol: osff_avfilter_graph_alloc" -- the addon then loads as a
+    # no-op and preview plus every export are dead. avfilter's exports are all
+    # av-prefixed (avfilter_*, av_buffersrc_*, av_buffersink_*), so the awk
+    # filter here and the leak check in installPhase already cover them.
+    for lib in ${ffmpegLgpl.lib}/lib/lib{avformat,avcodec,avutil,swscale,swresample,avfilter}.so.*; do
       case "$lib" in *.so.*.*) continue ;; esac
       test -f "$lib" || continue
       cp "$(readlink -f "$lib")" "$stage/lib/$(basename "$lib")"
@@ -190,7 +201,7 @@ rustPlatform.buildRustPackage {
     # Each copy still carries the RUNPATH it inherited from the original ffmpeg
     # output, which is where the UN-renamed libraries live -- so libavcodec's own
     # osff_swr_init would resolve against a libswresample that defines swr_init.
-    # It only works today because all five happen to be direct DT_NEEDED of the
+    # It only works today because all six happen to be direct DT_NEEDED of the
     # addon, so $ORIGIN is searched first; the day --as-needed drops one the
     # loader falls through to the store copy and dlopen fails on an undefined
     # osff_ symbol. Put $ORIGIN in front so the renamed set can only resolve
