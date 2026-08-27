@@ -16,33 +16,6 @@
 	user-select: none;
 }
 
-.app[data-collapse~="left"] {
-	--panel-w-left: 0px;
-}
-.app[data-collapse~="left"] .leftPanel,
-.app[data-collapse~="left"] .handleLeft {
-	display: none;
-}
-
-.app[data-collapse~="right"] {
-	--panel-w-right: 0px;
-}
-.app[data-collapse~="right"] .rightStack,
-.app[data-collapse~="right"] .rightRail,
-.app[data-collapse~="right"] .handleRight {
-	display: none;
-}
-
-.app[data-collapse~="bottom"] {
-	--bottom-h: 0px;
-}
-.app[data-collapse~="bottom"] .bottombar {
-	display: none;
-}
-.app[data-collapse~="bottom"] .handleBottom {
-	display: none;
-}
-
 /* ─── titlebar ──────────────────────────────────────────────────── */
 .titlebar {
 	display: flex;
@@ -250,13 +223,6 @@
 }
 .workbench > * + * {
 	border-left: 1px solid var(--border-soft);
-}
-
-.leftPanel {
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-	min-height: 0;
 }
 
 .panel {
@@ -807,13 +773,6 @@
 .transport .spacer { flex: 1; }
 
 /* ─── right panel-stack (one pane visible at a time) ──────────── */
-.rightStack {
-	grid-column: 6;
-	display: grid;
-	min-width: 0;
-	min-height: 0;
-	background: var(--bg);
-}
 .pane {
 	display: none;
 	grid-template-rows: auto 1fr;
@@ -1465,14 +1424,6 @@
 
 
 /* ─── bottombar / timeline ─────────────────────────────────────── */
-.bottombar {
-	display: grid;
-	grid-template-columns: 1fr;
-	min-height: 0;
-	background: var(--bg);
-	overflow: hidden;
-}
-
 /* Region lanes (annotations / speed / zoom) inside the timeline body. */
 /* Lanes: fixed-width label column + one shared dnd-timeline surface column.
    Both columns lay out 3 rows independently but with identical height (22px)

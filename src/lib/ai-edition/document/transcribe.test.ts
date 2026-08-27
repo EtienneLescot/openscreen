@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { type AxcutDocument, type AxcutTranscript, axcutSchemaVersion } from "../schema";
+import { type AxcutDocument, axcutSchemaVersion } from "../schema";
 import { transcribeAsset } from "./transcribe";
 
 vi.mock("@/components/video-editor/projectPersistence", () => ({

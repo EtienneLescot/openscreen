@@ -1001,7 +1001,7 @@ const PROVENANCE = [
 	{
 		shown: CHAT.conversationTitle,
 		source:
-			"computed: editor.json chat.untitledConversation + the session index, as LeftPanel.tsx:1433 renders it",
+			"computed: editor.json chat.untitledConversation + the session index, as LeftPanel.tsx:1184 renders it",
 	},
 	{ shown: CHAT.emptyState, source: "editor.json chat.emptyState" },
 	{ shown: CHAT.authorUser, source: "editor.json chat.authorUser" },
