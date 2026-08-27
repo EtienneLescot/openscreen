@@ -150,11 +150,15 @@ export class PipeWireCursorAccumulator {
 	addSample(payload: Extract<PipeWireHelperEvent, { event: "cursor-sample" }>) {
 		this.rememberAsset(payload.asset);
 
-		// Normalised against the stream's own dimensions, which the helper repeats
-		// on every sample. Electron's display bounds are deliberately NOT used:
-		// they are in DIPs, whereas the portal reports stream pixels, and the
-		// portal's source is whatever the user picked in its own dialog, which
-		// need not be the display the app thinks it is recording.
+		// Normalised against the RECORDED RECTANGLE, which the helper repeats on
+		// every sample: the crop for a window stream, the whole stream for a
+		// screen. It reports its own because only it knows — for a window,
+		// mutter pins the stream to the monitor and carves the window out
+		// through a crop, so the stream's dimensions describe a rectangle the
+		// file does not show. Electron's display bounds are deliberately NOT
+		// used either: they are in DIPs, whereas the portal reports pixels, and
+		// the portal's source is whatever the user picked in its own dialog,
+		// which need not be the display the app thinks it is recording.
 		const width = Math.max(1, payload.width);
 		const height = Math.max(1, payload.height);
 
