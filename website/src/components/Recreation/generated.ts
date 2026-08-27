@@ -544,7 +544,7 @@ export const PANELS = {
 		],
 	},
 	effects: {
-		title: "Video Effects",
+		title: "Composition",
 		padding: "Padding",
 		blurBg: "Blur BG",
 		motionBlur: "Motion Blur",
@@ -802,7 +802,7 @@ export const PROVENANCE: ProvenanceEntry[] = [
 	{ shown: "Gradient", source: "src/i18n/locales/en/settings.json → background.gradient" },
 	{ shown: "Upload Custom", source: "src/i18n/locales/en/settings.json → background.uploadCustom" },
 	{ shown: "Background 1", source: "computed: settings.json background.imageLabel over the 18 wallpapers WALLPAPER_COUNT declares in src/lib/wallpaper.ts" },
-	{ shown: "Video Effects", source: "src/i18n/locales/en/settings.json → effects.title" },
+	{ shown: "Composition", source: "src/i18n/locales/en/settings.json → effects.title" },
 	{ shown: "Padding", source: "src/i18n/locales/en/settings.json → effects.padding" },
 	{ shown: "Blur BG", source: "src/i18n/locales/en/settings.json → effects.blurBg" },
 	{ shown: "Motion Blur", source: "src/i18n/locales/en/settings.json → effects.motionBlur" },

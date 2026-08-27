@@ -40,7 +40,8 @@
 		"services": "Serviços",
 		"hide": "Ocultar OpenScreen",
 		"hideOthers": "Ocultar Outros",
-		"unhide": "Mostrar Todos"
+		"unhide": "Mostrar Todos",
+		"saveDiagnostics": "Salvar Diagnósticos"
 	},
 	"updates": {
 		"available": "O OpenScreen {{latestVersion}} está disponível. Você está usando a versão {{currentVersion}}.",
