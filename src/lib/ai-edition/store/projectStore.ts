@@ -410,8 +410,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		const track = createAudioTrack({
 			assetId,
 			durationSec: asset.durationSec ?? 0,
-			// Default to the playhead (output-timeline seconds), matching the
-			// timeline hook's placement.
+			// Default to the playhead (RAW/document timeline seconds — the clock the
+			// ruler and playhead use, NOT the trim-compressed output programme),
+			// matching the timeline hook's placement.
 			timelineStartSec: timelineStartSec ?? get().currentTimeSec,
 			label: asset.label,
 		});
