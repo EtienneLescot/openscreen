@@ -22,6 +22,7 @@
   pkg-config,
   patchelfUnstable,
   pipewire,
+  libglvnd,
 }:
 
 let
@@ -92,6 +93,17 @@ rustPlatform.buildRustPackage {
   # loader in compositor-view.nix: an soname reached by dlopen is invisible to the
   # linker and has to be added deliberately.
   #
+  # libglvnd is here for the same reason and needs no build dependency either:
+  # csrc/dmabuf_modifiers.c spells out the handful of EGL types it uses rather
+  # than including <EGL/egl.h>, and reaches the entry points through
+  # `dlopen("libEGL.so.1")` + dlsym. Without the RPATH entry that dlopen fails,
+  # the modifier query returns nothing, and the format offer degrades to
+  # LINEAR/INVALID -- so a tiled compositor buffer, the common case on
+  # AMD/mutter, negotiates as shm instead of dmabuf and the zero-copy path is
+  # lost with nothing in any log to say so. libglvnd is the dispatch library
+  # only; the vendor ICD stays the host's job via /run/opengl-driver, exactly as
+  # the Vulkan loader leaves it in compositor-view.nix.
+  #
   # --force-rpath because build.rs passes -Wl,--disable-new-dtags on purpose: it
   # wants DT_RPATH rather than DT_RUNPATH, so that the entries apply to the
   # transitive ffmpeg libraries too. patchelf defaults to writing DT_RUNPATH,
@@ -111,7 +123,12 @@ rustPlatform.buildRustPackage {
   # entry survives. dontPatchELF would also work and is worse: it disables the
   # shrink for every output, to fix one entry.
   postFixup = ''
-    patchelf --force-rpath --add-rpath "${lib.makeLibraryPath [ pipewire ]}" \
+    patchelf --force-rpath --add-rpath "${
+      lib.makeLibraryPath [
+        pipewire
+        libglvnd
+      ]
+    }" \
       "$out/bin/openscreen-pipewire-helper"
   '';
 
