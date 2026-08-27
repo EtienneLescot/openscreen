@@ -335,6 +335,17 @@ impl Capture {
     /// Converts a captured frame into the encoder's staging buffer. Nothing is
     /// written until [`Self::advance`] runs.
     pub fn stage(&mut self, frame: &shim::Frame) -> Result<(), String> {
+        // A paused recording must not ingest new pixels. The compositor keeps
+        // streaming while the app is paused — pause is app-side — so frames still
+        // arrive here; staging one would move the held picture to POST-pause
+        // content, which the tail write in `finish` would then encode into the
+        // file if a stop follows a pause with no resume. The user expects pause
+        // to hold that privacy boundary, so the staged picture is frozen at the
+        // pause instant instead. A no-op, not an error: the frame is simply
+        // dropped, exactly as a mid-recording drop would be.
+        if self.paused_at.is_some() {
+            return Ok(());
+        }
         let format = pixel_format(frame.video_format)?;
 
         // Address the crop by moving the START of the slice, and hand swscale the
@@ -480,7 +491,9 @@ impl Capture {
         // recording that ended during a quiet spell would be short by that gap.
         // Runs even when stopped while PAUSED: `current_index()` freezes at the
         // pause boundary, so the active time up to the pause still reaches the
-        // timeline (a stop can follow a pause with no resume in between).
+        // timeline (a stop can follow a pause with no resume in between). The
+        // staged picture is the last PRE-pause frame — `stage` is gated on pause —
+        // so this cannot leak post-pause content into the file.
         if self.encoder.has_staged_frame() {
             let target = self.current_index();
             if target >= self.next_index {
@@ -491,6 +504,17 @@ impl Capture {
                 self.frames_written += 1;
             }
         }
+
+        // Snapshot the active wall-clock time HERE, before the flush below.
+        // Draining audio, the encoder and the mp4 trailer can take tens of ms on
+        // a long recording, and `elapsed_active` keeps ticking through it; reading
+        // it afterwards would make a slow flush look like a timeline divergence
+        // (issue #512). The video timeline (`next_index`) is already frozen at the
+        // tail write above, so this is the moment the two are meant to agree.
+        let wall_clock_ms = self
+            .elapsed_active()
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0);
 
         // Audio first: whatever is still in the rings is real recorded sound,
         // and draining it before the video flush keeps both ending at roughly
@@ -507,10 +531,6 @@ impl Capture {
             .finish(|packet| muxer.write(video_track, packet))?;
         muxer.finish()?;
 
-        let wall_clock_ms = self
-            .elapsed_active()
-            .map(|elapsed| elapsed.as_millis() as u64)
-            .unwrap_or(0);
         Ok(Summary {
             path: self.path.clone(),
             // From the timeline, not the frame count: the last PTS is
@@ -1065,6 +1085,29 @@ mod tests {
             "the stall must not be backfilled with duplicates, encoded {} frames",
             summary.frames
         );
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn frames_arriving_while_paused_are_not_staged() {
+        // A paused recording must not ingest new pixels. The compositor keeps
+        // streaming while the app is paused, so frames still arrive; staging one
+        // would move the held picture to post-pause content, which the tail write
+        // in finish() could then encode when a stop follows a pause (#512). Pause
+        // must hold that privacy boundary — the staged picture freezes.
+        let output = std::env::temp_dir().join("openscreen-capture-pause-stage.mp4");
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+                .expect("start");
+
+        // Pause BEFORE any frame is staged, then a frame arrives during the pause.
+        capture.pause();
+        let staged = capture.stage(&frame(320, 240, shim::constants().video_format_bgrx));
+        assert!(staged.is_ok(), "staging while paused is a no-op, not an error: {staged:?}");
+        assert!(!capture.started(), "a frame received while paused must not start the timeline");
+
+        let summary = capture.finish().expect("finish");
+        assert_eq!(summary.frames, 0, "nothing captured while paused may reach the file");
         let _ = std::fs::remove_file(&output);
     }
 
