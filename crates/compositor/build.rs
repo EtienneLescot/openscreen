@@ -31,12 +31,12 @@ fn main() {
         // un dev l'a posé à la main pour macOS, jamais quand il vient du pin Windows.
         env::var("MAC_FFMPEG_DIR")
             .ok()
-            .filter(|v| Path::new(v).join("include").exists())
+            .filter(|v| usable_ffmpeg_tree(Path::new(v)))
             .or_else(|| vendored_ffmpeg_tree("ffmpeg-n8.1.2-macos64-lgpl-shared"))
             .or_else(|| {
                 env::var("FFMPEG_DIR")
                     .ok()
-                    .filter(|v| Path::new(v).join("include").exists())
+                    .filter(|v| usable_ffmpeg_tree(Path::new(v)))
             })
     } else if target_os == "linux" {
         // Même piège que LIBCLANG_PATH, même remède : le `FFMPEG_DIR` du `[env]` global
@@ -48,7 +48,7 @@ fn main() {
         // le même arbre.
         env::var("FFMPEG_DIR")
             .ok()
-            .filter(|v| Path::new(v).join("include").exists())
+            .filter(|v| usable_ffmpeg_tree(Path::new(v)))
             .or_else(|| vendored_ffmpeg_tree("ffmpeg-linux64-lgpl-shared"))
     } else {
         env::var("FFMPEG_DIR").ok()
@@ -319,6 +319,19 @@ fn point_libclang_at_the_xcode_toolchain() {
     }
 }
 
+/// Un arbre ffmpeg exploitable : `include/` pour bindgen ET `lib/` pour le linkage.
+///
+/// Les deux, pas seulement le premier : la section « linkage » plus bas pose un
+/// `rustc-link-search` sur `<tree>/lib` et réclame avformat/avcodec/avutil/swscale/
+/// swresample. Un arbre n'ayant que les en-têtes passait le filtre, écartait le repli
+/// vers un arbre vendorisé complet, et échouait bien plus tard sur un `cannot find
+/// -lavformat` qui ne désigne pas sa cause. `resolveFfmpegDir()` dans
+/// scripts/build-linux-compositor-addon.mjs vérifie déjà les deux — c'est la même règle
+/// des deux côtés.
+fn usable_ffmpeg_tree(dir: &Path) -> bool {
+    dir.join("include").is_dir() && dir.join("lib").is_dir()
+}
+
 /// L'arbre ffmpeg vendorisé sous `crates/thirdparty/<name>`, s'il existe vraiment.
 ///
 /// `thirdparty/` est frère de `compositor/`, sous `crates/` — c'est aussi ce que le pin
@@ -331,10 +344,7 @@ fn vendored_ffmpeg_tree(name: &str) -> Option<String> {
         .parent()?
         .join("thirdparty")
         .join(name);
-    candidate
-        .join("include")
-        .exists()
-        .then(|| candidate.to_string_lossy().to_string())
+    usable_ffmpeg_tree(&candidate).then(|| candidate.to_string_lossy().to_string())
 }
 
 /// Même remède que le versant macOS, pour la même cause.
