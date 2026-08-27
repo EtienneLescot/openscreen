@@ -10,6 +10,8 @@ fn main() {
 
     if target_is_macos {
         point_libclang_at_the_xcode_toolchain();
+    } else if target_os == "linux" {
+        drop_unusable_libclang_path();
     }
 
     // Le pin ffmpeg est porté par `.cargo/config.toml` ; sur Windows c'est le
@@ -30,27 +32,24 @@ fn main() {
         env::var("MAC_FFMPEG_DIR")
             .ok()
             .filter(|v| Path::new(v).join("include").exists())
-            .or_else(|| {
-                // `thirdparty/` est frère de `compositor/`, sous `crates/` — c'est aussi
-                // ce que le pin Windows désigne (`relative = true` dans
-                // `crates/.cargo/config.toml`, relatif au dossier de la config).
-                // build.rs s'exécute avec cwd = racine du crate, pas `crates/`, donc on
-                // remonte depuis CARGO_MANIFEST_DIR plutôt que d'écrire un chemin relatif
-                // qui viserait `crates/compositor/thirdparty/`.
-                let candidate = Path::new(&env::var("CARGO_MANIFEST_DIR").ok()?)
-                    .parent()?
-                    .join("thirdparty")
-                    .join("ffmpeg-n8.1.2-macos64-lgpl-shared");
-                candidate
-                    .join("include")
-                    .exists()
-                    .then(|| candidate.to_string_lossy().to_string())
-            })
+            .or_else(|| vendored_ffmpeg_tree("ffmpeg-n8.1.2-macos64-lgpl-shared"))
             .or_else(|| {
                 env::var("FFMPEG_DIR")
                     .ok()
                     .filter(|v| Path::new(v).join("include").exists())
             })
+    } else if target_os == "linux" {
+        // Même piège que LIBCLANG_PATH, même remède : le `FFMPEG_DIR` du `[env]` global
+        // désigne l'arbre win64, qui n'existe pas ici, donc on ne l'accepte que s'il
+        // pointe sur un arbre RÉEL — c'est-à-dire quand un dev ou
+        // scripts/build-linux-compositor-addon.mjs l'a posé à la main. Sinon on retombe
+        // sur l'emplacement vendorisé conventionnel, dans le même ordre que ce script
+        // (`resolveFfmpegDir`), pour qu'un `cargo check` nu et un build via npm voient
+        // le même arbre.
+        env::var("FFMPEG_DIR")
+            .ok()
+            .filter(|v| Path::new(v).join("include").exists())
+            .or_else(|| vendored_ffmpeg_tree("ffmpeg-linux64-lgpl-shared"))
     } else {
         env::var("FFMPEG_DIR").ok()
     };
@@ -58,9 +57,12 @@ fn main() {
     let include_dir = match ff.as_ref() {
         Some(v) => Path::new(v).join("include").to_string_lossy().to_string(),
         None => panic!(
-            "crates/compositor build.rs: FFMPEG_DIR non défini (target={}). \
+            "crates/compositor build.rs: aucun arbre ffmpeg utilisable (target={}). \
              Sur Windows, voir crates/.cargo/config.toml. Sur macOS, poser \
-             MAC_FFMPEG_DIR ou vendoriser thirdparty/ffmpeg-n8.1.2-macos64-lgpl-shared.",
+             MAC_FFMPEG_DIR ou vendoriser thirdparty/ffmpeg-n8.1.2-macos64-lgpl-shared. \
+             Sur Linux, poser FFMPEG_DIR ou vendoriser \
+             thirdparty/ffmpeg-linux64-lgpl-shared (arbre *shared*, avec include/ et \
+             lib/ — celui de scripts/fetch-ffmpeg.mjs est statique et ne convient pas).",
             target_os
         ),
     };
@@ -314,5 +316,57 @@ fn point_libclang_at_the_xcode_toolchain() {
         // Rien trouvé : retirer la valeur Windows plutôt que la laisser saboter la
         // découverte par défaut de clang-sys, qui sait aussi chercher toute seule.
         None => env::remove_var("LIBCLANG_PATH"),
+    }
+}
+
+/// L'arbre ffmpeg vendorisé sous `crates/thirdparty/<name>`, s'il existe vraiment.
+///
+/// `thirdparty/` est frère de `compositor/`, sous `crates/` — c'est aussi ce que le pin
+/// Windows désigne (`relative = true` dans `crates/.cargo/config.toml`, relatif au
+/// dossier de la config). build.rs s'exécute avec cwd = racine du crate, pas `crates/`,
+/// donc on remonte depuis CARGO_MANIFEST_DIR plutôt que d'écrire un chemin relatif qui
+/// viserait `crates/compositor/thirdparty/`.
+fn vendored_ffmpeg_tree(name: &str) -> Option<String> {
+    let candidate = Path::new(&env::var("CARGO_MANIFEST_DIR").ok()?)
+        .parent()?
+        .join("thirdparty")
+        .join(name);
+    candidate
+        .join("include")
+        .exists()
+        .then(|| candidate.to_string_lossy().to_string())
+}
+
+/// Même remède que le versant macOS, pour la même cause.
+///
+/// `crates/.cargo/config.toml` pose `LIBCLANG_PATH` dans un `[env]` GLOBAL, faute de
+/// `[target.<cfg>.env]` en cargo. La valeur est celle de Windows
+/// (`C:\Program Files\LLVM\bin`) et elle est donc renseignée sous Linux aussi, où
+/// clang-sys la prend au mot : il ne regarde nulle part ailleurs et abandonne sur
+/// « Unable to find libclang », alors qu'un `libclang.so` de distribution est presque
+/// toujours installé. Un `cargo check -p openscreen-compositor` nu échouait donc sur
+/// une Ubuntu de série — exactement ce que `freestanding_header_args()` juste au-dessus
+/// s'emploie à éviter par ailleurs.
+///
+/// On ne devine pas le bon chemin : clang-sys sait chercher tout seul (LD_LIBRARY_PATH,
+/// PATH, /usr/lib/llvm-*/lib …). Il suffit de ne pas lui mentir. Une valeur posée par le
+/// dev et réellement utilisable est conservée telle quelle — `force = false` fait déjà
+/// gagner l'environnement réel sur la config, et on ne casse pas un choix explicite.
+fn drop_unusable_libclang_path() {
+    println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
+    let Ok(dir) = env::var("LIBCLANG_PATH") else {
+        return;
+    };
+    // `libclang.so`, `libclang.so.1`, `libclang-14.so` : les distributions ne
+    // s'accordent pas sur le suffixe, seul le préfixe est stable.
+    let holds_libclang = std::fs::read_dir(&dir).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("libclang") && name.contains(".so")
+        })
+    });
+    if !holds_libclang {
+        env::remove_var("LIBCLANG_PATH");
     }
 }
