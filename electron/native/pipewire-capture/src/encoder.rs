@@ -381,8 +381,20 @@ impl VideoEncoder {
         // encoder must consume from THAT pool, so take references to it instead of
         // creating a second, incompatible one. See `open_importing`.
         if let Some((device, frames_ctx)) = external {
+            // The guard belongs on the INPUTS, before the refs are taken:
+            // av_buffer_ref dereferences its argument (`*ret = *buf`), so a null
+            // one faults inside ffmpeg instead of coming back as a null return
+            // value the old check could inspect. And null IS reachable here --
+            // `DmabufImporter::output_frames_ctx` is av_buffersink_get_hw_frames_ctx,
+            // which returns NULL whenever the sink's input link carries no hw
+            // frames context.
+            if device.is_null() || frames_ctx.is_null() {
+                return Err("av_buffer_ref on the shared VAAPI context returned null".to_owned());
+            }
             self.hw_device = ff::av_buffer_ref(device);
             self.hw_frames = ff::av_buffer_ref(frames_ctx);
+            // The results still get checked: av_buffer_ref allocates, and the
+            // hw_frames_ctx ref below would dereference whatever it handed back.
             if self.hw_device.is_null() || self.hw_frames.is_null() {
                 return Err("av_buffer_ref on the shared VAAPI context returned null".to_owned());
             }
