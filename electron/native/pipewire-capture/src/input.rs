@@ -13,18 +13,31 @@
 //! SCOPE AND PRIVACY. A pointer node can also deliver keystrokes on a combined
 //! keyboard+mouse device. This reader inspects ONLY `EV_KEY` events whose code is
 //! `BTN_LEFT`, and only their press edge; it never reads, stores, or forwards any
-//! other key code, and it only ever opens devices that advertise `BTN_LEFT` in
-//! the first place. Set `OPENSCREEN_DISABLE_CLICK_CAPTURE=1` to turn it off
-//! entirely even where the permission exists.
+//! other key code. Enumerating the devices does briefly open each readable
+//! `/dev/input/event*` node to inspect its capability bits, but any node that
+//! does not advertise `BTN_LEFT` is dropped immediately, without a single event
+//! ever being read from it — only `BTN_LEFT` devices get a reader. Set
+//! `OPENSCREEN_DISABLE_CLICK_CAPTURE=1` to turn it off entirely even where the
+//! permission exists.
 
+use std::collections::HashSet;
+use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::thread;
+use std::time::Duration;
 
 use evdev::{Device, EventType, KeyCode};
 
+use crate::events::timestamp_ms;
 use crate::Message;
 
 const DISABLE_ENV: &str = "OPENSCREEN_DISABLE_CLICK_CAPTURE";
+
+/// How often the hotplug watcher re-scans `/dev/input` for pointer devices that
+/// appeared after startup. A few seconds is imperceptible for a device the user
+/// just plugged in and costs a cheap directory walk.
+const RESCAN_INTERVAL: Duration = Duration::from_secs(3);
 
 /// True when this evdev event is the press edge of the left mouse button.
 ///
@@ -53,29 +66,51 @@ pub enum ClickCapture {
     Active,
 }
 
-/// Opens every readable pointer device that reports `BTN_LEFT` and spawns a
-/// reader thread per device.
+/// Opens every readable pointer device that reports `BTN_LEFT`, spawns a reader
+/// thread per device, and leaves a daemon thread re-scanning for devices plugged
+/// in later.
 ///
 /// Never fails: an unreadable node (the common case, when the user is not in the
 /// `input` group) is skipped by `evdev::enumerate`, and no readable node at all
-/// simply means every sample stays `"move"`, exactly as before this existed.
+/// simply means every sample stays `"move"`, exactly as before this existed. The
+/// returned value reflects the INITIAL scan only — a device attached afterwards
+/// is adopted by the watcher without changing it.
 pub fn spawn_readers(sender: &Sender<Message>) -> ClickCapture {
     if std::env::var_os(DISABLE_ENV).is_some() {
         return ClickCapture::Disabled;
     }
-    let mut opened = 0usize;
-    for (_path, device) in evdev::enumerate() {
-        if !device_reports_left_button(&device) {
+    // Paths already given a reader. Only ever grows, so a device is never
+    // double-read; the one case it misses is a device that unplugs and returns
+    // on the SAME node path — a replug usually lands on a fresh `eventNN`, which
+    // is not in the set and so is picked up.
+    let mut opened: HashSet<PathBuf> = HashSet::new();
+    scan_once(sender, &mut opened);
+    let result = if opened.is_empty() {
+        ClickCapture::NoDevice
+    } else {
+        ClickCapture::Active
+    };
+    // Hotplug: the one-shot scan above cannot see a mouse attached mid-recording,
+    // so a daemon thread re-scans and starts readers for nodes it has not seen.
+    // Detached, like the reader threads — it ends when the process does.
+    let watch_sender = sender.clone();
+    thread::spawn(move || loop {
+        thread::sleep(RESCAN_INTERVAL);
+        scan_once(&watch_sender, &mut opened);
+    });
+    result
+}
+
+/// Spawns a reader for every `BTN_LEFT` device not already in `opened`, recording
+/// each newly opened node's path. Shared by the initial scan and the watcher.
+fn scan_once(sender: &Sender<Message>, opened: &mut HashSet<PathBuf>) {
+    for (path, device) in evdev::enumerate() {
+        if opened.contains(&path) || !device_reports_left_button(&device) {
             continue;
         }
-        opened += 1;
+        opened.insert(path);
         let forward = sender.clone();
         thread::spawn(move || read_device(device, forward));
-    }
-    if opened > 0 {
-        ClickCapture::Active
-    } else {
-        ClickCapture::NoDevice
     }
 }
 
@@ -93,17 +128,27 @@ fn device_reports_left_button(device: &Device) -> bool {
 }
 
 /// Blocks reading `device`, forwarding one `PointerButton` message per left-button
-/// press. Returns when the device errors (e.g. unplugged) or the loop's channel
-/// has closed, so the thread cannot outlive the recording it serves.
+/// press, each stamped with the press time so a click is not backdated to the
+/// next cursor sample. Returns when the device fails terminally (e.g. unplugged)
+/// or the loop's channel has closed, so the thread cannot outlive the recording
+/// it serves. A transient `EINTR` is retried, not mistaken for an unplug.
 fn read_device(mut device: Device, sender: Sender<Message>) {
     loop {
         let events = match device.fetch_events() {
             Ok(events) => events,
-            Err(_) => return,
+            // A signal interrupted the blocking read — not a device failure.
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            // A real error, typically the device unplugging. Report it rather
+            // than ending silently, so click capture going quiet mid-recording
+            // is answerable from the log; the watcher re-adopts it on a replug.
+            Err(err) => {
+                let _ = sender.send(Message::PointerDeviceLost(err.to_string()));
+                return;
+            }
         };
         for event in events {
             if is_left_button_press(event.event_type(), event.code(), event.value())
-                && sender.send(Message::PointerButton).is_err()
+                && sender.send(Message::PointerButton(timestamp_ms())).is_err()
             {
                 return;
             }

@@ -212,10 +212,16 @@ struct AudioSourceConfig {
 enum Message {
     Portal(Box<Result<portal::PortalStream, portal::PortalError>>),
     Stream(StreamEvent),
-    /// A left mouse-button press observed on evdev — the next cursor sample is
-    /// tagged `"click"`. See [`input`] for why this is the only way to see a
-    /// button on Wayland, and for its permission and privacy model.
-    PointerButton,
+    /// A left mouse-button press observed on evdev, carrying the press time in
+    /// milliseconds so the emitted click sample is stamped when it happened
+    /// rather than at the next throttled sample. See [`input`] for why this is
+    /// the only way to see a button on Wayland, and for its permission and
+    /// privacy model.
+    PointerButton(u64),
+    /// A pointer reader thread stopped on a device error (typically an unplug);
+    /// the string is the OS error. Surfaced as a warning so click capture going
+    /// quiet mid-recording is not silent.
+    PointerDeviceLost(String),
     /// Arm a deferred session: connect to PipeWire and start encoding.
     Record,
     Pause,
@@ -593,8 +599,6 @@ fn run<W: Write>(
     let mut cursor: Option<CursorState> = None;
     let mut known_assets: HashSet<String> = HashSet::new();
     let mut pending_asset: Option<CursorAsset> = None;
-    // Set by a `PointerButton` message, consumed by the next emitted sample.
-    let mut pending_click = false;
     // The pw_stream has reached `streaming`, i.e. mutter has actually started
     // handing us frames. Presses are ignored until then: before it, the only
     // thing on screen is the portal's own picker, and the click that dismisses
@@ -632,15 +636,36 @@ fn run<W: Write>(
         match receiver.recv_timeout(config.tick) {
             Ok(Message::Stop) => break,
 
-            // Latched, not emitted here: a bare press carries no position, so it
-            // waits for the next sample (which does) to become a `"click"`.
-            // Dropped before the stream is live (see `streaming`): a press that
-            // lands while the picker is still up is the click on its "Share"
-            // button, not content, and must not tag the first real sample.
-            Ok(Message::PointerButton) => {
+            // Emit a click sample straight away at the current cursor position,
+            // stamped with the press time the reader captured: immediate so it is
+            // not backdated to the next throttled sample, and one sample per press
+            // so a rapid double-click reads as two clicks rather than collapsing
+            // into one. Dropped before the stream is live (see `streaming`): a
+            // press while the picker is still up is the click on its "Share"
+            // button, not content.
+            Ok(Message::PointerButton(press_ms)) => {
                 if streaming {
-                    pending_click = true;
+                    emit_sample(
+                        emitter,
+                        &cursor,
+                        size,
+                        &mut pending_asset,
+                        Some(press_ms),
+                    );
                 }
+            }
+
+            // A reader lost its device (typically an unplug). Report it — if it
+            // was the only pointer, clicks stop until one is (re)connected, which
+            // the input watcher will pick up.
+            Ok(Message::PointerDeviceLost(reason)) => {
+                let _ = emitter.emit(&Event::Warning {
+                    code: "click-capture-device-lost".to_owned(),
+                    message: format!(
+                        "a pointer device stopped delivering clicks ({reason}); if it was the \
+                         only one, clicks are not captured until a device is reconnected"
+                    ),
+                });
             }
 
             Ok(Message::Pause) => {
@@ -1103,14 +1128,14 @@ fn run<W: Write>(
                 // A new sprite ships immediately; positions respect the sample
                 // interval so a 120fps compositor cannot flood stdout.
                 if asset_is_new || last_emit.elapsed() >= config.sample_interval {
-                    emit_sample(emitter, &cursor, size, &mut pending_asset, &mut pending_click);
+                    emit_sample(emitter, &cursor, size, &mut pending_asset, None);
                     last_emit = Instant::now();
                 }
             }
 
             Err(RecvTimeoutError::Timeout) => {
                 if cursor.is_some() && last_emit.elapsed() >= config.sample_interval {
-                    emit_sample(emitter, &cursor, size, &mut pending_asset, &mut pending_click);
+                    emit_sample(emitter, &cursor, size, &mut pending_asset, None);
                     last_emit = Instant::now();
                 }
                 // The heartbeat that keeps the output at a constant frame rate
@@ -1199,30 +1224,30 @@ fn finish_capture<W: Write>(
     }
 }
 
+/// Emits one cursor sample at the current position. `click` is `Some(press_ms)`
+/// for a left-button press — the sample is then tagged `"click"` and stamped with
+/// that press time — or `None` for an ordinary throttled position sample stamped
+/// now. Either way a pending new sprite rides out on it.
 fn emit_sample<W: Write>(
     emitter: &mut Emitter<W>,
     cursor: &Option<CursorState>,
     size: Option<(i32, i32)>,
     pending_asset: &mut Option<CursorAsset>,
-    pending_click: &mut bool,
+    click: Option<u64>,
 ) {
     let (Some(state), Some((width, height))) = (cursor, size) else {
         return;
     };
     let visible = state.x >= 0 && state.y >= 0 && state.x < width && state.y < height;
-    // A click observed since the last sample rides out on this one, cleared only
-    // when a sample is actually emitted — at the sample cadence the cursor has not
-    // moved enough for the position to be wrong. Presses before the stream is live
-    // are never latched (see the `PointerButton` arm), so this cannot carry the
-    // portal picker's own "Share" click into the recording.
-    let interaction_type = if *pending_click {
-        *pending_click = false;
-        Some("click".to_owned())
-    } else {
-        None
+    // A click carries its own press time so the bounce lands when the button went
+    // down, not up to a sample interval later; the position is the latest known,
+    // which at the sample cadence has not moved enough to be wrong.
+    let (timestamp, interaction_type) = match click {
+        Some(press_ms) => (press_ms, Some("click".to_owned())),
+        None => (timestamp_ms(), None),
     };
     let _ = emitter.emit(&Event::CursorSample {
-        timestamp_ms: timestamp_ms(),
+        timestamp_ms: timestamp,
         x: state.x,
         y: state.y,
         width,
