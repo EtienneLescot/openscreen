@@ -197,7 +197,9 @@
 		"exportFailed": "Échec de l'export",
 		"failedToWriteFile": "Échec de l'écriture du fichier",
 		"qualityUpscaleWarning": "Upscaling",
-		"nothingToExport": "Rien à exporter — la timeline est vide."
+		"nothingToExport": "Rien à exporter — la timeline est vide.",
+		"audioLayersSkipped": "Vidéo exportée sans les couches audio — le fichier exporté n'a pas pu être relu pour le mixage",
+		"audioLayerMissingFile": "{{count}} couche(s) audio ignorée(s) : fichier illisible"
 	},
 	"inspector": {
 		"resetFocusPoint": "Réinitialiser le point de focus",

@@ -197,7 +197,9 @@
 		"failedToWriteFile": "فشلت كتابة الملف",
 		"qualityUpscaleWarning": "تكبير الدقة",
 		"exportedVideoOf": "من الفيديو تم تصديره في",
-		"nothingToExport": "لا يوجد شيء للتصدير — المخطط الزمني فارغ."
+		"nothingToExport": "لا يوجد شيء للتصدير — المخطط الزمني فارغ.",
+		"audioLayersSkipped": "تم تصدير الفيديو بدون طبقات الصوت — تعذرت قراءة الملف المُصدَّر للمزج",
+		"audioLayerMissingFile": "تم تخطي {{count}} طبقة صوت: تعذرت قراءة ملفها"
 	},
 	"inspector": {
 		"resetFocusPoint": "إعادة تعيين نقطة التركيز",

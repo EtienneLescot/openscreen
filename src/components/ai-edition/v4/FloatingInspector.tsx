@@ -458,6 +458,22 @@ function AudioRegionControls({ region, tl }: { region: AxcutAudioRegion; tl: Tim
 	const [fadeInDraft, setFadeInDraft] = useState(region.fadeInMs / 1000);
 	const [fadeOutDraft, setFadeOutDraft] = useState(region.fadeOutMs / 1000);
 
+	// An edit from OUTSIDE this pane (undo/redo, an agent write) changes the
+	// region while the controls stay mounted — the drafts must follow it, or
+	// the sliders keep showing (and committing) the stale values.
+	useEffect(() => {
+		setGainDraft(region.gainDb);
+	}, [region.gainDb]);
+	useEffect(() => {
+		setOffsetDraft(region.offsetMs / 1000);
+	}, [region.offsetMs]);
+	useEffect(() => {
+		setFadeInDraft(region.fadeInMs / 1000);
+	}, [region.fadeInMs]);
+	useEffect(() => {
+		setFadeOutDraft(region.fadeOutMs / 1000);
+	}, [region.fadeOutMs]);
+
 	return (
 		<>
 			<SliderCell

@@ -197,7 +197,9 @@
 		"failedToWriteFile": "Falha ao gravar o arquivo",
 		"qualityUpscaleWarning": "Upscaling",
 		"exportedVideoOf": "de vídeo exportado em",
-		"nothingToExport": "Nada para exportar — a linha do tempo está vazia."
+		"nothingToExport": "Nada para exportar — a linha do tempo está vazia.",
+		"audioLayersSkipped": "Vídeo exportado sem as camadas de áudio — não foi possível reler o arquivo exportado para mixar",
+		"audioLayerMissingFile": "{{count}} camada(s) de áudio ignoradas: arquivo não pôde ser lido"
 	},
 	"inspector": {
 		"resetFocusPoint": "Redefinir ponto de foco",

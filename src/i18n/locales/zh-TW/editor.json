@@ -197,7 +197,9 @@
 		"failedToWriteFile": "寫入檔案失敗",
 		"qualityUpscaleWarning": "放大",
 		"exportedVideoOf": "的影片已匯出，耗時",
-		"nothingToExport": "沒有可匯出的內容 — 時間軸為空。"
+		"nothingToExport": "沒有可匯出的內容 — 時間軸為空。",
+		"audioLayersSkipped": "影片已匯出但未包含音訊圖層——無法重新讀取匯出的檔案進行混音",
+		"audioLayerMissingFile": "已略過 {{count}} 個音訊圖層：無法讀取檔案"
 	},
 	"inspector": {
 		"resetFocusPoint": "重設焦點",

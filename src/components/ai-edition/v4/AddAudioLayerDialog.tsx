@@ -214,14 +214,27 @@ export function AddAudioLayerDialog({
 		}
 	}, [recording, elapsedSec, maxDurationSec, stopRecording]);
 
+	// Re-entrancy guard: the auto-open effect below re-runs whenever the shell
+	// re-renders (it passes an inline `onComplete`, and the shell re-renders on
+	// every playhead tick during playback), so without this a music dialog left
+	// open while the video plays would re-invoke the native picker on each
+	// render — stacking showOpenDialog calls and, eventually, duplicate layers.
+	const pickerOpenRef = useRef(false);
+
 	const importFile = useCallback(async () => {
-		const picker = await window.electronAPI?.openAudioFilePicker?.();
-		if (!picker?.success || !picker.path) return;
-		const url = toFileUrl(picker.path);
-		// The probe needs the real duration to size the layer; when it fails the
-		// caller falls back to the default span.
-		const duration = (await probeAudioDuration(url)) ?? 0;
-		await finishWithPath(picker.path, duration);
+		if (pickerOpenRef.current) return;
+		pickerOpenRef.current = true;
+		try {
+			const picker = await window.electronAPI?.openAudioFilePicker?.();
+			if (!picker?.success || !picker.path) return;
+			const url = toFileUrl(picker.path);
+			// The probe needs the real duration to size the layer; when it fails the
+			// caller falls back to the default span.
+			const duration = (await probeAudioDuration(url)) ?? 0;
+			await finishWithPath(picker.path, duration);
+		} finally {
+			pickerOpenRef.current = false;
+		}
 	}, [finishWithPath]);
 
 	// Music has nothing to record — open the picker as soon as the dialog is up.

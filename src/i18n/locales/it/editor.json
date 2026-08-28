@@ -197,7 +197,9 @@
 		"failedToWriteFile": "Impossibile scrivere il file",
 		"qualityUpscaleWarning": "Upscaling",
 		"exportedVideoOf": "di video esportato in",
-		"nothingToExport": "Niente da esportare: la timeline è vuota."
+		"nothingToExport": "Niente da esportare: la timeline è vuota.",
+		"audioLayersSkipped": "Video esportato senza i livelli audio — impossibile rileggere il file esportato per il mix",
+		"audioLayerMissingFile": "{{count}} livello(i) audio saltati: file non leggibile"
 	},
 	"inspector": {
 		"resetFocusPoint": "Reimposta punto di messa a fuoco",

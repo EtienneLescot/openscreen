@@ -35,6 +35,19 @@ describe("layerSourcePosition", () => {
 		expect(layerSourcePosition(region({ loop: true }), 14.5, 4)).toBeCloseTo(0.5);
 	});
 
+	it("folds a looping layer over the post-offset window, matching the export", () => {
+		// offset 2s into a 6s file → the loop repeats source [2, 6): 4s long.
+		// local 0 → 2; local 4 → 2 (wrapped); local 5 → 3.
+		const r = region({ loop: true, offsetMs: 2000 });
+		expect(layerSourcePosition(r, 10, 6)).toBeCloseTo(2);
+		expect(layerSourcePosition(r, 14, 6)).toBeCloseTo(2);
+		expect(layerSourcePosition(r, 15, 6)).toBeCloseTo(3);
+	});
+
+	it("holds a looping layer at the end when the offset leaves nothing to loop", () => {
+		expect(layerSourcePosition(region({ loop: true, offsetMs: 5000 }), 12, 5)).toBeCloseTo(5);
+	});
+
 	it("is undefined-safe for unloaded metadata (0 duration)", () => {
 		expect(layerSourcePosition(region(), 12, 0)).toBeCloseTo(2);
 	});

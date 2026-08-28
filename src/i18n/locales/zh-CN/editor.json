@@ -197,7 +197,9 @@
 		"failedToWriteFile": "写入文件失败",
 		"qualityUpscaleWarning": "放大",
 		"exportedVideoOf": "的视频已导出，用时",
-		"nothingToExport": "没有可导出的内容 — 时间轴为空。"
+		"nothingToExport": "没有可导出的内容 — 时间轴为空。",
+		"audioLayersSkipped": "视频已导出但未包含音频图层——无法重新读取导出文件进行混音",
+		"audioLayerMissingFile": "已跳过 {{count}} 个音频图层：无法读取文件"
 	},
 	"inspector": {
 		"resetFocusPoint": "重置焦点",

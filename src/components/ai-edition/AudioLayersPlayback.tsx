@@ -48,8 +48,11 @@ export function layerVolumeAt(region: AxcutAudioRegion, localSec: number): numbe
 
 /**
  * Local source position (seconds) for a layer at `timelineSec`. Loop folds the
- * position back into the source; without it the position clamps to the source
- * length. `sourceDurationSec` comes from the element's real metadata.
+ * position back into the source — over `sourceDuration - offset`, the same
+ * window the export's `planLayerIterations` repeats, so a looping layer with a
+ * start offset stays in phase with the mix. Without looping the position
+ * clamps to the source length. `sourceDurationSec` comes from the element's
+ * real metadata.
  */
 export function layerSourcePosition(
 	region: AxcutAudioRegion,
@@ -60,7 +63,12 @@ export function layerSourcePosition(
 	const local = Math.max(0, timelineSec - region.startMs / 1000);
 	const raw = offset + local;
 	if (sourceDurationSec <= 0) return raw;
-	if (region.loop) return offset + (local % sourceDurationSec);
+	if (region.loop) {
+		const loopLen = sourceDurationSec - offset;
+		if (loopLen > 0) return offset + (local % loopLen);
+		// The offset is at/after the end of the file: nothing left to loop.
+		return sourceDurationSec;
+	}
 	return Math.min(raw, sourceDurationSec);
 }
 
@@ -139,11 +147,28 @@ export function AudioLayersPlayback({
 					1,
 					gainScalar(region.gainDb) * layerVolumeAt(region, timeSec - startSec),
 				);
-				if (playing && element.paused) {
+				// A layer whose source has run out (non-looping file shorter than
+				// its span, or a loop offset past the end) sits silent instead of
+				// restarting: `play()` on an ended element seeks it to 0, and the
+				// next tick would reposition it back to the end — a 60 Hz
+				// restart/stutter loop. Hold it paused at the end.
+				const exhausted = sourceDuration > 0 && target >= sourceDuration - SYNC_EPSILON_SEC;
+				if (playing && !exhausted && element.paused) {
 					const play = element.play();
 					if (play) void play.catch(() => undefined);
-				} else if (!playing && !element.paused) {
+				} else if ((!playing || exhausted) && !element.paused) {
 					element.pause();
+				}
+				// A looping layer that reached the file's end between two ticks
+				// (the `ended` event pauses it before the fold catches up):
+				// reposition and resume in the same tick.
+				if (playing && region.loop && element.ended) {
+					try {
+						element.currentTime = target;
+					} catch {
+						// metadata not ready yet
+					}
+					void element.play().catch(() => undefined);
 				}
 			}
 		});

@@ -197,7 +197,9 @@
 		"exportFailed": "Export failed",
 		"failedToWriteFile": "Failed to write file",
 		"qualityUpscaleWarning": "Upscale",
-		"nothingToExport": "Nothing to export — the timeline is empty."
+		"nothingToExport": "Nothing to export — the timeline is empty.",
+		"audioLayersSkipped": "Video exported without audio layers — the exported file could not be read back for mixing",
+		"audioLayerMissingFile": "{{count}} audio layer(s) skipped: file could not be read"
 	},
 	"inspector": {
 		"resetFocusPoint": "Reset focus point",

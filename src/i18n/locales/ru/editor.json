@@ -197,7 +197,9 @@
 		"failedToWriteFile": "Не удалось записать файл",
 		"qualityUpscaleWarning": "Апскейл",
 		"exportedVideoOf": "видео экспортировано за",
-		"nothingToExport": "Нечего экспортировать — таймлайн пуст."
+		"nothingToExport": "Нечего экспортировать — таймлайн пуст.",
+		"audioLayersSkipped": "Видео экспортировано без аудиослоёв — не удалось перечитать экспортированный файл для сведения",
+		"audioLayerMissingFile": "Пропущено аудиослоёв: {{count}} — файл не удалось прочитать"
 	},
 	"inspector": {
 		"resetFocusPoint": "Сбросить точку фокуса",

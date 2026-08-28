@@ -353,11 +353,13 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 							document.timeline.trimRanges,
 						);
 						const layerInputs = [];
+						let missingLayerFiles = 0;
 						for (const { region, asset } of layerAssets) {
 							const bytes = await window.electronAPI?.readBinaryFile?.(asset.originalPath);
 							if (!bytes?.success || !bytes.data) {
 								// A layer whose file vanished degrades to silence rather
-								// than failing the whole export.
+								// than failing the whole export — but it is said out loud.
+								missingLayerFiles += 1;
 								console.warn("[export] audio layer asset unreadable:", asset.originalPath);
 								continue;
 							}
@@ -371,6 +373,9 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 								fadeInMs: region.fadeInMs,
 								fadeOutMs: region.fadeOutMs,
 							});
+						}
+						if (missingLayerFiles > 0) {
+							toast.warning(t("exportDialog.audioLayerMissingFile", { count: missingLayerFiles }));
 						}
 						if (layerInputs.length > 0) {
 							const exported = await window.electronAPI?.readBinaryFile?.(pickedPath);
@@ -386,6 +391,12 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 								if (!write?.success) {
 									throw new Error(write?.message ?? t("exportDialog.exportFailed"));
 								}
+							} else {
+								// The export itself succeeded; only the layer mix could
+								// not run. The video must not silently lose its audio.
+								toast.warning(t("exportDialog.audioLayersSkipped"), {
+									description: exported?.message,
+								});
 							}
 						}
 					}

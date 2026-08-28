@@ -197,7 +197,9 @@
 		"failedToWriteFile": "ファイルの書き込みに失敗しました",
 		"qualityUpscaleWarning": "アップスケール",
 		"exportedVideoOf": "の動画を書き出しました。所要時間:",
-		"nothingToExport": "書き出す内容がありません — タイムラインが空です。"
+		"nothingToExport": "書き出す内容がありません — タイムラインが空です。",
+		"audioLayersSkipped": "音声レイヤーなしで書き出されました — 書き出したファイルを読み戻せず、ミックスできませんでした",
+		"audioLayerMissingFile": "音声レイヤーを {{count}} 件スキップ：ファイルを読み込めませんでした"
 	},
 	"inspector": {
 		"resetFocusPoint": "フォーカスポイントをリセット",

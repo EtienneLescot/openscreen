@@ -197,7 +197,9 @@
 		"failedToWriteFile": "Không thể ghi tệp",
 		"qualityUpscaleWarning": "Upscale",
 		"exportedVideoOf": "video đã xuất trong",
-		"nothingToExport": "Không có gì để xuất — dòng thời gian trống."
+		"nothingToExport": "Không có gì để xuất — dòng thời gian trống.",
+		"audioLayersSkipped": "Đã xuất video không có lớp âm thanh — không thể đọc lại tệp đã xuất để trộn",
+		"audioLayerMissingFile": "Đã bỏ qua {{count}} lớp âm thanh: không đọc được tệp"
 	},
 	"inspector": {
 		"resetFocusPoint": "Đặt lại điểm lấy nét",

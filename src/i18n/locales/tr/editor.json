@@ -197,7 +197,9 @@
 		"failedToWriteFile": "Dosya yazılamadı",
 		"qualityUpscaleWarning": "Upscale",
 		"exportedVideoOf": "video şu sürede dışa aktarıldı:",
-		"nothingToExport": "Dışa aktarılacak bir şey yok — zaman çizelgesi boş."
+		"nothingToExport": "Dışa aktarılacak bir şey yok — zaman çizelgesi boş.",
+		"audioLayersSkipped": "Video ses katmanları olmadan dışa aktarıldı — dışa aktarılan dosya miks için geri okunamadı",
+		"audioLayerMissingFile": "{{count}} ses katmanı atlandı: dosya okunamadı"
 	},
 	"inspector": {
 		"resetFocusPoint": "Odak noktasını sıfırla",
