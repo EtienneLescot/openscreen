@@ -4,7 +4,10 @@ import {
 	DEFAULT_CROP_REGION,
 	MAX_NATIVE_PLAYBACK_RATE,
 } from "@/components/video-editor/types";
-import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
+import {
+	projectRawTimelineSecToPlayback,
+	resolvePlaybackSegments,
+} from "@/lib/ai-edition/document/timeline";
 import type {
 	AxcutAudioTrack,
 	AxcutClip,
@@ -71,28 +74,35 @@ export function resolveAudioTrackPlayback(
 }
 
 /**
- * Where an imported audio track (issue #350) should sit against the RAW virtual
- * timeline clock, and whether it should be playing there.
+ * Where an imported audio track (issue #350) should sit against the playback
+ * clock, and whether it should be playing there. Both arguments are in
+ * trim-compressed OUTPUT-programme seconds: `outputTimeSec` is the playhead and
+ * `outputStartSec` is the track's head, each already projected from raw through
+ * the trims by `projectRawTimelineSecToPlayback` in the caller.
  *
- * A track occupies `[timelineStartSec, timelineStartSec + (trimEnd - trimStart)]`
- * on the timeline; its source position is `trimStart` plus however far the
- * playhead is into that span. Outside the span it parks at the nearer trim edge
+ * The track plays as one CONTIGUOUS block: `[outputStartSec, outputStartSec +
+ * (trimEnd - trimStart)]`, its source position `trimStart` plus how far the
+ * playhead is past the head. Outside that span it parks at the nearer trim edge
  * and stays paused, the same discipline `resolveAudioTrackPlayback` uses so the
  * rAF never seeks an element into nothing.
  *
- * This is the RAW/document timeline the ruler, playhead and lane all use — NOT
- * the trim-compressed output timeline — because that is where the track was
- * placed (`useTimeline.addAudioTrack` seeds `timelineStartSec` from the playhead).
- * The preview's playhead JUMPS across a trim, so a track at a raw head past a cut
- * still fires at the right wall-clock moment here. The export mixes onto the
- * compressed programme, so it projects the raw head through the trims first
- * (`projectRawTimelineSecToPlayback` in sceneDescription) to land at the same place.
+ * Working in output space is what keeps the preview identical to the export: the
+ * native `audio::mix_external_tracks` overlays the decoded window
+ * `[trimStart, trimEnd]` contiguously at its projected offset, so an interior
+ * trim shortens the programme UNDER the track without cutting the track's own
+ * content. Deriving `local` from the RAW playhead instead (which jumps across a
+ * cut) made the element skip that much source and end early — the preview/export
+ * desync this fixes.
  */
-export function resolveTimelineAudioPlayback(virtualTimeSec: number, track: AxcutAudioTrack) {
+export function resolveTimelineAudioPlayback(
+	outputTimeSec: number,
+	outputStartSec: number,
+	track: AxcutAudioTrack,
+) {
 	const trimStart = Math.max(0, track.trimStartSec);
 	const trimEnd = track.trimEndSec ?? track.durationSec;
 	const windowLen = Math.max(0, trimEnd - trimStart);
-	const local = virtualTimeSec - track.timelineStartSec;
+	const local = outputTimeSec - outputStartSec;
 	return {
 		targetTimeSec: Math.min(Math.max(trimStart, trimStart + local), trimEnd),
 		shouldPlay: local >= 0 && local < windowLen,
@@ -492,6 +502,11 @@ export function VirtualPreview({
 	// mutation.
 	const clipsRef = useRef(clips);
 	clipsRef.current = clips;
+	// Same reason as `clipsRef`: the rAF projects the playhead and each imported
+	// audio track's head raw→output every frame (see the audio-track loop), and
+	// must see the live trims, not the set captured when the loop was created.
+	const trimRangesRef = useRef(trimRanges);
+	trimRangesRef.current = trimRanges;
 	// Trim-narrowed (`resolvePlaybackSegments`) — used ONLY to detect "has the <video>'s own
 	// currentTime drifted into a trim" and where to jump it back out to. Everything ELSE in
 	// this component (`clips`/`clipsRef` above, virtualTimeSec, zoom/speed region lookups,
@@ -574,17 +589,30 @@ export function VirtualPreview({
 					audio.pause();
 				}
 			}
-			// Imported audio tracks (issue #350): position each against the RAW
-			// virtual timeline it was placed on, play it only inside its window, and
-			// set its level from the track gain. When the WebAudio graph is up the level
+			// Imported audio tracks (issue #350): project the playhead raw→output
+			// once, then position each track as a contiguous block against that
+			// output clock (see `resolveTimelineAudioPlayback`) so an interior trim
+			// shortens the programme without cutting the track — identical to the
+			// export's `mix_external_tracks`. Play it only inside its window, and set
+			// its level from the track gain. When the WebAudio graph is up the level
 			// rides a per-track gain node (which CAN boost past 0 dB, and the output node
 			// applies the global gain on top, matching the export); the `.volume` path is
 			// the fallback for when the graph is unavailable — there a boost caps at 0 dB.
 			const globalGain = audioGainScalar(audioGainDbRef.current);
+			const outputTimeSec = projectRawTimelineSecToPlayback(
+				clipsRef.current,
+				trimRangesRef.current,
+				virtualTimeSecRef.current,
+			);
 			for (const track of audioTracksRef.current) {
 				const el = audioTrackElsRef.current.get(track.id);
 				if (!el) continue;
-				const trackTarget = resolveTimelineAudioPlayback(virtualTimeSecRef.current, track);
+				const outputStartSec = projectRawTimelineSecToPlayback(
+					clipsRef.current,
+					trimRangesRef.current,
+					track.timelineStartSec,
+				);
+				const trackTarget = resolveTimelineAudioPlayback(outputTimeSec, outputStartSec, track);
 				if (el.playbackRate !== v.playbackRate) el.playbackRate = v.playbackRate;
 				const trackGainNode = audioTrackGainNodesRef.current.get(track.id);
 				if (trackGainNode) {
