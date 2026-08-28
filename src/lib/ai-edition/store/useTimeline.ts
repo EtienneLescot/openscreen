@@ -144,6 +144,17 @@ export function useTimeline() {
 
 	const hasDoc = document !== null && projectId !== null;
 
+	// Clear a stale audio-track selection. `removeAudioTrack` clears it on an explicit
+	// delete, but an undo (or any document swap) can drop the selected track WITHOUT
+	// going through that op — and then `selectedAudioTrackId` points at nothing while the
+	// inspector stays open on an empty AudioTrackPane, recoverable only by clicking a facet.
+	useEffect(() => {
+		if (selectedAudioTrackId === null) return;
+		if (!document?.audioTracks.some((t) => t.id === selectedAudioTrackId)) {
+			setSelectedAudioTrackId(null);
+		}
+	}, [document, selectedAudioTrackId, setSelectedAudioTrackId]);
+
 	// Backfill missing source dimensions for any USED asset whose `video` was never probed.
 	// `probeAndCorrectClip` only populates dims on INSERT, gated on a null duration, so an asset
 	// saved with a duration but no dims (e.g. a project migrated from before dims were probed
