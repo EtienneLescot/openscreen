@@ -28,21 +28,18 @@ unsafe extern "C" fn drm_descriptor_free(_opaque: *mut std::ffi::c_void, data: *
     ff::av_free(data as *mut std::ffi::c_void);
 }
 
-/// One dmabuf plane. `fd` is borrowed for the duration of [`DmabufImporter::import`]
-/// only — VAAPI dups it during surface creation, so the caller may close it after.
-pub struct DmabufPlane {
-    pub fd: i32,
-    pub offset: i32,
-    pub stride: i32,
-}
-
-/// A dmabuf frame to import. Borrows the fds; see [`DmabufPlane`].
+/// A dmabuf frame to import. Reuses [`crate::shim::DmabufPlane`] (an identical
+/// `{fd, offset, stride}`) rather than a second copy, so the capture path can
+/// borrow `DmabufDesc::planes` straight through instead of reallocating a plane
+/// vector per frame — on the one path whose whole purpose is avoiding per-frame
+/// copies. The fds are borrowed for the duration of [`DmabufImporter::import`]
+/// only: VAAPI dups them during surface creation, so the caller may close after.
 pub struct DmabufFrame<'a> {
     pub width: i32,
     pub height: i32,
     pub drm_fourcc: u32,
     pub modifier: u64,
-    pub planes: &'a [DmabufPlane],
+    pub planes: &'a [crate::shim::DmabufPlane],
 }
 
 /// The pixel format the VAAPI-mapped surface presents, derived from the dmabuf's
@@ -451,5 +448,32 @@ impl Drop for DmabufImporter {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pins the DRM-fourcc → ffmpeg-format mapping. The fourcc constants are
+    // hand-duplicated between this file and the C shim's `osc_spa_format_to_drm_fourcc`,
+    // so a transposed XBGR/XRGB would silently swap red and blue in every recording
+    // with nothing else to catch it. The fourccs are spelled out here independently
+    // of `sw_format_for_fourcc`'s own consts so the two must agree.
+    #[test]
+    fn maps_each_negotiated_fourcc_to_its_packed_format() {
+        // "XR24" (BGRx) → BGR0, "AR24" (BGRA) → BGRA,
+        // "XB24" (RGBx) → 0BGR, "AB24" (RGBA) → ABGR.
+        assert_eq!(sw_format_for_fourcc(0x3432_5258), Some(ff::AV_PIX_FMT_BGR0));
+        assert_eq!(sw_format_for_fourcc(0x3432_5241), Some(ff::AV_PIX_FMT_BGRA));
+        assert_eq!(sw_format_for_fourcc(0x3432_4258), Some(ff::AV_PIX_FMT_0BGR));
+        assert_eq!(sw_format_for_fourcc(0x3432_4241), Some(ff::AV_PIX_FMT_ABGR));
+    }
+
+    #[test]
+    fn rejects_a_fourcc_we_do_not_negotiate() {
+        // "NV12" is a real fourcc, just not one of our packed RGB layouts.
+        assert_eq!(sw_format_for_fourcc(0x3231_564e), None);
+        assert_eq!(sw_format_for_fourcc(0), None);
     }
 }
