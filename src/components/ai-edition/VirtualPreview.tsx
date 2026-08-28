@@ -613,7 +613,11 @@ export function VirtualPreview({
 					track.timelineStartSec,
 				);
 				const trackTarget = resolveTimelineAudioPlayback(outputTimeSec, outputStartSec, track);
-				if (el.playbackRate !== v.playbackRate) el.playbackRate = v.playbackRate;
+				// Imported audio plays at its natural 1× rate, NOT the video's. The export
+				// sums it into the programme at 1× — speed regions stretch clip PCM only,
+				// never the imported track — so following `v.playbackRate` would pitch a
+				// voiceover up under a 2× region and finish it early, diverging from export.
+				if (el.playbackRate !== 1) el.playbackRate = 1;
 				const trackGainNode = audioTrackGainNodesRef.current.get(track.id);
 				if (trackGainNode) {
 					trackGainNode.gain.value = audioGainScalar(track.gainDb);
@@ -639,6 +643,13 @@ export function VirtualPreview({
 					}
 				}
 				if (!v.paused && trackTarget.shouldPlay && el.paused) {
+					// Resume a context suspended by autoplay policy, exactly as the primary
+					// loop does above — otherwise a track that starts while the primary
+					// element is silent (its span is over, or a recording with no separate
+					// audio element) routes into a suspended context and plays nothing.
+					if (audioGraphRef.current?.context.state === "suspended") {
+						void audioGraphRef.current.context.resume();
+					}
 					const playback = el.play();
 					if (playback) void playback.catch(() => undefined);
 				} else if ((v.paused || !trackTarget.shouldPlay) && !el.paused) {

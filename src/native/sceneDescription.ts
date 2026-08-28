@@ -473,6 +473,13 @@ export function buildSceneDescription(
 	// asset's file path and a concrete trim-out (the source duration when the tail
 	// isn't trimmed — the compositor preallocates its decode window from it). A
 	// track whose asset or path is missing is dropped rather than sent path-less.
+	// Project onto the SAME clips the programme is assembled from. `resolveVisibleClips`
+	// (below) drops clips whose asset has no resolvable `originalPath`; if the projection
+	// walked the full `document.timeline.clips` it would count a relinked-away clip the
+	// programme does not, landing every following track past the real programme end.
+	const projectedClips = document.timeline.clips.filter(
+		(clip) => assetById.get(clip.assetId)?.originalPath,
+	);
 	const audioTracks = document.audioTracks.flatMap((track) => {
 		const asset = assetById.get(track.assetId);
 		if (!asset?.originalPath) return [];
@@ -484,7 +491,7 @@ export function buildSceneDescription(
 				// mixes onto is trim-compressed — so project raw→output. Passing the raw head
 				// verbatim delayed the track by the total trim duration ahead of it (issue #350).
 				startSec: projectRawTimelineSecToPlayback(
-					document.timeline.clips,
+					projectedClips,
 					document.timeline.trimRanges,
 					track.timelineStartSec,
 				),
