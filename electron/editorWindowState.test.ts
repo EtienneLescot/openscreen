@@ -77,4 +77,32 @@ describe("editor window state", () => {
 		);
 		expect(loadEditorWindowState(dir)).toBeNull();
 	});
+
+	it("rejects zero or negative dimensions instead of clamping them up", () => {
+		// A width:0 record is garbage the app never writes; letting it through
+		// would restore a min-size non-maximized window instead of the default.
+		for (const dims of [
+			{ width: 0, height: 720 },
+			{ width: 1280, height: 0 },
+			{ width: -1280, height: 720 },
+		]) {
+			const dir = tmp();
+			writeFileSync(
+				path.join(dir, "editor-window.json"),
+				JSON.stringify({ x: 10, y: 20, ...dims, maximized: false }),
+			);
+			expect(loadEditorWindowState(dir)).toBeNull();
+		}
+	});
+
+	it("rejects a non-boolean maximized rather than coercing it", () => {
+		for (const maximized of ["true", 1, null, undefined]) {
+			const dir = tmp();
+			writeFileSync(
+				path.join(dir, "editor-window.json"),
+				JSON.stringify({ x: 10, y: 20, width: 1280, height: 720, maximized }),
+			);
+			expect(loadEditorWindowState(dir)).toBeNull();
+		}
+	});
 });

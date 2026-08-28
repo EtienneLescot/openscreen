@@ -37,11 +37,17 @@ function isFiniteNumber(value: unknown): value is number {
 export function parseEditorWindowState(raw: unknown): EditorWindowState | null {
 	if (!raw || typeof raw !== "object") return null;
 	const rec = raw as Record<string, unknown>;
+	// Zero/negative dimensions and a non-boolean `maximized` are garbage the
+	// app never writes; restoring them would clamp into a small non-maximized
+	// window instead of the documented default. Reject the record whole.
 	if (
 		!isFiniteNumber(rec.x) ||
 		!isFiniteNumber(rec.y) ||
 		!isFiniteNumber(rec.width) ||
-		!isFiniteNumber(rec.height)
+		!isFiniteNumber(rec.height) ||
+		rec.width <= 0 ||
+		rec.height <= 0 ||
+		typeof rec.maximized !== "boolean"
 	) {
 		return null;
 	}
@@ -50,7 +56,7 @@ export function parseEditorWindowState(raw: unknown): EditorWindowState | null {
 		y: rec.y,
 		width: rec.width,
 		height: rec.height,
-		maximized: rec.maximized === true,
+		maximized: rec.maximized,
 	};
 }
 
