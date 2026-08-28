@@ -595,6 +595,14 @@ fn run<W: Write>(
     let mut pending_asset: Option<CursorAsset> = None;
     // Set by a `PointerButton` message, consumed by the next emitted sample.
     let mut pending_click = false;
+    // The pw_stream has reached `streaming`, i.e. mutter has actually started
+    // handing us frames. Presses are ignored until then: before it, the only
+    // thing on screen is the portal's own picker, and the click that dismisses
+    // it (its "Share" button) would otherwise latch and ride out on the
+    // recording's first sample as a phantom click at t≈0. mutter enables its
+    // capture source on STREAMING, so this is the exact edge at which a press
+    // starts landing on content the recording contains.
+    let mut streaming = false;
     let mut reported_cursor_meta = false;
     // Allocated up front so the PipeWire callback has somewhere to put frames
     // from the very first buffer; `None` in cursor-only mode, which is also what
@@ -626,8 +634,13 @@ fn run<W: Write>(
 
             // Latched, not emitted here: a bare press carries no position, so it
             // waits for the next sample (which does) to become a `"click"`.
+            // Dropped before the stream is live (see `streaming`): a press that
+            // lands while the picker is still up is the click on its "Share"
+            // button, not content, and must not tag the first real sample.
             Ok(Message::PointerButton) => {
-                pending_click = true;
+                if streaming {
+                    pending_click = true;
+                }
             }
 
             Ok(Message::Pause) => {
@@ -998,6 +1011,11 @@ fn run<W: Write>(
                         ("error", error.clone().into()),
                     ]),
                 });
+                // Once frames are flowing, presses land on recorded content; the
+                // picker (and the "Share" click that dismissed it) is behind us.
+                if state == "streaming" {
+                    streaming = true;
+                }
                 if let Some(error) = error {
                     let _ = emitter.emit(&Event::Warning {
                         code: "stream-error".to_owned(),
@@ -1192,10 +1210,11 @@ fn emit_sample<W: Write>(
         return;
     };
     let visible = state.x >= 0 && state.y >= 0 && state.x < width && state.y < height;
-    // A click observed since the last sample rides out on this one. Cleared only
-    // when a sample is actually emitted, so a press that lands before the stream
-    // is live tags the first real sample rather than being dropped; at the sample
-    // cadence the cursor has not moved enough for the position to be wrong.
+    // A click observed since the last sample rides out on this one, cleared only
+    // when a sample is actually emitted — at the sample cadence the cursor has not
+    // moved enough for the position to be wrong. Presses before the stream is live
+    // are never latched (see the `PointerButton` arm), so this cannot carry the
+    // portal picker's own "Share" click into the recording.
     let interaction_type = if *pending_click {
         *pending_click = false;
         Some("click".to_owned())
