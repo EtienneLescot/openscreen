@@ -203,6 +203,15 @@ function hasAllowedImportAudioExtension(filePath: string): boolean {
 	return ALLOWED_IMPORT_AUDIO_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
+// Video OR audio. The type-specific pickers stay honest (see the audio set's
+// comment), but the generic media READS — peaks, binary, file-info, chunk — serve
+// whichever kind the document points at, so they must accept both. Gating them on
+// video alone dropped every imported audio path once `approvedPaths` was empty
+// (a project reopen), and the waveform was lost for good (issue #350).
+function hasAllowedImportMediaExtension(filePath: string): boolean {
+	return hasAllowedImportVideoExtension(filePath) || hasAllowedImportAudioExtension(filePath);
+}
+
 function runProcess(
 	command: string,
 	args: string[],
@@ -356,6 +365,15 @@ function approveReadableAudioPath(
 	trustedDirs?: string[],
 ): Promise<string | null> {
 	return approveReadableMediaPath(filePath, hasAllowedImportAudioExtension, trustedDirs);
+}
+
+// For the generic media reads that accept either kind — NOT for the pickers,
+// which must stay type-specific (see `hasAllowedImportMediaExtension`).
+function approveReadableAvPath(
+	filePath?: string | null,
+	trustedDirs?: string[],
+): Promise<string | null> {
+	return approveReadableMediaPath(filePath, hasAllowedImportMediaExtension, trustedDirs);
 }
 
 function resolveRecordingOutputPath(fileName: string): string {
@@ -3748,7 +3766,7 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("read-binary-file", async (_, filePath: string) => {
 		try {
-			const normalizedPath = await approveReadableVideoPath(filePath);
+			const normalizedPath = await approveReadableAvPath(filePath);
 			if (!normalizedPath) {
 				return {
 					success: false,
@@ -3778,7 +3796,7 @@ export function registerIpcHandlers(
 	// recording above that can never be loaded whole — see read-file-chunk).
 	ipcMain.handle("get-readable-file-info", async (_, filePath: string) => {
 		try {
-			const normalizedPath = await approveReadableVideoPath(filePath);
+			const normalizedPath = await approveReadableAvPath(filePath);
 			if (!normalizedPath) {
 				return {
 					success: false,
@@ -3814,7 +3832,7 @@ export function registerIpcHandlers(
 		async (_, filePath: string, durationSec: number): Promise<AudioPeaksResult> => {
 			try {
 				// Same approval gate as every other read of a renderer-supplied path.
-				const normalizedPath = await approveReadableVideoPath(filePath);
+				const normalizedPath = await approveReadableAvPath(filePath);
 				if (!normalizedPath) {
 					return { success: false, message: "File path is not approved" };
 				}
@@ -3838,7 +3856,7 @@ export function registerIpcHandlers(
 	// do (2 GiB cap) and a 16 GB machine cannot hold for multi-GB recordings.
 	ipcMain.handle("read-file-chunk", async (_, filePath: string, offset: number, length: number) => {
 		try {
-			const normalizedPath = await approveReadableVideoPath(filePath);
+			const normalizedPath = await approveReadableAvPath(filePath);
 			if (!normalizedPath) {
 				return {
 					success: false,
