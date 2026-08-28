@@ -19,9 +19,24 @@ export function appendAudioTrack(doc: AxcutDocument, track: AxcutAudioTrack): Ax
 	return { ...doc, audioTracks: [...doc.audioTracks, track] };
 }
 
-/** Drop a track by id. A no-op if the id isn't present. */
+/**
+ * Drop a track by id. A no-op if the id isn't present.
+ *
+ * Also drops the track's asset if nothing else references it. An imported audio
+ * asset is only ever reachable through its track — audio is filtered out of the
+ * clip lists, so it never becomes a clip — so a deleted track orphans it, and it
+ * would otherwise linger in the document forever, invisible in every asset list
+ * (issue #350).
+ */
 export function removeAudioTrack(doc: AxcutDocument, trackId: string): AxcutDocument {
-	return { ...doc, audioTracks: doc.audioTracks.filter((t) => t.id !== trackId) };
+	const track = doc.audioTracks.find((t) => t.id === trackId);
+	const audioTracks = doc.audioTracks.filter((t) => t.id !== trackId);
+	if (!track) return { ...doc, audioTracks };
+	const stillReferenced =
+		audioTracks.some((t) => t.assetId === track.assetId) ||
+		doc.timeline.clips.some((c) => c.assetId === track.assetId);
+	const assets = stillReferenced ? doc.assets : doc.assets.filter((a) => a.id !== track.assetId);
+	return { ...doc, audioTracks, assets };
 }
 
 // Shared updater — maps the one matching track through `patch`. Keeps every op

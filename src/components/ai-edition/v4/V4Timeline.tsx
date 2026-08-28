@@ -875,6 +875,11 @@ export function V4Timeline({
 			e.preventDefault();
 			e.stopPropagation();
 			tl.selectAudioTrack(track.id);
+			// Start clean: a previous drag's commit may still be in flight (its ref is
+			// cleared only when `placeAudioTrack` resolves). Without this, a plain
+			// select-click that never moves would let `up` read that stale value and
+			// re-commit the old drag — a redundant write and an extra undo step.
+			audioDragRef.current = null;
 			const el = canvasRef.current;
 			if (!el) return;
 			const r = el.getBoundingClientRect();

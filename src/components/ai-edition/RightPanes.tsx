@@ -2349,6 +2349,13 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 	const asset = track ? tl.assets.find((a) => a.id === track.assetId) : undefined;
 	// Live-drag value for the volume slider; null means "show the committed gain".
 	const [liveGain, setLiveGain] = useState<number | null>(null);
+	// Drop the live value when the selected track changes: a drag released outside
+	// the input never fires onCommit, so without this an uncommitted -10 dB from
+	// track A would show as track B's gain the moment B is selected.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: trackId is the trigger, not a read — the body only resets the live value.
+	useEffect(() => {
+		setLiveGain(null);
+	}, [trackId]);
 	if (!track) return null;
 	const fileName = track.label || asset?.label || asset?.originalPath?.split(/[\\/]/).pop() || "";
 
