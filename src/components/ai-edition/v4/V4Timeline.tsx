@@ -355,6 +355,7 @@ const AudioLanePill = memo(function AudioLanePill({
 	onStartDrag,
 	onSelect,
 	label,
+	outputGain,
 }: {
 	track: AxcutAudioTrack;
 	url: string | undefined;
@@ -365,6 +366,9 @@ const AudioLanePill = memo(function AudioLanePill({
 	onStartDrag: (e: ReactPointerEvent, track: AxcutAudioTrack, mode: "move" | "l" | "r") => void;
 	onSelect: (id: string) => void;
 	label: string;
+	/** Linear project output gain, applied on top of the track gain — the mixer
+	 *  applies both, so the bars must too or they under-read the exported level. */
+	outputGain: number;
 }) {
 	const duration = assetDurationSec ?? track.durationSec;
 	return (
@@ -395,7 +399,9 @@ const AudioLanePill = memo(function AudioLanePill({
 				assetDurationSec={duration}
 				sourceStartSec={track.trimStartSec}
 				sourceEndSec={track.trimEndSec ?? duration}
-				gain={audioGainScalar(track.gainDb)}
+				// Track gain AND the project output gain — `finish_audio` applies both and
+				// clamps, so scaling by the track gain alone under-read a boosted output.
+				gain={audioGainScalar(track.gainDb) * outputGain}
 			/>
 			<span className={styles.laneAudioLabel}>
 				<Music size={11} />
@@ -1731,6 +1737,7 @@ export function V4Timeline({
 													onStartDrag={startAudioDrag}
 													onSelect={tl.selectAudioTrack}
 													label={track.label || asset?.label || ts("audioTrack.defaultLabel")}
+													outputGain={audioGainScalar(settings.audioGainDb)}
 												/>
 											);
 										})
