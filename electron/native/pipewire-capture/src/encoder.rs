@@ -559,6 +559,15 @@ impl VideoEncoder {
             if scaled < 0 {
                 return Err(format!("sws_scale: {}", ff::err_to_string(scaled)));
             }
+            // This CPU frame is now what `encode_staged` must send, so drop any hw
+            // surface a previous dmabuf frame left staged — e.g. after the stream
+            // renegotiates to a modifier-less format and frames start arriving on
+            // the sws path. `encode_staged` prefers `hw_staged` whenever it is
+            // non-null, so without this it would keep re-sending that stale surface
+            // and freeze the video. `av_frame_free` nulls the pointer.
+            if !self.hw_staged.is_null() {
+                ff::av_frame_free(&mut self.hw_staged);
+            }
             self.staged = true;
         }
         Ok(())
