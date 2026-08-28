@@ -25,7 +25,7 @@ import {
 	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { useCaptions } from "@/lib/ai-edition/store/useCaptions";
-import { firstBusyView } from "@/lib/ai-edition/transcription/status";
+import { firstTimelineBusyView } from "@/lib/ai-edition/transcription/status";
 import { nativeBridgeClient } from "@/native";
 import { ColorField } from "./ColorField";
 import styles from "./NewEditorShell.module.css";
@@ -105,8 +105,11 @@ export function CaptionsPane() {
 	const transcriptions = useAssetTranscriptions();
 	const transcriptionLabel = useTranscriptionLabel();
 	const isTranscribing = gate.state === "pending";
+	// Timeline-scoped on purpose: the gate below answers for the timeline's
+	// assets, so the label must too — an off-timeline job must not relabel an
+	// enabled button.
 	const busyLabel = transcriptionBusyLabel(
-		firstBusyView(Object.values(transcriptions)) ??
+		firstTimelineBusyView(document, transcriptions) ??
 			(isTranscribing ? { assetId: "", status: "running", phase: "loading-model" } : undefined),
 		transcriptionLabel,
 	);
@@ -256,10 +259,13 @@ export function CaptionsPane() {
 					>
 						{/* The cue count is only meaningful while the layer is on — deriving
 						    cues short-circuits when it's off, so a "0 lines" reading there
-						    would say the transcript is empty when it isn't. */}
-						{settings.enabled
-							? t("captions.derivedFromTranscript", { count: cues.length })
-							: t("captions.hiddenHint")}
+						    would say the transcript is empty when it isn't. While a
+						    regeneration is in flight the phase label matters more than the
+						    count of cues about to be replaced. */}
+						{busyLabel ??
+							(settings.enabled
+								? t("captions.derivedFromTranscript", { count: cues.length })
+								: t("captions.hiddenHint"))}
 					</p>
 				)}
 

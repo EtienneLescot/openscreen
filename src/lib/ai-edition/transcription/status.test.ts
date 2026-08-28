@@ -5,6 +5,7 @@ import {
 	classifyTranscriptionError,
 	deriveAssetStatus,
 	firstBusyView,
+	firstTimelineBusyView,
 	isCpuBackend,
 	isModelDownloadInFlight,
 	isPermanentFailure,
@@ -232,53 +233,53 @@ describe("resolveTranscriptGate", () => {
 	});
 });
 
-describe("transcriptRelevantAssetIds", () => {
-	const base = {
-		schemaVersion: 7 as const,
-		project: {
-			id: "proj_1",
-			title: "T",
-			createdAt: "2026-06-25T10:00:00.000Z",
-			updatedAt: "2026-06-25T10:00:00.000Z",
-		},
-		transcript: null,
-		transcripts: [],
-		annotations: [],
-		zoomRanges: [],
-		legacyEditor: null,
-	};
+const base = {
+	schemaVersion: 7 as const,
+	project: {
+		id: "proj_1",
+		title: "T",
+		createdAt: "2026-06-25T10:00:00.000Z",
+		updatedAt: "2026-06-25T10:00:00.000Z",
+	},
+	transcript: null,
+	transcripts: [],
+	annotations: [],
+	zoomRanges: [],
+	legacyEditor: null,
+};
 
-	function doc(assetIds: string[], clipAssetIds: string[]): AxcutDocument {
-		return {
-			...base,
-			assets: assetIds.map((id) => ({
-				id,
-				kind: "video" as const,
-				label: id,
-				originalPath: `/tmp/${id}.mp4`,
-				cameraTrack: null,
+function doc(assetIds: string[], clipAssetIds: string[]): AxcutDocument {
+	return {
+		...base,
+		assets: assetIds.map((id) => ({
+			id,
+			kind: "video" as const,
+			label: id,
+			originalPath: `/tmp/${id}.mp4`,
+			cameraTrack: null,
+		})),
+		timeline: {
+			clips: clipAssetIds.map((assetId, i) => ({
+				id: `clip_${i}`,
+				assetId,
+				sourceStartSec: 0,
+				sourceEndSec: 10,
+				timelineStartSec: i * 10,
+				timelineEndSec: i * 10 + 10,
+				wordRefs: [],
+				origin: "system" as const,
+				reason: "",
 			})),
-			timeline: {
-				clips: clipAssetIds.map((assetId, i) => ({
-					id: `clip_${i}`,
-					assetId,
-					sourceStartSec: 0,
-					sourceEndSec: 10,
-					timelineStartSec: i * 10,
-					timelineEndSec: i * 10 + 10,
-					wordRefs: [],
-					origin: "system" as const,
-					reason: "",
-				})),
-				gaps: [],
-				trimRanges: [],
-				muteRanges: [],
-				speedRanges: [],
-				captionRanges: [],
-			},
-		} as AxcutDocument;
-	}
+			gaps: [],
+			trimRanges: [],
+			muteRanges: [],
+			speedRanges: [],
+			captionRanges: [],
+		},
+	} as AxcutDocument;
+}
 
+describe("transcriptRelevantAssetIds", () => {
 	it("only counts the assets the timeline plays", () => {
 		expect(transcriptRelevantAssetIds(doc(["a", "b"], ["a", "a"]))).toEqual(["a"]);
 	});
@@ -293,6 +294,30 @@ describe("transcriptRelevantAssetIds", () => {
 
 	it("has nothing to say about a missing document", () => {
 		expect(transcriptRelevantAssetIds(null)).toEqual([]);
+	});
+});
+
+describe("firstTimelineBusyView", () => {
+	it("ignores a busy job on an asset the timeline does not play", () => {
+		// "b" is in the bin and mid-transcription, but the timeline only plays
+		// "a" — the timeline-scoped label must stay idle, like the gate does.
+		const views = { b: view("b", "running") };
+		expect(firstTimelineBusyView(doc(["a", "b"], ["a"]), views)).toBeUndefined();
+	});
+
+	it("reports a busy job on a timeline asset", () => {
+		const views = { a: view("a", "running"), b: view("b", "running") };
+		expect(firstTimelineBusyView(doc(["a", "b"], ["a"]), views)?.assetId).toBe("a");
+	});
+
+	it("keeps the empty-timeline fallback: whole-bin jobs count", () => {
+		const views = { b: view("b", "queued") };
+		expect(firstTimelineBusyView(doc(["a", "b"], []), views)?.assetId).toBe("b");
+	});
+
+	it("is quiet when nothing relevant is busy", () => {
+		const views = { a: view("a", "ready") };
+		expect(firstTimelineBusyView(doc(["a"], ["a"]), views)).toBeUndefined();
 	});
 });
 
