@@ -79,6 +79,13 @@ pub fn spawn_readers(sender: &Sender<Message>) -> ClickCapture {
     }
 }
 
+/// A touchpad advertises `BTN_LEFT` for a physical clickpad press, so it passes
+/// this check and its node is opened — but tap-to-click never arrives here.
+/// libinput consumes the raw `BTN_TOUCH`/`ABS_MT_*` stream and synthesises the
+/// button for its own clients without writing `BTN_LEFT` back to the kernel
+/// device, so a tap is invisible at the evdev layer we read. The consequence is
+/// documented for users under "Mouse clicks on Wayland" in the installation docs:
+/// on a touchpad only hard presses are captured, taps are not.
 fn device_reports_left_button(device: &Device) -> bool {
     device
         .supported_keys()
