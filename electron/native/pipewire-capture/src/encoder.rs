@@ -33,6 +33,18 @@ pub enum Backend {
     Software,
 }
 
+/// Whether the dmabuf → VAAPI zero-copy import may be used for a `forced` encoder
+/// choice. The import can only feed VAAPI, so `software`/`vulkan` must skip it —
+/// otherwise the documented `OPENSCREEN_LINUX_ENCODER` override is silently
+/// ignored on the dmabuf path.
+///
+/// The SINGLE source of truth for this: the negotiation offer (`prefer_dmabuf` in
+/// main) and the importer build (`Capture::start`) both call it, so they cannot
+/// drift into offering dmabuf that no importer will consume.
+pub fn forced_allows_dmabuf(forced: Option<Backend>) -> bool {
+    matches!(forced, None | Some(Backend::Vaapi))
+}
+
 impl Backend {
     /// The name the app reports and the tests match on. Kept in the same
     /// vocabulary as the Windows helper's `encoder-selection` event.

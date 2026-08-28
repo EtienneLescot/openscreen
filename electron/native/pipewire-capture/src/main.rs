@@ -579,12 +579,15 @@ fn run<W: Write>(
         .output_path
         .as_ref()
         .map(|_| Arc::new(FrameMailbox::default()));
-    // Offer dmabuf ahead of shm (issue #507) only for a video session AND only
-    // when the VAAPI import pipeline actually builds on this GPU. Probed once
-    // here — it constructs a VAAPI device and filtergraph — so a machine that
-    // cannot import (no VAAPI, or a driver that will not map) simply keeps the
-    // shm path with no per-recording cost.
-    let prefer_dmabuf = frames.is_some() && crate::dmabuf_import::available();
+    // Offer dmabuf ahead of shm (issue #507) only for a video session, only when
+    // the VAAPI import pipeline actually builds on this GPU, AND only when the
+    // forced-encoder choice can consume it — `software`/`vulkan` cannot, and
+    // offering dmabuf they can't import makes the first frame fail. The available()
+    // probe constructs a VAAPI device and filtergraph once here, so a machine that
+    // cannot import keeps the shm path with no per-recording cost.
+    let prefer_dmabuf = frames.is_some()
+        && crate::dmabuf_import::available()
+        && encoder::forced_allows_dmabuf(config.forced_encoder);
     if frames.is_some() {
         let _ = emitter.emit(&Event::Debug {
             code: "dmabuf-import".to_owned(),

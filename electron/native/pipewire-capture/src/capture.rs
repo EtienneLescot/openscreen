@@ -244,10 +244,10 @@ impl Capture {
     ) -> Result<(Self, Selection), String> {
         let bitrate = bitrate.unwrap_or_else(|| default_bitrate(width, height, fps));
         let mut rejected = Vec::new();
-        // The dmabuf import can only feed VAAPI, so a user forcing `software` or
-        // `vulkan` must skip it — otherwise the documented `forced` workaround
-        // (VideoEncoder::open) would be silently ignored on the dmabuf path.
-        let use_dmabuf = matches!(forced, None | Some(Backend::Vaapi));
+        // Shared with the negotiation offer (`prefer_dmabuf` in main) so the two
+        // never disagree: offering dmabuf that this then refuses to import is what
+        // makes a forced-software recording fail on its first frame.
+        let use_dmabuf = crate::encoder::forced_allows_dmabuf(forced);
         let (encoder, importer) = match dmabuf.filter(|_| use_dmabuf) {
             Some(desc) => {
                 // The importer maps the full stream (`desc`) and its VPP crops to
