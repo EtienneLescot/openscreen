@@ -31,4 +31,31 @@ describe("isNativeMacCaptureOsSupported", () => {
 		});
 		expect(findHelper).not.toHaveBeenCalled();
 	});
+
+	it("does not look up the helper on unsupported platforms", async () => {
+		const findHelper = vi.fn(async () => "/Applications/OpenScreen/helper");
+
+		await expect(resolveNativeMacCaptureHelper("win32", "13.0", findHelper)).resolves.toEqual({
+			available: false,
+			reason: "unsupported-platform",
+		});
+		expect(findHelper).not.toHaveBeenCalled();
+	});
+
+	it("reports missing and available helpers on supported macOS versions", async () => {
+		const findMissingHelper = vi.fn(async () => null);
+		await expect(
+			resolveNativeMacCaptureHelper("darwin", "13.0", findMissingHelper),
+		).resolves.toEqual({ available: false, reason: "missing-helper" });
+		expect(findMissingHelper).toHaveBeenCalledOnce();
+
+		const findAvailableHelper = vi.fn(async () => "/Applications/OpenScreen/helper");
+		await expect(
+			resolveNativeMacCaptureHelper("darwin", "13.0", findAvailableHelper),
+		).resolves.toEqual({
+			available: true,
+			helperPath: "/Applications/OpenScreen/helper",
+		});
+		expect(findAvailableHelper).toHaveBeenCalledOnce();
+	});
 });
