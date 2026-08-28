@@ -1010,9 +1010,22 @@ extern "C" fn on_frame(user: *mut c_void, frame: *const RawFrame) -> i32 {
     // SAFETY: `user` is the CallbackState pointer given to osc_pw_start, valid for
     // the session's lifetime; `frame` is valid for the callback's duration.
     let state = unsafe { &*(user as *const CallbackState) };
+    // Same guard `with_state` gives every other callback, which this one cannot use
+    // because it returns a value: a panic (an allocation failure in
+    // `Vec::with_capacity`, a capacity overflow in `put`) must not unwind across the
+    // `extern "C"` boundary and abort the helper. Decline the frame on panic (0) so
+    // the shim re-queues it rather than leaking the buffer.
+    catch_unwind(AssertUnwindSafe(|| on_frame_inner(state, frame))).unwrap_or(0)
+}
+
+/// The body of [`on_frame`], split out so the callback can wrap it in
+/// `catch_unwind`. `frame` is non-null (checked by the caller) and valid for the
+/// callback's duration.
+fn on_frame_inner(state: &CallbackState, frame: *const RawFrame) -> i32 {
     let Some(mailbox) = state.frames.as_ref() else {
         return 0;
     };
+    // SAFETY: non-null (checked in `on_frame`) and valid for the callback duration.
     let frame = unsafe { &*frame };
 
     // Tiled dmabuf: no pixels to copy. Take the PipeWire buffer (hold it out of

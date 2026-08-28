@@ -778,15 +778,29 @@ fn run<W: Write>(
                     let staged = capture.stage(&frame);
                     let (width, height) = (frame.crop.width, frame.crop.height);
                     mailbox.recycle(frame.pixels);
-                    if let Err(message) = staged {
-                        let _ = emitter.emit(&Event::Error {
-                            code: "encode-failed".to_owned(),
-                            message,
-                        });
-                        exit_code = 1;
-                        break;
+                    match staged {
+                        Ok(capture::StageOutcome::Staged) => {}
+                        // Recoverable: one frame the GPU could not import. Warn so
+                        // it is answerable from the log, then carry on — `advance`
+                        // holds the previous frame — rather than ending the file.
+                        Ok(capture::StageOutcome::Dropped(reason)) => {
+                            let _ = emitter.emit(&Event::Warning {
+                                code: "frame-dropped".to_owned(),
+                                message: reason,
+                            });
+                        }
+                        Err(message) => {
+                            let _ = emitter.emit(&Event::Error {
+                                code: "encode-failed".to_owned(),
+                                message,
+                            });
+                            exit_code = 1;
+                            break;
+                        }
                     }
-                    if first {
+                    // Only once a frame has actually staged — a first frame that
+                    // dropped leaves capture unstarted, so this waits for a real one.
+                    if first && capture.started() {
                         let _ = emitter.emit(&Event::CaptureStarted {
                             timestamp_ms: timestamp_ms(),
                             path: config

@@ -227,6 +227,18 @@ pub struct Capture {
     committed_height: i32,
 }
 
+/// The outcome of staging one captured frame.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StageOutcome {
+    /// A new frame was staged; `advance` will encode it.
+    Staged,
+    /// A recoverable per-frame failure — one dmabuf the GPU could not map, or a
+    /// transient EAGAIN. The frame is skipped and `advance` holds the previously
+    /// staged one forward, so a single bad frame costs one frame, not the whole
+    /// recording. Carries the reason for a log warning.
+    Dropped(String),
+}
+
 impl Capture {
     pub fn start(
         path: &Path,
@@ -364,8 +376,10 @@ impl Capture {
     }
 
     /// Converts a captured frame into the encoder's staging buffer. Nothing is
-    /// written until [`Self::advance`] runs.
-    pub fn stage(&mut self, frame: &shim::Frame) -> Result<(), String> {
+    /// written until [`Self::advance`] runs. A recoverable per-frame failure (a
+    /// dmabuf the GPU cannot map) returns `Ok(Dropped)` rather than `Err`, so it
+    /// costs one frame, not the recording; a genuine encoder error still errors.
+    pub fn stage(&mut self, frame: &shim::Frame) -> Result<StageOutcome, String> {
         // Zero-copy dmabuf path: import the tiled GPU buffer into an NV12 VAAPI
         // surface (the VPP crops a window to its committed rectangle) and hand it
         // to the encoder as-is — no swscale. See issue #507.
@@ -388,7 +402,7 @@ impl Capture {
                     stride: plane.stride,
                 })
                 .collect();
-            let nv12 = importer.import(
+            let nv12 = match importer.import(
                 &crate::dmabuf_import::DmabufFrame {
                     width: desc.width,
                     height: desc.height,
@@ -398,12 +412,18 @@ impl Capture {
                 },
                 crop_x,
                 crop_y,
-            )?;
+            ) {
+                Ok(nv12) => nv12,
+                // A single un-mappable buffer must not end the recording. Skip it;
+                // `advance` holds the previous frame, and the shm path is still in
+                // the offer for a full downgrade later (a planned follow-up).
+                Err(reason) => return Ok(StageOutcome::Dropped(reason)),
+            };
             // SAFETY: `nv12` is a VAAPI NV12 frame from the pool the encoder was
             // opened against; the encoder takes ownership.
             unsafe { self.encoder.stage_hw(nv12) };
             self.mark_started();
-            return Ok(());
+            return Ok(StageOutcome::Staged);
         }
 
         let format = pixel_format(frame.video_format)?;
@@ -425,7 +445,7 @@ impl Capture {
 
         self.encoder.stage(pixels, frame.stride, format)?;
         self.mark_started();
-        Ok(())
+        Ok(StageOutcome::Staged)
     }
 
     /// Starts the timeline on the first staged frame and drops the audio backlog.
