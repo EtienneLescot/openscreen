@@ -1032,6 +1032,14 @@ fn on_frame_inner(state: &CallbackState, frame: *const RawFrame) -> i32 {
     // the queue) so the plane fds AND their content stay valid until the main-loop
     // import copies the surface; the buffer is re-queued when the DmabufDesc drops.
     if frame.is_dmabuf != 0 {
+        // Decline a buffer the C side could not register (its live-buffer table was
+        // full — two overlapping sets across a renegotiation). Its generation is 0,
+        // which `osc_pw_requeue_buffer` refuses to re-queue, so holding it would
+        // leak it out of the pool for good. Returning 0 lets the shim re-queue it
+        // now; the frame is dropped instead (the previous one is held forward).
+        if frame.buffer_generation == 0 {
+            return 0;
+        }
         let n = frame.n_planes.clamp(0, 4) as usize;
         if n == 0 {
             return 0;
