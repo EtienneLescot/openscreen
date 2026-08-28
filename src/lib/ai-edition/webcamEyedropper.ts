@@ -8,15 +8,32 @@
 // to drive decode: `NewEditorShell.module.css` `.webcamSlot .webcamVideo`), and
 // that element is the un-keyed source.
 //
-// The geometry below inverts what CSS already did to that element:
-// `object-fit: cover` (crop the long axis, never letterbox) and, when the user
-// has mirroring on, `transform: scaleX(-1)`.
+// The geometry below inverts what CSS already did to that element, in the order
+// CSS applies it: `object-view-box` (the user's webcam crop, a sub-rect of the
+// raster), then `object-fit: cover` on that window (crop the long axis, never
+// letterbox), then `transform: scaleX(-1)` when mirroring is on.
+//
+// That order is the compositor's order, not a coincidence: `webcam_source_rect`
+// (Rust) crops to the authored window and cover-fits the result into the layout
+// slot. The pick has to invert the same pipeline the user is looking at, or a
+// zoomed camera samples the pixel next to the one they clicked.
 
 /** A box in any consistent unit — the slot's CSS size, or the video's natural size. */
 export interface EyedropperBox {
 	width: number;
 	height: number;
 }
+
+/** The authored webcam crop, as fractions of the raster (`webcamCropRegion`). */
+export interface EyedropperCrop {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+/** The whole raster — what an unzoomed camera crops to, and the safe fallback. */
+const FULL_FRAME: EyedropperCrop = { x: 0, y: 0, width: 1, height: 1 };
 
 /**
  * Slot-relative point (px from the slot's top-left) → pixel coordinates in the
@@ -31,10 +48,19 @@ export function mapSlotPointToVideoPixel(
 	slot: EyedropperBox,
 	video: EyedropperBox,
 	mirrored: boolean,
+	crop: EyedropperCrop = FULL_FRAME,
 ): { x: number; y: number } | null {
 	if (slot.width <= 0 || slot.height <= 0 || video.width <= 0 || video.height <= 0) {
 		return null;
 	}
+
+	// The crop window in raster pixels. This is the box `object-view-box` shows and
+	// the box `object-fit` then covers — so every step below works on it rather than
+	// on the full frame. At 100% zoom it IS the full frame and the maths is unchanged,
+	// which is what keeps an unzoomed pick byte-for-byte what it was before.
+	const windowWidth = video.width * crop.width;
+	const windowHeight = video.height * crop.height;
+	if (windowWidth <= 0 || windowHeight <= 0) return null;
 
 	// Un-mirror FIRST, in slot space. `scaleX(-1)` flips the element about its own
 	// vertical centre, so the pixel the user aimed at sits at the mirrored x — and
@@ -45,14 +71,17 @@ export function mapSlotPointToVideoPixel(
 	// `object-fit: cover` scales by the LARGER ratio so the box is filled, then
 	// centres the overflow and clips it. Inverting it: divide out that scale, then
 	// add back the half that was cropped off each side.
-	const scale = Math.max(slot.width / video.width, slot.height / video.height);
-	const shownWidth = video.width * scale;
-	const shownHeight = video.height * scale;
+	const scale = Math.max(slot.width / windowWidth, slot.height / windowHeight);
+	const shownWidth = windowWidth * scale;
+	const shownHeight = windowHeight * scale;
 	const cropX = (shownWidth - slot.width) / 2;
 	const cropY = (shownHeight - slot.height) / 2;
 
-	const videoX = (x + cropX) / scale;
-	const videoY = (y + cropY) / scale;
+	// Back out of the window, then back out of the crop: the window's own origin is
+	// `crop.x/y` of the raster, so it has to be added on to land in the raster the
+	// caller is about to sample.
+	const videoX = video.width * crop.x + (x + cropX) / scale;
+	const videoY = video.height * crop.y + (y + cropY) / scale;
 
 	// Clamp rather than reject: a click exactly on the slot's right or bottom edge
 	// lands one pixel past the raster after rounding, and refusing it would make the

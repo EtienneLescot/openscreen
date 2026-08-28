@@ -60,6 +60,11 @@ interface WebcamOverlayProps {
 	revealVideo?: boolean;
 }
 
+/** Crop fraction → the CSS percentage `object-view-box`'s inset() wants. */
+function pct(fraction: number): string {
+	return `${(Math.min(1, Math.max(0, fraction)) * 100).toFixed(4)}%`;
+}
+
 export function WebcamOverlay(props: WebcamOverlayProps) {
 	const { settings } = useEditorSettings();
 	const assets = useProjectStore((s) => s.document?.assets ?? null);
@@ -174,11 +179,30 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 	// for dual-frame/overlay, 0 for stack, half-circle for circle PiP, etc.).
 	// Push it onto the <video> itself so it actually clips the camera
 	// content; the container stays a transparent, overflow:hidden wrapper.
+	// The user's webcam crop, as the sub-rect of the raster this element shows.
+	// Normally invisible (the <video> is hidden and the native canvas draws the
+	// composite), but the eyedropper REVEALS this element to pick from — and a
+	// revealed video that ignored the crop would show a wider shot than the one
+	// being composed, so the framing would jump the moment the tool was armed.
+	// `object-view-box` then `object-fit: cover` is the same order the compositor
+	// uses (`webcam_source_rect`), which is what keeps the two pictures identical.
+	const crop = settings.webcamCropRegion;
+	const isFullFrame = crop.width >= 0.999 && crop.height >= 0.999;
 	const style: React.CSSProperties = {
 		display: showError ? "none" : "block",
 		transform: settings.webcamMirrored ? "scaleX(-1)" : undefined,
 		clipPath: getCssClipPath(props.webcamMaskShape) ?? undefined,
 		borderRadius: `${props.borderRadius}px`,
+		// Omitted at full frame rather than written as a no-op inset: `object-view-box`
+		// resolves against the intrinsic raster, and an element whose metadata has not
+		// loaded yet has none to resolve against.
+		...(isFullFrame
+			? {}
+			: {
+					objectViewBox: `inset(${pct(crop.y)} ${pct(1 - crop.x - crop.width)} ${pct(
+						1 - crop.y - crop.height,
+					)} ${pct(crop.x)})`,
+				}),
 		...(props.revealVideo ? { visibility: "visible" as const } : {}),
 	};
 

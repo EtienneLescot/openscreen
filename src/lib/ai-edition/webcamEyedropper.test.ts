@@ -72,6 +72,75 @@ describe("mapSlotPointToVideoPixel", () => {
 			mapSlotPointToVideoPixel({ x: 5, y: 5 }, { width: 0, height: 300 }, CAMERA, false),
 		).toBeNull();
 	});
+
+	// The webcam crop (zoom + pan) landed after the eyedropper did. The element the
+	// user picks from carries the crop as an `object-view-box`, so the pick has to
+	// invert it too — otherwise the sample drifts further from the pointer the more
+	// the camera is zoomed, which is the failure that looks like "the key picked the
+	// wrong green".
+	it("defaults to the full frame, so an unzoomed pick is unchanged", () => {
+		const slot = { width: 320, height: 180 };
+		const implicit = mapSlotPointToVideoPixel({ x: 80, y: 45 }, slot, CAMERA, false);
+		const explicit = mapSlotPointToVideoPixel({ x: 80, y: 45 }, slot, CAMERA, false, {
+			x: 0,
+			y: 0,
+			width: 1,
+			height: 1,
+		});
+		expect(explicit).toEqual(implicit);
+	});
+
+	it("samples inside the crop window when the camera is zoomed", () => {
+		// A 2x zoom centred on the frame: the window is the middle half of the raster,
+		// x 320..960 and y 180..540. The slot has the window's ratio (640:360), so
+		// cover crops nothing and the mapping is a straight scale within the window.
+		const slot = { width: 320, height: 180 };
+		const crop = { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+		// Slot centre → window centre → raster centre, because this crop is centred.
+		expect(mapSlotPointToVideoPixel({ x: 160, y: 90 }, slot, CAMERA, false, crop)).toEqual({
+			x: 640,
+			y: 360,
+		});
+		// The slot's ORIGIN is the window's origin, not the raster's — this is the
+		// assertion that fails if the crop offset is dropped.
+		expect(mapSlotPointToVideoPixel({ x: 0, y: 0 }, slot, CAMERA, false, crop)).toEqual({
+			x: 320,
+			y: 180,
+		});
+	});
+
+	it("follows the pan, not just the zoom", () => {
+		// Same 2x window, panned hard to the bottom-right: it now covers x 640..1280
+		// and y 360..720, so the same click lands 320px further along each axis.
+		const slot = { width: 320, height: 180 };
+		const crop = { x: 0.5, y: 0.5, width: 0.5, height: 0.5 };
+		expect(mapSlotPointToVideoPixel({ x: 0, y: 0 }, slot, CAMERA, false, crop)).toEqual({
+			x: 640,
+			y: 360,
+		});
+	});
+
+	it("mirrors within the crop window rather than the whole raster", () => {
+		// Mirroring flips the element, and the element shows the WINDOW — so the far
+		// edge of a panned window maps to that window's other edge, never the raster's.
+		const slot = { width: 320, height: 180 };
+		const crop = { x: 0.5, y: 0, width: 0.5, height: 0.5 };
+		const at = mapSlotPointToVideoPixel({ x: 0, y: 0 }, slot, CAMERA, true, crop);
+		// Un-mirrored, x=0 reads the window's RIGHT edge: 640 + 640 - 1, clamped.
+		expect(at?.x).toBe(1279);
+		expect(at?.y).toBe(0);
+	});
+
+	it("returns null for a degenerate crop instead of dividing by zero", () => {
+		expect(
+			mapSlotPointToVideoPixel({ x: 5, y: 5 }, { width: 320, height: 180 }, CAMERA, false, {
+				x: 0,
+				y: 0,
+				width: 0,
+				height: 0,
+			}),
+		).toBeNull();
+	});
 });
 
 describe("rgbToHex", () => {

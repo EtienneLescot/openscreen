@@ -387,6 +387,10 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			{ width: rect.width, height: rect.height },
 			{ width: video.videoWidth, height: video.videoHeight },
 			settings.webcamMirrored,
+			// The same crop `WebcamOverlay` puts on the element as an `object-view-box`.
+			// Passing it is what makes the pick land on the pixel under the pointer once
+			// the camera is zoomed; without it the sample drifts with the zoom.
+			settings.webcamCropRegion,
 		);
 		if (!at) return;
 		const hex = sampleVideoPixelHex(video, at);
