@@ -38,6 +38,13 @@ export interface ProjectSummary {
 export interface AddAssetInput {
 	path: string;
 	label?: string;
+	/**
+	 * What the caller KNOWS the file is. Optional: without it the extension
+	 * decides — which misclassifies ambiguous containers (a recorded voiceover
+	 * is `.webm`, the same extension as a screen recording). Callers that know
+	 * (the audio-layer import flow) say so.
+	 */
+	kind?: "video" | "audio";
 }
 
 export class DocumentNotFoundError extends Error {
@@ -67,9 +74,27 @@ const SUPPORTED_VIDEO_EXTENSIONS = new Set([
 	".wmv",
 ]);
 
-function isSupportedVideoPath(filePath: string): boolean {
+// Audio-only media for editor audio layers (voiceover / background music).
+// Anything decodeAudioData / an <audio> element can play in Chromium.
+const SUPPORTED_AUDIO_EXTENSIONS = new Set([
+	".mp3",
+	".wav",
+	".m4a",
+	".aac",
+	".ogg",
+	".oga",
+	".opus",
+	".flac",
+	".webm",
+]);
+
+function classifyMediaPath(
+	filePath: string,
+): { kind: "video" | "audio"; extension: string } | null {
 	const ext = path.extname(filePath).toLowerCase();
-	return SUPPORTED_VIDEO_EXTENSIONS.has(ext);
+	if (SUPPORTED_VIDEO_EXTENSIONS.has(ext)) return { kind: "video", extension: ext };
+	if (SUPPORTED_AUDIO_EXTENSIONS.has(ext)) return { kind: "audio", extension: ext };
+	return null;
 }
 
 function safeProjectId(raw: string): string {
@@ -283,9 +308,17 @@ export class DocumentService {
 		if (!input.path) {
 			throw new ProjectFileError("Asset path is required.", projectId);
 		}
-		if (!isSupportedVideoPath(input.path)) {
+		// The caller's explicit kind wins; otherwise the extension decides. Both
+		// fall out of the same classifier so the rest of the method sees one shape.
+		const media: { kind: "video" | "audio"; extension: string } | null = input.kind
+			? { kind: input.kind, extension: path.extname(input.path).toLowerCase() }
+			: classifyMediaPath(input.path);
+		if (!media) {
 			throw new ProjectFileError(
-				`Unsupported video extension: ${path.extname(input.path)} (supported: ${[...SUPPORTED_VIDEO_EXTENSIONS].join(", ")})`,
+				`Unsupported media extension: ${path.extname(input.path)} (supported: ${[
+					...SUPPORTED_VIDEO_EXTENSIONS,
+					...SUPPORTED_AUDIO_EXTENSIONS,
+				].join(", ")})`,
 				projectId,
 			);
 		}
@@ -300,7 +333,7 @@ export class DocumentService {
 		}
 		const asset: AxcutAsset = {
 			id: createId("asset"),
-			kind: "video",
+			kind: media.kind,
 			label: input.label?.trim() || path.basename(absolutePath),
 			originalPath: absolutePath,
 			sizeBytes,
@@ -311,7 +344,13 @@ export class DocumentService {
 			assets: [...doc.assets, asset],
 			project: {
 				...doc.project,
-				...(doc.project.primaryAssetId ? {} : { primaryAssetId: asset.id }),
+				// An audio asset is never a timeline clip, so it must not become the
+				// primary asset either — everything downstream (export scene, ratio
+				// picker, "add video before exporting") reads primaryAssetId as a
+				// VIDEO. Only a video import can claim the slot.
+				...(doc.project.primaryAssetId || media.kind !== "video"
+					? {}
+					: { primaryAssetId: asset.id }),
 				updatedAt: new Date().toISOString(),
 			},
 		};
@@ -338,6 +377,10 @@ export class DocumentService {
 				...withoutAssetClips.timeline,
 				trimRanges: withoutAssetClips.timeline.trimRanges.filter((r) => r.assetId !== assetId),
 			},
+			// Same rule as trimRanges: an audio layer over a deleted asset has
+			// nothing left to play, and keeping it would leave a pill on the ruler
+			// that fails silently at preview and export.
+			audioRanges: withoutAssetClips.audioRanges.filter((r) => r.assetId !== assetId),
 			project: {
 				...withoutAssetClips.project,
 				primaryAssetId,

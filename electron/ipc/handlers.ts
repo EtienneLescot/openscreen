@@ -103,6 +103,18 @@ const ALLOWED_IMPORT_VIDEO_EXTENSIONS = new Set([
 	".flv",
 	".ts",
 ]);
+// Mirrors DocumentService's audio set — anything an <audio> element can decode.
+const ALLOWED_IMPORT_AUDIO_EXTENSIONS = new Set([
+	".mp3",
+	".wav",
+	".m4a",
+	".aac",
+	".ogg",
+	".oga",
+	".opus",
+	".flac",
+	".webm",
+]);
 const PREVIEW_AUDIO_DIR = path.join(app.getPath("userData"), "preview-audio");
 const nativeMacCaptureEvents = new EventEmitter();
 
@@ -180,7 +192,12 @@ function buildDialogOptions<T extends Electron.OpenDialogOptions | Electron.Save
 }
 
 function hasAllowedImportVideoExtension(filePath: string): boolean {
-	return ALLOWED_IMPORT_VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+	const ext = path.extname(filePath).toLowerCase();
+	// Audio extensions ride the same approval gate: the read-binary-file /
+	// get-readable-file-info handlers serve audio-layer assets (voiceover /
+	// music) exactly like video assets, and both go through
+	// `approveReadableVideoPath`.
+	return ALLOWED_IMPORT_VIDEO_EXTENSIONS.has(ext) || ALLOWED_IMPORT_AUDIO_EXTENSIONS.has(ext);
 }
 
 function runProcess(
@@ -3615,6 +3632,74 @@ export function registerIpcHandlers(
 			return {
 				success: false,
 				message: "Failed to open file picker",
+				error: String(error),
+			};
+		}
+	});
+
+	// Audio-layer import (voiceover file / background music). Same shape as
+	// open-video-file-picker, with audio filters and an audio extension gate.
+	ipcMain.handle("open-audio-file-picker", async () => {
+		try {
+			const dialogOptions = buildDialogOptions(
+				{
+					title: mainT("dialogs", "fileDialogs.selectAudio"),
+					defaultPath: RECORDINGS_DIR,
+					filters: [
+						{
+							name: mainT("dialogs", "fileDialogs.audioFiles"),
+							extensions: [...ALLOWED_IMPORT_AUDIO_EXTENSIONS],
+						},
+						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
+					],
+					properties: ["openFile"],
+				},
+				getMainWindow(),
+			);
+			const result = await dialog.showOpenDialog(dialogOptions);
+			if (result.canceled || result.filePaths.length === 0) {
+				return { success: false, canceled: true };
+			}
+			const picked = result.filePaths[0];
+			if (!ALLOWED_IMPORT_AUDIO_EXTENSIONS.has(path.extname(picked).toLowerCase())) {
+				return {
+					success: false,
+					message: "Selected file is not a supported audio file",
+				};
+			}
+			return {
+				success: true,
+				path: picked,
+			};
+		} catch (error) {
+			console.error("Failed to open audio file picker:", error);
+			return {
+				success: false,
+				message: "Failed to open audio file picker",
+				error: String(error),
+			};
+		}
+	});
+
+	// In-editor voiceover recording: the renderer hands over the raw
+	// MediaRecorder blob (webm/opus) and gets back the path it landed at, under
+	// the recordings dir so it lives with the project's other media and survives
+	// relaunches.
+	ipcMain.handle("save-recorded-voiceover", async (_event, data: ArrayBuffer) => {
+		try {
+			if (!(data instanceof ArrayBuffer) || data.byteLength === 0) {
+				return { success: false, message: "Empty recording" };
+			}
+			await fs.mkdir(RECORDINGS_DIR, { recursive: true });
+			const fileName = `voiceover-${new Date().toISOString().replace(/[:.]/g, "-")}.webm`;
+			const target = path.join(RECORDINGS_DIR, fileName);
+			await fs.writeFile(target, Buffer.from(data));
+			return { success: true, path: target };
+		} catch (error) {
+			console.error("Failed to save recorded voiceover:", error);
+			return {
+				success: false,
+				message: "Failed to save recorded voiceover",
 				error: String(error),
 			};
 		}

@@ -266,11 +266,27 @@ describe("DocumentService", () => {
 			expect(path.isAbsolute(updated.assets[0]?.originalPath ?? "")).toBe(true);
 		});
 
-		it("rejects unsupported video extensions", async () => {
+		it("rejects unsupported media extensions", async () => {
 			const doc = await service.createProject("P");
 			await expect(
-				service.addAsset(doc.project.id, { path: "/tmp/audio.mp3" }),
+				service.addAsset(doc.project.id, { path: "/tmp/notes.txt" }),
 			).rejects.toBeInstanceOf(ProjectFileError);
+		});
+
+		it("appends an audio asset with kind 'audio' without claiming primaryAssetId", async () => {
+			const doc = await service.createProject("P");
+			const updated = await service.addAsset(doc.project.id, { path: "/tmp/music.mp3" });
+			expect(updated.assets).toHaveLength(1);
+			expect(updated.assets[0]?.kind).toBe("audio");
+			expect(updated.project.primaryAssetId).toBeUndefined();
+		});
+
+		it("an audio asset does not displace the primary video", async () => {
+			const doc = await service.createProject("P");
+			const withVideo = await service.addAsset(doc.project.id, { path: "/tmp/a.mp4" });
+			const after = await service.addAsset(withVideo.project.id, { path: "/tmp/b.mp3" });
+			expect(after.project.primaryAssetId).toBe(withVideo.project.primaryAssetId);
+			expect(after.assets.at(-1)?.kind).toBe("audio");
 		});
 
 		it("preserves primaryAssetId when adding a second asset", async () => {
@@ -342,6 +358,25 @@ describe("DocumentService", () => {
 						},
 					],
 				},
+				audioRanges: [
+					{
+						id: "aud_1",
+						clipId: "clip_1",
+						sourceStartSec: 0,
+						sourceEndSec: 1,
+						startMs: 0,
+						endMs: 1000,
+						assetId,
+						kind: "music",
+						offsetMs: 0,
+						gainDb: 0,
+						loop: false,
+						fadeInMs: 0,
+						fadeOutMs: 0,
+						muted: false,
+						origin: "user",
+					},
+				],
 			});
 
 			const after = await service.removeAsset(docWithTimeline.project.id, assetId);
@@ -349,6 +384,7 @@ describe("DocumentService", () => {
 			expect(after.timeline.clips).toHaveLength(0);
 			expect(after.timeline.trimRanges).toHaveLength(0);
 			expect(after.zoomRanges).toHaveLength(0);
+			expect(after.audioRanges).toHaveLength(0);
 			expect((after.legacyEditor as { speedRegions: unknown[] }).speedRegions).toHaveLength(0);
 			expect(after.project.primaryAssetId).toBeUndefined();
 		});

@@ -77,11 +77,21 @@ type PickVideoResult =
 	| { success: false; canceled: true };
 
 function pickVideoFileViaInput(): Promise<PickVideoResult> {
+	return pickMediaFileViaInput(
+		"video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/x-ms-wmv,video/*",
+	);
+}
+
+// Same shim for audio-layer imports (voiceover file / background music).
+function pickAudioFileViaInput(): Promise<PickVideoResult> {
+	return pickMediaFileViaInput("audio/*");
+}
+
+function pickMediaFileViaInput(accept: string): Promise<PickVideoResult> {
 	return new Promise((resolve) => {
 		const input = document.createElement("input");
 		input.type = "file";
-		input.accept =
-			"video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/x-ms-wmv,video/*";
+		input.accept = accept;
 		input.style.position = "fixed";
 		input.style.top = "-9999px";
 		let settled = false;
@@ -110,6 +120,8 @@ function createShimElectronAPI() {
 	return {
 		assetBaseUrl: "",
 		openVideoFilePicker: pickVideoFileViaInput,
+		openAudioFilePicker: pickAudioFileViaInput,
+		saveRecordedVoiceover: () => Promise.resolve({ success: false, message: "Not available" }),
 		openProjectFile: () => Promise.resolve({ success: false, canceled: true }),
 		pickExportSavePath: () => Promise.resolve({ success: false, canceled: true }),
 		writeExportToPath: () => Promise.resolve({ success: false }),
@@ -186,7 +198,7 @@ function createShimBridgeClient() {
 			updatedAt: string;
 			primaryAssetId?: string;
 		};
-		assets: Array<{ id: string; kind: "video"; label: string; originalPath: string }>;
+		assets: Array<{ id: string; kind: "video" | "audio"; label: string; originalPath: string }>;
 		[key: string]: unknown;
 	};
 	const projectsStorageKey = "browser-shim-projects-v2";
@@ -407,20 +419,27 @@ function createShimBridgeClient() {
 				saveProjectsState();
 				return Promise.resolve({ success: true });
 			},
-			addAsset: (projectId: string, path: string, label?: string) => {
+			addAsset: (projectId: string, path: string, label?: string, kind?: "video" | "audio") => {
 				const doc = documentsByProject[projectId];
 				if (!doc) return Promise.resolve({ assetId: "", document: null });
 				const assetId = `asset_${Math.random().toString(36).slice(2, 10)}`;
 				const asset = {
 					id: assetId,
-					kind: "video" as const,
+					// The caller's kind wins — the shim's paths are blob: URLs with
+					// no meaningful extension, so extension guessing is unavailable.
+					kind: (kind ?? "video") as "video" | "audio",
 					label: label || path.split(/[\\/]/).pop() || "Recording",
 					originalPath: path,
 				};
 				const next: ShimDocument = {
 					...doc,
 					assets: [...doc.assets, asset],
-					project: { ...doc.project, primaryAssetId: doc.project.primaryAssetId ?? assetId },
+					project: {
+						...doc.project,
+						// Same rule as DocumentService: only a VIDEO import claims the
+						// primary-asset slot.
+						primaryAssetId: doc.project.primaryAssetId ?? (kind === "audio" ? undefined : assetId),
+					},
 				};
 				documentsByProject[projectId] = next;
 				saveProjectsState();

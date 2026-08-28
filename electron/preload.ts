@@ -276,6 +276,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	openVideoFilePicker: () => {
 		return ipcRenderer.invoke("open-video-file-picker");
 	},
+	openAudioFilePicker: () => {
+		return ipcRenderer.invoke("open-audio-file-picker");
+	},
+	saveRecordedVoiceover: (data: ArrayBuffer) => {
+		return ipcRenderer.invoke("save-recorded-voiceover", data);
+	},
 	setCurrentVideoPath: (path: string) => {
 		return ipcRenderer.invoke("set-current-video-path", path);
 	},

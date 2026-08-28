@@ -483,6 +483,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									request.payload.projectId,
 									request.payload.path,
 									request.payload.label,
+									request.payload.kind,
 								),
 							);
 						case "document.removeAsset":
