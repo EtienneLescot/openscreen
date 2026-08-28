@@ -71,7 +71,7 @@ export interface ProjectState {
 	loadProject: (projectId: string) => Promise<void>;
 	createProject: (title: string) => Promise<AxcutDocument>;
 	refresh: () => Promise<void>;
-	addAsset: (path: string, label?: string) => Promise<AxcutAsset | null>;
+	addAsset: (path: string, label?: string, kind?: "video" | "audio") => Promise<AxcutAsset | null>;
 	removeAsset: (assetId: string) => Promise<void>;
 	/**
 	 * Write the document to disk. Resolves `true` when it took effect, `false` when it
@@ -223,7 +223,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		await get().loadProject(projectId);
 	},
 
-	async addAsset(path, label) {
+	async addAsset(path, label, kind) {
 		const { projectId } = get();
 		if (!projectId) throw new Error("No project loaded");
 		// Everything below awaits: the native add, a camera lookup, a dimension probe and a
@@ -234,7 +234,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		// superseded the write while it was in flight.
 		const epoch = currentWriteEpoch();
 		const superseded = () => get().projectId !== projectId || currentWriteEpoch() !== epoch;
-		const result = await nativeBridgeClient.aiEdition.addAsset(projectId, path, label);
+		const result = await nativeBridgeClient.aiEdition.addAsset(projectId, path, label, kind);
 		if (superseded()) return null;
 		let document = parseDocument(result.document);
 		const addedAsset =
