@@ -91,6 +91,26 @@ export type NativeMacRecordingStartResult = {
 	error?: string;
 };
 
+type NativeMacCaptureAvailability = {
+	success: boolean;
+	available: boolean;
+	reason?: string;
+};
+
+/** Accessibility is needed only by the editable cursor paired with native capture. */
+export function shouldRequestMacCursorAccess(
+	platform: NodeJS.Platform,
+	cursorMode: CursorCaptureMode,
+	availability: NativeMacCaptureAvailability,
+) {
+	return (
+		platform === "darwin" &&
+		cursorMode === "editable-overlay" &&
+		availability.success &&
+		availability.available
+	);
+}
+
 export function parseMacWindowIdFromSourceId(sourceId?: string | null) {
 	if (!sourceId?.startsWith("window:")) {
 		return null;

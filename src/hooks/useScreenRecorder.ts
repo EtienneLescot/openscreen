@@ -11,6 +11,7 @@ import {
 	type NativeMacRecordingRequest,
 	parseMacDisplayIdFromSourceId,
 	parseMacWindowIdFromSourceId,
+	shouldRequestMacCursorAccess,
 } from "@/lib/nativeMacRecording";
 import {
 	type NativeWindowsRecordingRequest,
@@ -1212,7 +1213,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 			const availability = await window.electronAPI.isNativeMacCaptureAvailable();
 			if (!availability.success || !availability.available) {
-				if (availability.reason === "unsupported-platform") {
+				if (
+					availability.reason === "unsupported-platform" ||
+					availability.reason === "unsupported-os"
+				) {
 					return false;
 				}
 
@@ -1546,13 +1550,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		try {
 			const platform = window.electronAPI.getPlatform();
 			if (platform === "darwin" && cursorCaptureMode === "editable-overlay") {
-				// The main process shows a native dialog that deep-links to the
-				// Accessibility settings pane when access is missing, so we just stop
-				// here and let the user grant it and press record again.
-				const access = await window.electronAPI.requestNativeMacCursorAccess();
-				if (!access.granted) {
-					return;
+				const availability = await window.electronAPI.isNativeMacCaptureAvailable();
+				if (shouldRequestMacCursorAccess(platform, cursorCaptureMode, availability)) {
+					// The main process shows a native dialog that deep-links to the
+					// Accessibility settings pane when access is missing, so we just stop
+					// here and let the user grant it and press record again.
+					const access = await window.electronAPI.requestNativeMacCursorAccess();
+					if (!access.granted) {
+						return;
+					}
 				}
+				// macOS 12 records through Chromium, which does not use the native cursor helper.
+				// Asking for Accessibility there can never improve the take or gate the countdown.
 			}
 		} catch (error) {
 			console.warn("Failed to preflight macOS cursor accessibility before countdown:", error);

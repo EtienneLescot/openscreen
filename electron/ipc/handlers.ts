@@ -74,6 +74,7 @@ import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { toHelperRect } from "../native-bridge/helperCoordinates";
 import { scoreDeviceNameMatch } from "../recording/deviceNameMatching";
+import { isNativeMacCaptureOsSupported } from "../recording/nativeMacCaptureSupport";
 import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
@@ -2087,6 +2088,9 @@ export function registerIpcHandlers(
 	ipcMain.handle("is-native-mac-capture-available", async () => {
 		if (process.platform !== "darwin") {
 			return { success: true, available: false, reason: "unsupported-platform" };
+		}
+		if (!isNativeMacCaptureOsSupported(process.platform, process.getSystemVersion())) {
+			return { success: true, available: false, reason: "unsupported-os" };
 		}
 
 		const helperPath = await findNativeMacCaptureHelperPath();
