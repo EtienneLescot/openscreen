@@ -1327,6 +1327,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			if (!result.success || !result.recordingId) {
 				throw new Error(result.error ?? "Native macOS capture failed.");
 			}
+			if (result.microphoneDefaulted) {
+				toast.error(t("recording.microphoneDefaulted"));
+			}
 			if (!isCountdownRunActive(countdownRunToken)) {
 				await window.electronAPI.stopNativeMacRecording(true);
 				return true;

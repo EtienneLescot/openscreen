@@ -465,6 +465,12 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			configuration.setValue(true, forKey: "captureMicrophone")
 			if let deviceId = resolveMicrophoneCaptureDeviceID() {
 				configuration.setValue(deviceId, forKey: "microphoneCaptureDeviceID")
+			} else {
+				emit([
+					"event": "warning",
+					"code": "microphone-defaulted",
+					"message": "The requested microphone could not be resolved; capturing the default input.",
+				])
 			}
 		} else {
 			nativeMicrophoneEnabled = false
