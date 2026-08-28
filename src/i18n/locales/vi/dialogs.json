@@ -85,6 +85,8 @@
 		"mp4Video": "Video MP4",
 		"videoFiles": "Tệp Video",
 		"openscreenProject": "Dự án OpenScreen",
-		"allFiles": "Tất cả các tệp"
+		"allFiles": "Tất cả các tệp",
+		"selectAudio": "Chọn tệp âm thanh",
+		"audioFiles": "Tệp âm thanh"
 	}
 }

@@ -9,14 +9,18 @@
 		"addTrim": "Add Trim (T)",
 		"addAnnotation": "Add Annotation (A)",
 		"addSpeed": "Add Speed (S)",
-		"addCameraFullscreen": "Add Full Camera (C)"
+		"addCameraFullscreen": "Add Full Camera (C)",
+		"addVoiceover": "Add Voiceover (V)",
+		"addMusic": "Add Music (B)"
 	},
 	"hints": {
 		"pressZoom": "Press Z to add zoom",
 		"pressTrim": "Press T to add trim",
 		"pressAnnotation": "Press A to add annotation",
 		"pressSpeed": "Press S to add speed",
-		"pressCameraFullscreen": "Press C to add a Full Camera segment"
+		"pressCameraFullscreen": "Press C to add a Full Camera segment",
+		"pressVoiceover": "Press V to add voiceover",
+		"pressMusic": "Press B to add music"
 	},
 	"labels": {
 		"pan": "Pan",
@@ -86,5 +90,28 @@
 		"smartCutsNoAudio": "This media has no audio",
 		"smartCutsNoSpeech": "No speech detected",
 		"smartCutsFailed": "Transcription failed — retry it from Media"
+	},
+	"audio": {
+		"addVoiceover": "Add Voiceover",
+		"addMusic": "Add Background Music",
+		"subtitle": "Place a voiceover or background music layer on the timeline",
+		"record": "Record voiceover",
+		"importFile": "Import audio file",
+		"chooseMusic": "Choose music file",
+		"recording": "Recording",
+		"stop": "Stop",
+		"micDenied": "Microphone access was denied",
+		"recordingUnavailable": "Recording is not available here",
+		"saveFailed": "Could not save the recording",
+		"importFailed": "Could not import the audio file",
+		"voiceoverLabel": "Voiceover",
+		"musicLabel": "Music",
+		"gain": "Volume",
+		"mute": "Mute",
+		"offset": "Start offset",
+		"fadeIn": "Fade in",
+		"fadeOut": "Fade out",
+		"loop": "Loop",
+		"deleteLayer": "Delete audio layer"
 	}
 }

@@ -9,14 +9,18 @@
 		"addTrim": "Ajouter une coupe (T)",
 		"addAnnotation": "Ajouter une annotation (A)",
 		"addSpeed": "Ajouter une vitesse (S)",
-		"addCameraFullscreen": "Ajouter Caméra plein écran (C)"
+		"addCameraFullscreen": "Ajouter Caméra plein écran (C)",
+		"addVoiceover": "Ajouter une voix off (V)",
+		"addMusic": "Ajouter de la musique (B)"
 	},
 	"hints": {
 		"pressZoom": "Appuyez sur Z pour ajouter un zoom",
 		"pressTrim": "Appuyez sur T pour ajouter une coupe",
 		"pressAnnotation": "Appuyez sur A pour ajouter une annotation",
 		"pressSpeed": "Appuyez sur S pour ajouter une vitesse",
-		"pressCameraFullscreen": "Appuyez sur C pour ajouter un segment Caméra plein écran"
+		"pressCameraFullscreen": "Appuyez sur C pour ajouter un segment Caméra plein écran",
+		"pressVoiceover": "Appuyez sur V pour ajouter une voix off",
+		"pressMusic": "Appuyez sur B pour ajouter de la musique"
 	},
 	"labels": {
 		"pan": "Panoramique",
@@ -86,5 +90,28 @@
 		"smartCutsNoAudio": "Ce média n'a pas d'audio",
 		"smartCutsNoSpeech": "Aucune parole détectée",
 		"smartCutsFailed": "Échec de la transcription — relancez-la depuis Médias"
+	},
+	"audio": {
+		"addVoiceover": "Ajouter une voix off",
+		"addMusic": "Ajouter une musique de fond",
+		"subtitle": "Placez une couche de voix off ou de musique de fond sur la timeline",
+		"record": "Enregistrer une voix off",
+		"importFile": "Importer un fichier audio",
+		"chooseMusic": "Choisir un fichier musical",
+		"recording": "Enregistrement",
+		"stop": "Arrêter",
+		"micDenied": "L'accès au micro a été refusé",
+		"recordingUnavailable": "L'enregistrement n'est pas disponible ici",
+		"saveFailed": "Impossible d'enregistrer la capture",
+		"importFailed": "Impossible d'importer le fichier audio",
+		"voiceoverLabel": "Voix off",
+		"musicLabel": "Musique",
+		"gain": "Volume",
+		"mute": "Couper le son",
+		"offset": "Décalage de début",
+		"fadeIn": "Fondu d'entrée",
+		"fadeOut": "Fondu de sortie",
+		"loop": "Boucle",
+		"deleteLayer": "Supprimer la couche audio"
 	}
 }

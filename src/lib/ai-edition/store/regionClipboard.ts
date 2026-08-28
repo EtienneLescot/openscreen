@@ -11,6 +11,9 @@ export type RegionSnapshot =
 	| { kind: "annotation"; region: Record<string, unknown> }
 	| { kind: "speed"; region: Record<string, unknown> }
 	| { kind: "cameraFullscreen"; region: Record<string, unknown> }
+	// An audio layer copies its whole payload (asset, gain, fades, loop) so a
+	// paste is a second placement of the same audio, like every other kind.
+	| { kind: "audio"; region: Record<string, unknown> }
 	// A trim carries no user-visible properties, so all there is to copy is how
 	// LONG it was — `{ durationSec }`. That is not a special case so much as the
 	// general one made obvious: every paste keeps the copied properties and takes

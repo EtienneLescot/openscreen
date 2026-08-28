@@ -85,6 +85,8 @@
 		"mp4Video": "MP4 Video",
 		"videoFiles": "Video Dosyaları",
 		"openscreenProject": "OpenScreen Projesi",
-		"allFiles": "Tüm Dosyalar"
+		"allFiles": "Tüm Dosyalar",
+		"selectAudio": "Ses dosyası seç",
+		"audioFiles": "Ses dosyaları"
 	}
 }

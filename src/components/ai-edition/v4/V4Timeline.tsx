@@ -4,6 +4,8 @@ import {
 	Loader2,
 	Maximize2,
 	MessageSquare,
+	Mic,
+	Music,
 	Pencil,
 	Scissors,
 	Sparkles,
@@ -337,7 +339,7 @@ const ClipWaveform = memo(function ClipWaveform({
 
 interface LanePill {
 	id: string;
-	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen";
+	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen" | "voiceover" | "music";
 	start: number;
 	end: number;
 	label: string;
@@ -356,6 +358,7 @@ export function V4Timeline({
 	onPrevClip,
 	onNextClip,
 	onEditClip,
+	onAddAudioLayer,
 }: {
 	tl: TimelineApi;
 	setCurrentTime: (sec: number) => void;
@@ -369,6 +372,8 @@ export function V4Timeline({
 	/** Opens the (now single, shell-level) EditClipModal for this clip —
 	 * trim in/out and crop both live there per-clip. */
 	onEditClip: (clip: AxcutClip) => void;
+	/** Opens the add-audio-layer flow (voiceover record/import, music import). */
+	onAddAudioLayer?: (kind: "voiceover" | "music") => void;
 }) {
 	const t = useScopedT("timeline");
 	// The camera lane borrows the Layout pane's "No Webcam" wording when there is no
@@ -523,6 +528,22 @@ export function V4Timeline({
 		sourceIds: g.ids,
 	}));
 
+	// Audio layers: one lane per kind, labelled by the asset they play (the
+	// inspector carries the full payload — gain, fades, loop, mute).
+	const audioPills = (kind: "voiceover" | "music"): LanePill[] =>
+		coalesceRegionsForRuler(tl.audioRegions.filter((r) => r.kind === kind)).map((p) => ({
+			id: p.ids[0],
+			kind,
+			start: p.start,
+			end: p.end,
+			label:
+				tl.assets.find((a) => a.id === (p.member as { assetId?: string }).assetId)?.label ??
+				(kind === "voiceover" ? t("audio.voiceoverLabel") : t("audio.musicLabel")),
+			sourceIds: p.ids,
+		}));
+	const voiceoverPills = audioPills("voiceover");
+	const musicPills = audioPills("music");
+
 	// Ruler ticks are chosen from what is actually ON SCREEN, not from the clip
 	// length: the canvas is widened by 1/navSpan, so the same recording shows one
 	// label per 30s zoomed out and one per tenth of a second zoomed in. The step
@@ -664,7 +685,11 @@ export function V4Timeline({
 		(e: ReactPointerEvent, pill: LanePill, dragMode: "move" | "l" | "r") => {
 			e.preventDefault();
 			e.stopPropagation();
-			tl.selectRegion(pill.kind, pill.id, { additive: e.shiftKey });
+			// Voiceover and music render on separate lanes but are the SAME region
+			// kind in the document ("audio") — selection and deletion key off the
+			// document kind, the payload's own `kind` tells the lanes apart.
+			const regionKind = pill.kind === "voiceover" || pill.kind === "music" ? "audio" : pill.kind;
+			tl.selectRegion(regionKind, pill.id, { additive: e.shiftKey });
 			// Scale drag deltas against the canvas (full zoomed timeline) width, so a
 			// drag tracks the cursor exactly regardless of padding, scrollbar or zoom.
 			const el = canvasRef.current;
@@ -717,6 +742,8 @@ export function V4Timeline({
 					await tl.updateAnnotationSpan(pill.id, s * 1000, en * 1000);
 				else if (pill.kind === "cameraFullscreen")
 					await tl.updateCameraFullscreenSpan(pill.id, s * 1000, en * 1000);
+				else if (pill.kind === "voiceover" || pill.kind === "music")
+					await tl.updateAudioSpan(pill.id, s * 1000, en * 1000);
 				else {
 					// Trims are stored in source-time per asset but manipulated on the
 					// timeline like every other pill. Ventilate the new span across the
@@ -901,7 +928,11 @@ export function V4Timeline({
 					? styles.laneTrim
 					: kind === "cameraFullscreen"
 						? styles.laneCameraFullscreen
-						: styles.laneZoom;
+						: kind === "voiceover"
+							? styles.laneVoiceover
+							: kind === "music"
+								? styles.laneMusic
+								: styles.laneZoom;
 	const pillIcon = (kind: LanePill["kind"]) =>
 		kind === "annotation" ? (
 			<MessageSquare size={11} />
@@ -911,6 +942,10 @@ export function V4Timeline({
 			<Scissors size={11} />
 		) : kind === "cameraFullscreen" ? (
 			<Maximize2 size={11} />
+		) : kind === "voiceover" ? (
+			<Mic size={11} />
+		) : kind === "music" ? (
+			<Music size={11} />
 		) : (
 			<ZoomIn size={11} />
 		);
@@ -1382,6 +1417,25 @@ export function V4Timeline({
 						>
 							<Maximize2 size={15} />
 						</button>
+						<span className={styles.tlToolSep} aria-hidden />
+						<button
+							type="button"
+							className={styles.tlToolBtn}
+							title={t("buttons.addVoiceover")}
+							aria-label={t("buttons.addVoiceover")}
+							onClick={() => onAddAudioLayer?.("voiceover")}
+						>
+							<Mic size={15} />
+						</button>
+						<button
+							type="button"
+							className={styles.tlToolBtn}
+							title={t("buttons.addMusic")}
+							aria-label={t("buttons.addMusic")}
+							onClick={() => onAddAudioLayer?.("music")}
+						>
+							<Music size={15} />
+						</button>
 					</div>
 				) : (
 					// Media is an ARRANGING surface: add, remove, reorder. Nothing here
@@ -1481,6 +1535,12 @@ export function V4Timeline({
 										cameraFullscreenPills,
 										hasAnyCamera ? t("hints.pressCameraFullscreen") : ts("layout.noWebcam"),
 									)}
+								</div>
+								<div className={styles.tlLane}>
+									{renderPills(voiceoverPills, t("hints.pressVoiceover"))}
+								</div>
+								<div className={styles.tlLane}>
+									{renderPills(musicPills, t("hints.pressMusic"))}
 								</div>
 							</>
 						) : null}

@@ -85,6 +85,8 @@
 		"mp4Video": "Video MP4",
 		"videoFiles": "Archivos de video",
 		"openscreenProject": "Proyecto OpenScreen",
-		"allFiles": "Todos los archivos"
+		"allFiles": "Todos los archivos",
+		"selectAudio": "Seleccionar archivo de audio",
+		"audioFiles": "Archivos de audio"
 	}
 }

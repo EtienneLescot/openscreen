@@ -25,7 +25,9 @@
 		"deleteSelected": "Elimina selezionato",
 		"playPause": "Riproduci / Pausa",
 		"copySelected": "Copia selezione",
-		"paste": "Incolla"
+		"paste": "Incolla",
+		"addVoiceover": "Aggiungi voce fuori campo",
+		"addMusic": "Aggiungi musica"
 	},
 	"fixedActions": {
 		"undo": "Annulla",

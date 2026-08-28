@@ -9,14 +9,18 @@
 		"addTrim": "トリムを追加 (T)",
 		"addAnnotation": "注釈を追加 (A)",
 		"addSpeed": "再生速度を追加 (S)",
-		"addCameraFullscreen": "フルスクリーンカメラを追加 (C)"
+		"addCameraFullscreen": "フルスクリーンカメラを追加 (C)",
+		"addVoiceover": "ナレーションを追加（V）",
+		"addMusic": "音楽を追加（B）"
 	},
 	"hints": {
 		"pressZoom": "Zキーを押してズームを追加",
 		"pressTrim": "Tキーを押してトリムを追加",
 		"pressAnnotation": "Aキーを押して注釈を追加",
 		"pressSpeed": "Sキーを押して再生速度を追加",
-		"pressCameraFullscreen": "Cキーを押してフルスクリーンカメラのセグメントを追加"
+		"pressCameraFullscreen": "Cキーを押してフルスクリーンカメラのセグメントを追加",
+		"pressVoiceover": "V キーでナレーションを追加",
+		"pressMusic": "B キーで音楽を追加"
 	},
 	"labels": {
 		"pan": "移動",
@@ -86,5 +90,28 @@
 		"smartCutsNoAudio": "このメディアには音声がありません",
 		"smartCutsNoSpeech": "音声が検出されませんでした",
 		"smartCutsFailed": "文字起こしに失敗しました — メディアから再試行してください"
+	},
+	"audio": {
+		"addVoiceover": "ナレーションを追加",
+		"addMusic": "BGM を追加",
+		"subtitle": "タイムラインにナレーションまたは BGM のレイヤーを配置します",
+		"record": "ナレーションを録音",
+		"importFile": "音声ファイルを読み込む",
+		"chooseMusic": "音楽ファイルを選択",
+		"recording": "録音中",
+		"stop": "停止",
+		"micDenied": "マイクへのアクセスが拒否されました",
+		"recordingUnavailable": "ここでは録音できません",
+		"saveFailed": "録音を保存できませんでした",
+		"importFailed": "音声ファイルを読み込めませんでした",
+		"voiceoverLabel": "ナレーション",
+		"musicLabel": "音楽",
+		"gain": "音量",
+		"mute": "ミュート",
+		"offset": "開始オフセット",
+		"fadeIn": "フェードイン",
+		"fadeOut": "フェードアウト",
+		"loop": "ループ",
+		"deleteLayer": "音声レイヤーを削除"
 	}
 }

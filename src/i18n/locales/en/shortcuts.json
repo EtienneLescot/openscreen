@@ -25,7 +25,9 @@
 		"deleteSelected": "Delete Selected",
 		"playPause": "Play / Pause",
 		"copySelected": "Copy Selected",
-		"paste": "Paste"
+		"paste": "Paste",
+		"addVoiceover": "Add Voiceover",
+		"addMusic": "Add Music"
 	},
 	"fixedActions": {
 		"undo": "Undo",

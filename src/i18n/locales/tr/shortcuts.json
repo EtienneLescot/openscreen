@@ -25,7 +25,9 @@
 		"deleteSelected": "Seçileni Sil",
 		"playPause": "Oynat / Duraklat",
 		"copySelected": "Seçileni Kopyala",
-		"paste": "Yapıştır"
+		"paste": "Yapıştır",
+		"addVoiceover": "Seslendirme ekle",
+		"addMusic": "Müzik ekle"
 	},
 	"fixedActions": {
 		"undo": "Geri Al",

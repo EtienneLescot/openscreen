@@ -9,14 +9,18 @@
 		"addTrim": "Kırpma Ekle (T)",
 		"addAnnotation": "Açıklama Ekle (A)",
 		"addSpeed": "Hız Ekle (S)",
-		"addCameraFullscreen": "Tam Ekran Kamera Ekle (C)"
+		"addCameraFullscreen": "Tam Ekran Kamera Ekle (C)",
+		"addVoiceover": "Seslendirme ekle (V)",
+		"addMusic": "Müzik ekle (B)"
 	},
 	"hints": {
 		"pressZoom": "Yakınlaştırma eklemek için Z tuşuna basın",
 		"pressTrim": "Kırpma eklemek için T tuşuna basın",
 		"pressAnnotation": "Açıklama eklemek için A tuşuna basın",
 		"pressSpeed": "Hız eklemek için S tuşuna basın",
-		"pressCameraFullscreen": "Tam Ekran Kamera bölümü eklemek için C tuşuna basın"
+		"pressCameraFullscreen": "Tam Ekran Kamera bölümü eklemek için C tuşuna basın",
+		"pressVoiceover": "Seslendirme eklemek için V tuşuna basın",
+		"pressMusic": "Müzik eklemek için B tuşuna basın"
 	},
 	"labels": {
 		"pan": "Kaydır",
@@ -86,5 +90,28 @@
 		"smartCutsNoAudio": "Bu medyada ses yok",
 		"smartCutsNoSpeech": "Konuşma algılanmadı",
 		"smartCutsFailed": "Metne dökme başarısız — Medya bölümünden yeniden deneyin"
+	},
+	"audio": {
+		"addVoiceover": "Seslendirme ekle",
+		"addMusic": "Fon müziği ekle",
+		"subtitle": "Zaman çizelgesine seslendirme veya fon müziği katmanı yerleştirin",
+		"record": "Seslendirme kaydet",
+		"importFile": "Ses dosyası içe aktar",
+		"chooseMusic": "Müzik dosyası seç",
+		"recording": "Kaydediliyor",
+		"stop": "Durdur",
+		"micDenied": "Mikrofon erişimi reddedildi",
+		"recordingUnavailable": "Burada kayıt kullanılamıyor",
+		"saveFailed": "Kayıt kaydedilemedi",
+		"importFailed": "Ses dosyası içe aktarılamadı",
+		"voiceoverLabel": "Seslendirme",
+		"musicLabel": "Müzik",
+		"gain": "Ses düzeyi",
+		"mute": "Sessize al",
+		"offset": "Başlangıç kaydırması",
+		"fadeIn": "Giriş solması",
+		"fadeOut": "Çıkış solması",
+		"loop": "Döngü",
+		"deleteLayer": "Ses katmanını sil"
 	}
 }

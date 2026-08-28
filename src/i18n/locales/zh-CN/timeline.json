@@ -9,14 +9,18 @@
 		"addTrim": "添加剪辑 (T)",
 		"addAnnotation": "添加标注 (A)",
 		"addSpeed": "添加速度 (S)",
-		"addCameraFullscreen": "添加全屏摄像头 (C)"
+		"addCameraFullscreen": "添加全屏摄像头 (C)",
+		"addVoiceover": "添加配音（V）",
+		"addMusic": "添加音乐（B）"
 	},
 	"hints": {
 		"pressZoom": "按 Z 添加缩放",
 		"pressTrim": "按 T 添加剪辑",
 		"pressAnnotation": "按 A 添加标注",
 		"pressSpeed": "按 S 添加速度",
-		"pressCameraFullscreen": "按 C 添加一个全屏摄像头片段"
+		"pressCameraFullscreen": "按 C 添加一个全屏摄像头片段",
+		"pressVoiceover": "按 V 添加配音",
+		"pressMusic": "按 B 添加音乐"
 	},
 	"labels": {
 		"pan": "平移",
@@ -86,5 +90,28 @@
 		"smartCutsNoAudio": "此媒体没有音频",
 		"smartCutsNoSpeech": "未检测到语音",
 		"smartCutsFailed": "转录失败 — 请在“媒体”中重试"
+	},
+	"audio": {
+		"addVoiceover": "添加配音",
+		"addMusic": "添加背景音乐",
+		"subtitle": "在时间轴上放置配音或背景音乐图层",
+		"record": "录制配音",
+		"importFile": "导入音频文件",
+		"chooseMusic": "选择音乐文件",
+		"recording": "正在录制",
+		"stop": "停止",
+		"micDenied": "麦克风访问被拒绝",
+		"recordingUnavailable": "此处无法录音",
+		"saveFailed": "无法保存录音",
+		"importFailed": "无法导入音频文件",
+		"voiceoverLabel": "配音",
+		"musicLabel": "音乐",
+		"gain": "音量",
+		"mute": "静音",
+		"offset": "起始偏移",
+		"fadeIn": "淡入",
+		"fadeOut": "淡出",
+		"loop": "循环",
+		"deleteLayer": "删除音频图层"
 	}
 }

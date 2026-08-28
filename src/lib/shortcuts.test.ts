@@ -21,12 +21,22 @@ describe("shortcut registry", () => {
 		expect(Object.keys(DEFAULT_SHORTCUTS).sort()).toEqual([...SHORTCUT_ACTIONS].sort());
 	});
 
-	it("leaves a plain 'b' free to bind", () => {
-		// The blur *region* was never implemented — blur ships as an annotation
-		// type. While `addBlur: {key: "b"}` was still in the registry, binding B to
-		// any real action reported "Already used by Add Blur" and offered a Swap
-		// that handed the old binding to a hidden, undispatched action.
-		expect(findConflict({ key: "b" }, "addZoom", DEFAULT_SHORTCUTS)).toBeNull();
+	it("binds V and B to the audio layers", () => {
+		expect(DEFAULT_SHORTCUTS.addVoiceover).toEqual({ key: "v" });
+		expect(DEFAULT_SHORTCUTS.addMusic).toEqual({ key: "b" });
+		// The keys really are claimed: re-binding them collides with the layers.
+		expect(findConflict({ key: "v" }, "addZoom", DEFAULT_SHORTCUTS)).toEqual({
+			type: "configurable",
+			action: "addVoiceover",
+		});
+		expect(findConflict({ key: "b" }, "addZoom", DEFAULT_SHORTCUTS)).toEqual({
+			type: "configurable",
+			action: "addMusic",
+		});
+	});
+
+	it("leaves a plain 'q' free to bind", () => {
+		expect(findConflict({ key: "q" }, "addZoom", DEFAULT_SHORTCUTS)).toBeNull();
 	});
 
 	it("still reports a real collision", () => {

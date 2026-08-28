@@ -9,14 +9,18 @@
 		"addTrim": "Aggiungi taglio (T)",
 		"addAnnotation": "Aggiungi annotazione (A)",
 		"addSpeed": "Aggiungi velocità (S)",
-		"addCameraFullscreen": "Aggiungi Camera a schermo intero (C)"
+		"addCameraFullscreen": "Aggiungi Camera a schermo intero (C)",
+		"addVoiceover": "Aggiungi voce fuori campo (V)",
+		"addMusic": "Aggiungi musica (B)"
 	},
 	"hints": {
 		"pressZoom": "Premi Z per aggiungere zoom",
 		"pressTrim": "Premi T per aggiungere taglio",
 		"pressAnnotation": "Premi A per aggiungere annotazione",
 		"pressSpeed": "Premi S per aggiungere velocità",
-		"pressCameraFullscreen": "Premi C per aggiungere un segmento Camera a schermo intero"
+		"pressCameraFullscreen": "Premi C per aggiungere un segmento Camera a schermo intero",
+		"pressVoiceover": "Premi V per aggiungere una voce fuori campo",
+		"pressMusic": "Premi B per aggiungere musica"
 	},
 	"labels": {
 		"pan": "Panoramica",
@@ -86,5 +90,28 @@
 		"smartCutsNoAudio": "Questo contenuto non ha audio",
 		"smartCutsNoSpeech": "Nessun parlato rilevato",
 		"smartCutsFailed": "Trascrizione non riuscita: riprova da Contenuti multimediali"
+	},
+	"audio": {
+		"addVoiceover": "Aggiungi voce fuori campo",
+		"addMusic": "Aggiungi musica di sottofondo",
+		"subtitle": "Posiziona un livello di voce fuori campo o di musica di sottofondo sulla timeline",
+		"record": "Registra voce fuori campo",
+		"importFile": "Importa file audio",
+		"chooseMusic": "Scegli file musicale",
+		"recording": "Registrazione",
+		"stop": "Ferma",
+		"micDenied": "Accesso al microfono negato",
+		"recordingUnavailable": "La registrazione non è disponibile qui",
+		"saveFailed": "Impossibile salvare la registrazione",
+		"importFailed": "Impossibile importare il file audio",
+		"voiceoverLabel": "Voce fuori campo",
+		"musicLabel": "Musica",
+		"gain": "Volume",
+		"mute": "Muto",
+		"offset": "Offset iniziale",
+		"fadeIn": "Dissolvenza in entrata",
+		"fadeOut": "Dissolvenza in uscita",
+		"loop": "Ripeti",
+		"deleteLayer": "Elimina livello audio"
 	}
 }

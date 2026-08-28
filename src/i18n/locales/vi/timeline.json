@@ -9,14 +9,18 @@
 		"addTrim": "Thêm Cắt (T)",
 		"addAnnotation": "Thêm Chú thích (A)",
 		"addSpeed": "Thêm Tốc độ (S)",
-		"addCameraFullscreen": "Thêm Camera Toàn màn hình (C)"
+		"addCameraFullscreen": "Thêm Camera Toàn màn hình (C)",
+		"addVoiceover": "Thêm thuyết minh (V)",
+		"addMusic": "Thêm nhạc (B)"
 	},
 	"hints": {
 		"pressZoom": "Nhấn Z để thêm thu phóng",
 		"pressTrim": "Nhấn T để thêm cắt",
 		"pressAnnotation": "Nhấn A để thêm chú thích",
 		"pressSpeed": "Nhấn S để thêm tốc độ",
-		"pressCameraFullscreen": "Nhấn C để thêm một đoạn Camera Toàn màn hình"
+		"pressCameraFullscreen": "Nhấn C để thêm một đoạn Camera Toàn màn hình",
+		"pressVoiceover": "Nhấn V để thêm thuyết minh",
+		"pressMusic": "Nhấn B để thêm nhạc"
 	},
 	"labels": {
 		"pan": "Xoay",
@@ -86,5 +90,28 @@
 		"smartCutsNoAudio": "Media này không có âm thanh",
 		"smartCutsNoSpeech": "Không phát hiện giọng nói",
 		"smartCutsFailed": "Phiên âm thất bại — thử lại trong Media"
+	},
+	"audio": {
+		"addVoiceover": "Thêm thuyết minh",
+		"addMusic": "Thêm nhạc nền",
+		"subtitle": "Đặt lớp thuyết minh hoặc nhạc nền lên dòng thời gian",
+		"record": "Ghi âm thuyết minh",
+		"importFile": "Nhập tệp âm thanh",
+		"chooseMusic": "Chọn tệp nhạc",
+		"recording": "Đang ghi",
+		"stop": "Dừng",
+		"micDenied": "Quyền truy cập micrô bị từ chối",
+		"recordingUnavailable": "Không thể ghi âm ở đây",
+		"saveFailed": "Không thể lưu bản ghi",
+		"importFailed": "Không thể nhập tệp âm thanh",
+		"voiceoverLabel": "Thuyết minh",
+		"musicLabel": "Nhạc",
+		"gain": "Âm lượng",
+		"mute": "Tắt tiếng",
+		"offset": "Độ lệch bắt đầu",
+		"fadeIn": "Mờ vào",
+		"fadeOut": "Mờ ra",
+		"loop": "Lặp lại",
+		"deleteLayer": "Xóa lớp âm thanh"
 	}
 }

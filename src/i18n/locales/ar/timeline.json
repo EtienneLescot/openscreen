@@ -9,14 +9,18 @@
 		"addTrim": "إضافة قص (T)",
 		"addAnnotation": "إضافة شرح (A)",
 		"addSpeed": "إضافة سرعة (S)",
-		"addCameraFullscreen": "إضافة كاميرا كاملة الشاشة (C)"
+		"addCameraFullscreen": "إضافة كاميرا كاملة الشاشة (C)",
+		"addVoiceover": "إضافة تعليق صوتي (V)",
+		"addMusic": "إضافة موسيقى (B)"
 	},
 	"hints": {
 		"pressZoom": "اضغط Z لإضافة تكبير",
 		"pressTrim": "اضغط T لإضافة قص",
 		"pressAnnotation": "اضغط A لإضافة شرح",
 		"pressSpeed": "اضغط S لإضافة سرعة",
-		"pressCameraFullscreen": "اضغط C لإضافة مقطع كاميرا كاملة الشاشة"
+		"pressCameraFullscreen": "اضغط C لإضافة مقطع كاميرا كاملة الشاشة",
+		"pressVoiceover": "اضغط V لإضافة تعليق صوتي",
+		"pressMusic": "اضغط B لإضافة موسيقى"
 	},
 	"labels": {
 		"pan": "تحريك",
@@ -86,5 +90,28 @@
 		"smartCutsNoAudio": "لا يحتوي هذا الملف على صوت",
 		"smartCutsNoSpeech": "لم يتم اكتشاف كلام",
 		"smartCutsFailed": "فشل النسخ — أعد المحاولة من قسم الوسائط"
+	},
+	"audio": {
+		"addVoiceover": "إضافة تعليق صوتي",
+		"addMusic": "إضافة موسيقى خلفية",
+		"subtitle": "ضع تعليقًا صوتيًا أو موسيقى خلفية على المخطط الزمني",
+		"record": "تسجيل تعليق صوتي",
+		"importFile": "استيراد ملف صوتي",
+		"chooseMusic": "اختر ملف موسيقى",
+		"recording": "جارٍ التسجيل",
+		"stop": "إيقاف",
+		"micDenied": "تم رفض الوصول إلى الميكروفون",
+		"recordingUnavailable": "التسجيل غير متاح هنا",
+		"saveFailed": "تعذر حفظ التسجيل",
+		"importFailed": "تعذر استيراد الملف الصوتي",
+		"voiceoverLabel": "تعليق صوتي",
+		"musicLabel": "موسيقى",
+		"gain": "مستوى الصوت",
+		"mute": "كتم",
+		"offset": "إزاحة البداية",
+		"fadeIn": "تلاشي للداخل",
+		"fadeOut": "تلاشي للخارج",
+		"loop": "تكرار",
+		"deleteLayer": "حذف طبقة الصوت"
 	}
 }

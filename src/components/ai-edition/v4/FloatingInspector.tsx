@@ -5,7 +5,9 @@ import {
 	FileText,
 	Layout as LayoutIcon,
 	Maximize2,
+	Mic,
 	MousePointer2,
+	Music,
 	Pencil,
 	Scissors,
 	SlidersHorizontal,
@@ -33,7 +35,7 @@ import {
 	type AnnotationTextAnimation,
 	TEXT_ANIMATION_VALUES,
 } from "@/lib/ai-edition/annotations/textAnimation";
-import type { AxcutAnnotationRegion, AxcutClip } from "@/lib/ai-edition/schema";
+import type { AxcutAnnotationRegion, AxcutAudioRegion, AxcutClip } from "@/lib/ai-edition/schema";
 import { rafCoalesce } from "@/lib/ai-edition/store/rafCoalesce";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
@@ -438,6 +440,93 @@ export function SpeedControl({
 			    changes in what they get: the export renders the true speed either way. The note
 			    that used to sit here described the legacy editor's frame-stepped, silent preview,
 			    which is not this one. */}
+		</>
+	);
+}
+
+/**
+ * Per-layer controls for a selected audio region (gain, mute, start offset,
+ * fades, loop). Sliders drag against a LOCAL draft and commit once on release
+ * — the same reason annotations use `updateAnnotationLive`: a range input
+ * emits one event per pixel, and one `saveDocument` (IPC + disk + re-parse)
+ * per pixel turns a smooth drag into a write flood.
+ */
+function AudioRegionControls({ region, tl }: { region: AxcutAudioRegion; tl: TimelineApi }) {
+	const tt = useScopedT("timeline");
+	const [gainDraft, setGainDraft] = useState(region.gainDb);
+	const [offsetDraft, setOffsetDraft] = useState(region.offsetMs / 1000);
+	const [fadeInDraft, setFadeInDraft] = useState(region.fadeInMs / 1000);
+	const [fadeOutDraft, setFadeOutDraft] = useState(region.fadeOutMs / 1000);
+
+	return (
+		<>
+			<SliderCell
+				label={tt("audio.gain")}
+				value={gainDraft}
+				min={-60}
+				max={12}
+				decimals={0}
+				suffix=" dB"
+				onChange={setGainDraft}
+				onCommit={() => void tl.updateAudioRegion(region.id, { gainDb: gainDraft })}
+			/>
+			{paneRow(
+				tt("audio.mute"),
+				<Toggle
+					checked={region.muted}
+					ariaLabel={tt("audio.mute")}
+					onChange={(next) => void tl.updateAudioRegion(region.id, { muted: next })}
+				/>,
+			)}
+			<SliderCell
+				label={tt("audio.offset")}
+				value={offsetDraft}
+				min={0}
+				max={30}
+				step={0.1}
+				decimals={1}
+				suffix=" s"
+				onChange={setOffsetDraft}
+				onCommit={() =>
+					void tl.updateAudioRegion(region.id, { offsetMs: Math.round(offsetDraft * 1000) })
+				}
+			/>
+			<SliderCell
+				label={tt("audio.fadeIn")}
+				value={fadeInDraft}
+				min={0}
+				max={5}
+				step={0.05}
+				decimals={2}
+				suffix=" s"
+				onChange={setFadeInDraft}
+				onCommit={() =>
+					void tl.updateAudioRegion(region.id, { fadeInMs: Math.round(fadeInDraft * 1000) })
+				}
+			/>
+			<SliderCell
+				label={tt("audio.fadeOut")}
+				value={fadeOutDraft}
+				min={0}
+				max={5}
+				step={0.05}
+				decimals={2}
+				suffix=" s"
+				onChange={setFadeOutDraft}
+				onCommit={() =>
+					void tl.updateAudioRegion(region.id, { fadeOutMs: Math.round(fadeOutDraft * 1000) })
+				}
+			/>
+			{region.kind === "music"
+				? paneRow(
+						tt("audio.loop"),
+						<Toggle
+							checked={region.loop}
+							ariaLabel={tt("audio.loop")}
+							onChange={(next) => void tl.updateAudioRegion(region.id, { loop: next })}
+						/>,
+					)
+				: null}
 		</>
 	);
 }
@@ -972,6 +1061,36 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
 						{te("inspector.deleteRegion")}
+					</button>
+				</div>
+			</div>
+		);
+	}
+
+	if (selection.kind === "audio") {
+		const region = tl.audioRegions.find((a) => a.id === selection.id);
+		if (!region) return null;
+		const asset = tl.assets.find((a) => a.id === region.assetId);
+		const isMusic = region.kind === "music";
+		const Icon = isMusic ? Music : Mic;
+		return (
+			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+				{paneHeader(
+					<Icon size={15} />,
+					isMusic ? tt("audio.musicLabel") : tt("audio.voiceoverLabel"),
+					onClose,
+					tc("actions.close"),
+				)}
+				<div style={bodyStyle}>
+					{asset ? (
+						<p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.5, color: "var(--muted)" }}>
+							{asset.label}
+						</p>
+					) : null}
+					<AudioRegionControls key={region.id} region={region} tl={tl} />
+					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
+						<Trash2 size={14} />
+						{tt("audio.deleteLayer")}
 					</button>
 				</div>
 			</div>

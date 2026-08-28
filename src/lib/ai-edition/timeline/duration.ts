@@ -66,8 +66,7 @@ export function probeVideoDuration(
  *  cheap, one-shot, not worth merging into a combined probe for the one extra caller that
  *  needs both). `asset.video` was otherwise left permanently unset for most recordings (nothing
  *  else populates it), silently breaking anything that reads it — e.g. the export dialog's
- *  downscale/upscale badges, which need real source dimensions to compare against. */
-export function probeVideoDimensions(
+ *  downscale/upscale badges, which need real source dimensions to compare against. */ export function probeVideoDimensions(
 	src: string,
 	timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<{ width: number; height: number } | null> {
@@ -111,5 +110,53 @@ export function probeVideoDimensions(
 		video.onerror = () => settle(null);
 		document.body.appendChild(video);
 		video.src = src;
+	});
+}
+
+/**
+ * Probe an audio file's duration with a throwaway <audio> element — the
+ * audio-layer answer to `probeVideoDuration`. A freshly imported voiceover or
+ * music file has no `durationSec` yet (DocumentService only captures the
+ * path), and the layer's initial span wants the real length so it covers what
+ * it plays. Same null-on-failure contract.
+ */
+export function probeAudioDuration(
+	src: string,
+	timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<number | null> {
+	return new Promise((resolve) => {
+		if (typeof document === "undefined" || !src) {
+			resolve(null);
+			return;
+		}
+		const audio = document.createElement("audio");
+		audio.preload = "metadata";
+		let settled = false;
+		const cleanup = () => {
+			audio.onloadedmetadata = null;
+			audio.onerror = null;
+			clearTimeout(timer);
+			try {
+				audio.removeAttribute("src");
+				audio.load();
+			} catch {
+				// ignore — browser may refuse if already detached
+			}
+			if (audio.parentNode) audio.parentNode.removeChild(audio);
+		};
+		const settle = (value: number | null) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolve(value);
+		};
+		const timer = setTimeout(() => settle(null), timeoutMs);
+		audio.onloadedmetadata = () => {
+			const d = audio.duration;
+			settle(Number.isFinite(d) && d > 0 ? d : null);
+		};
+		audio.onerror = () => settle(null);
+		document.body.appendChild(audio);
+		audio.src = src;
 	});
 }

@@ -31,6 +31,7 @@ import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
 import { resolveVisibleClips } from "@/native/sceneDescription";
 import { useNativePlaybackSync } from "@/native/useNativePlaybackSync";
+import { AudioLayersPlayback } from "./AudioLayersPlayback";
 import { ExportDialog } from "./ExportDialog";
 import { LeftPanel } from "./LeftPanel";
 import {
@@ -44,6 +45,7 @@ import {
 import { Preview } from "./Preview";
 import type { TrimTarget } from "./RightPanes";
 import { importPendingRecording } from "./recordingImport";
+import { AddAudioLayerDialog } from "./v4/AddAudioLayerDialog";
 import v4 from "./v4/EditorShellV4.module.css";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 import { type Facet, FloatingInspector } from "./v4/FloatingInspector";
@@ -127,6 +129,15 @@ export function NewEditorShell() {
 	// mounted per trigger site.
 	const [editClipTarget, setEditClipTarget] = useState<AxcutClip | null>(null);
 	const [exportOpen, setExportOpen] = useState(false);
+	// Which add-audio-layer flow is on screen (voiceover record/import, music
+	// import). `null` = closed. Lifted to the shell so the toolbar buttons AND
+	// the V/B shortcuts drive the same dialog instance. `maxDurationSec` is the
+	// timeline left to cover when the flow opened — the voiceover recorder stops
+	// itself at the end of the video instead of recording into the void.
+	const [audioLayerFlow, setAudioLayerFlow] = useState<{
+		kind: "voiceover" | "music";
+		maxDurationSec: number;
+	} | null>(null);
 	const [unsavedPrompt, setUnsavedPrompt] = useState<{
 		action: "close" | "new" | "open" | "record";
 		resolve: (choice: UnsavedChoice) => void;
@@ -496,6 +507,46 @@ export function NewEditorShell() {
 		}
 	}, [videoElement]);
 
+	// ── audio layers ──────────────────────────────────────────────────────
+	// V / B (or the timeline toolbar) open the add flow; the dialog resolves an
+	// audio ASSET and its duration and hands them back via onComplete, where the
+	// region actually gets placed (span at the playhead, clip anchor, inspector
+	// selection) — the same split every other add* flow uses.
+	const openAudioLayerFlow = useCallback((kind: "voiceover" | "music") => {
+		const doc = useProjectStore.getState().document;
+		if (!doc) return;
+		const total = Math.max(
+			0.001,
+			doc.timeline.clips.reduce((max, c) => Math.max(max, c.timelineEndSec), 0),
+		);
+		const playhead = useProjectStore.getState().currentTimeSec;
+		setAudioLayerFlow({
+			kind,
+			maxDurationSec: Math.max(0.5, total - playhead),
+		});
+	}, []);
+
+	const handleAudioLayerReady = useCallback(
+		async (kind: "voiceover" | "music", assetId: string, durationSec: number) => {
+			setAudioLayerFlow(null);
+			const dur = durationSec > 0 ? durationSec : newRegionDurationSec();
+			await tl.addAudioRegion(kind, assetId, dur);
+		},
+		[tl],
+	);
+
+	// While a voiceover is being recorded the video plays from the playhead, so
+	// the user can narrate what they see; stopping the recording pauses it
+	// again. The dialog owns the mic, the shell owns the transport.
+	const handleVoiceoverRecordingStart = useCallback(() => {
+		if (videoElement && videoElement.paused) {
+			void videoElement.play().catch(() => undefined);
+		}
+	}, [videoElement]);
+	const handleVoiceoverRecordingStop = useCallback(() => {
+		videoElement?.pause();
+	}, [videoElement]);
+
 	const handlePrevClip = useCallback(() => {
 		if (clips.length === 0) return;
 		// ponytail: navigate in virtual timeline space, not source-media time.
@@ -792,7 +843,8 @@ export function NewEditorShell() {
 		// Land it at the playhead, keeping the copied length.
 		const timeMs = Math.round(useProjectStore.getState().currentTimeSec * 1000);
 		const src = snapshot.region as { startMs: number; endMs: number };
-		const prefix = snapshot.kind === "annotation" ? "ann" : snapshot.kind;
+		const prefix =
+			snapshot.kind === "annotation" ? "ann" : snapshot.kind === "audio" ? "aud" : snapshot.kind;
 		const pasted = {
 			...snapshot.region,
 			id: createId(prefix),
@@ -822,6 +874,16 @@ export function NewEditorShell() {
 				{
 					...doc,
 					annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
+				},
+				{ history: true },
+			);
+		} else if (snapshot.kind === "audio") {
+			// An audio layer pastes with its payload intact (asset, gain, fades)
+			// at the playhead — the same deal every other kind gets.
+			await saveDocument(
+				{
+					...doc,
+					audioRanges: [...doc.audioRanges, ...anchored] as typeof doc.audioRanges,
 				},
 				{ history: true },
 			);
@@ -877,7 +939,9 @@ export function NewEditorShell() {
 					? tl.annotationRegions
 					: sel.kind === "speed"
 						? tl.speedRegions
-						: tl.cameraFullscreenRegions;
+						: sel.kind === "audio"
+							? tl.audioRegions
+							: tl.cameraFullscreenRegions;
 		const region = (source as Array<{ id: string }>).find((r) => r.id === sel.id);
 		if (!region) return;
 		copyRegion({ kind: sel.kind, region: region as unknown as Record<string, unknown> });
@@ -1042,6 +1106,16 @@ export function NewEditorShell() {
 				void tl.addCameraFullscreen(newRegionDurationSec());
 				return;
 			}
+			if (matchesShortcut(e, shortcuts.addVoiceover, isMac)) {
+				e.preventDefault();
+				openAudioLayerFlow("voiceover");
+				return;
+			}
+			if (matchesShortcut(e, shortcuts.addMusic, isMac)) {
+				e.preventDefault();
+				openAudioLayerFlow("music");
+				return;
+			}
 
 			// Fixed (non-configurable) shortcuts advertised in the shortcuts dialog.
 			if (e.key === "Tab") {
@@ -1086,6 +1160,7 @@ export function NewEditorShell() {
 		isMac,
 		togglePlay,
 		handleSeek,
+		openAudioLayerFlow,
 	]);
 
 	const showTimeline = mode !== "rec";
@@ -1325,6 +1400,7 @@ export function NewEditorShell() {
 						onPrevClip={handlePrevClip}
 						onNextClip={handleNextClip}
 						onEditClip={setEditClipTarget}
+						onAddAudioLayer={openAudioLayerFlow}
 					/>
 				</div>
 			) : null}
@@ -1383,6 +1459,24 @@ export function NewEditorShell() {
 				onChoose={handleConfirmUnsaved}
 			/>
 			<ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} document={document} />
+
+			{/* Voiceover / music layers: the playback engine is a headless
+			    component next to the preview, and the add-flow dialog is shell
+			    level so V/B and the timeline toolbar share it. */}
+			{showTimeline ? <AudioLayersPlayback regions={tl.audioRegions} assets={tl.assets} /> : null}
+			<AddAudioLayerDialog
+				open={audioLayerFlow !== null}
+				kind={audioLayerFlow?.kind ?? "voiceover"}
+				maxDurationSec={audioLayerFlow?.maxDurationSec ?? 0}
+				onClose={() => setAudioLayerFlow(null)}
+				onComplete={(assetId, durationSec) => {
+					if (audioLayerFlow) {
+						void handleAudioLayerReady(audioLayerFlow.kind, assetId, durationSec);
+					}
+				}}
+				onRecordingStart={handleVoiceoverRecordingStart}
+				onRecordingStop={handleVoiceoverRecordingStop}
+			/>
 		</div>
 	);
 }

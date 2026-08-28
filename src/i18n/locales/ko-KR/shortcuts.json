@@ -25,7 +25,9 @@
 		"deleteSelected": "선택 항목 삭제",
 		"playPause": "재생 / 일시정지",
 		"copySelected": "선택 항목 복사",
-		"paste": "붙여넣기"
+		"paste": "붙여넣기",
+		"addVoiceover": "내레이션 추가",
+		"addMusic": "음악 추가"
 	},
 	"fixedActions": {
 		"undo": "실행 취소",

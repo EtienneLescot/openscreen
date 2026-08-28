@@ -25,7 +25,9 @@
 		"deleteSelected": "刪除所選",
 		"playPause": "播放 / 暫停",
 		"copySelected": "複製所選",
-		"paste": "貼上"
+		"paste": "貼上",
+		"addVoiceover": "新增旁白",
+		"addMusic": "新增音樂"
 	},
 	"fixedActions": {
 		"undo": "復原",

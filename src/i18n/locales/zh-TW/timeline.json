@@ -9,14 +9,18 @@
 		"addTrim": "新增剪輯 (T)",
 		"addAnnotation": "新增標註 (A)",
 		"addSpeed": "新增速度 (S)",
-		"addCameraFullscreen": "新增全螢幕攝影機 (C)"
+		"addCameraFullscreen": "新增全螢幕攝影機 (C)",
+		"addVoiceover": "新增旁白（V）",
+		"addMusic": "新增音樂（B）"
 	},
 	"hints": {
 		"pressZoom": "按 Z 新增縮放",
 		"pressTrim": "按 T 新增剪輯",
 		"pressAnnotation": "按 A 新增標註",
 		"pressSpeed": "按 S 新增速度",
-		"pressCameraFullscreen": "按 C 新增一個全螢幕攝影機片段"
+		"pressCameraFullscreen": "按 C 新增一個全螢幕攝影機片段",
+		"pressVoiceover": "按 V 新增旁白",
+		"pressMusic": "按 B 新增音樂"
 	},
 	"labels": {
 		"pan": "平移",
@@ -86,5 +90,28 @@
 		"smartCutsNoAudio": "此媒體沒有音訊",
 		"smartCutsNoSpeech": "未偵測到語音",
 		"smartCutsFailed": "轉錄失敗 — 請在「媒體」中重試"
+	},
+	"audio": {
+		"addVoiceover": "新增旁白",
+		"addMusic": "新增背景音樂",
+		"subtitle": "在時間軸上放置旁白或背景音樂圖層",
+		"record": "錄製旁白",
+		"importFile": "匯入音訊檔案",
+		"chooseMusic": "選擇音樂檔案",
+		"recording": "錄製中",
+		"stop": "停止",
+		"micDenied": "麥克風存取遭拒絕",
+		"recordingUnavailable": "此處無法錄音",
+		"saveFailed": "無法儲存錄音",
+		"importFailed": "無法匯入音訊檔案",
+		"voiceoverLabel": "旁白",
+		"musicLabel": "音樂",
+		"gain": "音量",
+		"mute": "靜音",
+		"offset": "起始偏移",
+		"fadeIn": "淡入",
+		"fadeOut": "淡出",
+		"loop": "循環",
+		"deleteLayer": "刪除音訊圖層"
 	}
 }

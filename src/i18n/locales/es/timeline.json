@@ -9,14 +9,18 @@
 		"addTrim": "Agregar recorte (T)",
 		"addAnnotation": "Agregar anotación (A)",
 		"addSpeed": "Agregar velocidad (S)",
-		"addCameraFullscreen": "Agregar cámara a pantalla completa (C)"
+		"addCameraFullscreen": "Agregar cámara a pantalla completa (C)",
+		"addVoiceover": "Añadir voz en off (V)",
+		"addMusic": "Añadir música (B)"
 	},
 	"hints": {
 		"pressZoom": "Presiona Z para agregar zoom",
 		"pressTrim": "Presiona T para agregar recorte",
 		"pressAnnotation": "Presiona A para agregar anotación",
 		"pressSpeed": "Presiona S para agregar velocidad",
-		"pressCameraFullscreen": "Presiona C para agregar un segmento de cámara a pantalla completa"
+		"pressCameraFullscreen": "Presiona C para agregar un segmento de cámara a pantalla completa",
+		"pressVoiceover": "Pulsa V para añadir voz en off",
+		"pressMusic": "Pulsa B para añadir música"
 	},
 	"labels": {
 		"pan": "Desplazar",
@@ -86,5 +90,28 @@
 		"smartCutsNoAudio": "Este medio no tiene audio",
 		"smartCutsNoSpeech": "No se detectó voz",
 		"smartCutsFailed": "La transcripción falló: reinténtala desde Medios"
+	},
+	"audio": {
+		"addVoiceover": "Añadir voz en off",
+		"addMusic": "Añadir música de fondo",
+		"subtitle": "Coloca una capa de voz en off o de música de fondo en la línea de tiempo",
+		"record": "Grabar voz en off",
+		"importFile": "Importar archivo de audio",
+		"chooseMusic": "Elegir archivo de música",
+		"recording": "Grabando",
+		"stop": "Detener",
+		"micDenied": "Se denegó el acceso al micrófono",
+		"recordingUnavailable": "La grabación no está disponible aquí",
+		"saveFailed": "No se pudo guardar la grabación",
+		"importFailed": "No se pudo importar el archivo de audio",
+		"voiceoverLabel": "Voz en off",
+		"musicLabel": "Música",
+		"gain": "Volumen",
+		"mute": "Silenciar",
+		"offset": "Desplazamiento inicial",
+		"fadeIn": "Fundido de entrada",
+		"fadeOut": "Fundido de salida",
+		"loop": "Bucle",
+		"deleteLayer": "Eliminar capa de audio"
 	}
 }

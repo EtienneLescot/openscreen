@@ -25,7 +25,9 @@
 		"deleteSelected": "حذف المحدد",
 		"playPause": "تشغيل / إيقاف مؤقت",
 		"copySelected": "نسخ المحدد",
-		"paste": "لصق"
+		"paste": "لصق",
+		"addVoiceover": "إضافة تعليق صوتي",
+		"addMusic": "إضافة موسيقى"
 	},
 	"fixedActions": {
 		"undo": "تراجع",

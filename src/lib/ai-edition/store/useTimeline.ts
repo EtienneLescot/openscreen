@@ -438,6 +438,112 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
+	// Audio layers (voiceover / background music). The region's span defaults to
+	// the audio file's own duration when the caller knows it (a fresh voiceover
+	// recording, an imported asset that has been probed) so the layer covers what
+	// it has to play — the caller decides, because only it knows whether the
+	// duration is real yet.
+	const addAudioRegion = useCallback(
+		async (kind: "voiceover" | "music", assetId: string, durationSec = DEFAULT_NEW_REGION_SEC) => {
+			if (!document) return;
+			if (!document.assets.some((a) => a.id === assetId)) return;
+			const timeMs = Math.round(playheadSec() * 1000);
+			const endMs = timeMs + Math.max(1, Math.round(durationSec * 1000));
+			const anchored = anchorRegionsWithDerivedMs(
+				[
+					{
+						id: createId("aud"),
+						startMs: timeMs,
+						endMs,
+						assetId,
+						kind,
+						offsetMs: 0,
+						gainDb: 0,
+						loop: false,
+						fadeInMs: 0,
+						fadeOutMs: 0,
+						muted: false,
+						origin: "user" as const,
+					},
+				],
+				document.timeline.clips,
+				() => createId("aud"),
+			);
+			const next: AxcutDocument = {
+				...document,
+				audioRanges: [...document.audioRanges, ...anchored] as AxcutDocument["audioRanges"],
+			};
+			if (!(await saveDocument(next, { history: true }))) return;
+			// Select the new layer so its inspector opens — same affordance as
+			// addAnnotation.
+			const newId = anchored[0]?.id;
+			if (newId) {
+				setMultiSelection([{ kind: "audio", id: newId }]);
+				setSelection({ kind: "audio", id: newId });
+			}
+		},
+		[document, saveDocument],
+	);
+
+	// Payload edits (gain, offset, loop, fades, mute) hit every fragment under
+	// the pill, exactly like updateZoomDepth — a layer dragged across a clip
+	// boundary is 2+ rows that must not disagree.
+	const updateAudioRegion = useCallback(
+		async (
+			id: string,
+			patch: Partial<
+				Pick<
+					AxcutDocument["audioRanges"][number],
+					"gainDb" | "offsetMs" | "loop" | "fadeInMs" | "fadeOutMs" | "muted"
+				>
+			>,
+		) => {
+			// Read the store, not the render closure: two actions fired back to
+			// back (e.g. a slider commit right after a pill drag) each captured
+			// the same pre-edit document, so whichever write landed last silently
+			// dropped the other's patch — the same clobber applyClipEdit composes
+			// around.
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const next: AxcutDocument = {
+				...doc,
+				audioRanges: patchPillById(
+					doc.audioRanges,
+					id,
+					// Every key in the pick exists on the region, so widening the
+					// partial is safe; it is what `patchPillById` expects.
+					patch as Partial<AxcutDocument["audioRanges"][number]>,
+				) as AxcutDocument["audioRanges"],
+			};
+			await saveDocument(next, { history: true });
+		},
+		[saveDocument],
+	);
+
+	// Drag/resize on the ruler — group-aware like the other span updates.
+	const updateAudioSpan = useCallback(
+		async (id: string, startMs: number, endMs: number) => {
+			// Store-read for the same reason as updateAudioRegion above.
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const s = finiteMs(startMs);
+			const e = finiteMs(endMs);
+			const next: AxcutDocument = {
+				...doc,
+				audioRanges: replacePillSpan(
+					doc.audioRanges,
+					id,
+					Math.min(s, e),
+					Math.max(s, e),
+					doc.timeline.clips,
+					() => createId("aud"),
+				) as AxcutDocument["audioRanges"],
+			};
+			await saveDocument(next, { history: true });
+		},
+		[saveDocument],
+	);
+
 	// Like updateTrimRange but also re-attaches the trim to a (possibly different) CLIP —
 	// needed when a trim is dragged across a clip boundary, whether or not the landing clip
 	// is backed by another asset. Re-pointing `clipId` as well as `assetId` is what makes a
@@ -847,6 +953,7 @@ export function useTimeline() {
 			const cameraFullscreenIds = new Set(
 				handles.filter((h) => h.kind === "cameraFullscreen").map((h) => h.id),
 			);
+			const audioIds = new Set(handles.filter((h) => h.kind === "audio").map((h) => h.id));
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 			const prevSpeed = dropPillsByIds(
 				(legacy.speedRegions as Array<{ id: string; startMs: number; endMs: number }>) ?? [],
@@ -861,6 +968,7 @@ export function useTimeline() {
 				...document,
 				zoomRanges: dropPillsByIds(document.zoomRanges, zoomIds) as AxcutDocument["zoomRanges"],
 				annotations: dropPillsByIds(document.annotations, annotationIds),
+				audioRanges: dropPillsByIds(document.audioRanges, audioIds) as AxcutDocument["audioRanges"],
 				timeline: {
 					...document.timeline,
 					// Whole-pill delete, same as the zoom/annotation lines above — a trim grown
@@ -1179,6 +1287,8 @@ export function useTimeline() {
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
 		speedRegions,
 		cameraFullscreenRegions,
+		audioRegions: document?.audioRanges ?? [],
+		audioAssets: (document?.assets ?? []).filter((a) => a.kind === "audio"),
 		clips: document?.timeline.clips ?? [],
 		assets: document?.assets ?? [],
 		hasDoc,
@@ -1191,6 +1301,7 @@ export function useTimeline() {
 		addAnnotation,
 		addSpeed,
 		addCameraFullscreen,
+		addAudioRegion,
 		removeRegion,
 		removeRegions,
 		selectRegion,
@@ -1215,6 +1326,8 @@ export function useTimeline() {
 		updateSpeedSpan,
 		updateSpeedValue,
 		updateCameraFullscreenSpan,
+		updateAudioRegion,
+		updateAudioSpan,
 		// T19 — drives the preview video during trim-edge resize.
 		setCurrentTime: useProjectStore((s) => s.setCurrentTime),
 	};

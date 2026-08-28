@@ -42,7 +42,6 @@
 		"step1Title": "1. Add Trim",
 		"step1DescriptionBefore": "Press ",
 		"step1DescriptionAfter": " or click the scissors icon to mark a section for removal.",
-
 		"step2Title": "2. Adjust",
 		"step2Description": "Drag the edges of the red region to cover exactly what you want to cut out."
 	},
@@ -86,6 +85,8 @@
 		"mp4Video": "MP4 Video",
 		"videoFiles": "Video Files",
 		"openscreenProject": "OpenScreen Project",
-		"allFiles": "All Files"
+		"allFiles": "All Files",
+		"selectAudio": "Select Audio File",
+		"audioFiles": "Audio Files"
 	}
 }
