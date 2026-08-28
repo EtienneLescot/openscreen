@@ -110,6 +110,7 @@ const sampleDoc: AxcutDocument = {
 	},
 	annotations: [],
 	zoomRanges: [],
+	audioRanges: [],
 	legacyEditor: null,
 };
 
@@ -544,6 +545,93 @@ describe("useTimeline.addCameraFullscreen (camera gate)", () => {
 		expect(regions).toHaveLength(1);
 		// 2s at the playhead (currentTimeSec = 1), the shared default.
 		expect(regions[0]).toMatchObject({ startMs: 1000, endMs: 3000 });
+	});
+});
+
+describe("useTimeline.addAudioRegion", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: {
+				...sampleDoc,
+				assets: [
+					...sampleDoc.assets,
+					{
+						id: "asset_music",
+						kind: "audio",
+						label: "bgm.mp3",
+						originalPath: "/tmp/bgm.mp3",
+						durationSec: 120,
+						cameraTrack: null,
+					},
+				],
+			},
+			currentTimeSec: 1,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("places an anchored layer at the playhead with the given span", async () => {
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addAudioRegion("music", "asset_music", 5);
+		});
+		const layers = useProjectStore.getState().document?.audioRanges ?? [];
+		expect(layers).toHaveLength(1);
+		expect(layers[0]).toMatchObject({
+			assetId: "asset_music",
+			kind: "music",
+			startMs: 1000,
+			endMs: 6000,
+			gainDb: 0,
+			loop: false,
+			muted: false,
+			// Anchored to the covered clip, like every other modifier kind.
+			clipId: "clip_a",
+		});
+		// Auto-selected so its inspector opens, matching addAnnotation.
+		expect(result.current.selection).toEqual({ kind: "audio", id: layers[0]?.id });
+	});
+
+	it("refuses an asset that is not in the document", async () => {
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addAudioRegion("voiceover", "asset_missing", 3);
+		});
+		expect(useProjectStore.getState().document?.audioRanges ?? []).toHaveLength(0);
+	});
+
+	it("updates payload fields group-wide and moves spans", async () => {
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addAudioRegion("voiceover", "asset_music", 5);
+		});
+		const id = useProjectStore.getState().document?.audioRanges[0]?.id ?? "";
+		expect(id).toBeTruthy();
+		await act(async () => {
+			await result.current.updateAudioRegion(id, { gainDb: 6, loop: true, fadeInMs: 250 });
+			await result.current.updateAudioSpan(id, 2000, 9000);
+		});
+		const layer = useProjectStore.getState().document?.audioRanges[0];
+		expect(layer).toMatchObject({
+			gainDb: 6,
+			loop: true,
+			fadeInMs: 250,
+			startMs: 2000,
+			endMs: 9000,
+		});
 	});
 });
 

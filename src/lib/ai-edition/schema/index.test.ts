@@ -3,6 +3,7 @@ import { migrateRawDocumentToCurrent } from "../document/migrate";
 import {
 	annotationRegionSchema,
 	assetSchema,
+	audioRegionSchema,
 	axcutSchemaVersion,
 	clipSchema,
 	createEmptyDocument,
@@ -73,15 +74,65 @@ describe("axcut-schema v7", () => {
 		).toThrow();
 	});
 
-	it("assetSchema requires kind = 'video'", () => {
+	it("assetSchema accepts kind 'video' and 'audio' but rejects anything else", () => {
 		expect(() =>
 			assetSchema.parse({
 				id: "asset_1",
-				kind: "audio",
+				kind: "image",
 				label: "x",
-				originalPath: "/x.mp4",
+				originalPath: "/x.png",
 			}),
 		).toThrow();
+		const audioAsset = assetSchema.parse({
+			id: "asset_2",
+			kind: "audio",
+			label: "music",
+			originalPath: "/m.mp3",
+		});
+		expect(audioAsset.kind).toBe("audio");
+		expect(audioAsset.cameraTrack).toBeNull();
+	});
+
+	it("audioRegionSchema defaults payload fields and validates monotonicity", () => {
+		const region = audioRegionSchema.parse({
+			id: "aud_1",
+			startMs: 0,
+			endMs: 2000,
+			assetId: "asset_2",
+			kind: "voiceover",
+		});
+		expect(region).toMatchObject({
+			offsetMs: 0,
+			gainDb: 0,
+			loop: false,
+			fadeInMs: 0,
+			fadeOutMs: 0,
+			muted: false,
+			origin: "user",
+		});
+		expect(() =>
+			audioRegionSchema.parse({
+				id: "aud_2",
+				startMs: 3000,
+				endMs: 2000,
+				assetId: "asset_2",
+				kind: "music",
+			}),
+		).toThrow();
+	});
+
+	it("documentSchema defaults audioRanges to [] when absent", () => {
+		const doc = documentSchema.parse({
+			schemaVersion: axcutSchemaVersion,
+			project: {
+				id: "proj_1",
+				title: "Test",
+				createdAt: "2026-06-26T10:00:00Z",
+				updatedAt: "2026-06-26T10:00:00Z",
+			},
+			timeline: {},
+		});
+		expect(doc.audioRanges).toEqual([]);
 	});
 
 	it("trimRangeSchema carries assetId and origin", () => {

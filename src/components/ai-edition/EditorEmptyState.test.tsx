@@ -53,6 +53,7 @@ const sampleDoc = vi.hoisted(
 		},
 		annotations: [],
 		zoomRanges: [],
+		audioRanges: [],
 		legacyEditor: null,
 	}),
 );
@@ -178,6 +179,7 @@ describe("EditorEmptyState (new editor)", () => {
 				"proj_test",
 				"/tmp/recording.mp4",
 				"recording.mp4",
+				undefined,
 			);
 		});
 	});
@@ -205,6 +207,7 @@ describe("EditorEmptyState (new editor)", () => {
 				"proj_test",
 				"/tmp/recording.mp4",
 				"recording.mp4",
+				undefined,
 			);
 		});
 	});

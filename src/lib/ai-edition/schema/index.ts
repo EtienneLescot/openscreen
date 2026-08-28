@@ -148,9 +148,19 @@ export const assetTranscriptionFailureSchema = z.object({
 	at: isoDateSchema.optional(),
 });
 
+// Audio-only media imported as an edit layer (voiceover / background music).
+// Same shape as a video asset minus the video-specific links — an audio asset
+// never appears as a timeline CLIP (the ruler's clip row is video only); it is
+// referenced by `audioRanges` regions, which place it on the timeline.
+export const assetAudioKindSchema = z.literal("audio");
+
 export const assetSchema = z.object({
 	id: z.string().min(1),
-	kind: z.literal("video"),
+	// "video" for every asset written before audio layers existed — the enum is
+	// additive, so an older build parsing a new document simply sees the one
+	// new value it doesn't know and drops the key on save (same window as
+	// `cameraTrack.width` above).
+	kind: z.enum(["video", "audio"]),
 	label: z.string().min(1),
 	originalPath: z.string().min(1),
 	proxyPath: z.string().optional(),
@@ -471,6 +481,33 @@ export const zoomRegionSchema = endGteStart(
 	"startMs",
 );
 
+// Audio layers (voiceover / background music) placed on the timeline. Same
+// v5 clip-anchor contract as zoom/annotation: `{clipId, sourceStartSec,
+// sourceEndSec}` is the source of truth, `startMs`/`endMs` the derived ruler
+// cache, so a layer travels with the clip it covers through reorder/trim.
+// `offsetMs` skips INTO the audio file (start the music at its chorus); the
+// region's own span is where it plays on the timeline. Music longer than its
+// span is trimmed to the span unless `loop` is set, in which case it repeats.
+export const audioRegionSchema = endGteStart(
+	z.object({
+		id: z.string().min(1),
+		startMs: z.number().nonnegative(),
+		endMs: z.number().nonnegative(),
+		...clipAnchorShape,
+		assetId: z.string().min(1),
+		kind: z.enum(["voiceover", "music"]),
+		offsetMs: z.number().int().nonnegative().default(0),
+		gainDb: z.number().min(-60).max(12).default(0),
+		loop: z.boolean().default(false),
+		fadeInMs: z.number().int().nonnegative().default(0),
+		fadeOutMs: z.number().int().nonnegative().default(0),
+		muted: z.boolean().default(false),
+		origin: z.enum(["system", "agent", "user"]).default("user"),
+	}),
+	"endMs",
+	"startMs",
+);
+
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time
 // by the existing pipeline (see technical-documentation/architecture/document-model.md).
@@ -503,6 +540,10 @@ const documentSchemaShape = z.object({
 	}),
 	annotations: z.array(annotationRegionSchema).default([]),
 	zoomRanges: z.array(zoomRegionSchema).default([]),
+	// Audio layers. Additive with a default, so documents written before audio
+	// layers existed load unchanged (absent key → []) and no schema-version
+	// bump is needed — same convention as `cameraTrack.width`.
+	audioRanges: z.array(audioRegionSchema).default([]),
 	legacyEditor: legacyEditorSchema.nullable().default(null),
 });
 
@@ -943,6 +984,8 @@ export type AxcutTimeline = z.infer<typeof timelineSchema>;
 export type AxcutTimelineOperation = z.infer<typeof timelineOperationSchema>;
 export type AxcutAnnotationRegion = z.infer<typeof annotationRegionSchema>;
 export type AxcutZoomRegion = z.infer<typeof zoomRegionSchema>;
+export type AxcutAudioRegion = z.infer<typeof audioRegionSchema>;
+export type AxcutAudioLayerKind = AxcutAudioRegion["kind"];
 export type AxcutCameraTrack = z.infer<typeof cameraTrackSchema>;
 export type AxcutLegacyEditor = z.infer<typeof legacyEditorSchema>;
 export type AxcutDocument = z.infer<typeof documentSchema>;
@@ -979,6 +1022,7 @@ export function createEmptyDocument(
 		},
 		annotations: [],
 		zoomRanges: [],
+		audioRanges: [],
 		legacyEditor: null,
 	});
 }
