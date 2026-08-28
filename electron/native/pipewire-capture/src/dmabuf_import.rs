@@ -134,7 +134,15 @@ impl DmabufImporter {
             // ENOSYS on radeonsi — VAAPI knows how to open on a DRM fd, but not the
             // other way round. The DRM device backs the DRM_PRIME source frames;
             // the derived VAAPI device backs the mapped surface and the encoder.
-            let node = c"/dev/dri/renderD128";
+            // /dev/dri/renderD128 is the default, but on hybrid graphics the
+            // compositor may render on a different node — mapping a dmabuf from the
+            // wrong GPU then fails on every frame, with `available()` still passing.
+            // Honour an override so such a machine can point at the right node
+            // without a rebuild; the single-GPU default is unchanged.
+            let node_path = std::env::var("OPENSCREEN_LINUX_RENDER_NODE")
+                .unwrap_or_else(|_| "/dev/dri/renderD128".to_owned());
+            let node = std::ffi::CString::new(node_path)
+                .map_err(|_| "OPENSCREEN_LINUX_RENDER_NODE has an interior NUL byte".to_owned())?;
             let created = ff::av_hwdevice_ctx_create(
                 &mut me.drm_device,
                 ff::AV_HWDEVICE_TYPE_DRM,
