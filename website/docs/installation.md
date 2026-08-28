@@ -132,7 +132,7 @@ The editing tools are the same everywhere — zooms, backgrounds, crop/trim/spee
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | Capture pipeline | Native (ScreenCaptureKit) | Native (Windows Graphics Capture) | Browser pipeline |
-| Custom cursor themes / click effects | ✅ | ✅ | ❌ (position-only, used for auto-zoom) |
+| Custom cursor themes / click effects | ✅ | ✅ | ✅ (clicks need the `input` group — see [Mouse clicks on Wayland](#mouse-clicks-on-wayland)) |
 | Webcam | Native capture | Native capture | Browser capture (still works as PiP) |
 | System audio | macOS 13+; permission prompt on 14.2+; not available on macOS 12 and below | Works out of the box | Needs PipeWire (default on Ubuntu 22.04+, Fedora 34+) |
 | MP4 export | ✅ | ✅ | ✅ (software encode) |
