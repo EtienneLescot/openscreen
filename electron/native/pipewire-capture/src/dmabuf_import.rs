@@ -12,6 +12,7 @@
 //! `avcodec_send_frame` accepts directly. See docs/dmabuf-vaapi-plan.md.
 
 use crate::ffmpeg as ff;
+use std::os::fd::AsRawFd;
 use std::ptr;
 
 /// `av_frame_free` wants a `**AVFrame`; wrap the pointer in a local so the null
@@ -320,11 +321,17 @@ impl DmabufImporter {
         if frame.planes.is_empty() || frame.planes.len() > 4 {
             return Err(format!("dmabuf has {} planes", frame.planes.len()));
         }
-        // All planes must share one fd: we build a single DRM object from
-        // planes[0].fd and point every plane at it, so a buffer whose planes span
-        // multiple fds would make VAAPI read the wrong memory. Our RGB formats are
-        // single-plane; guard the assumption rather than rely on it.
-        if frame.planes.iter().any(|plane| plane.fd != frame.planes[0].fd) {
+        // We build a single DRM object from planes[0]'s fd and point every plane at
+        // it, so all planes must be backed by that one fd. Each plane now owns its
+        // own dup (see `DmabufPlane`), so two planes aliasing one buffer no longer
+        // share a NUMBER — this therefore accepts only the single-plane case. That is
+        // exactly our RGB formats; a genuine multi-plane buffer (never negotiated) is
+        // conservatively rejected rather than risk VAAPI reading the wrong memory.
+        if frame
+            .planes
+            .iter()
+            .any(|plane| plane.fd.as_raw_fd() != frame.planes[0].fd.as_raw_fd())
+        {
             return Err("dmabuf planes span multiple fds, which this importer does not handle".to_owned());
         }
         // SAFETY: every allocated frame/buffer is freed on the error paths and on
@@ -340,7 +347,7 @@ impl DmabufImporter {
                 return Err("av_mallocz(drm descriptor) failed".to_owned());
             }
             (*desc).nb_objects = 1;
-            (*desc).objects[0].fd = frame.planes[0].fd;
+            (*desc).objects[0].fd = frame.planes[0].fd.as_raw_fd();
             (*desc).objects[0].size = 0; // recovered by the driver from the fd
             (*desc).objects[0].format_modifier = frame.modifier;
             (*desc).nb_layers = 1;
