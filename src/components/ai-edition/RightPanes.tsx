@@ -65,7 +65,6 @@ import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import {
 	type AssetTranscriptionView,
-	firstBusyView,
 	type TranscriptGateReason,
 } from "@/lib/ai-edition/transcription/status";
 import { getAssetPath } from "@/lib/assetPath";
@@ -712,6 +711,7 @@ export function TranscriptPane({
 	trimRanges,
 	busyAssetIds,
 	transcriptions,
+	busyView,
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
@@ -731,6 +731,11 @@ export function TranscriptPane({
 	 *  background pass, with nothing on screen to say why. */
 	busyAssetIds: readonly string[];
 	transcriptions?: Record<string, AssetTranscriptionView>;
+	/** First busy view over the TIMELINE's assets (same scope as `blocked` and
+	 *  `isTranscribing`) — the pane-level label reads this, never the whole
+	 *  `transcriptions` record, so an off-timeline job cannot relabel controls
+	 *  the gate keeps enabled. */
+	busyView?: AssetTranscriptionView;
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
@@ -780,7 +785,7 @@ export function TranscriptPane({
 	const silentMedia = blocked?.reason === "no-audio";
 	const transcriptionLabel = useTranscriptionLabel();
 	const paneBusyLabel = transcriptionBusyLabel(
-		firstBusyView(Object.values(transcriptions ?? {})) ??
+		busyView ??
 			(isTranscribing ? { assetId: "", status: "running", phase: "loading-model" } : undefined),
 		transcriptionLabel,
 	);

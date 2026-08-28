@@ -112,6 +112,33 @@ describe("captions pane gating", () => {
 		expect(screen.getByRole("button", { name: "Transcribing" })).toBeDisabled();
 	});
 
+	it("keeps the idle button when only an off-timeline asset is busy", () => {
+		// The gate answers for the timeline's assets; the label must not answer
+		// for the whole bin. A bin asset mid-transcription used to relabel the
+		// still-enabled button with its busy copy.
+		const offTimeline: AxcutAsset = {
+			id: "asset_2",
+			kind: "video",
+			label: "bin-only.mp4",
+			originalPath: "/bin.mp4",
+			durationSec: 8,
+			cameraTrack: null,
+		};
+		const document = documentWith(ASSET);
+		document.assets.push(offTimeline);
+		load(document);
+		useTranscriptionStore.setState({
+			projectId: "proj_1",
+			jobs: { asset_2: { status: "running", language: "auto", manual: false } },
+		});
+		render(
+			<I18nProvider>
+				<CaptionsPane />
+			</I18nProvider>,
+		);
+		expect(screen.getByRole("button", { name: "Transcribe video" })).toBeEnabled();
+	});
+
 	it("kills the retry on a media with no audio track and explains it", () => {
 		load(
 			documentWith({

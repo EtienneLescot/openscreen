@@ -26,6 +26,7 @@ import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { newRegionDurationSec } from "@/lib/ai-edition/timeline/newRegionDuration";
+import { firstTimelineBusyView } from "@/lib/ai-edition/transcription/status";
 import { matchesShortcut } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
@@ -158,6 +159,12 @@ export function NewEditorShell() {
 				.filter((v) => v.status === "running" || v.status === "queued")
 				.map((v) => v.assetId),
 		[transcriptions],
+	);
+	// For the pane-level busy label: timeline-scoped like the gate, so an
+	// off-timeline job cannot relabel controls the gate keeps enabled.
+	const timelineBusyView = useMemo(
+		() => firstTimelineBusyView(document, transcriptions),
+		[document, transcriptions],
 	);
 	const tl = useTimeline();
 	// An undo only puts the restored document back in the store and marks it dirty,
@@ -1149,6 +1156,7 @@ export function NewEditorShell() {
 		trimRanges: document?.timeline?.trimRanges ?? [],
 		busyAssetIds,
 		transcriptions,
+		busyView: timelineBusyView,
 		onSeek: handleSeek,
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,

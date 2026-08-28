@@ -83,6 +83,24 @@ export function firstBusyView(
 }
 
 /**
+ * First busy view among the assets the timeline actually plays — the same
+ * scope every transcript-dependent gate uses (`transcriptRelevantAssetIds`).
+ * A job on an off-timeline asset must not relabel a timeline-scoped button
+ * that stays enabled: label and gate have to answer about the same assets.
+ */
+export function firstTimelineBusyView(
+	document: AxcutDocument | null,
+	views: Record<string, AssetTranscriptionView>,
+): AssetTranscriptionView | undefined {
+	const relevant: AssetTranscriptionView[] = [];
+	for (const id of transcriptRelevantAssetIds(document)) {
+		const view = views[id];
+		if (view) relevant.push(view);
+	}
+	return firstBusyView(relevant);
+}
+
+/**
  * A media that has no audio track (or one Whisper cannot read) will fail the
  * same way on every attempt, so that verdict is worth remembering: it is
  * persisted on the asset and stops the auto pass from re-extracting the audio
