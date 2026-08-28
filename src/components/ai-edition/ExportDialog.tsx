@@ -32,7 +32,9 @@ import {
 	type GifFrameRate,
 	type GifSizePreset,
 } from "@/lib/exporter";
+import { buildExportTimelineMapping, rawToExportTime } from "@/lib/exporter/audioLayerTimeline";
 import { calculateMp4ExportSettings, wouldUpscale } from "@/lib/exporter/mp4ExportSettings";
+import { mixAudioLayersIntoVideo } from "@/lib/exporter/voiceoverMix";
 import { exportGifNative, exportMultiNative, useIsCpuCompositor } from "@/native";
 import type { CompositorClipInput } from "@/native/contracts";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
@@ -330,6 +332,64 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 								fps,
 								codec,
 							});
+				// Audio layers (voiceover / background music) are a renderer-side
+				// post-pass: the native pipeline has no extra-audio-track concept, so
+				// the layers are mixed into the finished MP4 here — same re-mux the
+				// CLI uses for `--audio`. Video packets stay untouched.
+				if (format === "mp4") {
+					const layerAssets = document.audioRanges
+						.filter((r) => !r.muted)
+						.map((r) => ({
+							region: r,
+							asset: document.assets.find((a) => a.id === r.assetId),
+						}))
+						.filter((entry): entry is typeof entry & { asset: NonNullable<typeof entry.asset> } =>
+							Boolean(entry.asset),
+						);
+					if (layerAssets.length > 0) {
+						setPhase("writing");
+						const mapping = buildExportTimelineMapping(
+							document.timeline.clips,
+							document.timeline.trimRanges,
+						);
+						const layerInputs = [];
+						for (const { region, asset } of layerAssets) {
+							const bytes = await window.electronAPI?.readBinaryFile?.(asset.originalPath);
+							if (!bytes?.success || !bytes.data) {
+								// A layer whose file vanished degrades to silence rather
+								// than failing the whole export.
+								console.warn("[export] audio layer asset unreadable:", asset.originalPath);
+								continue;
+							}
+							layerInputs.push({
+								data: bytes.data,
+								startSec: rawToExportTime(region.startMs / 1000, mapping),
+								endSec: rawToExportTime(region.endMs / 1000, mapping),
+								offsetSec: region.offsetMs / 1000,
+								gainDb: region.gainDb,
+								loop: region.loop,
+								fadeInMs: region.fadeInMs,
+								fadeOutMs: region.fadeOutMs,
+							});
+						}
+						if (layerInputs.length > 0) {
+							const exported = await window.electronAPI?.readBinaryFile?.(pickedPath);
+							if (exported?.success && exported.data) {
+								const mixed = await mixAudioLayersIntoVideo(
+									new Blob([exported.data], { type: "video/mp4" }),
+									{ layers: layerInputs },
+								);
+								const write = await window.electronAPI?.writeExportToPath?.(
+									await mixed.arrayBuffer(),
+									pickedPath,
+								);
+								if (!write?.success) {
+									throw new Error(write?.message ?? t("exportDialog.exportFailed"));
+								}
+							}
+						}
+					}
+				}
 				setSavedPath(pickedPath);
 				setPhase("done");
 				toast.success(t("exportDialog.exportedVideo"), {
