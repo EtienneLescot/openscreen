@@ -10,7 +10,7 @@
 //! letting a Rust panic unwind into C.
 
 use std::ffi::{c_char, c_void, CStr};
-use std::os::fd::{IntoRawFd, OwnedFd};
+use std::os::fd::{BorrowedFd, IntoRawFd, OwnedFd};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[repr(C)]
@@ -267,11 +267,14 @@ impl Drop for DmabufDesc {
     }
 }
 
-/// One dmabuf plane: a BORROWED fd (owned by the still-held PipeWire buffer) plus
-/// its layout. Valid until the buffer is re-queued.
+/// One dmabuf plane: an OWNED (dup'd) fd plus its layout. The dup is taken when the
+/// frame is claimed and closed when the owning `DmabufDesc` drops. Owning it — not
+/// borrowing the PipeWire buffer's fd — is what keeps the plane valid if a
+/// renegotiation destroys the buffer set (which closes the original fds and reuses
+/// the numbers) while this plane is still queued for import.
 #[derive(Debug)]
 pub struct DmabufPlane {
-    pub fd: i32,
+    pub fd: OwnedFd,
     pub offset: i32,
     pub stride: i32,
 }
@@ -1050,7 +1053,24 @@ fn on_frame_inner(state: &CallbackState, frame: *const RawFrame) -> i32 {
             if fd < 0 {
                 return 0;
             }
-            planes.push(DmabufPlane { fd, offset: frame.plane_offset[i], stride: frame.plane_stride[i] });
+            // Dup the plane fd so the descriptor owns a handle independent of the
+            // PipeWire buffer's lifetime: if a renegotiation destroys the buffer set
+            // while this desc is still queued for import, the original fds are closed
+            // and their numbers reused, and a borrowed fd would then import an
+            // unrelated buffer. The dup keeps the dmabuf alive until the OwnedFd drops
+            // with the desc, after `Capture::stage`; VAAPI dups again during surface
+            // creation, so it costs nothing past import.
+            // SAFETY: `fd` is valid for this callback; `try_clone_to_owned` dups it.
+            let Ok(owned) = (unsafe { BorrowedFd::borrow_raw(fd) }).try_clone_to_owned() else {
+                // fd exhaustion: decline. `planes` drops here, closing the dups taken
+                // so far, and the shim re-queues the buffer.
+                return 0;
+            };
+            planes.push(DmabufPlane {
+                fd: owned,
+                offset: frame.plane_offset[i],
+                stride: frame.plane_stride[i],
+            });
         }
         mailbox.put_dmabuf(
             DmabufDesc {
