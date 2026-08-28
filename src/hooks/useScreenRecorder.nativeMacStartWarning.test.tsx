@@ -55,6 +55,7 @@ async function settle(ms = 0) {
 beforeEach(() => {
 	vi.useFakeTimers();
 	stubElectronAPI();
+	vi.mocked(toast.error).mockClear();
 });
 
 afterEach(() => {
@@ -86,5 +87,34 @@ describe("useScreenRecorder native macOS start warnings", () => {
 		);
 		expect(view.result.current.recording).toBe(true);
 		expect(toast.error).toHaveBeenCalledWith("recording.microphoneDefaulted");
+	});
+
+	it("does not warn after the recording start is cancelled", async () => {
+		let resolveStart:
+			| ((result: Awaited<ReturnType<ElectronAPI["startNativeMacRecording"]>>) => void)
+			| null = null;
+		api.startNativeMacRecording.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveStart = resolve;
+				}),
+		);
+		const view = renderHook(() => useScreenRecorder());
+		await settle();
+
+		await act(async () => {
+			view.result.current.toggleRecording();
+		});
+		await settle(3_500);
+		expect(api.startNativeMacRecording).toHaveBeenCalledOnce();
+
+		view.unmount();
+		await act(async () => {
+			resolveStart?.({ success: true, recordingId: 8, microphoneDefaulted: true });
+			await Promise.resolve();
+		});
+
+		expect(api.stopNativeMacRecording).toHaveBeenCalledWith(true);
+		expect(toast.error).not.toHaveBeenCalled();
 	});
 });
