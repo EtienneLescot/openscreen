@@ -259,11 +259,14 @@ export function useTimeline() {
 				!probedAudioAssetIdsRef.current.has(a.id),
 		);
 		if (missing.length === 0) return;
+		// Mark every candidate BEFORE the first await. Marking each only as its turn
+		// came meant a document change that re-entered this effect while asset #1 was
+		// still awaiting found #2+ unmarked and probed them a second time.
+		for (const a of missing) probedAudioAssetIdsRef.current.add(a.id);
 		let cancelled = false;
 		void (async () => {
 			const probed: Record<string, number> = {};
 			for (const a of missing) {
-				probedAudioAssetIdsRef.current.add(a.id);
 				const durationSec = await probeAudioDuration(toFileUrl(a.originalPath));
 				if (durationSec != null && durationSec > 0) probed[a.id] = durationSec;
 			}
