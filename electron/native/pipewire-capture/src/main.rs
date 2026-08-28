@@ -599,14 +599,17 @@ fn run<W: Write>(
     let mut cursor: Option<CursorState> = None;
     let mut known_assets: HashSet<String> = HashSet::new();
     let mut pending_asset: Option<CursorAsset> = None;
-    // The pw_stream has reached `streaming`, i.e. mutter has actually started
-    // handing us frames. Presses are ignored until then: before it, the only
-    // thing on screen is the portal's own picker, and the click that dismisses
-    // it (its "Share" button) would otherwise latch and ride out on the
-    // recording's first sample as a phantom click at t≈0. mutter enables its
-    // capture source on STREAMING, so this is the exact edge at which a press
-    // starts landing on content the recording contains.
-    let mut streaming = false;
+    // Wall-clock ms at which the pw_stream last reached `streaming` (mutter began
+    // handing us frames), or `None` when it is not streaming. A press counts only
+    // if its own read time is at or after this: before streaming the only thing on
+    // screen is the portal picker, and the click that dismisses it (its "Share"
+    // button) would otherwise ride out on the first sample as a phantom click at
+    // t≈0. Comparing timestamps rather than a bare flag closes two gaps: the press
+    // and the stream-state arrive on DIFFERENT channels, so a pre-stream press can
+    // be dequeued after the flag flips (it is still dropped, its time is older);
+    // and clearing it on disconnect stops clicks emitting against a stale cursor
+    // after capture has stopped.
+    let mut streaming_since: Option<u64> = None;
     let mut reported_cursor_meta = false;
     // Allocated up front so the PipeWire callback has somewhere to put frames
     // from the very first buffer; `None` in cursor-only mode, which is also what
@@ -640,18 +643,13 @@ fn run<W: Write>(
             // stamped with the press time the reader captured: immediate so it is
             // not backdated to the next throttled sample, and one sample per press
             // so a rapid double-click reads as two clicks rather than collapsing
-            // into one. Dropped before the stream is live (see `streaming`): a
-            // press while the picker is still up is the click on its "Share"
-            // button, not content.
+            // into one. Counted only if the press happened at or after streaming
+            // began (see `streaming_since`): a press while the picker is still up —
+            // the click on its "Share" button — is older, so it is dropped even if
+            // its message is delivered after the stream-state one.
             Ok(Message::PointerButton(press_ms)) => {
-                if streaming {
-                    emit_sample(
-                        emitter,
-                        &cursor,
-                        size,
-                        &mut pending_asset,
-                        Some(press_ms),
-                    );
+                if streaming_since.is_some_and(|since| press_ms >= since) {
+                    emit_sample(emitter, &cursor, size, &mut pending_asset, Some(press_ms));
                 }
             }
 
@@ -1038,8 +1036,16 @@ fn run<W: Write>(
                 });
                 // Once frames are flowing, presses land on recorded content; the
                 // picker (and the "Share" click that dismissed it) is behind us.
+                // Stamped so a press read before this instant is dropped by time,
+                // and cleared on disconnect so clicks stop emitting against a stale
+                // cursor after capture ends. Only set on the FIRST streaming edge so
+                // a transient renegotiation `paused`→`streaming` does not re-arm it.
                 if state == "streaming" {
-                    streaming = true;
+                    if streaming_since.is_none() {
+                        streaming_since = Some(timestamp_ms());
+                    }
+                } else if state == "unconnected" {
+                    streaming_since = None;
                 }
                 if let Some(error) = error {
                     let _ = emitter.emit(&Event::Warning {
