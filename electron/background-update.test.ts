@@ -75,4 +75,22 @@ describe("background update policy", () => {
 		});
 		expect(failed).toEqual({ status: "failed", error });
 	});
+
+	it("never reaches the restart prompt without a downloaded update", async () => {
+		// downloadSelfUpdate cannot return these today, but the type admits
+		// them; a current/unsupported outcome must not prompt or install.
+		for (const kind of ["current", "unsupported"] as const) {
+			const confirmRestart = vi.fn(async () => 0);
+			const install = vi.fn();
+			const result = await runUnblockedDownloadAndInstall({
+				download: async () => ({ kind }),
+				blocked: () => null,
+				confirmRestart,
+				install,
+			});
+			expect(result).toEqual({ status: "unavailable" });
+			expect(confirmRestart).not.toHaveBeenCalled();
+			expect(install).not.toHaveBeenCalled();
+		}
+	});
 });
