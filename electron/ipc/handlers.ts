@@ -74,7 +74,7 @@ import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { toHelperRect } from "../native-bridge/helperCoordinates";
 import { scoreDeviceNameMatch } from "../recording/deviceNameMatching";
-import { isNativeMacCaptureOsSupported } from "../recording/nativeMacCaptureSupport";
+import { resolveNativeMacCaptureHelper } from "../recording/nativeMacCaptureSupport";
 import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
@@ -2089,14 +2089,13 @@ export function registerIpcHandlers(
 		if (process.platform !== "darwin") {
 			return { success: true, available: false, reason: "unsupported-platform" };
 		}
-		if (!isNativeMacCaptureOsSupported(process.platform, process.getSystemVersion())) {
-			return { success: true, available: false, reason: "unsupported-os" };
-		}
 
-		const helperPath = await findNativeMacCaptureHelperPath();
-		return helperPath
-			? { success: true, available: true, helperPath }
-			: { success: true, available: false, reason: "missing-helper" };
+		const availability = await resolveNativeMacCaptureHelper(
+			process.platform,
+			process.getSystemVersion(),
+			findNativeMacCaptureHelperPath,
+		);
+		return { success: true, ...availability };
 	});
 
 	ipcMain.handle("is-native-linux-capture-available", async () => {
@@ -2625,10 +2624,18 @@ export function registerIpcHandlers(
 				return { success: false, error: "Native macOS capture is already running." };
 			}
 
-			const helperPath = await findNativeMacCaptureHelperPath();
-			if (!helperPath) {
+			const availability = await resolveNativeMacCaptureHelper(
+				process.platform,
+				process.getSystemVersion(),
+				findNativeMacCaptureHelperPath,
+			);
+			if (!availability.available && availability.reason === "unsupported-os") {
+				return { success: false, error: "Native macOS capture requires macOS 13 or later." };
+			}
+			if (!availability.available) {
 				return { success: false, error: "Native macOS capture helper is not available." };
 			}
+			const { helperPath } = availability;
 
 			if (!request?.source?.sourceId) {
 				return { success: false, error: "Native macOS capture request is missing a source." };
