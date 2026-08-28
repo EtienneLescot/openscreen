@@ -1248,7 +1248,8 @@ mod tests {
         // The advertised modifier set is a real set, not a wildcard: a tiled or
         // compressed buffer cannot be read through a plain mmap, so it must fail
         // negotiation rather than be accepted and decoded into garbage.
-        // 0x0300000000000001 = a vendor (AMD) modifier, neither LINEAR nor INVALID.
+        // 0x0300000000000001 = a vendor (NVIDIA — modifier vendor byte 0x03) modifier,
+        // neither LINEAR nor INVALID.
         assert_eq!(
             enum_format_accepts_dmabuf_producer(true, 0x0300_0000_0000_0001),
             0,

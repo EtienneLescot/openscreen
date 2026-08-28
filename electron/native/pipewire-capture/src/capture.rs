@@ -393,22 +393,16 @@ impl Capture {
                 .importer
                 .as_mut()
                 .ok_or_else(|| "dmabuf frame arrived but no importer was built".to_owned())?;
-            let planes: Vec<crate::dmabuf_import::DmabufPlane> = desc
-                .planes
-                .iter()
-                .map(|plane| crate::dmabuf_import::DmabufPlane {
-                    fd: plane.fd,
-                    offset: plane.offset,
-                    stride: plane.stride,
-                })
-                .collect();
+            // Borrow the descriptor's planes directly — they are already
+            // `shim::DmabufPlane`, the exact type `import` takes — instead of
+            // reallocating a plane vector on every frame.
             let nv12 = match importer.import(
                 &crate::dmabuf_import::DmabufFrame {
                     width: desc.width,
                     height: desc.height,
                     drm_fourcc: desc.drm_fourcc,
                     modifier: desc.modifier,
-                    planes: &planes,
+                    planes: &desc.planes,
                 },
                 crop_x,
                 crop_y,
