@@ -99,6 +99,12 @@ const MAX_FRAMES_AWAITING_CROP: u32 = 8;
 /// How much audio may queue before the oldest is discarded. Generous: the drain
 /// runs every loop tick, so reaching this means the encoder stopped entirely.
 const AUDIO_RING_SECONDS: usize = 2;
+/// How many dmabuf imports may fail in a row before the recording gives up. One
+/// failure is a recoverable dropped frame (the previous is held forward), but this
+/// many in a row means the import path is broken — typically a render node that
+/// cannot map the compositor's GPU buffers — and the file would otherwise be empty
+/// behind a wall of `frame-dropped` warnings. ~1–2 s at 30–60 fps.
+const MAX_CONSECUTIVE_IMPORT_FAILURES: u32 = 60;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -610,6 +616,10 @@ fn run<W: Write>(
         .checked_sub(config.sample_interval)
         .unwrap_or_else(Instant::now);
     let mut exit_code = 0;
+    // Consecutive dmabuf import failures; reset on any staged frame. A run of them
+    // means the import never works, which would otherwise record nothing — see
+    // MAX_CONSECUTIVE_IMPORT_FAILURES.
+    let mut consecutive_drops: u32 = 0;
 
     loop {
         // Return PipeWire buffers whose dmabuf imports completed last iteration
@@ -779,11 +789,32 @@ fn run<W: Write>(
                     let (width, height) = (frame.crop.width, frame.crop.height);
                     mailbox.recycle(frame.pixels);
                     match staged {
-                        Ok(capture::StageOutcome::Staged) => {}
-                        // Recoverable: one frame the GPU could not import. Warn so
-                        // it is answerable from the log, then carry on — `advance`
-                        // holds the previous frame — rather than ending the file.
+                        Ok(capture::StageOutcome::Staged) => {
+                            consecutive_drops = 0;
+                        }
+                        // Recoverable: one frame the GPU could not import. Warn so it
+                        // is answerable from the log, then carry on — `advance` holds
+                        // the previous frame — rather than ending the file. But a long
+                        // RUN of failures means the import path is broken and the file
+                        // would be empty, so past the threshold fail loudly with a way
+                        // out (the full auto-downgrade to shm remains a follow-up).
                         Ok(capture::StageOutcome::Dropped(reason)) => {
+                            consecutive_drops += 1;
+                            if consecutive_drops >= MAX_CONSECUTIVE_IMPORT_FAILURES {
+                                let _ = emitter.emit(&Event::Error {
+                                    code: "encode-failed".to_owned(),
+                                    message: format!(
+                                        "the GPU could not import {consecutive_drops} captured \
+                                         frames in a row ({reason}); the render node likely \
+                                         cannot map the compositor's buffers. Set \
+                                         OPENSCREEN_LINUX_RENDER_NODE to the correct /dev/dri \
+                                         node, or OPENSCREEN_LINUX_ENCODER=software for the CPU \
+                                         path."
+                                    ),
+                                });
+                                exit_code = 1;
+                                break;
+                            }
                             let _ = emitter.emit(&Event::Warning {
                                 code: "frame-dropped".to_owned(),
                                 message: reason,
