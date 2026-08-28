@@ -138,7 +138,6 @@
 		"sourceTranscript": "ソースの文字起こし",
 		"close": "閉じる",
 		"transcriptReady": "文字起こし完了",
-		"notGeneratedYet": "まだ生成されていません",
 		"regenerateAs": "この言語で再生成",
 		"auto": "自動",
 		"regenerate": "再生成",
@@ -151,12 +150,7 @@
 		"transcriptionFailed": "文字起こしに失敗しました",
 		"cpuBackendHint": "CPU で実行中 — GPU より約 2 倍低速です",
 		"noTranscript": "文字起こしなし",
-		"generating": "生成中",
-		"generationFailed": "生成に失敗しました",
-		"generated": "生成済み",
 		"generationFailedHint": "生成に失敗しました — 言語を選んで再生成してください。",
-		"noPreviewAvailable": "プレビューがありません",
-		"restart": "再生位置を先頭に戻す",
 		"detectedLanguage": "検出された言語: {{language}}",
 		"noAudioTrack": "音声トラックがありません",
 		"noAudioTrackHint": "このメディアには音声トラックがないため、文字起こしできません。",
@@ -212,18 +206,6 @@
 		"cameraFullscreenDescription": "この区間の再生中は、カメラが画面全体を占めます（枠・角丸・背景なし）。終わりでは滑らかに元に戻ります。タイムライン上で区間の端をドラッグすると、開始位置と長さを変更できます。",
 		"deleteRegion": "区間を削除",
 		"freehandRendersAsBox": "書き出しでは、フリーハンドの形は外接する矩形で覆われます。覆いすぎることはあっても、足りないことはありません。"
-	},
-	"leftPanel": {
-		"mediaTitle": "メディア",
-		"searchPlaceholder": "検索…",
-		"clearSearch": "検索をクリア",
-		"emptyHint": "このプロジェクトにはまだメディアがありません。下から動画をインポートしてください。",
-		"transcriptReadyBadge": "文字起こし準備完了"
-	},
-	"leftRail": {
-		"chat": "チャット",
-		"media": "メディア",
-		"ariaLabel": "左側のツール"
 	},
 	"chat": {
 		"changeProvider": "プロバイダーを変更",

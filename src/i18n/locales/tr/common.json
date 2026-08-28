@@ -52,12 +52,6 @@
 		"failed": "Güncellemeler denetlenemedi.",
 		"downloadFailed": "Güncelleme indirilemedi."
 	},
-	"playback": {
-		"play": "Oynat",
-		"pause": "Duraklat",
-		"fullscreen": "Tam Ekran",
-		"exitFullscreen": "Tam Ekrandan Çık"
-	},
 	"units": {
 		"pixelsPerSecond": "{{value}} piks/sn",
 		"pixels": "{{value}} piks"

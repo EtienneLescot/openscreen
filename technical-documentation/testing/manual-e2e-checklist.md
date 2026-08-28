@@ -73,7 +73,7 @@ Sections marked **v1.8.0** cover what this release changed: chat-driven editing 
 - [ ] Confirm the top bar shows an unsaved state after changing the project title.
 - [ ] Switch among the Media, Edit, and Rec editor modes and confirm each selected tab visibly changes state.
 - [ ] Confirm the editor's preview, timeline, and inspector remain usable after switching modes.
-- [ ] Activate the left-panel toggle by its `aria-label` and confirm the chat/media panel opens or closes without changing the project.
+- [ ] Activate the left-panel toggle by its `aria-label` and confirm the chat panel opens or closes without changing the project.
 - [ ] Resize the chat panel by its visible divider and confirm the preview area resizes without moving the timeline content.
 - [ ] Resize the timeline by its visible top divider and confirm the timeline height changes without a layout crash.
 
