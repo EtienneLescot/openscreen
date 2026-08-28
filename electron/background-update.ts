@@ -54,6 +54,7 @@ export function shouldQuitAndInstallAfterRestartPrompt(response: number): boolea
  *  caller. */
 export type DownloadAndInstallResult =
 	| { status: "failed"; error: Error }
+	| { status: "unavailable" }
 	| { status: "blocked" }
 	| { status: "cancelled" }
 	| { status: "installed" };
@@ -66,6 +67,10 @@ export async function runUnblockedDownloadAndInstall(deps: {
 }): Promise<DownloadAndInstallResult> {
 	const downloaded = await deps.download();
 	if (downloaded.kind === "failed") return { status: "failed", error: downloaded.error };
+	// `downloadSelfUpdate` only ever reports downloaded|failed today, but the
+	// UpdateOutcome type admits current|unsupported — neither of which may
+	// reach the restart prompt, let alone quitAndInstall.
+	if (downloaded.kind !== "downloaded") return { status: "unavailable" };
 	if (deps.blocked()) return { status: "blocked" };
 	const choice = await deps.confirmRestart();
 	if (!shouldQuitAndInstallAfterRestartPrompt(choice)) return { status: "cancelled" };
