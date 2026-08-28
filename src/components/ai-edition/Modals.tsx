@@ -610,6 +610,12 @@ function CropField({
 	onChange: (n: number) => void;
 	step: number;
 }) {
+	// While the field is focused the user's raw text is the value: rendering
+	// `displayPct(value)` on a controlled input would rewrite "25." to "25" on
+	// every keystroke, making decimals untypable. The buffer seeds from the
+	// UNROUNDED stored value so native stepper arrows step from the exact
+	// state, not the rounded display; two-decimal formatting happens on blur.
+	const [draft, setDraft] = useState<string | null>(null);
 	return (
 		<div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
 			<label
@@ -624,11 +630,17 @@ function CropField({
 			</label>
 			<input
 				type="number"
-				value={displayPct(value)}
+				value={draft ?? displayPct(value)}
 				min={0}
 				max={100}
 				step={step}
-				onChange={(e) => onChange(Number(e.target.value))}
+				onFocus={() => setDraft(String(value))}
+				onBlur={() => setDraft(null)}
+				onChange={(e) => {
+					setDraft(e.target.value);
+					const parsed = Number(e.target.value);
+					if (e.target.value !== "" && Number.isFinite(parsed)) onChange(parsed);
+				}}
 				style={{
 					width: "100%",
 					padding: "8px 10px",
@@ -734,6 +746,14 @@ export function EditClipModal({
 	// clip's original in-point, not on every trim drag.
 	useEffect(() => {
 		if (!open || !clip) return;
+		// A clip switch must not leave the previous clip's dimensions live: an
+		// immediate preset or typed edit would quantize against the wrong
+		// resolution and `cropTouched` would lock the wrong aspect in. Reset to
+		// the same defaults a fresh dialog starts with; the metadata handler
+		// below refills them (immediately, when this clip's metadata is already
+		// loaded).
+		setVideoAspectRatio(16 / 9);
+		setFrameSizePx({ width: 0, height: 0 });
 		const v = cropVideoRef.current;
 		if (!v) return;
 		const seek = () => {
