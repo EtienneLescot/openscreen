@@ -1,26 +1,26 @@
-import { getPlatform } from "@/utils/platformUtils";
-
 /**
  * Can this platform tell us when a mouse button was pressed?
  *
- * Not a preference and not a feature flag — a hard limit of the display server.
- * On Wayland an unprivileged process cannot observe mouse buttons at all: the
- * ScreenCast portal reports pointer POSITION as frame metadata and nothing else,
- * there is no portal for input events, and `/dev/input/event*` is `root:input`.
- * So the Linux capture helper stamps every sample `interactionType: "move"`
- * (see `pipeWireCursorAccumulator.ts`), the compositor's `CursorTrack.clicks`
- * vector is always empty, and `CursorTrack::bounce()` returns exactly 1.0 —
- * which `frame_geometry.rs` multiplies the cursor size by, leaving it unchanged
- * for every possible slider value.
+ * True on every platform we support. macOS and Windows read real button state in
+ * their native cursor helpers (`macNativeCursorRecordingSession.ts`,
+ * `windowsNativeRecordingSession.ts`).
  *
- * macOS and Windows both read real button state in their native cursor helpers
- * (`macNativeCursorRecordingSession.ts`, `windowsNativeRecordingSession.ts`), so
- * the effect works there.
+ * On Linux/Wayland the ScreenCast portal still reports pointer POSITION as frame
+ * metadata and nothing else — there is no portal for button events. But the
+ * capture helper now reads left-button presses directly from `/dev/input/event*`
+ * via evdev and tags the coinciding sample `interactionType: "click"` (the
+ * pipewire helper's `input.rs`; the accumulator preserves the tag in
+ * `pipeWireCursorAccumulator.ts`). Those clicks travel in the `.cursor.json`
+ * sidecar, populate the compositor's `CursorTrack.clicks` vector (`cursor.rs`),
+ * and drive `CursorTrack::bounce()` through the shared geometry in
+ * `frame_geometry.rs` — the exact same path macOS and Windows take, with no
+ * Linux-specific branch.
  *
- * Same shape and same intent as `supportsWebcamReactiveZoom` in
- * `compositeLayout.ts`: a control that provably cannot change a pixel is
- * dropped rather than shown doing nothing.
+ * Reading `/dev/input` requires the recording user to be in the `input` group.
+ * When they are not, no click is captured and every sample stays a plain move,
+ * so the effect has nothing to act on — a recording-side permission matter, not
+ * a reason to hide the control (see `website/docs/installation.md`).
  */
 export function supportsCursorClickEffects(): boolean {
-	return getPlatform() !== "linux";
+	return true;
 }
