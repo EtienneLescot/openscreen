@@ -65,12 +65,13 @@ not an alpha channel, so nothing has to survive a codec that cannot carry one.
 
 ### Not done
 
-- **Intel macOS and Linux have no runtime staged**, so the effect stays off there — for
-  different reasons, both recorded under *Staging* below.
+- **Intel macOS has no runtime staged**, so the effect stays off there. Upstream publishes no
+  build for it; see *Staging* below.
 
 ## Staging the runtime
 
-`scripts/fetch-onnxruntime.mjs`, wired into `build:mac`, `build:win` and `build:win:store`. The
+`scripts/fetch-onnxruntime.mjs`, wired into `build:mac`, `build:win`, `build:win:store` and
+`build:linux`. The
 crate links `ort` with `load-dynamic`, so nothing is needed to *build*; at runtime
 `ensureOnnxRuntimeOnPath` looks for the library next to the addon in `electron/native/bin/<tag>/`,
 the convention `whisper-stt` already uses. The script downloads the pinned upstream release,
@@ -90,7 +91,7 @@ What it actually costs, measured on the 1.27.1 artifacts rather than estimated:
 |---|---|---:|---|
 | win32-x64 | `onnxruntime.dll` | 15.4 MB | yes |
 | darwin-arm64 | `libonnxruntime.dylib` | 38.5 MB | yes |
-| linux-x64 | `libonnxruntime.so` | 23.7 MB | pinned, not shipped |
+| linux-x64 | `libonnxruntime.so` | 23.7 MB | yes |
 | darwin-x64 | — | — | **no upstream build** |
 
 Two things fall out of that table, and neither was the expectation:
@@ -105,9 +106,15 @@ Two things fall out of that table, and neither was the expectation:
   from source is the only way round it, and that is an ffmpeg-macos-sized script for a shrinking
   platform.
 
-Linux is pinned in the same table but deliberately not wired into `build:linux`: the back-end
-carries the shader half only, so the library would be 23 MB of installer for a code path that
-cannot run. Landing the Linux capture half makes it a one-line change.
+Linux was pinned but deliberately not wired in until its back-end gained the capture half — the
+library would have been 23 MB of installer for a code path that could not run. That landed, so it
+is wired now, and the same reasoning applies to `RightPanes.tsx`: the control is only worth showing
+where a mask can actually reach the shader.
+
+The **Linux compositor CI job stages it too**, as the macOS one does. Without a library on
+`ORT_DYLIB_PATH`, `runtime_available()` is false and every segmentation test returns early — the
+suite goes green having exercised no inference at all, which is exactly how the
+`ort`-panics-when-absent bug got in.
 
 `onnxruntime-node` was considered and rejected: 296 MB unpacked, which would roughly triple the
 installer for three platforms' worth of providers we do not use.

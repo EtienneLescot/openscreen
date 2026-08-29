@@ -51,7 +51,7 @@
 		"build:native:linux": "node scripts/build-linux-pipewire-helper.mjs",
 		"build:win": "npm run build:native:win && npm run fetch:ffmpeg && npm run fetch:onnxruntime && npm run stage:vcomp && npm run build:native:compositor && tsc && vite build && electron-builder --win --config.npmRebuild=false",
 		"build:win:store": "npm run build:native:win && npm run fetch:ffmpeg && npm run fetch:onnxruntime && npm run stage:vcomp && npm run build:native:compositor && tsc && vite build && electron-builder --win appx --config.npmRebuild=false",
-		"build:linux": "npm run fetch:ffmpeg:sdk && npm run build:native:linux && npm run build:native:compositor:linux && tsc && vite build && electron-builder --linux AppImage deb pacman rpm --config.npmRebuild=false",
+		"build:linux": "npm run fetch:ffmpeg:sdk && npm run build:native:linux && npm run fetch:onnxruntime && npm run build:native:compositor:linux && tsc && vite build && electron-builder --linux AppImage deb pacman rpm --config.npmRebuild=false",
 		"build:whisper-binaries": "bash scripts/build-whisper-stt.sh",
 		"test:whisper-stt": "node scripts/test-whisper-stt.mjs",
 		"test": "vitest --run",
