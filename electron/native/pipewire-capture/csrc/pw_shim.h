@@ -122,6 +122,18 @@ struct osc_pw_callbacks {
     void (*on_buffer_info)(void *user, uint32_t data_type, uint32_t n_datas,
                            int32_t has_cursor_meta, uint32_t cursor_meta_size,
                            const char *metas);
+    /* A condition that costs the user frames, reported on the event stream
+     * rather than to a debug log.
+     *
+     * This channel exists because the failures it carries are TERMINAL and
+     * SILENT: stride, geometry and the mapped length are constant for a whole
+     * negotiation, so a buffer that fails validation once fails every time, and
+     * the user gets a recording with no frames in it. Nothing downstream can
+     * infer the cause — a rejected frame never reaches the mailbox, so the
+     * frames-dropped counter stays at zero and the session still stops
+     * "successfully". `code` is a stable kebab-case identifier; `detail` is a
+     * borrowed sentence for a human. */
+    void (*on_capture_issue)(void *user, const char *code, const char *detail);
     void (*on_state)(void *user, const char *state, const char *error);
 };
 
@@ -170,6 +182,30 @@ int osc_pw_cursor_meta_accepts_producer_size(uint32_t width, uint32_t height);
  * portal or a screen.
  */
 int osc_pw_enum_format_accepts_dmabuf_producer(int with_modifier, int64_t producer_modifier);
+
+/*
+ * Which bound, if any, rejects this frame? Returns the same stable reason string
+ * the frame-drop diagnostics carry ("stride-shorter-than-row",
+ * "chunk-offset-out-of-bounds", ...), or "none" when the frame is accepted.
+ *
+ * It returns the REASON rather than a yes/no because six distinct conditions
+ * reject a frame here, and a test asserting only "rejected" passes when the
+ * wrong one fires — a reordering of the checks, or a broken row computation,
+ * would keep such a suite green. Exposed so the bound can be asserted without a
+ * portal, a compositor, or a screen.
+ *
+ * The caller's pre-checks in osc_read_frame (n_datas, a NULL chunk, a missing
+ * dmabuf mapping) are deliberately NOT modelled here: this answers only the
+ * bounds question.
+ */
+const char *osc_pw_frame_bounds_reason(uint32_t data_type, uint32_t maxsize, size_t mapped_len,
+                                       uint32_t chunk_offset, uint32_t chunk_size,
+                                       int32_t chunk_flags, int32_t stride, int32_t width,
+                                       int32_t height);
+
+/* DMA-BUF mapoffset and shared-mapping lifecycle test helpers. */
+int osc_pw_dmabuf_mapped_len(size_t allocation_len, uint32_t mapoffset, size_t *mapped_len);
+int osc_pw_dmabuf_map_lifecycle_valid(void);
 
 struct osc_pw_session;
 

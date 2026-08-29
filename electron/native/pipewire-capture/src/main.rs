@@ -940,7 +940,7 @@ fn run<W: Write>(
                         ("metas", metas.clone().into()),
                     ]),
                 });
-                if !has_cursor_meta {
+                if !has_cursor_meta && config.cursor_mode.reports_cursor() {
                     let _ = emitter.emit(&Event::Warning {
                         code: "no-cursor-metadata".to_owned(),
                         message: format!(
@@ -951,6 +951,19 @@ fn run<W: Write>(
                         ),
                     });
                 }
+            }
+
+            // Surfaced as a warning rather than logged, because these are the
+            // conditions that leave a recording empty while every counter still
+            // reads zero: a frame refused by the shim never reaches the mailbox,
+            // so `frames-dropped` stays at 0 and the session stops "cleanly".
+            // Without this the only honest symptom is a file with no frames in
+            // it and nothing anywhere saying why.
+            Ok(Message::Stream(StreamEvent::CaptureIssue { code, detail })) => {
+                let _ = emitter.emit(&Event::Warning {
+                    code,
+                    message: detail,
+                });
             }
 
             Ok(Message::Stream(StreamEvent::State { state, error })) => {
