@@ -127,18 +127,35 @@ export function resolveSceneAssetPaths(sceneJson: string): string {
 				theme?: string;
 				cursorSprites?: Record<string, { path: string; hotspotX: number; hotspotY: number }>;
 			};
-			webcamEffect?: { mode?: string; modelPath?: string };
+			webcamEffect?: {
+				mode?: string;
+				modelPath?: string;
+				background?: { kind?: string; path?: string };
+			};
 		};
 		let changed = false;
-		const bg = scene.background;
-		if (bg?.kind === "image" && typeof bg.path === "string" && bg.path.startsWith("/")) {
-			// strip the leading slash so path.join keeps it under the base dir
-			const resolved = resolveSceneAssetPath(bg.path.replace(/^\/+/, ""));
-			if (resolved) {
-				bg.path = resolved;
-				changed = true;
+		// Both backgrounds go through this: the screen's, and the camera's under the "custom"
+		// mode. The camera one was missed, and the failure is silent — the compositor gets
+		// "/wallpapers/wallpaper1.jpg", `image::open` cannot find it, and the PiP falls back to
+		// a flat colour with only a line on stderr to say so.
+		const resolveBackgroundImage = (target?: { kind?: string; path?: string }): boolean => {
+			if (
+				target?.kind !== "image" ||
+				typeof target.path !== "string" ||
+				!target.path.startsWith("/")
+			) {
+				return false;
 			}
-		}
+			// strip the leading slash so path.join keeps it under the base dir
+			const resolved = resolveSceneAssetPath(target.path.replace(/^\/+/, ""));
+			if (!resolved) {
+				return false;
+			}
+			target.path = resolved;
+			return true;
+		};
+		changed = resolveBackgroundImage(scene.background) || changed;
+		changed = resolveBackgroundImage(scene.webcamEffect?.background) || changed;
 		if (scene.cursor && typeof scene.cursor.theme === "string") {
 			scene.cursor.cursorSprites = resolveCursorSpritePaths(scene.cursor.theme);
 			changed = true;

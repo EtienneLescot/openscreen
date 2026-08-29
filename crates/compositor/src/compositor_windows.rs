@@ -816,6 +816,20 @@ impl Compositor {
     /// uploadé une fois (cache), puis échantillonné en mode 6. Err → l'appelant retombe sur une
     /// couleur plate. Le rect uv `src` recouvre toute la sortie en rognant le débordement.
     unsafe fn draw_image_bg(&self, path: &str, output_aspect: f32) -> Result<()> {
+        self.draw_image_in(path, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0], 0.0, output_aspect)
+    }
+
+    /// `draw_image_bg` pour un rect quelconque — la bulle webcam s'en sert avec ses coins
+    /// arrondis. `output_aspect` est le ratio du RECT visé, pas celui de la sortie : le crop
+    /// « cover » se calcule contre la zone qu'on remplit.
+    unsafe fn draw_image_in(
+        &self,
+        path: &str,
+        dst: [f32; 4],
+        quad_px: [f32; 2],
+        radius_px: f32,
+        output_aspect: f32,
+    ) -> Result<()> {
         // NB : la recherche est isolée dans un `let` pour que l'emprunt immuable soit relâché
         // AVANT le `borrow_mut()` (sinon double-emprunt RefCell → panic sur la 1re frame image).
         let cached = self.img_cache.borrow().get(path).cloned();
@@ -843,14 +857,80 @@ impl Compositor {
             (0.0, (1.0 - vis) * 0.5, 1.0, 1.0 - (1.0 - vis) * 0.5)
         };
         self.upload_cb(&LayerCB {
-            dst: [0.0, 0.0, 1.0, 1.0],
+            dst,
             src: [u0, v0, u1, v1],
+            quad_px,
+            radius_px,
             mode: 6.0,
             ..Default::default()
         });
         self.ctx.PSSetShaderResources(2, Some(&[Some(srv)]));
         self.ctx.Draw(4, 0);
         Ok(())
+    }
+
+    /// Peint le fond du mode « personnalisé » DANS la bulle webcam, avant que la caméra n'y soit
+    /// découpée par-dessus.
+    ///
+    /// Le shader ne sait peindre qu'une couleur plate sous le masque, donc un dégradé ou une image
+    /// y tombaient sur du noir — et le défaut EST une image (`DEFAULT_WALLPAPER`), si bien que le
+    /// mode ne rendait jamais ce que le sélecteur montrait. Peindre le fond puis composer la
+    /// caméra en détourage donne exactement le même résultat (`lerp(fond, caméra, personne)`, ici
+    /// par le mélange alpha) pour les trois sortes de fond, en réutilisant les chemins déjà
+    /// éprouvés du fond d'écran, et sans rien ajouter aux trois shaders.
+    ///
+    /// `quad_px` / `radius_px` sont ceux de la bulle : le fond doit épouser ses coins arrondis,
+    /// sinon un rectangle déborde derrière la caméra.
+    unsafe fn draw_webcam_bg(
+        &self,
+        bg: Option<&SceneBackground>,
+        dst: [f32; 4],
+        quad_px: [f32; 2],
+        radius_px: f32,
+    ) {
+        const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+        let solid = |color: [f32; 4]| LayerCB {
+            dst,
+            quad_px,
+            radius_px,
+            mode: 1.0,
+            color,
+            ..Default::default()
+        };
+        match bg {
+            Some(SceneBackground::Color { color }) => {
+                self.draw_solid(&solid(parse_hex(color).unwrap_or(BLACK)));
+            }
+            Some(SceneBackground::Gradient { angle_deg, stops }) => {
+                let c0 = stops.first().and_then(|s| parse_hex(s)).unwrap_or(BLACK);
+                let c1 = stops.last().and_then(|s| parse_hex(s)).unwrap_or(c0);
+                // angle CSS → direction unitaire, même convention que le fond d'écran.
+                let a = angle_deg.to_radians();
+                let dir = [a.sin(), -a.cos()];
+                self.draw_solid(&LayerCB {
+                    dst,
+                    quad_px,
+                    radius_px,
+                    src: [c1[0], c1[1], c1[2], c1[3]],
+                    mode: 5.0,
+                    color: c0,
+                    fx: [dir[0], dir[1], 0.0, 0.0],
+                    ..Default::default()
+                });
+            }
+            Some(SceneBackground::Image { path }) => {
+                // Même contrat que le fond d'écran : un chemin cassé est loggé puis remplacé par
+                // du noir. Un fallback silencieux redonnerait le bug qu'on corrige.
+                let aspect = if quad_px[1] > 0.0 { quad_px[0] / quad_px[1] } else { 1.0 };
+                if let Err(e) = self.draw_image_in(path, dst, quad_px, radius_px, aspect) {
+                    eprintln!("[compositor] fond webcam \"{}\" : {:#}", path, e);
+                    self.draw_solid(&solid(BLACK));
+                }
+            }
+            // Personnalisé sans fond : noir, comme avant — mais c'est désormais le seul chemin
+            // qui y mène, au lieu de l'être pour toute image et tout dégradé.
+            None => self.draw_solid(&solid(BLACK)),
+        }
     }
 
     /// Décode un fichier image (jpg/png) → texture RGBA immuable + SRV.
@@ -1884,21 +1964,18 @@ impl Compositor {
                 .map(|e| (e.shader_code(), e))
                 .filter(|(code, _)| *code > 0.0);
 
-            let (effect_code, blur_intensity, bg_color) = match effect {
+            // Fond personnalisé : on PEINT le fond dans la bulle, puis on y découpe la caméra
+            // par-dessus — le mélange alpha donne `lerp(fond, caméra, personne)`, soit exactement
+            // ce que la branche « mode 3 » du shader calculait, mais pour les TROIS sortes de
+            // fond. Le shader ne sait peindre qu'une couleur plate sous le masque ; dégradés et
+            // images y tombaient sur du noir, et le défaut EST une image.
+            let (effect_code, blur_intensity) = match effect {
                 Some((code, e)) if code > 2.5 => {
-                    // Fond personnalisé : seule une couleur plate se peint dans le shader. Un
-                    // dégradé ou une image passeraient par une texture, ce que ce calque ne
-                    // porte pas encore — on retombe alors sur du noir plutôt que sur du hasard.
-                    let col = match &e.background {
-                        Some(SceneBackground::Color { color }) => {
-                            parse_hex(color).unwrap_or([0.0, 0.0, 0.0, 1.0])
-                        }
-                        _ => [0.0, 0.0, 0.0, 1.0],
-                    };
-                    (code, 0.0, col)
+                    self.draw_webcam_bg(e.background.as_ref(), w_dst, w_px, w_radius);
+                    (1.0, 0.0)
                 }
-                Some((code, e)) => (code, e.blur_intensity.clamp(0.0, 1.0), [0.0, 0.0, 0.0, 1.0]),
-                None => (0.0, 0.0, [0.0, 0.0, 0.0, 1.0]),
+                Some((code, e)) => (code, e.blur_intensity.clamp(0.0, 1.0)),
+                None => (0.0, 0.0),
             };
 
             if let Some(m) = mask.as_ref() {
@@ -1914,7 +1991,9 @@ impl Compositor {
                     quad_px: w_px,
                     radius_px: w_radius,
                     mode: 0.0,
-                    color: bg_color,
+                    // `color.a` porte l'alpha du découpage (`color.a * personne`) ; le RGB n'est
+                    // plus lu, le fond ayant déjà été peint sous la caméra.
+                    color: [0.0, 0.0, 0.0, 1.0],
                     fx: [w_valid[0], w_valid[1], effect_code, blur_intensity],
                     src_prev: [u0, sv0, u1, sv1], // src fixe (pas de zoom webcam)
                     dst_prev: w_dst_prev,

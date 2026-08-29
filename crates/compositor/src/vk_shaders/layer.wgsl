@@ -82,6 +82,20 @@ fn sd_round_rect(p: vec2<f32>, halfsz: vec2<f32>, r: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
+// Couverture du quad avec coins arrondis, pour le mode 6 qui retourne AVANT la queue de
+// `fs_main`. Il s'en passait tant qu'il ne servait qu'au fond plein cadre, qui n'a pas de
+// rayon ; depuis que la bulle webcam peut porter une image, sans ca le fond deborde en carre
+// opaque sur les coins arrondis de la bulle et mange l'ombre. Renvoie 1.0 quand aucun rayon
+// n'est demande -- le fond plein cadre est donc inchange.
+fn quad_round_alpha(local: vec2<f32>, quad_px: vec2<f32>, radius_px: f32) -> f32 {
+    if radius_px <= 0.0 || quad_px.x <= 0.0 || quad_px.y <= 0.0 {
+        return 1.0;
+    }
+    let halfsz = quad_px * 0.5;
+    let d = sd_round_rect(local - halfsz, halfsz, radius_px);
+    return 1.0 - smoothstep(0.0, 1.5, d); // meme feather ~1.5px que la queue
+}
+
 // ---- Primitives du tilt 3D (modes 8 et 12), portees de `shaders.metal` ----
 
 // SDF segment a bouts ronds.
@@ -278,7 +292,17 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     } else if layer.mode > 4.5 && layer.mode < 5.5 {
         // Mode 5 -- gradient lineaire : color (c0) -> src.rgb (c1) le long de
         // la direction fx.xy (sin, -cos de l'angle). Parite avec le HLSL/MSL.
-        let t = clamp(dot(i.pout - vec2<f32>(0.5), layer.fx.xy) + 0.5, 0.0, 1.0);
+        // `denom` : HLSL et MSL normalisent coin-a-coin (|dx|+|dy|) pour couvrir toute la
+        // diagonale. Il manquait ici, donc le meme degrade ne rendait pas pareil sur Linux.
+        let denom = max(abs(layer.fx.x) + abs(layer.fx.y), 1e-4);
+        // Parametre sur le QUAD des qu'il en a un (la bulle webcam), sinon sur la sortie. Pour
+        // le fond plein cadre les deux coincident ; pour une bulle dans un coin, `pout` ne
+        // montrerait que la tranche du degrade plein cadre qui passe dessous.
+        var gp = i.pout;
+        if layer.quad_px.x > 0.0 && layer.quad_px.y > 0.0 {
+            gp = i.local / layer.quad_px;
+        }
+        let t = clamp(0.5 + dot(gp - vec2<f32>(0.5), layer.fx.xy) / denom, 0.0, 1.0);
         rgb = mix(layer.color.rgb, layer.src.rgb, t);
     } else if layer.mode > 10.5 && layer.mode < 11.5 {
         // Mode 11 : texte. texY est l'atlas R8 (couverture alpha au canal .r,
@@ -377,7 +401,8 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         // Mode 6 -- fond image (wallpaper RGBA) cover-fit, echantillonne sur
         // texY. `src` porte le rect UV cover-fit (calcule cote Rust). Opaque :
         // le fond couvre tout le cadre.
-        return vec4<f32>(textureSample(texY, samp, i.uv).rgb, 1.0);
+        let bg_a = quad_round_alpha(i.local, layer.quad_px, layer.radius_px);
+        return vec4<f32>(textureSample(texY, samp, i.uv).rgb * bg_a, bg_a); // premultiplie
     } else if layer.mode > 7.5 && layer.mode < 8.5 {
         // Mode 8 -- ecran tilte (rotation 3D des zoom regions). Le quad projete est
         // dessine dans sa BBOX (le VS ne sait tracer qu'un rect) et chaque fragment
