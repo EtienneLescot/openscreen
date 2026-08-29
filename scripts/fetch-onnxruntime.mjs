@@ -91,11 +91,11 @@ const PINNED = {
 		member: `libonnxruntime.${VERSION}.dylib`,
 		out: "libonnxruntime.dylib",
 	},
-	// Linux is pinned but not yet wired into `build:linux`: the Linux compositor
-	// back-end carries the segmentation SHADER only — nothing captures the webcam
-	// frame or uploads a mask there, so `fx.z` never leaves 0 and the library would
-	// be 23 MB of installer for a code path that cannot run. The entry is here so
-	// that landing the Linux capture half is a one-line change to package.json.
+	// Linux is wired into `build:linux` since its back-end gained the capture half
+	// (`capture_webcam_rgb` + `set_webcam_mask` in `compositor_linux.rs`). Until
+	// then this entry existed but was deliberately unused: the back-end carried the
+	// segmentation SHADER only, so `fx.z` never left 0 and the library would have
+	// been 23 MB of installer for a code path that could not run.
 	// See technical-documentation/engineering/webcam-segmentation-backend-port.md.
 	"linux-x64": {
 		slug: "linux-x64",
