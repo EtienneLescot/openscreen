@@ -51,14 +51,28 @@ const STALL_FRAME_CALLBACK_ENV = "OPENSCREEN_WGC_TEST_STALL_FRAME_CALLBACK_MS";
  * frame *callback* itself while it holds the frame lock, the shape that issue
  * actually reproduced on Intel HD 520 ("A WGC frame callback did not finish").
  * Distinct from WITH_STALLED_READBACK above -- that stalls the writer's own
- * readback, which quiesceCapture()'s drain cannot see (callbacksInFlight_
- * stays at zero), so it cannot exercise the video-writer-join skip this stall
- * exists to test.
+ * readback, which quiesceLegacyCallback()'s drain cannot see
+ * (callbacksInFlight_ stays at zero), so it cannot exercise the
+ * video-writer-join skip this stall exists to test.
+ *
+ * Forces the legacy push path on (below), because that is the only path with a
+ * frame callback to stall: the default pull path has no WGC-owned thread, so
+ * this scenario would otherwise stall nothing and assert on a skip that can
+ * never be taken.
  */
 const WITH_STALLED_FRAME_CALLBACK =
 	process.env.OPENSCREEN_WGC_TEST_STALL_FRAME_CALLBACK === "true" ||
 	process.argv.includes("--stall-frame-callback");
 const STALL_FRAME_CALLBACK_MS = Number(process.env[STALL_FRAME_CALLBACK_ENV] ?? 60_000);
+const LEGACY_FRAME_CALLBACK_ENV = "OPENSCREEN_WGC_LEGACY_FRAME_CALLBACK";
+/**
+ * Runs any scenario on the pre-#306 push-based delivery path instead of the
+ * pull-based default -- the same lever a user gets, so a machine that only
+ * fails one way can be A/B'd without swapping builds.
+ */
+const WITH_LEGACY_FRAME_CALLBACK =
+	process.env.OPENSCREEN_WGC_LEGACY_FRAME_CALLBACK === "1" ||
+	process.argv.includes("--legacy-frame-callback");
 const STOP_BUDGET_ENV = "OPENSCREEN_WGC_STOP_BUDGET_MS";
 /**
  * The helper's global shutdown ceiling, pinned into its environment below so
@@ -80,14 +94,23 @@ if (WITH_SOFTWARE_ENCODER && WITH_SOFTWARE_FALLBACK) {
 
 function runHelper(
 	config,
-	{ injectDefaultSinkWriterFailure = false, stallReadbackMs = 0, stallFrameCallbackMs = 0 } = {},
+	{
+		injectDefaultSinkWriterFailure = false,
+		stallReadbackMs = 0,
+		stallFrameCallbackMs = 0,
+		legacyFrameCallback = false,
+	} = {},
 ) {
 	return new Promise((resolve, reject) => {
 		const env = { ...process.env };
 		delete env[INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV];
 		delete env[STALL_READBACK_ENV];
 		delete env[STALL_FRAME_CALLBACK_ENV];
+		delete env[LEGACY_FRAME_CALLBACK_ENV];
 		env[STOP_BUDGET_ENV] = String(STOP_BUDGET_MS);
+		if (legacyFrameCallback) {
+			env[LEGACY_FRAME_CALLBACK_ENV] = "1";
+		}
 		if (injectDefaultSinkWriterFailure) {
 			env[INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV] = "1";
 		}
@@ -483,6 +506,7 @@ try {
 		injectDefaultSinkWriterFailure: WITH_SOFTWARE_FALLBACK,
 		stallReadbackMs: WITH_STALLED_READBACK ? STALL_READBACK_MS : 0,
 		stallFrameCallbackMs: WITH_STALLED_FRAME_CALLBACK ? STALL_FRAME_CALLBACK_MS : 0,
+		legacyFrameCallback: WITH_LEGACY_FRAME_CALLBACK || WITH_STALLED_FRAME_CALLBACK,
 	});
 } finally {
 	if (fixtureWindow) {
