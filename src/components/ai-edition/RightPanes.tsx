@@ -2178,6 +2178,7 @@ function ChromaKeySection({ disabled }: { disabled: boolean }) {
 			<div className={styles.paneRow}>
 				<span className="label">{ts("layout.chromaKeyEnable")}</span>
 				<Toggle
+					ariaLabel={ts("layout.chromaKeyEnable")}
 					checked={key.enabled}
 					disabled={disabled}
 					onChange={(v) => {
@@ -2234,14 +2235,22 @@ function ChromaKeySection({ disabled }: { disabled: boolean }) {
 									<span className="val">{Math.round(s.value * 100)}%</span>
 								</div>
 								<input
+									// The visible label is a <span> in the head above, not a
+									// <label htmlFor>, so without this the three sliders are
+									// indistinguishable to a screen reader — all "slider".
+									aria-label={ts(s.labelKey)}
 									type="range"
 									min={0}
 									max={100}
 									step={1}
-									// `defaultValue`, matching the webcam-size slider above: the
-									// value is pushed on every drag tick, and a controlled input
-									// would fight the pointer through the React round trip.
-									defaultValue={Math.round(s.value * 100)}
+									// Controlled, like `SliderCell`: `setLive` writes the store
+									// synchronously, so the thumb still tracks the pointer, and
+									// a value that arrives from OUTSIDE the drag — undo/redo, a
+									// project switch — actually moves the thumb. With
+									// `defaultValue` the input kept its mount-time position and
+									// the next drag started from it, overwriting the restored
+									// setting.
+									value={Math.round(s.value * 100)}
 									disabled={disabled}
 									onChange={(e) => {
 										const next = Number(e.target.value) / 100;

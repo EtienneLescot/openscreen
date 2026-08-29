@@ -55,6 +55,7 @@ import {
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { computeCameraFullscreenProgress } from "@/lib/zoomMath/cameraFullscreenUtils";
+import { isNativeCompositorActive, setNativeParam } from "@/native/nativeCompositorStore";
 import { clamp, clamp01 } from "@/utils/math";
 import { AnnotationLayer } from "./AnnotationLayer";
 import { NativeCompositorOverlay } from "./NativeCompositorOverlay";
@@ -398,6 +399,14 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		// `setLive` + `commit`: one user gesture, one undo entry — the same pairing
 		// the drag handler above uses.
 		setLive({ webcamChromaKey: { color: hex, enabled: true } });
+		// The live preview builds its params from these pushes and never re-reads the
+		// scene, so without them the native window keeps keying on the OLD colour until
+		// something else re-pushes — the pick would look like it did nothing. Same
+		// pairing the chroma controls in `RightPanes` use.
+		if (isNativeCompositorActive()) {
+			setNativeParam("webcamChromaColor", hex);
+			setNativeParam("webcamChromaEnabled", true);
+		}
 		void commit();
 	};
 
