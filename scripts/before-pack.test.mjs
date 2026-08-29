@@ -88,3 +88,187 @@ describe("symbol-version ceiling", () => {
 		});
 	});
 });
+
+// ---------------------------------------------------------------------------
+// macOS deployment floor (issue #515)
+// ---------------------------------------------------------------------------
+//
+// Mach-O headers are synthesised here rather than compiled with clang, so this runs on
+// the Linux and Windows CI legs too. That is the same reason the guard parses the file
+// itself instead of shelling out to `vtool`: the check has to be present everywhere the
+// hook is, not conditionally absent on the hosts where nobody would notice.
+//
+// The parser is separately cross-checked against the real thing — on a machine with a
+// staged macOS payload, every Mach-O in it agreed with `vtool -show-build` (44/44).
+
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+
+/** Packs X.Y.Z the way LC_BUILD_VERSION does: one byte per component, X in the top half. */
+function packVersion(text) {
+	const [x = 0, y = 0, z = 0] = text.split(".").map(Number);
+	return ((x & 0xffff) << 16) | ((y & 0xff) << 8) | (z & 0xff);
+}
+
+/** A 64-bit Mach-O carrying exactly one load command: LC_BUILD_VERSION for macOS. */
+function thinMachO(minOs) {
+	const header = Buffer.alloc(32);
+	header.writeUInt32LE(0xfeedfacf, 0); // MH_MAGIC_64
+	header.writeUInt32LE(1, 16); // ncmds
+	const lc = Buffer.alloc(24);
+	lc.writeUInt32LE(0x32, 0); // LC_BUILD_VERSION
+	lc.writeUInt32LE(24, 4); // cmdsize
+	lc.writeUInt32LE(1, 8); // PLATFORM_MACOS
+	lc.writeUInt32LE(packVersion(minOs), 12);
+	return Buffer.concat([header, lc]);
+}
+
+/** The older spelling, which anything built against an older SDK carries instead. */
+function thinMachOVersionMin(minOs) {
+	const header = Buffer.alloc(32);
+	header.writeUInt32LE(0xfeedfacf, 0);
+	header.writeUInt32LE(1, 16);
+	const lc = Buffer.alloc(16);
+	lc.writeUInt32LE(0x24, 0); // LC_VERSION_MIN_MACOSX
+	lc.writeUInt32LE(16, 4);
+	lc.writeUInt32LE(packVersion(minOs), 8);
+	return Buffer.concat([header, lc]);
+}
+
+/** A universal binary whose slices disagree — the highest floor is the one that counts. */
+function fatMachO(minOsPerSlice) {
+	const headerSize = 8 + minOsPerSlice.length * 20;
+	const head = Buffer.alloc(headerSize);
+	head.writeUInt32BE(0xcafebabe, 0);
+	head.writeUInt32BE(minOsPerSlice.length, 4);
+	const slices = minOsPerSlice.map(thinMachO);
+	let offset = headerSize;
+	slices.forEach((slice, i) => {
+		const entry = 8 + i * 20;
+		head.writeUInt32BE(offset, entry + 8); // offset
+		head.writeUInt32BE(slice.length, entry + 12); // size
+		offset += slice.length;
+	});
+	return Buffer.concat([head, ...slices]);
+}
+
+function withPayload(files, body) {
+	const dir = mkdtempSync(path.join(tmpdir(), "openscreen-minos-"));
+	try {
+		for (const [name, bytes] of Object.entries(files)) {
+			writeFileSync(path.join(dir, name), bytes);
+		}
+		return body(dir);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+const testing = () => require(BEFORE_PACK).__testing;
+
+describe("machoMinOs", () => {
+	it("reads LC_BUILD_VERSION", () => {
+		withPayload({ helper: thinMachO("12.0") }, (dir) => {
+			expect(testing().machoMinOs(path.join(dir, "helper"))).toBe("12.0.0");
+		});
+	});
+
+	it("reads the older LC_VERSION_MIN_MACOSX spelling", () => {
+		withPayload({ helper: thinMachOVersionMin("11.3") }, (dir) => {
+			expect(testing().machoMinOs(path.join(dir, "helper"))).toBe("11.3.0");
+		});
+	});
+
+	it("takes the HIGHEST floor across a universal binary's slices", () => {
+		// An arm64 half built correctly does not rescue an x86_64 half that was not:
+		// Intel users are stranded just as thoroughly.
+		withPayload({ fat: fatMachO(["12.0", "26.0"]) }, (dir) => {
+			expect(testing().machoMinOs(path.join(dir, "fat"))).toBe("26.0.0");
+		});
+	});
+
+	it("returns null for a Mach-O that declares no deployment target", () => {
+		const header = Buffer.alloc(32);
+		header.writeUInt32LE(0xfeedfacf, 0);
+		withPayload({ bare: header }, (dir) => {
+			expect(testing().machoMinOs(path.join(dir, "bare"))).toBeNull();
+		});
+	});
+});
+
+describe("checkMacOsVersionFloor", () => {
+	it("passes a payload built at the floor", () => {
+		withPayload({ a: thinMachO("12.0"), b: thinMachO("11.0") }, (dir) => {
+			expect(() => testing().checkMacOsVersionFloor(dir)).not.toThrow();
+		});
+	});
+
+	/**
+	 * The regression test for #515: the helper that stranded Monterey was built for 13,
+	 * and nothing in the pipeline looked. The message has to carry enough for whoever
+	 * hits it to understand the consequence rather than just raise the constant.
+	 */
+	it("refuses a binary built above the floor, and says which and why", () => {
+		withPayload({ "openscreen-macos-cursor-helper": thinMachO("13.0") }, (dir) => {
+			let message = "";
+			try {
+				testing().checkMacOsVersionFloor(dir);
+			} catch (err) {
+				message = err.message;
+			}
+			expect(message).toContain("openscreen-macos-cursor-helper");
+			expect(message).toContain("macOS 13.0.0");
+			expect(message).toContain("12.0");
+			expect(message).toContain("#515");
+			// The mechanism, so nobody "fixes" it by assuming dyld gates on the number.
+			expect(message).toContain("Symbol not found");
+		});
+	});
+
+	it("reports every offender, not just the first", () => {
+		withPayload(
+			{ ok: thinMachO("12.0"), bad1: thinMachO("13.0"), bad2: thinMachO("26.0") },
+			(dir) => {
+				expect(() => testing().checkMacOsVersionFloor(dir)).toThrow(/bad1[\s\S]*bad2/);
+			},
+		);
+	});
+
+	it("shouts if it parsed nothing, rather than reporting a clean payload", () => {
+		const header = Buffer.alloc(32);
+		header.writeUInt32LE(0xfeedfacf, 0);
+		withPayload({ bare: header }, (dir) => {
+			expect(() => testing().checkMacOsVersionFloor(dir)).toThrow(/bug in machoMinOs/);
+		});
+	});
+
+	it("says nothing about a directory with no Mach-O in it", () => {
+		// Non-macOS packs reach this only if the tree exists; an empty one is not an error
+		// here — checkNativePayload already owns "the payload is incomplete".
+		withPayload({ "notes.txt": Buffer.from("hello") }, (dir) => {
+			expect(() => testing().checkMacOsVersionFloor(dir)).not.toThrow();
+		});
+	});
+});
+
+describe("MAC_MIN_OS_FLOOR", () => {
+	it("is no higher than the oldest macOS the README promises", () => {
+		const readme = readFileSync(path.join(path.dirname(BEFORE_PACK), "..", "README.md"), "utf8");
+		const claimed = readme.match(/^-\s+\*\*macOS\*\*:\s*(\d+(?:\.\d+)?)/m);
+		expect(claimed, "no macOS line found in README.md system requirements").not.toBeNull();
+
+		const { MAC_MIN_OS_FLOOR } = testing();
+		const asNumbers = (v) => v.split(".").map(Number);
+		const [floorMajor, floorMinor = 0] = asNumbers(MAC_MIN_OS_FLOOR);
+		const [claimedMajor, claimedMinor = 0] = asNumbers(claimed[1]);
+
+		// One-directional: building for older than advertised is harmless, building for
+		// newer is the bug. So floor <= claimed, not floor === claimed.
+		expect(
+			floorMajor * 1000 + floorMinor,
+			`before-pack.cjs builds for macOS ${MAC_MIN_OS_FLOOR} but README.md promises ` +
+				`${claimed[1]} or later. Shipping binaries that cannot run on a version the ` +
+				"README claims to support is issue #515.",
+		).toBeLessThanOrEqual(claimedMajor * 1000 + claimedMinor);
+	});
+});
