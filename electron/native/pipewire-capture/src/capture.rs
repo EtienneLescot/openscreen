@@ -225,6 +225,17 @@ pub struct Capture {
     /// through it rather than replacing it.
     committed_width: i32,
     committed_height: i32,
+    /// The rectangle of the SOURCE STREAM the encoder last read, in stream
+    /// pixels: the live crop origin (clamped by [`Self::read_origin`]) at the
+    /// committed size.
+    ///
+    /// Exists for the cursor, not for the video. The portal reports pointer
+    /// positions in stream pixels, and for a window stream the stream is the
+    /// whole monitor — mutter pins it there and carves the window out through
+    /// SPA_META_VideoCrop. Normalising the pointer against the stream would
+    /// then place it in a rectangle the file does not show. This is the one the
+    /// file DOES show.
+    content: shim::CropRect,
 }
 
 /// The outcome of staging one captured frame.
@@ -341,6 +352,7 @@ impl Capture {
                 frames_written: 0,
                 committed_width: width,
                 committed_height: height,
+                content: shim::CropRect { x: 0, y: 0, width, height },
             },
             selection,
         ))
@@ -428,6 +440,12 @@ impl Capture {
         // path subtracts the x offset from it, which is wrong for any non-zero x
         // and is latent there only because no shipping compositor sets one.
         let (x, y) = self.read_origin(frame);
+        self.content = shim::CropRect {
+            x,
+            y,
+            width: self.committed_width,
+            height: self.committed_height,
+        };
         let offset = (y as usize)
             .checked_mul(frame.stride)
             .and_then(|rows| rows.checked_add((x as usize) * BYTES_PER_SOURCE_PIXEL))
@@ -466,6 +484,11 @@ impl Capture {
     /// started.
     pub fn started(&self) -> bool {
         self.epoch.is_some()
+    }
+
+    /// The source rectangle the file is showing. See [`Self::content`].
+    pub fn content_rect(&self) -> shim::CropRect {
+        self.content
     }
 
     /// Encodes forward to the current clock position. Returns how many frames
@@ -760,6 +783,72 @@ mod tests {
 
         let summary = capture.finish().expect("finish");
         assert_eq!(summary.frames, written as u64);
+        let _ = std::fs::remove_file(&output);
+    }
+
+    /// The rectangle the cursor is measured against has to be the one the FILE
+    /// shows, which for a window is the crop and not the stream. Getting this
+    /// wrong put the pointer in monitor coordinates over window-sized footage —
+    /// a fixed offset and a wrong scale, in every window recording.
+    #[test]
+    fn the_content_rect_is_the_window_the_file_shows() {
+        let output = std::env::temp_dir().join("openscreen-capture-content.mp4");
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+                .expect("start");
+
+        // Before a frame is staged there is nothing cropped yet, so the whole
+        // committed size sits at the origin.
+        assert_eq!(
+            capture.content_rect(),
+            shim::CropRect { x: 0, y: 0, width: 320, height: 240 }
+        );
+
+        capture
+            .stage(&cropped_frame(
+                1920,
+                1080,
+                shim::CropRect { x: 100, y: 50, width: 320, height: 240 },
+                shim::constants().video_format_bgrx,
+            ))
+            .expect("stage");
+        assert_eq!(
+            capture.content_rect(),
+            shim::CropRect { x: 100, y: 50, width: 320, height: 240 }
+        );
+
+        // The window moved. The file follows its origin at the committed size,
+        // and so must the cursor.
+        capture
+            .stage(&cropped_frame(
+                1920,
+                1080,
+                shim::CropRect { x: 700, y: 400, width: 320, height: 240 },
+                shim::constants().video_format_bgrx,
+            ))
+            .expect("stage");
+        assert_eq!(
+            capture.content_rect(),
+            shim::CropRect { x: 700, y: 400, width: 320, height: 240 }
+        );
+
+        // An origin that would read past the buffer is clamped for the pixels,
+        // so the cursor has to be clamped with it or the two disagree about
+        // which rectangle was recorded.
+        capture
+            .stage(&cropped_frame(
+                1920,
+                1080,
+                shim::CropRect { x: 1800, y: 1000, width: 320, height: 240 },
+                shim::constants().video_format_bgrx,
+            ))
+            .expect("stage");
+        assert_eq!(
+            capture.content_rect(),
+            shim::CropRect { x: 1600, y: 840, width: 320, height: 240 }
+        );
+
+        let _ = capture.finish();
         let _ = std::fs::remove_file(&output);
     }
 
