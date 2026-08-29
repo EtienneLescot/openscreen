@@ -109,6 +109,12 @@ mask is posted by hand with `set_webcam_mask` and inference is not what these ar
 | `the_pip_shadow_is_suppressed_in_cutout_mode` | the shadow of an invisible box — with a control render, so the assertion cannot pass vacuously |
 | `the_whole_loop_produces_a_mask_from_compose_frame_alone` | capture → inference → upload, driven by `compose_frame` alone. The only one that needs ONNX Runtime, and it skips cleanly without it |
 
+Plus `seg_visual_renders_the_four_modes_from_a_real_photo`, opt-in behind
+`OPENSCREEN_SEG_VISUAL` + `OPENSCREEN_SEG_CAM` (same shape of gate as
+`tests/compose_linux.rs`): it renders the four modes from a photograph and writes PNGs. The
+assertions above can only say the mask *composites*; a mask that is *correct* on real hair
+against a real background is a judgement, and this is what you look at to make it.
+
 ## macOS specifics
 
 - **Device and queue.** `d3d_macos.rs:66-72` — `Gpu { device: metal::Device, context:
