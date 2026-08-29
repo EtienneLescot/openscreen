@@ -62,6 +62,15 @@ See [docs/cli.md](./docs/cli.md).
 
 Every platform has a recommended route below. On Windows that is the Microsoft Store; everywhere else it is the installer from the [GitHub Releases](https://github.com/getopenscreen/openscreen/releases) page.
 
+### System requirements
+
+- **Windows**: version 1903+ (build 18362) with Intel 8th Gen / AMD Ryzen 2000 series or newer minimum; Windows 11 with Intel 12th Gen / Ryzen 4000 series or newer recommended
+- **macOS**: 12.3 (Monterey) or later — required by ScreenCaptureKit for native capture
+- **Linux**: `xdg-desktop-portal` and PipeWire for native capture and system audio; recording still works without them through the browser-capture fallback, with fewer capabilities (see [Platform differences](#platform-differences))
+- **RAM**: 8 GB minimum, 16 GB recommended
+
+Full table and notes on older integrated graphics: [system requirements](https://getopenscreen.com/docs/installation#system-requirements).
+
 ### macOS
 
 Download the `.dmg` installer directly from the [Releases page](https://github.com/getopenscreen/openscreen/releases) and drag OpenScreen into your Applications folder. Builds from 1.9.0 onward are signed with a Developer ID certificate and notarized by Apple, so Gatekeeper does not block them and no terminal step is needed.

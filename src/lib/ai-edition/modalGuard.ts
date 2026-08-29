@@ -9,7 +9,7 @@
 // remember to add.
 //
 // Every modal in this tree already announces itself the same way: `ModalShell` and the
-// hand-rolled portal in `LeftPanel` render `aria-modal="true"`, and `ui/dialog` passes the same
+// hand-rolled portal in `ChatStripPanel` render `aria-modal="true"`, and `ui/dialog` passes the same
 // attribute to Radix's content. So one selector answers for all of them, including the ones
 // that do not exist yet.
 

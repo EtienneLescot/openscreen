@@ -52,12 +52,6 @@
 		"failed": "Não foi possível verificar atualizações.",
 		"downloadFailed": "Não foi possível baixar a atualização."
 	},
-	"playback": {
-		"play": "Play",
-		"pause": "Pause",
-		"fullscreen": "Tela Cheia",
-		"exitFullscreen": "Sair da Tela Cheia"
-	},
 	"units": {
 		"pixelsPerSecond": "{{value}} pixels/s",
 		"pixels": "{{value}} pixels"

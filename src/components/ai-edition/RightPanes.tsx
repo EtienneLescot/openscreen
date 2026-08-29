@@ -1020,9 +1020,17 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 				);
 				return;
 			}
-			// typing/pasting free text is non-destructive by design
-			// (the user's transcript edits come via the Source Transcript
-			// modal, not here). Block inserts to keep the projection stable.
+			// Inserts are blocked to keep the projection stable: every run of text
+			// here maps back to a `transcript.words` entry by id, and free text has
+			// no id to land on. Deletion is fine because it goes through
+			// `cutNativeSelection`, which resolves the selection to word ids first.
+			//
+			// This used to defer to `SourceTranscriptModal`, deleted with the v3
+			// media pane — it never got past read-only, so it was never the answer
+			// it was cited as. Editing a word's TEXT therefore has no in-app path
+			// today. Adding one means a word-level mutation alongside
+			// `skipWordRange`, reached from here; lifting this guard on its own
+			// would only desynchronise the DOM from `words`.
 			if (inputEvent.inputType === "insertText" || inputEvent.inputType === "insertFromPaste") {
 				event.preventDefault();
 			}

@@ -52,12 +52,6 @@
 		"failed": "無法檢查更新。",
 		"downloadFailed": "無法下載更新。"
 	},
-	"playback": {
-		"play": "播放",
-		"pause": "暫停",
-		"fullscreen": "全螢幕",
-		"exitFullscreen": "退出全螢幕"
-	},
 	"units": {
 		"pixelsPerSecond": "{{value}} 像素/秒",
 		"pixels": "{{value}} 像素"

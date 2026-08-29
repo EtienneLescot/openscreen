@@ -11,6 +11,7 @@ import {
 	ShieldCheck,
 	TerminalSquare,
 } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { type AssetKind, findAsset, formatSize, type LatestRelease } from "../lib/release";
 import { jsonLd, SOFTWARE_ID, softwareApplicationLd, WEBSITE_ID } from "../lib/structured-data";
@@ -33,7 +34,7 @@ type PlatformSpec = {
 	icon: typeof Apple;
 	/** One row per artifact the platform actually ships. */
 	options: { kind: AssetKind; label: string; sublabel: string }[];
-	footnote?: string;
+	footnote?: ReactNode;
 };
 
 const PLATFORMS: PlatformSpec[] = [
@@ -52,7 +53,13 @@ const PLATFORMS: PlatformSpec[] = [
 		name: "Windows",
 		icon: AppWindow,
 		options: [{ kind: "windows", label: "Windows 10 & 11", sublabel: "Installer · .exe" }],
-		footnote: "System audio is captured without extra drivers.",
+		footnote: (
+			<>
+				System audio is captured without extra drivers. Integrated graphics older than ~8th-gen
+				Intel (or the AMD Ryzen 2000 series equivalent) may hit known recording-stop issues — see{" "}
+				<Link to="/docs/installation#system-requirements">system requirements</Link>.
+			</>
+		),
 	},
 	{
 		id: "linux",

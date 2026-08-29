@@ -188,11 +188,11 @@ const waveBarCount = new Function(
 	`return ${lift(/const barCount = ([^;]+);/, "waveform barCount")};`,
 );
 const waveBarHeightPct = new Function(
-	"h",
+	"amplitude",
 	`return ${lift(/height: `\$\{([^}]+)\}%`/, "waveform bar height")};`,
 );
 const waveBarOpacity = new Function(
-	"h",
+	"amplitude",
 	`return ${lift(/opacity: ([^,\n]+),\n/, "waveform bar opacity")};`,
 );
 
@@ -1001,7 +1001,7 @@ const PROVENANCE = [
 	{
 		shown: CHAT.conversationTitle,
 		source:
-			"computed: editor.json chat.untitledConversation + the session index, as LeftPanel.tsx:1433 renders it",
+			"computed: editor.json chat.untitledConversation + the session index, as LeftPanel.tsx:1184 renders it",
 	},
 	{ shown: CHAT.emptyState, source: "editor.json chat.emptyState" },
 	{ shown: CHAT.authorUser, source: "editor.json chat.authorUser" },

@@ -1,5 +1,10 @@
 # FFMPEG_DIR relatif au dossier crates/ (portable dans le repo). Y déposer le build
 # ffmpeg LGPL-shared (voir README). LIBCLANG_PATH = install LLVM locale (bindgen).
+# Ces deux valeurs sont celles de WINDOWS et cargo n'a pas de `[target.<cfg>.env]` :
+# le `[env]` ci-dessous est global, donc elles sont posées sur les trois OS. C'est
+# `crates/compositor/build.rs` qui les neutralise ailleurs — voir
+# `point_libclang_at_the_xcode_toolchain()` (macOS) et `drop_unusable_libclang_path()`
+# (Linux). Ne pas supposer qu'un `LIBCLANG_PATH` non vide désigne un vrai libclang.
 # Ces valeurs cèdent à une vraie variable d'environnement (force=false par défaut).
 #
 # Pinné sur le MÊME build release-branch (n8.1.2-34-g9b6c8969e0, tag BtbN

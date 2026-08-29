@@ -52,12 +52,6 @@
 		"failed": "Không thể kiểm tra bản cập nhật.",
 		"downloadFailed": "Không thể tải xuống bản cập nhật."
 	},
-	"playback": {
-		"play": "Phát",
-		"pause": "Tạm dừng",
-		"fullscreen": "Toàn màn hình",
-		"exitFullscreen": "Thoát toàn màn hình"
-	},
 	"units": {
 		"pixelsPerSecond": "{{value}} px/giây",
 		"pixels": "{{value}} px"
