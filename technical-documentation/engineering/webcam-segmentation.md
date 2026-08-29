@@ -57,7 +57,17 @@ not an alpha channel, so nothing has to survive a codec that cannot carry one.
 
 - **macOS and Linux have the shader half only.** All three back-ends carry the same branch, but
   only Windows captures and uploads a mask, so `fx.z` never leaves 0 on the other two and the
-  effect is inert there. That is deliberate: the shader is the part that must not drift.
+  effect is inert there. That is deliberate: the shader is the part that must not drift, and it
+  is also the part that cannot be verified from a Windows machine, so it is the half worth
+  landing blind.
+
+  **The control is therefore hidden off Windows** (`supportsWebcamSegmentation` in
+  `RightPanes.tsx`). A visible setting that changes nothing is worse than an absent one; it
+  comes back for a platform the moment that platform's capture lands. What each one still needs
+  is `capture_webcam_rgb` and `set_webcam_mask` — a 256x144 render plus a readback, and an R8
+  texture upload — against machinery both back-ends already have (`read_nv12_scaled` on macOS,
+  the `Readback` buffers on Linux). Neither can be compiled here, so both belong on a machine
+  that builds them.
 - **ONNX Runtime is not staged.** The crate links `ort` with `load-dynamic`, so nothing is needed
   to *build*; at runtime `ensureOnnxRuntimeOnPath` looks for the library next to the addon in
   `electron/native/bin/<tag>/`, the convention `whisper-stt` already uses. Until a CI job puts it

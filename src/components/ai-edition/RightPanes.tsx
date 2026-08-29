@@ -1894,6 +1894,19 @@ const CAMERA_SHAPES: Array<{
 	},
 ];
 
+/**
+ * Whether this build can actually segment the camera.
+ *
+ * The mask is produced by the native compositor, and only the Windows back-end captures the
+ * frame and uploads the mask — macOS and Linux carry the shader branch but nothing feeds it,
+ * so `fx.z` never leaves 0 there. Showing the control anyway would put a setting in the panel
+ * that changes nothing, which is the one thing a control must never do. It comes back for a
+ * platform the moment that platform's capture lands.
+ */
+function supportsWebcamSegmentation(): boolean {
+	return window.electronAPI?.getPlatform?.() === "win32";
+}
+
 const CAMERA_BACKGROUND_MODES: Array<{
 	value: "none" | "transparent" | "blur" | "custom";
 	labelKey: string;
@@ -2143,77 +2156,81 @@ export function LayoutPane() {
 					</div>
 				</div>
 			) : null}
-			<div className={styles.sectionLabel}>{ts("layout.webcamBackground")}</div>
-			<div
-				style={{
-					display: "grid",
-					gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-					gap: 8,
-					padding: "0 var(--sp-4) 12px",
-				}}
-			>
-				{CAMERA_BACKGROUND_MODES.map((mode) => {
-					const isActive = settings.webcamBackgroundMode === mode.value;
-					return (
-						<button
-							type="button"
-							key={mode.value}
-							className={`${styles.cursorCell} ${isActive ? styles.isActive : ""}`}
-							style={{
-								flexDirection: "column",
-								gap: 4,
-								padding: 8,
-								display: "flex",
-								alignItems: "center",
-								minWidth: 0,
-							}}
-							disabled={layoutControlsDisabled}
-							onClick={() => {
-								void set({ webcamBackgroundMode: mode.value });
-							}}
-						>
-							<svg
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								width={22}
-								height={22}
-							>
-								{mode.icon}
-							</svg>
-							<span style={{ font: "500 11px/1 var(--font-body)" }}>{ts(mode.labelKey)}</span>
-						</button>
-					);
-				})}
-			</div>
-			{settings.webcamBackgroundMode === "blur" ? (
-				<div className={styles.sliderGrid}>
-					<SliderCell
-						label={ts("layout.webcamBlurIntensity")}
-						value={Math.round(settings.webcamBlurIntensity * 100)}
-						min={0}
-						max={100}
-						suffix="%"
-						disabled={layoutControlsDisabled}
-						onChange={(next) => setLive({ webcamBlurIntensity: next / 100 })}
-						onCommit={() => void commit()}
-					/>
-				</div>
-			) : null}
-			{settings.webcamBackgroundMode === "custom" ? (
-				<div style={{ padding: "0 var(--sp-4) 12px" }}>
-					<WallpaperPicker
-						value={settings.webcamWallpaper}
-						hasDocument={hasDocument && !layoutControlsDisabled}
-						onChange={(url) => void set({ webcamWallpaper: url })}
-						onLiveChange={(url) => setLive({ webcamWallpaper: url })}
-						onCommit={commit}
-						updateNativeBackground={false}
-						onPickFile={handlePickWebcamWallpaper}
-					/>
-					{webcamWallpaperInput}
-				</div>
+			{supportsWebcamSegmentation() ? (
+				<>
+					<div className={styles.sectionLabel}>{ts("layout.webcamBackground")}</div>
+					<div
+						style={{
+							display: "grid",
+							gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+							gap: 8,
+							padding: "0 var(--sp-4) 12px",
+						}}
+					>
+						{CAMERA_BACKGROUND_MODES.map((mode) => {
+							const isActive = settings.webcamBackgroundMode === mode.value;
+							return (
+								<button
+									type="button"
+									key={mode.value}
+									className={`${styles.cursorCell} ${isActive ? styles.isActive : ""}`}
+									style={{
+										flexDirection: "column",
+										gap: 4,
+										padding: 8,
+										display: "flex",
+										alignItems: "center",
+										minWidth: 0,
+									}}
+									disabled={layoutControlsDisabled}
+									onClick={() => {
+										void set({ webcamBackgroundMode: mode.value });
+									}}
+								>
+									<svg
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2"
+										width={22}
+										height={22}
+									>
+										{mode.icon}
+									</svg>
+									<span style={{ font: "500 11px/1 var(--font-body)" }}>{ts(mode.labelKey)}</span>
+								</button>
+							);
+						})}
+					</div>
+					{settings.webcamBackgroundMode === "blur" ? (
+						<div className={styles.sliderGrid}>
+							<SliderCell
+								label={ts("layout.webcamBlurIntensity")}
+								value={Math.round(settings.webcamBlurIntensity * 100)}
+								min={0}
+								max={100}
+								suffix="%"
+								disabled={layoutControlsDisabled}
+								onChange={(next) => setLive({ webcamBlurIntensity: next / 100 })}
+								onCommit={() => void commit()}
+							/>
+						</div>
+					) : null}
+					{settings.webcamBackgroundMode === "custom" ? (
+						<div style={{ padding: "0 var(--sp-4) 12px" }}>
+							<WallpaperPicker
+								value={settings.webcamWallpaper}
+								hasDocument={hasDocument && !layoutControlsDisabled}
+								onChange={(url) => void set({ webcamWallpaper: url })}
+								onLiveChange={(url) => setLive({ webcamWallpaper: url })}
+								onCommit={commit}
+								updateNativeBackground={false}
+								onPickFile={handlePickWebcamWallpaper}
+							/>
+							{webcamWallpaperInput}
+						</div>
+					) : null}
+				</>
 			) : null}
 			<div className={styles.sectionLabel}>{ts("layout.webcamFraming")}</div>
 			<div className={styles.sliderGrid}>
