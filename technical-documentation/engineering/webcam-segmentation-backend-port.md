@@ -94,6 +94,57 @@ the `--cfg C8 --scene …` route used to prove the Windows path does not exist f
 instead, and say in the PR what you actually saw on screen — a mask that composites is not the
 same claim as a mask that is correct.
 
+## macOS specifics
+
+- **Device and queue.** `d3d_macos.rs:66-72` — `Gpu { device: metal::Device, context:
+  metal::CommandQueue }`, one of each, and `compositor_macos.rs:526-531` shows the compositor
+  *clones* (retains) them. There is no persistent equivalent of `ID3D11DeviceContext`: state
+  lives on a per-pass encoder, and `begin_pass` (`:1230-1253`) is the factory.
+- **Webcam textures.** `nv12_srvs` (`:651-666`) returns owned `metal::Texture` (`R8Unorm` +
+  `RG8Unorm`), created in `compose_frame` at **`:1382`**. `tex_dims` (`:638-646`) returns
+  `(0, 0)` for a null webcam, so guard with `.max(1)` — the Windows path divides unguarded
+  because it always has both frames.
+- **Insertion point.** After `:1393`, before `let scene_ref = self.scene.borrow();` at `:1395` —
+  the last point where `wtw/wth/wcw/wch` are in scope with no borrow of `self.scene` held.
+- **Readback is already solved and prescribed by the module header** (`:15-25`): render targets
+  are `StorageMode::Private`, and each pass ends with a blit to a `Shared` mirror on which
+  `get_bytes` is legal. Copy the shape of `render_nv12` (`:1773-1825`), `mirror_rt`
+  (`:1687-1705`) and `readback_direct` (`:1830-1857`). **Do not introduce a `Managed` path** —
+  nothing here uses one, and `synchronizeResource` is only needed for `Managed`.
+- **Trap: do not use `submit()`/`sync()` for the capture pass.** `sync()` (`:1212-1223`) waits on
+  `last_cmd`, and `read_nv12_scaled` depends on `last_cmd` being the `render_nv12` buffer.
+  Commit and `wait_until_completed()` on the capture's own command buffer, leaving `last_cmd`
+  alone.
+- **Mask upload** is `replace_region` (the pattern is at `:774-782`).
+
+## Linux specifics
+
+- **Webcam textures.** `nv12_srvs` (`compositor_linux.rs:779-791`) delegates to
+  `linux_frames::nv12_planes`, which builds **fresh `TextureView`s on every call** — there is no
+  cache (`clear_srv_cache` is a documented no-op at `:765-767`). The planes are **CPU-uploaded**
+  via `Queue::write_texture`, not zero-copy: wgpu has no portable NV12 format
+  (`linux_frames.rs:16-22`).
+- **Insertion point.** The `compose_frame` prologue, `:1013-1038`, right after the `nv12_srvs` /
+  `tex_dims` calls at `:1023-1026`.
+- **Readback machinery already exists and is tuned.** `ReadbackRing` (`:95-102`), `PendingCopy`
+  (`:58-65`), `make_staging` (`:639-646`), submit+arm (`:2115-2152`), harvest (`:2170-2200`).
+  Reuse its shape rather than inventing a second one.
+- **Trap: never write `Maintain::Wait`.** The `ReadbackRing` header (`:67-94`) is a record of that
+  exact regression — `Maintain::Wait` does not absorb the copy, it absorbs the whole GPU queue,
+  measured at **3.8 ms (simple scene) to 6.2 ms (loaded scene) per frame at 1080p**. Always
+  `Maintain::WaitForSubmissionIndex(idx)`.
+- **`copy_texture_to_buffer` wants `bytes_per_row` aligned to 256.** A 256-wide R8 mask happens to
+  satisfy it; an RGBA capture at 256 wide is 1024 bytes and also does. Do not assume it for any
+  other width you pick.
+- **Bind the mask on every draw, not only the camera layer.** `make_bind` (`:922-965`) builds one
+  bind group per draw and the layout requires binding 4 (`tex_entry(4)` at `:241-246`); the shader
+  branch is gated on `fx.z` anyway, so binding it everywhere costs nothing. `dummy_view()`
+  (`:2036-2052`) stays the fallback.
+- **Note the existing cost profile before you judge yours:** live preview already runs readback at
+  depth 1, fully synchronous on the render thread (`:436-440`); export runs depth 2
+  (`pipeline_linux.rs:464`) precisely to avoid blocking. Your capture adds a second synchronous
+  readback to the preview path, and that is the one number this port can regress. Measure it.
+
 ## Traps this already hit
 
 - **`ort` panics when its library is missing.** It does not return an error:
