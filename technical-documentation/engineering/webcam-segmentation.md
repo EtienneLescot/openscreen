@@ -29,10 +29,10 @@ so they are identical by construction rather than by two implementations kept in
 |---|---|
 | capture | `Compositor::capture_webcam_rgb` renders the webcam NV12 into a 256x144 RGBA target and reads it back |
 | inference | `segmentation.rs`, ONNX Runtime CPU EP, own thread, 30 Hz, `intra_op_num_threads = 2` |
-| upload | `Compositor::set_webcam_mask`, from the render thread, into a DYNAMIC R8 texture (Windows) / a `Shared` R8 texture written by `replace_region` (Metal) |
+| upload | `Compositor::set_webcam_mask`, from the render thread, into a DYNAMIC R8 texture (Windows) / a `Shared` R8 texture written by `replace_region` (Metal) / an R8 texture written by `Queue::write_texture` (wgpu) |
 | composite | `ps_main`, `t3` / `texture(3)` / `@binding(4)`, branch on `fx.z` |
 
-Windows and macOS run all four stages; Linux carries the composite stage only (see *Not done*).
+All three back-ends run all four stages.
 
 The model is `public/mediapipe/selfie_segmentation/selfie_segmentation_landscape.onnx`, derived
 from the vendored `.tflite` by `scripts/convert-selfie-segmentation-to-onnx.py`. Its path is
@@ -65,20 +65,6 @@ not an alpha channel, so nothing has to survive a codec that cannot carry one.
 
 ### Not done
 
-- **Linux has the shader half only.** All three back-ends carry the same branch, but Linux does
-  not yet capture or upload a mask, so `fx.z` never leaves 0 there and the effect is inert. That
-  split was deliberate: the shader is the part that must not drift, and it is also the part that
-  cannot be verified from a Windows machine, so it was the half worth landing blind.
-
-  macOS now has the other half too — `capture_webcam_rgb` renders the camera into a 256x144
-  `Private` target and blits to a `Shared` mirror for `get_bytes` (the readback shape the module
-  header already prescribed, on the capture's **own** command buffer so `last_cmd` stays the
-  `render_nv12` one), and `set_webcam_mask` uploads R8 through `replace_region`.
-
-  **The control is therefore hidden on Linux only** (`supportsWebcamSegmentation` in
-  `RightPanes.tsx`). A visible setting that changes nothing is worse than an absent one; it
-  comes back for a platform the moment that platform's capture lands. What Linux still needs is
-  `capture_webcam_rgb` and `set_webcam_mask` against the `ReadbackRing` it already has.
 - **Intel macOS and Linux have no runtime staged**, so the effect stays off there — for
   different reasons, both recorded under *Staging* below.
 
@@ -260,8 +246,11 @@ Choosing the CPU EP is not a latency decision, it is an architectural one:
 
 ### Still open
 
-- **Linux**, where the export path is already CPU-heavy — giving two cores to inference may bite
-  differently. This is the one place the recommendation could still fail, and it is unmeasured.
+- **Linux, and it is now two questions rather than one.** The export path is already CPU-heavy, so
+  giving two cores to inference may bite differently there — that was the original open point and
+  it remains unmeasured. The port added a second: the capture is a synchronous readback on a
+  preview path that already blocks on one, which is a *GPU*-side cost the CPU-EP argument above
+  says nothing about. Both are §C.2 runs nobody has done.
 - `allow_spinning = false` on the CPU thread pool, the obvious next contention knob.
 - fp16/int8, reopened by round 2 and interacting with the provider choice now settled.
 
@@ -315,11 +304,24 @@ which would remove GPU contention entirely. Neither was needed once the CPU EP w
 11.07 ms compositor baseline quoted above is a Radeon number and does not transfer — the M1
 figure for the same shape of frame is the 3.04 ms in the table.
 
-**Linux — wgpu 24 + WGSL, not raw Vulkan.** `layer.wgsl` and `blur.wgsl` are compiled at runtime
-by naga; there is no SPIR-V toolchain to reuse and no raw `VkDevice` exposed. ONNX Runtime with a
-GPU EP is vendor-locked and unshippable to unknown hardware, and `libonnxruntime.so` risks symbol
-collision with Chromium's protobuf/abseil. The realistic options are WGSL compute on the existing
-wgpu device, or the CPU EP.
+**Linux — wgpu 24 + WGSL, and the port is in.** `layer.wgsl` and `blur.wgsl` are compiled at
+runtime by naga; there is no SPIR-V toolchain to reuse and no raw `VkDevice` exposed. That never
+had to be solved: ONNX Runtime with a GPU EP is vendor-locked and unshippable to unknown
+hardware, and the CPU EP made the question moot on every platform at once.
+
+Capture, upload and composite all run on the one wgpu device the compositor already shares with
+the encoder. Two things are specific to it. `copy_texture_to_buffer` demands a `bytes_per_row`
+aligned to 256, so the capture pads its stride and depads on read — at 256x144 the padding is
+nil, which is exactly why the depad has a test of its own at a width that needs it. And the
+capture is a **second synchronous readback on the preview path**, which already pays one at
+depth 1 (`live.rs`); it uses `WaitForSubmissionIndex` and not `Maintain::Wait`, the regression
+`ReadbackRing`'s header records. That added cost is the one number this port could regress and
+it is **not yet measured** — see *Still open*.
+
+`libonnxruntime.so` risking a symbol collision with Chromium's protobuf/abseil remains a real
+concern for *packaging*, and is untested: nothing stages the library yet (see *Not done*), so the
+loaded-under-Electron case has never run. The compositor crate itself is unaffected — it links
+`ort` with `load-dynamic` and resolves the library at runtime.
 
 Only `texture(3)` / `t3` / `@binding(4)` is common to all three — the mask binding is mechanical
 everywhere, and can be built before the engine question is settled.
