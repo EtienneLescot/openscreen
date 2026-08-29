@@ -42,6 +42,14 @@ Everything is inert until both a mode and a mask exist. No effect requested mean
 inference and no upload — the feature costs exactly zero when off. A model that fails to load
 turns the effect off with one log line rather than failing the frame.
 
+**`ort` panics rather than erroring when its library is missing** — `load_dynamic::init(&path)
+.expect("Failed to load ONNX Runtime dylib")` in `ort/src/lib.rs`. Without a guard, a build whose
+ONNX Runtime was never staged would take down the render thread on the first frame with an effect
+instead of degrading. `Segmenter::load` therefore checks `runtime_available()` before touching the
+API at all, and wraps the session build in `catch_unwind` for the case where the file is present
+but will not load. CI found this: the macOS and Linux Rust jobs have no library, and the first
+version of these tests failed there rather than skipping.
+
 ### What this replaced
 
 MediaPipe used to run in the renderer, and the layer had **two compositors**: a DOM `<canvas>`
