@@ -36,6 +36,28 @@ pub const MODEL_HEIGHT: u32 = 144;
 /// Deux threads intra-op. Voir la note du module : le défaut prend toute la machine.
 const INTRA_OP_THREADS: usize = 2;
 
+/// La bibliothèque ONNX Runtime est-elle chargeable ?
+///
+/// `ort` est lié en `load-dynamic` et **panique** quand la bibliothèque manque —
+/// `load_dynamic::init(&path).expect("Failed to load ONNX Runtime dylib")`, ort/src/lib.rs. Ce
+/// n'est pas une erreur qu'on peut propager : sans ce garde, un build où le staging de la lib
+/// n'a pas eu lieu ferait tomber le compositeur à la première frame avec un effet, au lieu de
+/// dessiner la webcam telle quelle.
+#[cfg(feature = "segmentation")]
+pub fn runtime_available() -> bool {
+    // `ORT_DYLIB_PATH` est ce que l'app pose (`ensureOnnxRuntimeOnPath`) ; sans lui, ort ira
+    // chercher un nom nu dans les chemins système, ce qui est le cas « pas installé ».
+    match std::env::var_os("ORT_DYLIB_PATH") {
+        Some(p) if Path::new(&p).is_file() => true,
+        _ => false,
+    }
+}
+
+#[cfg(not(feature = "segmentation"))]
+pub fn runtime_available() -> bool {
+    false
+}
+
 /// Segmenteur chargé, prêt à produire un masque par frame.
 pub struct Segmenter {
     #[cfg(feature = "segmentation")]
@@ -52,9 +74,19 @@ impl Segmenter {
         if !model_path.exists() {
             bail!("modèle de segmentation absent : {}", model_path.display());
         }
+        if !runtime_available() {
+            bail!(
+                "bibliothèque ONNX Runtime introuvable (ORT_DYLIB_PATH={:?}) — l'effet reste éteint",
+                std::env::var_os("ORT_DYLIB_PATH")
+            );
+        }
         // `ort::Error` est générique sur le type du builder, donc il ne satisfait pas les
         // bornes d'`anyhow::Context` — d'où le `map_err` explicite plutôt qu'un `?` direct.
-        let session = (|| -> ort::Result<ort::session::Session> {
+        // Deuxième garde, pour le cas « le fichier est là mais ne se charge pas » (mauvaise
+        // architecture, dépendance manquante) : ort panique là aussi, et une panique qui
+        // traverse le thread de rendu tue la preview.
+        let session = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (|| -> ort::Result<ort::session::Session> {
             ort::session::Session::builder()?
                 .with_intra_threads(INTRA_OP_THREADS)?
                 // Un seul thread inter-op : le graphe est une chaîne, il n'y a rien à
@@ -62,7 +94,9 @@ impl Segmenter {
                 // cœurs au compositeur.
                 .with_inter_threads(1)?
                 .commit_from_file(model_path)
-        })()
+            })()
+        }))
+        .map_err(|_| anyhow::anyhow!("ONNX Runtime a paniqué au chargement — effet désactivé"))?
         .map_err(|e| anyhow::anyhow!("chargement de {} : {e}", model_path.display()))?;
         Ok(Self {
             session,
@@ -146,13 +180,12 @@ mod tests {
         assert!(meta.len() > 100_000, "modèle suspicieusement petit : {} octets", meta.len());
     }
 
-    // Sans la feature, `load` échoue en disant que la feature manque — un message utile lui
-    // aussi, mais pas celui-ci.
+
     #[cfg(feature = "segmentation")]
     #[test]
-    fn a_missing_model_fails_with_the_path_in_the_message() {
-        // `.err()` plutôt que `.unwrap_err()` : ce dernier exigerait `Debug` sur `Segmenter`,
-        // qui contient une session ONNX Runtime.
+    fn a_missing_model_is_refused_before_the_runtime_is_even_touched() {
+        // Ce test-ci tourne PARTOUT : le chemin est vérifié avant tout appel à ort, ce qui
+        // est précisément la garantie qu'on veut (pas de panique sur une machine sans lib).
         let err = match Segmenter::load(Path::new("nexiste/pas.onnx")) {
             Ok(_) => panic!("un modèle inexistant ne doit pas charger"),
             Err(e) => e.to_string(),
@@ -162,7 +195,40 @@ mod tests {
 
     #[cfg(feature = "segmentation")]
     #[test]
+    fn a_missing_runtime_is_an_error_not_a_panic() {
+        if runtime_available() {
+            eprintln!("ONNX Runtime présent — le cas « absent » n'est pas exerçable ici");
+            return;
+        }
+        // Le modèle EXISTE, donc on va bien jusqu'au garde du runtime. Sans lui, ort
+        // paniquerait et emporterait le thread de rendu.
+        match Segmenter::load(&vendored_model()) {
+            Ok(_) => panic!("chargement réussi sans bibliothèque ?"),
+            Err(e) => assert!(
+                e.to_string().contains("ONNX Runtime"),
+                "l'erreur doit nommer la bibliothèque manquante : {e}"
+            ),
+        }
+    }
+
+    /// Les tests qui font tourner une vraie inférence n'ont de sens que là où la bibliothèque
+    /// est installée. La CI macOS et Linux ne la stage pas encore, et un test rouge pour ça
+    /// dirait quelque chose de faux sur le code.
+    #[cfg(feature = "segmentation")]
+    fn skip_without_runtime() -> bool {
+        if runtime_available() {
+            return false;
+        }
+        eprintln!("ONNX Runtime absent (ORT_DYLIB_PATH non posé) — test sauté");
+        true
+    }
+
+    #[cfg(feature = "segmentation")]
+    #[test]
     fn a_frame_of_the_wrong_size_is_refused_rather_than_read_out_of_bounds() {
+        if skip_without_runtime() {
+            return;
+        }
         let mut seg = Segmenter::load(&vendored_model()).expect("chargement du modèle");
         let err = seg.run(&[0u8; 12]).unwrap_err().to_string();
         assert!(err.contains("attendus"), "message peu utile : {err}");
@@ -195,6 +261,9 @@ mod tests {
     #[cfg(feature = "segmentation")]
     #[test]
     fn the_worker_drops_stale_frames_rather_than_queueing_them() {
+        if skip_without_runtime() {
+            return;
+        }
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let seen = Arc::new(AtomicUsize::new(0));
@@ -223,6 +292,9 @@ mod tests {
     #[cfg(feature = "segmentation")]
     #[test]
     fn segments_a_uniform_frame_without_panicking_and_returns_the_right_size() {
+        if skip_without_runtime() {
+            return;
+        }
         let mut seg = Segmenter::load(&vendored_model()).expect("chargement du modèle");
         let frame = vec![128u8; (MODEL_WIDTH * MODEL_HEIGHT * 3) as usize];
         let mask = seg.run(&frame).expect("inférence");
