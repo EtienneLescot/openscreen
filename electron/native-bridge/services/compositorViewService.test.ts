@@ -338,6 +338,57 @@ describe("resolveSceneAssetPaths", () => {
 		expect(fs.existsSync(out.background.path)).toBe(true);
 	});
 
+	// The camera's own background under the "custom" mode. It was NOT resolved, and the failure
+	// was silent and total: the compositor got "/wallpapers/wallpaper1.jpg", could not open it,
+	// and painted the bubble black — behind every one of the 18 bundled wallpapers, including
+	// the default. The screen's background had the fix; this one was simply missed.
+	it("resolves the camera's custom background, not just the screen's", () => {
+		const out = resolved({
+			webcamEffect: {
+				mode: "custom",
+				background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+			},
+		});
+
+		expect(out.webcamEffect.background.path).toBe(
+			path.join(resources, "wallpapers", "wallpaper1.jpg"),
+		);
+		expect(out.webcamEffect.background.path).not.toContain("app.asar");
+		expect(fs.existsSync(out.webcamEffect.background.path)).toBe(true);
+	});
+
+	// The two are independent: a scene can put a wallpaper behind the screen and a different one
+	// behind the camera, and resolving one must not depend on the other being present.
+	it("resolves both backgrounds in the same scene", () => {
+		const out = resolved({
+			background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+			webcamEffect: {
+				mode: "custom",
+				background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+			},
+		});
+
+		expect(out.background.path).toBe(path.join(resources, "wallpapers", "wallpaper1.jpg"));
+		expect(out.webcamEffect.background.path).toBe(out.background.path);
+	});
+
+	// A colour or a gradient carries no path, and the compositor renders both itself. Rewriting
+	// them would be a bug, not a no-op.
+	it("leaves a colour or gradient camera background untouched", () => {
+		const colour = resolved({
+			webcamEffect: { mode: "custom", background: { kind: "color", color: "#ff0080" } },
+		});
+		expect(colour.webcamEffect.background).toEqual({ kind: "color", color: "#ff0080" });
+
+		const gradient = resolved({
+			webcamEffect: {
+				mode: "custom",
+				background: { kind: "gradient", angleDeg: 90, stops: ["#000", "#fff"] },
+			},
+		});
+		expect(gradient.webcamEffect.background.stops).toEqual(["#000", "#fff"]);
+	});
+
 	it("resolves a cursor theme's arrow sprite to a path that exists on disk", () => {
 		if (!themed) return; // no bundled theme ships an arrow override
 		const arrow = resolved({ cursor: { theme: themed.id } }).cursor.cursorSprites.arrow;

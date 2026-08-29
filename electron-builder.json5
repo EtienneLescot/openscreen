@@ -97,6 +97,15 @@
     {
       "from": "public/cursors",
       "to": "cursors"
+    },
+    // The segmentation model, out of the asar for the same reason as the two above: the main
+    // process resolves it with `original-fs` (see realExistsSync in compositorViewService.ts),
+    // which cannot see inside app.asar, so a copy that ships only in `dist` resolves to null and
+    // the compositor draws the webcam unsegmented — the whole camera-background feature, silently
+    // off in every installer. 457 KB.
+    {
+      "from": "public/mediapipe",
+      "to": "mediapipe"
     }
   ],
 

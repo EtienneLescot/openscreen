@@ -57,6 +57,22 @@ fn layer_bytes(cb: &LayerCB) -> &[u8] {
     unsafe { std::slice::from_raw_parts(cb as *const LayerCB as *const u8, 128) }
 }
 
+/// Un calque de fond deja lie, en attente de son `draw`. `_buf`/`_tex`/`_view`
+/// ne sont jamais relus : ils gardent en vie ce que le bind group reference
+/// jusqu'au submit. Ce backend encode toute la frame avant de la soumettre, la
+/// ou D3D11 dessine au fil de l'eau ; d'ou cette boite, la que Windows n'a pas
+/// besoin d'equivalent.
+///
+/// Vit au niveau module (et non dans `compose_frame`) parce que le fond d'ecran
+/// ET le fond de la bulle webcam sont desormais construits par les memes
+/// methodes.
+struct BgDraw {
+    _buf: wgpu::Buffer,
+    _tex: Option<wgpu::Texture>,
+    _view: Option<wgpu::TextureView>,
+    bind: wgpu::BindGroup,
+}
+
 /// Une copie RT -> staging DEJA SOUMISE, dont le mapping est arme mais pas
 /// encore recolte. On garde `idx` (l'index de soumission rendu par
 /// `Queue::submit`) pour n'attendre QUE cette soumission-la, et les dimensions
@@ -1095,6 +1111,133 @@ impl Compositor {
         Ok((tex, w, h))
     }
 
+    /// Calque image (mode 6) couvrant `dst`, en cover-fit contre `aspect` -- le
+    /// ratio du RECT vise, et non celui de la sortie : le rognage se calcule
+    /// contre la zone qu'on remplit, ce qui permet a la bulle webcam d'emprunter
+    /// le chemin du fond d'ecran au lieu d'en refaire un.
+    ///
+    /// Err plutot qu'un repli maison : chaque appelant a son propre message et
+    /// son propre repli, et un echec silencieux redonnerait le noir qu'on corrige.
+    fn image_bg_draw(
+        &self,
+        path: &str,
+        dst: [f32; 4],
+        quad_px: [f32; 2],
+        radius_px: f32,
+        aspect: f32,
+        dummy: &wgpu::TextureView,
+    ) -> Result<BgDraw> {
+        // Charge (ou recupere du cache) l'image. Emprunt isole AVANT le
+        // borrow_mut (piege du double emprunt 1re frame, cf. macOS).
+        let cached = self.img_cache.borrow().get(path).cloned();
+        let (tex, iw, ih) = match cached {
+            Some(v) => v,
+            None => {
+                let v = self.load_image_texture(path)?;
+                self.img_cache.borrow_mut().insert(path.to_string(), v.clone());
+                v
+            }
+        };
+        // Cover-fit : l'image remplit tout le rect, on rogne l'axe long.
+        let ai = iw as f32 / ih.max(1) as f32;
+        let src = if ai > aspect {
+            let vis = aspect / ai;
+            [(1.0 - vis) * 0.5, 0.0, 1.0 - (1.0 - vis) * 0.5, 1.0]
+        } else {
+            let vis = ai / aspect;
+            [0.0, (1.0 - vis) * 0.5, 1.0, 1.0 - (1.0 - vis) * 0.5]
+        };
+        let cb = LayerCB {
+            dst,
+            src,
+            quad_px,
+            radius_px,
+            mode: 6.0,
+            ..Default::default()
+        };
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), dummy);
+        Ok(BgDraw { _buf: buf, _tex: Some(tex), _view: Some(view), bind })
+    }
+
+    /// Prepare le fond du mode « personnalise », peint DANS la bulle webcam juste
+    /// avant que la camera n'y soit decoupee par-dessus.
+    ///
+    /// Le shader ne sait peindre qu'une couleur plate sous le masque, donc un
+    /// degrade ou une image y tombaient sur du noir -- et le defaut EST une image
+    /// (`DEFAULT_WALLPAPER`), si bien que le mode ne rendait jamais ce que le
+    /// selecteur montrait. Peindre le fond puis composer la camera en detourage
+    /// donne exactement le meme resultat (`lerp(fond, camera, personne)`, ici par
+    /// le melange alpha) pour les trois sortes de fond, en reutilisant les chemins
+    /// deja eprouves du fond d'ecran, et sans rien ajouter aux trois shaders.
+    ///
+    /// `quad_px` / `radius_px` sont ceux de la bulle : le fond doit epouser ses
+    /// coins arrondis, sinon un rectangle deborde derriere la camera.
+    fn webcam_bg_draw(
+        &self,
+        bg: Option<&SceneBackground>,
+        dst: [f32; 4],
+        quad_px: [f32; 2],
+        radius_px: f32,
+        dummy: &wgpu::TextureView,
+    ) -> BgDraw {
+        const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+        let flat = |cb: LayerCB| {
+            let (buf, bind) = self.make_bind(&cb, None, dummy);
+            BgDraw { _buf: buf, _tex: None, _view: None, bind }
+        };
+        let solid = |color: [f32; 4]| LayerCB {
+            dst,
+            quad_px,
+            radius_px,
+            mode: 1.0,
+            color,
+            ..Default::default()
+        };
+        match bg {
+            Some(SceneBackground::Color { color }) => {
+                flat(solid(parse_hex(color).unwrap_or(BLACK)))
+            }
+            Some(SceneBackground::Gradient { angle_deg, stops }) => {
+                let c0 = stops.first().and_then(|s| parse_hex(s)).unwrap_or(BLACK);
+                let c1 = stops.last().and_then(|s| parse_hex(s)).unwrap_or(c0);
+                // angle CSS -> direction unitaire, meme convention que le fond
+                // d'ecran (dont la direction se lit en espace SORTIE : le degrade
+                // traverse le cadre, la bulle n'en montre que sa tranche).
+                let a = angle_deg.to_radians();
+                flat(LayerCB {
+                    dst,
+                    src: [c1[0], c1[1], c1[2], c1[3]],
+                    quad_px,
+                    radius_px,
+                    mode: 5.0,
+                    color: c0,
+                    fx: [a.sin(), -a.cos(), 0.0, 0.0],
+                    ..Default::default()
+                })
+            }
+            Some(SceneBackground::Image { path }) => {
+                // Le cover-fit se mesure sur la BULLE, pas sur la sortie : c'est
+                // elle que l'image doit remplir sans etirement.
+                let aspect = if quad_px[1] > 0.0 { quad_px[0] / quad_px[1] } else { 1.0 };
+                match self.image_bg_draw(path, dst, quad_px, radius_px, aspect, dummy) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        // Meme contrat que le fond d'ecran : un chemin casse est
+                        // logge puis remplace par du noir. Un repli silencieux
+                        // redonnerait le bug qu'on corrige.
+                        eprintln!("[fond webcam] \"{path}\" : {e:#}");
+                        flat(solid(BLACK))
+                    }
+                }
+            }
+            // Personnalise sans fond : noir, comme avant -- mais c'est desormais
+            // le seul chemin qui y mene, au lieu de l'etre pour toute image et
+            // tout degrade.
+            None => flat(solid(BLACK)),
+        }
+    }
+
     // -- segmentation du sujet webcam --
 
     /// Extrait la frame webcam en RGB8 a la resolution du modele, dans `out`.
@@ -1627,54 +1770,23 @@ impl Compositor {
         });
 
         // Fond (gradient mode 5 OU image mode 6), dessine dans la passe de fond.
-        // `_tex`/`_view` gardent l'image en vie pendant le pass.
-        struct BgDraw {
-            _buf: wgpu::Buffer,
-            _tex: Option<wgpu::Texture>,
-            _view: Option<wgpu::TextureView>,
-            bind: wgpu::BindGroup,
-        }
         let bg_draw = bg_layer.and_then(|bl| match bl {
             BgLayer::Gradient(cb) => {
                 let (buf, bind) = self.make_bind(&cb, None, &dummy);
                 Some(BgDraw { _buf: buf, _tex: None, _view: None, bind })
             }
+            // Le wallpaper couvre tout le cadre, donc dst plein et pas de coins :
+            // `image_bg_draw` sert aussi la bulle webcam, qui elle en a.
             BgLayer::Image(path) => {
-                // Charge (ou recupere du cache) le wallpaper. Emprunt isole AVANT
-                // le borrow_mut (piege du double emprunt 1re frame, cf. macOS).
-                let cached = self.img_cache.borrow().get(path.as_str()).cloned();
-                let (tex, iw, ih) = match cached {
-                    Some(v) => v,
-                    None => match self.load_image_texture(&path) {
-                        Ok(v) => {
-                            self.img_cache.borrow_mut().insert(path.clone(), v.clone());
-                            v
-                        }
-                        Err(e) => {
-                            eprintln!("[fond image] \"{path}\" : {e:#}");
-                            return None;
-                        }
-                    },
-                };
-                // Cover-fit : l'image remplit tout le cadre, on rogne l'axe long.
-                let ai = iw as f32 / ih.max(1) as f32;
-                let ao = rw / rh;
-                let src = if ai > ao {
-                    let vis = ao / ai;
-                    [(1.0 - vis) * 0.5, 0.0, 1.0 - (1.0 - vis) * 0.5, 1.0]
-                } else {
-                    let vis = ai / ao;
-                    [0.0, (1.0 - vis) * 0.5, 1.0, 1.0 - (1.0 - vis) * 0.5]
-                };
-                let cb = LayerCB {
-                    dst: [0.0, 0.0, 1.0, 1.0],
-                    src,
-                    mode: 6.0,
-                    ..Default::default()
-                };
-                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-                let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), &dummy);
-                Some(BgDraw { _buf: buf, _tex: Some(tex), _view: Some(view), bind })
+                match self
+                    .image_bg_draw(&path, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0], 0.0, rw / rh, &dummy)
+                {
+                    Ok(d) => Some(d),
+                    Err(e) => {
+                        eprintln!("[fond image] \"{path}\" : {e:#}");
+                        None
+                    }
+                }
             }
         });
 
@@ -1699,7 +1811,7 @@ impl Compositor {
         // lancement gracieux, le temps que l'inference rende son premier masque.
         //
         // Calcule ICI, avant le draw comme avant l'ombre : les deux en dependent.
-        let (effect_code, blur_intensity, bg_color) = {
+        let (effect_code, blur_intensity, webcam_bg) = {
             let has_mask = self.webcam_mask.borrow().is_some();
             let effect = scene_ref
                 .as_ref()
@@ -1708,25 +1820,39 @@ impl Compositor {
                 .map(|e| (e.shader_code(), e))
                 .filter(|(code, _)| *code > 0.0);
             match effect {
+                // Fond personnalise : on PEINT le fond dans la bulle, puis on y
+                // decoupe la camera par-dessus — le melange alpha donne
+                // `lerp(fond, camera, personne)`, soit exactement ce que la branche
+                // « mode 3 » du shader calculait, mais pour les TROIS sortes de
+                // fond. Le shader ne sait peindre qu'une couleur plate sous le
+                // masque ; degrades et images y tombaient sur du noir, et le defaut
+                // EST une image.
                 Some((code, e)) if code > 2.5 => {
-                    // Fond personnalise : seule une couleur plate se peint dans le
-                    // shader. Un degrade ou une image passeraient par une texture,
-                    // ce que ce calque ne porte pas encore — on retombe alors sur
-                    // du noir plutot que sur du hasard.
-                    let col = match &e.background {
-                        Some(SceneBackground::Color { color }) => {
-                            parse_hex(color).unwrap_or([0.0, 0.0, 0.0, 1.0])
-                        }
-                        _ => [0.0, 0.0, 0.0, 1.0],
-                    };
-                    (code, 0.0, col)
+                    // Sans piste webcam le fond peindrait un rectangle seul dans le
+                    // cadre : il ne se prepare que si la camera se dessine.
+                    let bg = webcam_planes.is_some().then(|| {
+                        self.webcam_bg_draw(
+                            e.background.as_ref(),
+                            g.w_dst,
+                            g.w_px,
+                            g.w_radius,
+                            &dummy,
+                        )
+                    });
+                    (1.0, 0.0, bg)
                 }
-                Some((code, e)) => {
-                    (code, e.blur_intensity.clamp(0.0, 1.0), [0.0, 0.0, 0.0, 1.0])
-                }
-                None => (0.0, 0.0, [0.0, 0.0, 0.0, 1.0]),
+                Some((code, e)) => (code, e.blur_intensity.clamp(0.0, 1.0), None),
+                None => (0.0, 0.0, None),
             }
         };
+        // L'ombre se juge sur le mode DE LA SCENE, pas sur `effect_code` : le fond
+        // personnalise se compose desormais en detourage (code 1) tout en gardant
+        // sa bulle, et tester le code compose la lui retirerait. Meme lecture que
+        // `is_cutout` cote Windows.
+        let is_cutout = matches!(
+            scene_ref.as_ref().and_then(|s| s.webcam_effect.as_ref()),
+            Some(e) if e.shader_code() == 1.0
+        ) && self.webcam_mask.borrow().is_some();
         let webcam_draw = webcam_planes.as_ref().map(|(wy, wuv)| {
             // COVER-CROP. `src` etait cable a [0,0,1,1], donc la texture entiere
             // etait etiree sur la boite quelle que soit sa forme : le facteur de
@@ -1763,7 +1889,9 @@ impl Compositor {
                 quad_px: g.w_px,
                 radius_px: g.w_radius,
                 mode: 0.0,
-                color: bg_color,
+                // `color.a` porte l'alpha du decoupage (`color.a * personne`) ; le
+                // RGB n'est plus lu, le fond ayant deja ete peint sous la camera.
+                color: [0.0, 0.0, 0.0, 1.0],
                 // `fx.xy` = etendue valide de la texture webcam, par quoi le
                 // shader divise `uv` pour retomber dans l'espace du masque ;
                 // `fx.z` = mode, `fx.w` = intensite du flou. Contrat commun aux
@@ -1790,7 +1918,7 @@ impl Compositor {
         let webcam_shadow = (cfg.shadow
             && g.shape_fade > 0.0
             && webcam_draw.is_some()
-            && effect_code != 1.0
+            && !is_cutout
             && !matches!(
                 g.scene_preset.as_deref(),
                 Some("dual-frame") | Some("vertical-stack")
@@ -2399,6 +2527,14 @@ impl Compositor {
             rpass.draw(0..4, 0..1);
             if let Some((_buf, bind)) = &webcam_shadow {
                 rpass.set_bind_group(0, bind, &[]);
+                rpass.draw(0..4, 0..1);
+            }
+            // Fond personnalise : ENTRE l'ombre et la camera. C'est ce sandwich qui
+            // remplace la branche « mode 3 » du shader — la camera, decoupee, se
+            // fond dessus par alpha ; l'ombre reste dessous, elle appartient a la
+            // bulle et non a son contenu.
+            if let Some(bg) = &webcam_bg {
+                rpass.set_bind_group(0, &bg.bind, &[]);
                 rpass.draw(0..4, 0..1);
             }
             if let Some((_buf, bind)) = &webcam_draw {

@@ -151,6 +151,22 @@ inline float sd_round_rect(float2 p, float2 halfsz, float r)
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
+// Couverture du quad avec coins arrondis, pour les modes qui retournent AVANT la queue de
+// `ps_main` (5 gradient, 6 image). Ils s'en passaient tant qu'ils ne servaient qu'au fond plein
+// cadre, qui n'a pas de rayon ; depuis que la bulle webcam peut porter un dégradé ou une image,
+// sans ça le fond déborde en carré opaque sur les coins arrondis de la bulle et mange l'ombre.
+// Renvoie 1.0 quand aucun rayon n'est demandé — le fond plein cadre est donc inchangé.
+inline float quad_round_alpha(float2 local, float2 quad_px, float radius_px)
+{
+    if (radius_px <= 0.0 || quad_px.x <= 0.0 || quad_px.y <= 0.0)
+    {
+        return 1.0;
+    }
+    float2 halfsz = quad_px * 0.5;
+    float d = sd_round_rect(local - halfsz, halfsz, radius_px);
+    return 1.0 - smoothstep(0.0, 1.5, d); // même feather ~1.5px que la queue
+}
+
 // Intersection de deux droites données par (normale, offset) : n·x = d. Cramer.
 inline float2 line_cross(float2 n1, float d1, float2 n2, float d2)
 {
@@ -369,7 +385,8 @@ fragment float4 ps_main(VSOut i [[stage_in]],
     // « le wallpaper est dessiné avec alpha 0 ».
     if (layer.mode > 5.5 && layer.mode < 6.5)
     {
-        return float4(texImg.sample(samp, i.uv).rgb, 1.0);
+        float a = quad_round_alpha(i.local, layer.quad_px, layer.radius_px);
+        return float4(texImg.sample(samp, i.uv).rgb * a, a); // prémultiplié
     }
 
     // mode 5 : gradient linéaire 2 stops (parité web wallpaper dégradé). color = stop0,
@@ -382,9 +399,17 @@ fragment float4 ps_main(VSOut i [[stage_in]],
     {
         float2 dir = layer.fx.xy;
         float denom = max(abs(dir.x) + abs(dir.y), 1e-4);
-        float t = clamp(0.5 + dot(i.pout - 0.5, dir) / denom, 0.0, 1.0);
+        // Paramétré sur le QUAD dès qu'il en a un (la bulle webcam), sinon sur la sortie. Pour le
+        // fond plein cadre les deux coïncident ; pour une bulle dans un coin, `pout` ne montrerait
+        // que la tranche du dégradé plein cadre qui passe dessous, jamais la rampe complète que
+        // le sélecteur affiche.
+        float2 gp = (layer.quad_px.x > 0.0 && layer.quad_px.y > 0.0)
+            ? (i.local / layer.quad_px)
+            : i.pout;
+        float t = clamp(0.5 + dot(gp - 0.5, dir) / denom, 0.0, 1.0);
         float3 g = mix(layer.color.rgb, layer.src.xyz, t);
-        return float4(g, 1.0); // opaque, prémultiplié (a=1)
+        float a = quad_round_alpha(i.local, layer.quad_px, layer.radius_px);
+        return float4(g * a, a); // prémultiplié
     }
 
     // mode 4 : curseur dessiné (dot + ring SDF).
