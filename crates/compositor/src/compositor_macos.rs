@@ -2670,8 +2670,11 @@ mod tests {
                     y[(row * w + col) as usize] = luma(col, row);
                 }
             }
-            let uv = vec![UV_NEUTRAL; (w * (h / 2)) as usize];
-            let pb = crate::mac_frames::nv12_pixel_buffer_from_planes(w, h, &y, &uv)
+            FakeFrame::from_planes(w, h, &y, &vec![UV_NEUTRAL; (w * (h / 2)) as usize])
+        }
+
+        fn from_planes(w: u32, h: u32, y: &[u8], uv: &[u8]) -> FakeFrame {
+            let pb = crate::mac_frames::nv12_pixel_buffer_from_planes(w, h, y, uv)
                 .expect("CVPixelBuffer NV12");
             let mut frame: Box<AVFrame> = Box::new(unsafe { std::mem::zeroed() });
             frame.format = crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX as i32;
@@ -2871,6 +2874,184 @@ mod tests {
             !*comp.seg_failed.borrow(),
             "la segmentation s'est éteinte d'elle-même"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Harnais visuel (opt-in)
+    //
+    // Les tests ci-dessus prouvent le mécanisme sur des images synthétiques, où le masque
+    // est posé à la main et donc trivialement juste. Ils ne peuvent rien dire de la QUALITÉ
+    // du masque que le modèle produit sur une vraie caméra — et « un masque qui composite »
+    // n'est pas la même affirmation que « un masque qui est correct ».
+    //
+    // `poc-d3d` étant `cfg(windows)`, il n'existe aucun banc ici pour trancher ça. Ceci en
+    // tient lieu : on lui donne une photo, il rend les quatre modes et écrit des PNG à
+    // regarder. Même forme d'opt-in que `tests/compose_linux.rs` (variable d'environnement
+    // + skip propre), et pour la même raison : ça rend sur GPU et ça lit un fichier que le
+    // dépôt ne porte pas.
+    //
+    // ```
+    // ORT_DYLIB_PATH=/chemin/libonnxruntime.dylib \
+    // OPENSCREEN_SEG_CAM=camera.png \
+    // OPENSCREEN_SEG_VISUAL=target/seg \
+    //   cargo test -p openscreen-compositor --lib seg_visual -- --nocapture
+    // ```
+    // -----------------------------------------------------------------------
+
+    /// RGB8 → NV12 BT.709 limited. Inverse EXACT de `yuv709_limited` dans `shaders.metal` :
+    /// une autre matrice ferait dériver les couleurs du rendu et on croirait à un bug du
+    /// compositeur là où il n'y aurait qu'une conversion d'entrée fausse.
+    #[allow(clippy::type_complexity)]
+    fn rgb_to_nv12(rgb: &[u8], w: u32, h: u32) -> (Vec<u8>, Vec<u8>) {
+        let luma = |i: usize| -> (f32, f32, f32, f32) {
+            let (r, g, b) = (
+                rgb[i * 3] as f32 / 255.0,
+                rgb[i * 3 + 1] as f32 / 255.0,
+                rgb[i * 3 + 2] as f32 / 255.0,
+            );
+            (r, g, b, 0.2126 * r + 0.7152 * g + 0.0722 * b)
+        };
+        let mut y = vec![0u8; (w * h) as usize];
+        for i in 0..(w * h) as usize {
+            let (_, _, _, yl) = luma(i);
+            y[i] = (16.0 + 219.0 * yl).round().clamp(0.0, 255.0) as u8;
+        }
+        // Chroma au plus proche voisin : l'échantillon en haut à gauche de chaque bloc 2x2.
+        // Un vrai filtre ne changerait rien à ce que ce harnais donne à voir.
+        let mut uv = vec![0u8; (w * (h / 2)) as usize];
+        for row in 0..h / 2 {
+            for col in 0..w / 2 {
+                let (r, _, b, yl) = luma(((row * 2) * w + col * 2) as usize);
+                let cb = 128.0 + 224.0 * ((b - yl) / 1.8556);
+                let cr = 128.0 + 224.0 * ((r - yl) / 1.5748);
+                let o = (row * w + col * 2) as usize;
+                uv[o] = cb.round().clamp(0.0, 255.0) as u8;
+                uv[o + 1] = cr.round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        (y, uv)
+    }
+
+    fn frame_from_png(path: &std::path::Path) -> FakeFrame {
+        let img = image::open(path)
+            .unwrap_or_else(|e| panic!("{} : {e}", path.display()))
+            .to_rgb8();
+        // NV12 veut des dimensions paires ; on rogne d'un pixel plutôt que de rééchantillonner.
+        let (w, h) = (img.width() & !1, img.height() & !1);
+        let src = img.as_raw();
+        let mut rgb = vec![0u8; (w * h * 3) as usize];
+        for row in 0..h {
+            let (d, s) = ((row * w * 3) as usize, (row * img.width() * 3) as usize);
+            rgb[d..d + (w * 3) as usize].copy_from_slice(&src[s..s + (w * 3) as usize]);
+        }
+        let (y, uv) = rgb_to_nv12(&rgb, w, h);
+        FakeFrame::from_planes(w, h, &y, &uv)
+    }
+
+    #[test]
+    fn seg_visual_renders_the_four_modes_from_a_real_photo() {
+        let (Ok(out_dir), Ok(cam)) = (
+            std::env::var("OPENSCREEN_SEG_VISUAL"),
+            std::env::var("OPENSCREEN_SEG_CAM"),
+        ) else {
+            eprintln!("harnais visuel : OPENSCREEN_SEG_VISUAL + OPENSCREEN_SEG_CAM absents — sauté");
+            return;
+        };
+        if !crate::segmentation::runtime_available() {
+            eprintln!("ONNX Runtime absent (ORT_DYLIB_PATH) — sauté");
+            return;
+        }
+        let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../public/mediapipe/selfie_segmentation/selfie_segmentation_landscape.onnx");
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — sauté");
+            return;
+        };
+        std::fs::create_dir_all(&out_dir).expect("dossier de sortie");
+
+        let (rw, rh) = (1280u32, 720u32);
+        let comp = super::Compositor::new_sized(&gpu, rw, rh).expect("Compositor::new_sized");
+        let webcam = frame_from_png(std::path::Path::new(&cam));
+        let screen = match std::env::var("OPENSCREEN_SEG_SCREEN") {
+            Ok(p) => frame_from_png(std::path::Path::new(&p)),
+            // Sans capture d'écran sous la main, un damier : il rend le détourage lisible,
+            // là où un aplat laisserait croire à un fond simplement peint.
+            Err(_) => FakeFrame::new(640, 360, |col, row| {
+                if (col / 40 + row / 40) % 2 == 0 { 180 } else { 60 }
+            }),
+        };
+        let model_json = serde_json::to_string(&model.to_string_lossy()).expect("chemin");
+
+        let mut wrote = Vec::new();
+        for (name, effect) in [
+            ("00-none", "null".to_string()),
+            ("01-cutout", format!(r#"{{"mode":"transparent","blurIntensity":0,"background":null,"modelPath":{model_json}}}"#)),
+            ("02-blur", format!(r#"{{"mode":"blur","blurIntensity":0.8,"background":null,"modelPath":{model_json}}}"#)),
+            ("03-custom", format!(r##"{{"mode":"custom","blurIntensity":0,"background":{{"kind":"color","color":"#ff2d95"}},"modelPath":{model_json}}}"##)),
+        ] {
+            // Le masque arrive de façon asynchrone : on tourne jusqu'à ce qu'il soit là, ce
+            // qui est aussi une vérification en soi — la boucle du rendu ne l'attend jamais.
+            let mut rgba = Vec::new();
+            for _ in 0..60 {
+                rgba = compose_visual(&comp, &screen, &webcam, &effect);
+                if effect == "null" || comp.webcam_mask.borrow().is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+            let path = format!("{out_dir}/seg-{name}.png");
+            image::RgbaImage::from_raw(rw, rh, rgba)
+                .expect("dimensions du readback")
+                .save(&path)
+                .unwrap_or_else(|e| panic!("écriture {path} : {e}"));
+            wrote.push(path);
+        }
+        for p in &wrote {
+            println!("wrote {p}");
+        }
+        assert!(
+            comp.webcam_mask.borrow().is_some(),
+            "aucun masque n'a été produit : les trois modes d'effet sont sans objet"
+        );
+    }
+
+    /// Caméra plein cadre (`camera-fullscreen`… sans région : on force le rect via
+    /// `webcamRect`), pour que le masque occupe toute l'image et se juge à taille réelle.
+    fn compose_visual(
+        comp: &super::Compositor,
+        screen: &FakeFrame,
+        webcam: &FakeFrame,
+        effect: &str,
+    ) -> Vec<u8> {
+        let json = format!(
+            r##"{{"clips":[],
+                "layout":{{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle",
+                           "webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false,
+                           "webcamRect":{{"x":0.06,"y":0.10,"width":0.55,"height":0.72}}}},
+                "effects":{{"padding":0.10,"blur":false,"shadow":1,"roundnessFrac":0.02,"motionBlur":0}},
+                "background":{{"kind":"gradient","angleDeg":45,"stops":["#1b2a4a","#0b0f1a"]}},
+                "zoomRegions":[],"annotations":[],
+                "cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,
+                           "clipToBounds":false,"theme":"default"}},
+                "cropByClip":[],
+                "webcamEffect":{effect},
+                "output":{{"width":1280,"height":720,"fps":30}}}}"##
+        );
+        let scene = crate::scene::Scene::from_json(&json).expect("scene json");
+        comp.set_live_params(live_params_from_scene(&scene));
+        comp.set_has_webcam(true);
+        comp.set_scene(Some(scene));
+        let mut cfg = crate::config::Cfg::c8();
+        cfg.zoom = false;
+        cfg.layout_anim = false;
+        cfg.cursor = false;
+        cfg.mblur_n = 1;
+        unsafe {
+            comp.compose_frame(screen.as_ptr(), webcam.as_ptr(), 0.0, &cfg)
+                .expect("compose_frame");
+            let (_, _, rgba) = comp.readback_direct().expect("readback_direct");
+            rgba
+        }
     }
 
     /// Le pendant macOS de `compositor_windows`'s `every_shader_entry_point_compiles`.

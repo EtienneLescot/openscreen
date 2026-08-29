@@ -238,12 +238,42 @@ LUID matching (`IDXGIFactory4::EnumAdapterByLuid`), a shared NT handle for the m
 there is no idle silicon for async compute to fill. That is a floor, not a tuning knob.
 `onnxruntime-node` in `electron-builder.json5` is a stale comment, not a dependency.
 
-**macOS — Metal. The cleanest of the three.** `d3d_macos.rs:109-119` creates one `MTLDevice` and
+**macOS — Metal, and the port is in.** Capture, upload and composite all run on the one
+`MTLDevice` the compositor already shares with the encoder; there is no interop layer, because
+the CPU EP made one unnecessary everywhere.
+
+Indicative cost, M1 (8 GPU cores, macOS 26.5), 1280x720 preview including the synchronous
+`readback_direct` the preview already pays, A/B/A/B interleaved, 300 frames per arm. **Not a
+§C.2 run** — no fixture, no `--repeat 3`, its own harness — so it is a shape, not a quotable
+number:
+
+| arm | p50 | vs off |
+|---|---:|---:|
+| effect off | 3.04 ms | — |
+| cutout | 2.57 ms | **−0.47 ms** |
+| blur | 3.47 ms | +0.43 ms |
+
+**Cutout is cheaper than no effect at all.** It drops the PiP drop shadow — one fewer full-quad
+SDF draw — and that more than pays for everything the feature adds.
+
+What these arms do **not** isolate is the capture itself. Cutout and blur do exactly the same
+capture, inference and upload work (same 30 Hz limiter, same 256x144 readback); they differ only
+by the shader branch and the shadow. So the 0.90 ms between them is shader work, and the capture
+cost sits inside both arms unmeasured. Separating it needs a fourth arm — effect requested,
+capture running, `fx.z` held at 0 — which is not a state the compositor can be asked for today.
+
+The honest claim is therefore the net one: **on this machine the whole feature costs between
+−0.47 and +0.43 ms per frame at 720p.** And it is a *this machine* claim — M1 unified memory
+makes the `Private`→`Shared` blit nearly free, whereas on an Intel Mac with a discrete GPU it is
+a real bus transfer. That has not been measured.
+
+**The engine question, kept for the record.** `d3d_macos.rs:109-119` creates one `MTLDevice` and
 one `MTLCommandQueue`, and `compositor_macos.rs:525-531` shows the compositor *clones* (retains)
 them rather than making its own — preview and export already share the same objects. MPSGraph and
 CoreML can take that same device: **no interop layer at all**, and CoreML may route to the ANE,
-which would remove GPU contention entirely. The macOS composite baseline has never been measured;
-the 11.07 ms figure is a Radeon number and does not transfer.
+which would remove GPU contention entirely. Neither was needed once the CPU EP was settled. The
+11.07 ms compositor baseline quoted above is a Radeon number and does not transfer — the M1
+figure for the same shape of frame is the 3.04 ms in the table.
 
 **Linux — wgpu 24 + WGSL, not raw Vulkan.** `layer.wgsl` and `blur.wgsl` are compiled at runtime
 by naga; there is no SPIR-V toolchain to reuse and no raw `VkDevice` exposed. ONNX Runtime with a
