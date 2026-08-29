@@ -49,6 +49,42 @@ distributed by their own registries, not redistributed inside our binaries.
 - The speech model (`ggml-*.bin`) is **not** bundled — it is downloaded into the
   user's data directory on first use by `electron/stt/modelManager.ts`.
 
+## ONNX Runtime (Windows and Apple Silicon macOS)
+
+- **Component**: `onnxruntime.dll` / `libonnxruntime.dylib`, under
+  `resources/electron/native/bin/<platform>-<arch>/`.
+- **License**: MIT — <https://github.com/microsoft/onnxruntime>.
+- Not built here: the pinned upstream release archive is downloaded, SHA-256
+  verified and unpacked by `scripts/fetch-onnxruntime.mjs`, which also checks the
+  archive's own LICENSE really is MIT before vendoring anything.
+- **Why it ships**: the native compositor segments the webcam subject with it, on
+  the CPU execution provider, to drive the camera background cutout/blur/custom
+  modes. The `gpu_cuda*` builds are deliberately not used — they are an order of
+  magnitude larger and carry NVIDIA redistribution terms.
+- **Not on Intel macOS**: upstream publishes no `osx-x86_64` asset from 1.27 on,
+  so the x64 DMG ships without it and the camera background effects are simply
+  absent there. Not shipped on Linux either, where the compositor has no capture
+  path for the mask yet.
+- The segmentation model it runs is a separate component, immediately below.
+
+## MediaPipe Selfie Segmentation — model weights
+
+- **Components**: `selfie_segmentation.tflite`,
+  `selfie_segmentation_landscape.tflite` and the `selfie_segmentation_landscape.onnx`
+  derived from them, shipped inside `app.asar` under `dist/mediapipe/`.
+- **License**: Apache-2.0 — <https://google.github.io/mediapipe/solutions/selfie_segmentation>.
+  Copyright The MediaPipe Authors.
+- The `.onnx` is a **derived work**, generated from the vendored `.tflite` by
+  `scripts/convert-selfie-segmentation-to-onnx.py`. No third-party weights are
+  downloaded at build time.
+- **Why it is listed here**: these weights are redistributed inside the installer,
+  and Apache-2.0 §4 asks that the attribution travel with them. The provenance note
+  in `public/mediapipe/selfie_segmentation/README.md` does not — electron-builder's
+  `"!*.md"` filter strips it from the package — so this file is the only copy a user
+  ever receives.
+- The MediaPipe **JavaScript** solution and its two ~5.6 MB WASM builds are no longer
+  bundled: inference moved into the native compositor, and nothing loaded them.
+
 ## Microsoft OpenMP runtime — `vcomp140.dll` (Windows only)
 
 - **Component**: `resources/electron/native/bin/win32-x64/vcomp140.dll`.

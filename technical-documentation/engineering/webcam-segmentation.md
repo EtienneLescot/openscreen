@@ -79,12 +79,52 @@ not an alpha channel, so nothing has to survive a codec that cannot carry one.
   `RightPanes.tsx`). A visible setting that changes nothing is worse than an absent one; it
   comes back for a platform the moment that platform's capture lands. What Linux still needs is
   `capture_webcam_rgb` and `set_webcam_mask` against the `ReadbackRing` it already has.
-- **ONNX Runtime is not staged.** The crate links `ort` with `load-dynamic`, so nothing is needed
-  to *build*; at runtime `ensureOnnxRuntimeOnPath` looks for the library next to the addon in
-  `electron/native/bin/<tag>/`, the convention `whisper-stt` already uses. Until a CI job puts it
-  there — the `build-whisper-stt.yml` pattern, roughly 15 MB per platform — the effect stays off.
-  `onnxruntime-node` was considered and rejected: 296 MB unpacked, which would roughly triple the
-  installer for three platforms' worth of providers we do not use.
+- **Intel macOS and Linux have no runtime staged**, so the effect stays off there — for
+  different reasons, both recorded under *Staging* below.
+
+## Staging the runtime
+
+`scripts/fetch-onnxruntime.mjs`, wired into `build:mac`, `build:win` and `build:win:store`. The
+crate links `ort` with `load-dynamic`, so nothing is needed to *build*; at runtime
+`ensureOnnxRuntimeOnPath` looks for the library next to the addon in `electron/native/bin/<tag>/`,
+the convention `whisper-stt` already uses. The script downloads the pinned upstream release,
+verifies its SHA-256 **before** unpacking, checks the archive's own LICENSE really is MIT, and
+lifts out exactly one file.
+
+**The version is not free to move.** `crates/Cargo.toml` gives `ort` the feature `api-27`, which is
+the minimum minor version it accepts — below it `GetApi` returns null and `ort` *panics* rather
+than erroring. `scripts/fetch-onnxruntime.test.mjs` cross-checks the two pins, in both directions,
+so a bump on either side cannot land alone. That coupling crosses a language boundary and is
+invisible in review; it is the only thing standing between an `ort` bump and a render thread dying
+on the first frame with an effect.
+
+What it actually costs, measured on the 1.27.1 artifacts rather than estimated:
+
+| target | library | size | shipped |
+|---|---|---:|---|
+| win32-x64 | `onnxruntime.dll` | 15.4 MB | yes |
+| darwin-arm64 | `libonnxruntime.dylib` | 38.5 MB | yes |
+| linux-x64 | `libonnxruntime.so` | 23.7 MB | pinned, not shipped |
+| darwin-x64 | — | — | **no upstream build** |
+
+Two things fall out of that table, and neither was the expectation:
+
+- **macOS costs 2.5x what Windows does**, not the "roughly 15 MB per platform" this document
+  previously assumed. `strip -x` takes the dylib from 38.5 MB to 23.7 MB, but stripping it would
+  mean shipping something other than the artifact the SHA-256 pin vouches for, which is the whole
+  point of pinning. Not done; noted in case the installer size ever forces the trade.
+- **Intel Macs cannot have it at all.** Microsoft publishes no `osx-x86_64` or universal asset for
+  any release from 1.27 on — arm64 is the only macOS target. The x64 DMG therefore ships without
+  the library and the effect is simply absent there, degrading exactly as designed. Building it
+  from source is the only way round it, and that is an ffmpeg-macos-sized script for a shrinking
+  platform.
+
+Linux is pinned in the same table but deliberately not wired into `build:linux`: the back-end
+carries the shader half only, so the library would be 23 MB of installer for a code path that
+cannot run. Landing the Linux capture half makes it a one-line change.
+
+`onnxruntime-node` was considered and rejected: 296 MB unpacked, which would roughly triple the
+installer for three platforms' worth of providers we do not use.
 
 ## The constraint that shapes any fix
 

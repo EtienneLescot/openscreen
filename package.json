@@ -42,15 +42,15 @@
 		"assets:appx": "node scripts/generate-appx-assets.mjs",
 		"preview": "vite preview",
 		"build:native:mac": "node scripts/build-macos-screencapturekit-helper.mjs",
-		"build:mac": "npm run build:native:mac && npm run fetch:ffmpeg:mac && npm run build:native:compositor:mac && tsc && vite build && electron-builder --mac",
+		"build:mac": "npm run build:native:mac && npm run fetch:ffmpeg:mac && npm run fetch:onnxruntime && npm run build:native:compositor:mac && tsc && vite build && electron-builder --mac",
 		"build:native:win": "node scripts/build-windows-wgc-helper.mjs",
 		"stage:vcomp": "node scripts/stage-vcomp-runtime.mjs",
 		"build:native:compositor": "node scripts/build-windows-compositor-addon.mjs",
 		"build:native:compositor:mac": "node scripts/build-macos-compositor-addon.mjs",
 		"build:native:compositor:linux": "node scripts/build-linux-compositor-addon.mjs",
 		"build:native:linux": "node scripts/build-linux-pipewire-helper.mjs",
-		"build:win": "npm run build:native:win && npm run fetch:ffmpeg && npm run stage:vcomp && npm run build:native:compositor && tsc && vite build && electron-builder --win --config.npmRebuild=false",
-		"build:win:store": "npm run build:native:win && npm run fetch:ffmpeg && npm run stage:vcomp && npm run build:native:compositor && tsc && vite build && electron-builder --win appx --config.npmRebuild=false",
+		"build:win": "npm run build:native:win && npm run fetch:ffmpeg && npm run fetch:onnxruntime && npm run stage:vcomp && npm run build:native:compositor && tsc && vite build && electron-builder --win --config.npmRebuild=false",
+		"build:win:store": "npm run build:native:win && npm run fetch:ffmpeg && npm run fetch:onnxruntime && npm run stage:vcomp && npm run build:native:compositor && tsc && vite build && electron-builder --win appx --config.npmRebuild=false",
 		"build:linux": "npm run fetch:ffmpeg:sdk && npm run build:native:linux && npm run build:native:compositor:linux && tsc && vite build && electron-builder --linux AppImage deb pacman rpm --config.npmRebuild=false",
 		"build:whisper-binaries": "bash scripts/build-whisper-stt.sh",
 		"test:whisper-stt": "node scripts/test-whisper-stt.mjs",
@@ -92,7 +92,8 @@
 		"prepare": "husky",
 		"fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs",
 		"fetch:ffmpeg:mac": "node scripts/fetch-ffmpeg-macos.mjs",
-		"fetch:ffmpeg:sdk": "node scripts/fetch-ffmpeg.mjs --sdk-only"
+		"fetch:ffmpeg:sdk": "node scripts/fetch-ffmpeg.mjs --sdk-only",
+		"fetch:onnxruntime": "node scripts/fetch-onnxruntime.mjs"
 	},
 	"dependencies": {
 		"@fix-webm-duration/fix": "^1.0.1",
