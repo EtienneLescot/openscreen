@@ -1897,14 +1897,15 @@ const CAMERA_SHAPES: Array<{
 /**
  * Whether this build can actually segment the camera.
  *
- * The mask is produced by the native compositor, and only the Windows back-end captures the
- * frame and uploads the mask — macOS and Linux carry the shader branch but nothing feeds it,
- * so `fx.z` never leaves 0 there. Showing the control anyway would put a setting in the panel
- * that changes nothing, which is the one thing a control must never do. It comes back for a
- * platform the moment that platform's capture lands.
+ * The mask is produced by the native compositor, so this tracks which back-ends capture the
+ * webcam frame and upload the mask: Windows and macOS do, Linux carries the shader branch but
+ * nothing feeds it, so `fx.z` never leaves 0 there. Showing the control anyway would put a
+ * setting in the panel that changes nothing, which is the one thing a control must never do.
+ * It comes back for a platform the moment that platform's capture lands.
  */
 function supportsWebcamSegmentation(): boolean {
-	return window.electronAPI?.getPlatform?.() === "win32";
+	const platform = window.electronAPI?.getPlatform?.();
+	return platform === "win32" || platform === "darwin";
 }
 
 const CAMERA_BACKGROUND_MODES: Array<{

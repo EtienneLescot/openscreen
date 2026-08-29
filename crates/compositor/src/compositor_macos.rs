@@ -198,6 +198,42 @@ impl Drop for CVMetalTextureCache {
 }
 
 // ---------------------------------------------------------------------------
+// Segmentation du sujet webcam
+// ---------------------------------------------------------------------------
+
+/// Cadence de l'inférence. Même valeur et même raison que
+/// `compositor_windows::SEGMENTATION_HZ` : une silhouette ne bouge pas de façon
+/// perceptible en 16 ms, et c'est le seul levier mesuré qui divise le coût par deux sans
+/// toucher au modèle.
+const SEGMENTATION_HZ: u32 = 30;
+
+/// Cible RGBA + miroir de lecture pour extraire la frame webcam à la résolution du modèle.
+///
+/// Deux textures, pas une : `rt` est `Private` parce que c'est une cible de rendu, et
+/// `get_bytes` n'est légal que sur du `Shared`. C'est exactement le couple
+/// `nv12_y`/`nv12_read_y` du chemin d'encodage, en RGBA et à 256x144 — cf. l'en-tête du
+/// module. `Managed` n'a pas sa place ici : rien dans ce fichier n'en utilise, et c'est le
+/// seul mode de stockage qui exigerait un `synchronizeResource` avant la lecture.
+struct SegCapture {
+    /// Cible de la passe de capture. `Private` : écrite par le GPU, jamais lue par le CPU.
+    rt: metal::Texture,
+    /// Miroir `Shared` de `rt`, rempli par blit dans le même command buffer.
+    read: metal::Texture,
+    width: u32,
+    height: u32,
+}
+
+/// Texture du masque de segmentation, recréée seulement quand la résolution du modèle
+/// change — c'est-à-dire jamais, en régime établi. Pendant Metal de
+/// `compositor_windows::WebcamMask` : pas de vue à côté de la texture, un `MTLTexture` est
+/// déjà ce que `set_fragment_texture` prend.
+struct WebcamMask {
+    tex: metal::Texture,
+    width: u32,
+    height: u32,
+}
+
+// ---------------------------------------------------------------------------
 // Compositor
 // ---------------------------------------------------------------------------
 
@@ -280,6 +316,25 @@ pub struct Compositor {
     /// Textes rastérisés, indexés par ID, avec la `cache_key` du spec pour invalider.
     text_cache: RefCell<std::collections::HashMap<String, (metal::Texture, u64)>>,
     text_raster: Option<crate::text::TextRasterizer>,
+
+    // --- Segmentation du sujet webcam (cf. `pump_segmentation`) ---
+    /// Masque du sujet, R8 à la résolution du modèle. Écrit par `set_webcam_mask`, lu au
+    /// moment de dessiner la webcam. `None` tant qu'aucune frame n'a été segmentée — l'effet
+    /// reste alors éteint plutôt que de rendre une webcam invisible en mode détourage.
+    webcam_mask: RefCell<Option<WebcamMask>>,
+    /// Cible + miroir de la capture, créés à la première capture et jamais redimensionnés :
+    /// le modèle a une entrée fixe.
+    seg_capture: RefCell<Option<SegCapture>>,
+    /// Worker d'inférence, absent tant que `enable_segmentation` n'a pas été appelé.
+    seg_worker: RefCell<Option<crate::segmentation::SegmentationWorker>>,
+    /// Boîte aux lettres du worker. Le masque est déposé depuis le thread d'inférence et
+    /// téléversé depuis le thread de rendu : aucun appel Metal ne traverse de thread.
+    seg_inbox: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    seg_rate: RefCell<crate::segmentation::RateLimiter>,
+    /// Frame RGB réutilisée d'une capture à l'autre.
+    seg_scratch: RefCell<Vec<u8>>,
+    /// Le chargement du modèle a échoué : ne pas réessayer à chaque frame.
+    seg_failed: RefCell<bool>,
 }
 
 /// Descripteur de texture — les six cibles ne diffèrent que par format, taille et
@@ -561,6 +616,13 @@ impl Compositor {
             ann_img_cache: RefCell::new(std::collections::HashMap::new()),
             text_cache: RefCell::new(std::collections::HashMap::new()),
             text_raster: crate::text::TextRasterizer::new().ok(),
+            webcam_mask: RefCell::new(None),
+            seg_capture: RefCell::new(None),
+            seg_worker: RefCell::new(None),
+            seg_inbox: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            seg_rate: RefCell::new(crate::segmentation::RateLimiter::new(SEGMENTATION_HZ)),
+            seg_scratch: RefCell::new(Vec::new()),
+            seg_failed: RefCell::new(false),
         })
     }
 
@@ -1208,6 +1270,291 @@ impl Compositor {
     }
 
 
+    /// Extrait la frame webcam en RGB8 à la résolution du modèle, dans `out`.
+    ///
+    /// Pendant Metal de `compositor_windows::capture_webcam_rgb`, avec les mêmes contraintes
+    /// d'appel et une seule divergence de mécanique : là où D3D11 réquisitionne la cible du
+    /// contexte persistant, Metal ouvre une passe sur `SegCapture::rt` et la referme, donc
+    /// rien n'est « réquisitionné ». La contrainte d'ordre reste malgré tout : cette méthode
+    /// **doit tourner avant que le command buffer de composition ne soit créé**, parce
+    /// qu'elle attend son propre buffer et qu'attendre au milieu d'une frame sérialiserait
+    /// CPU et GPU sur exactement le chemin que cette conception veut garder recouvert.
+    ///
+    /// `src` est le rect source en UV. L'appelant y passe la frame ENTIÈRE et non le
+    /// sous-rect dessiné — cf. `pump_segmentation`.
+    ///
+    /// # Le readback
+    ///
+    /// Trois étapes, la forme prescrite par l'en-tête du module et déjà tenue par
+    /// `render_nv12` + `read_nv12_scaled` : rendu dans une cible `Private`, blit vers un
+    /// miroir `Shared`, `get_bytes`. Pas de `Managed`, donc pas de `synchronizeResource` —
+    /// c'est le seul mode de stockage qui l'exigerait, et rien dans ce fichier n'en utilise.
+    ///
+    /// Le buffer `out` est réutilisé d'un appel à l'autre : il est dimensionné au RGBA lu
+    /// puis compacté sur place en RGB, ce qui laisse sa capacité au maximum des deux et ne
+    /// réalloue donc plus après la première capture.
+    pub unsafe fn capture_webcam_rgb(
+        &self,
+        wy: &metal::Texture,
+        wuv: &metal::Texture,
+        src: [f32; 4],
+        width: u32,
+        height: u32,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        if width == 0 || height == 0 {
+            return Err(anyhow!(
+                "capture webcam de dimensions nulles ({width}x{height})"
+            ));
+        }
+        {
+            let mut slot = self.seg_capture.borrow_mut();
+            if !matches!(slot.as_ref(), Some(c) if c.width == width && c.height == height) {
+                *slot = Some(SegCapture {
+                    rt: make_texture(
+                        &self.gpu.device,
+                        metal::MTLPixelFormat::RGBA8Unorm,
+                        width,
+                        height,
+                        metal::MTLStorageMode::Private,
+                        metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead,
+                    ),
+                    read: make_texture(
+                        &self.gpu.device,
+                        metal::MTLPixelFormat::RGBA8Unorm,
+                        width,
+                        height,
+                        metal::MTLStorageMode::Shared,
+                        metal::MTLTextureUsage::ShaderRead,
+                    ),
+                    width,
+                    height,
+                });
+            }
+        }
+        let slot = self.seg_capture.borrow();
+        let cap = slot.as_ref().expect("créé juste au-dessus");
+
+        // Command buffer PROPRE, et surtout PAS `submit`/`sync` : `sync` attend `last_cmd`,
+        // et `read_nv12_scaled` compte sur `last_cmd` pour être le buffer de `render_nv12`.
+        // Le remplacer ici ferait attendre la capture au lieu de la conversion NV12, et le
+        // readback d'encodage lirait des plans que rien n'a encore écrits.
+        let cmd_buf = self.gpu.context.new_command_buffer();
+        {
+            // Plein cadre de la cible, sans coins ni motion blur : le modèle veut l'image,
+            // pas la mise en forme. `fx` reste à zéro — la branche de masque du shader ne
+            // doit surtout pas se prendre sur la capture qui l'alimente.
+            let enc = self.begin_pass(
+                cmd_buf,
+                &cap.rt,
+                Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0)),
+                &self.pipeline_main,
+            )?;
+            self.draw_video(
+                enc,
+                &LayerCB {
+                    dst: [0.0, 0.0, 1.0, 1.0],
+                    src,
+                    quad_px: [width as f32, height as f32],
+                    mode: 0.0,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    mb: [1.0, 1.0, 1.0, 0.0],
+                    ..Default::default()
+                },
+                wy,
+                wuv,
+            );
+            enc.end_encoding();
+        }
+        let blit = cmd_buf.new_blit_command_encoder();
+        blit.copy_from_texture(
+            &cap.rt,
+            0,
+            0,
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            metal::MTLSize { width: width as u64, height: height as u64, depth: 1 },
+            &cap.read,
+            0,
+            0,
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+        );
+        blit.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let (w, h) = (width as usize, height as usize);
+        out.resize(w * h * 4, 0);
+        cap.read.get_bytes(
+            out.as_mut_ptr() as *mut std::ffi::c_void,
+            (w * 4) as u64,
+            metal::MTLRegion {
+                origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
+                size: metal::MTLSize { width: w as u64, height: h as u64, depth: 1 },
+            },
+            0,
+        );
+        // RGBA → RGB sur place : le modèle n'a pas de canal alpha en entrée. La destination
+        // (`3i`) court derrière la source (`4i`), donc aucune écriture n'écrase un octet pas
+        // encore lu.
+        for i in 0..w * h {
+            let (r, g, b) = (out[i * 4], out[i * 4 + 1], out[i * 4 + 2]);
+            out[i * 3] = r;
+            out[i * 3 + 1] = g;
+            out[i * 3 + 2] = b;
+        }
+        out.truncate(w * h * 3);
+        Ok(())
+    }
+
+    /// Publie le masque de segmentation du sujet webcam (R8, `width`x`height`, 0 = fond).
+    ///
+    /// La texture est `Shared` et réécrite en place par `replace_region` ; elle n'est
+    /// recréée que si la résolution du modèle change, ce qui n'arrive pas en régime établi.
+    ///
+    /// Réécrire une texture que le GPU pourrait encore lire serait une course — ici il ne
+    /// le peut pas : les trois chemins de frame macOS drainent la file avant de rendre la
+    /// main (`readback_direct` et `rgb_to_nv12` font `submit` + `sync`, `read_nv12_scaled`
+    /// fait `sync`), donc plus rien n'est en vol quand `compose_frame` rappelle
+    /// `pump_segmentation`. C'est ce qui dispense d'un double buffer, pas la chance.
+    pub fn set_webcam_mask(&self, data: &[u8], width: u32, height: u32) -> Result<()> {
+        if width == 0 || height == 0 {
+            return Err(anyhow!("masque webcam de dimensions nulles ({width}x{height})"));
+        }
+        let expected = (width as usize) * (height as usize);
+        if data.len() < expected {
+            return Err(anyhow!(
+                "masque webcam trop court : {} octets pour {width}x{height}",
+                data.len()
+            ));
+        }
+
+        let mut slot = self.webcam_mask.borrow_mut();
+        if !matches!(slot.as_ref(), Some(m) if m.width == width && m.height == height) {
+            *slot = Some(WebcamMask {
+                tex: make_texture(
+                    &self.gpu.device,
+                    metal::MTLPixelFormat::R8Unorm,
+                    width,
+                    height,
+                    metal::MTLStorageMode::Shared,
+                    metal::MTLTextureUsage::ShaderRead,
+                ),
+                width,
+                height,
+            });
+        }
+        let mask = slot.as_ref().expect("alloué juste au-dessus");
+        mask.tex.replace_region(
+            metal::MTLRegion {
+                origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
+                size: metal::MTLSize { width: width as u64, height: height as u64, depth: 1 },
+            },
+            0,
+            data.as_ptr() as *const std::ffi::c_void,
+            width as u64,
+        );
+        Ok(())
+    }
+
+    /// Un tour de segmentation : téléverse le masque prêt, puis soumet une nouvelle frame si
+    /// la cadence l'autorise. Port de `compositor_windows::pump_segmentation` — worker,
+    /// boîte aux lettres, limiteur de cadence et démarrage paresseux sont indépendants de la
+    /// plateforme, seuls les deux appels GPU changent.
+    ///
+    /// Les deux moitiés sont volontairement désynchronisées. Le masque téléversé ici vient de
+    /// la frame précédente — une frame de retard sur une silhouette est invisible, alors
+    /// qu'attendre l'inférence bloquerait le rendu, ce qui est exactement le coût que toute
+    /// cette conception cherche à ne pas payer.
+    unsafe fn pump_segmentation(
+        &self,
+        wy: &metal::Texture,
+        wuv: &metal::Texture,
+        valid: [f32; 2],
+    ) -> Result<()> {
+        if *self.seg_failed.borrow() {
+            return Ok(());
+        }
+        // Rien à faire si aucun effet n'est demandé : ni capture, ni inférence, ni masque.
+        // Le coût de la fonctionnalité est alors exactement nul.
+        let (wants_effect, model_path) = {
+            let scene = self.scene.borrow();
+            match scene.as_ref().and_then(|s| s.webcam_effect.as_ref()) {
+                Some(e) if e.shader_code() > 0.0 => (true, e.model_path.clone()),
+                _ => (false, None),
+            }
+        };
+        if !wants_effect {
+            return Ok(());
+        }
+
+        // Démarrage paresseux, piloté par la scène : personne n'a à appeler
+        // `enable_segmentation` à la main, et un modèle introuvable éteint l'effet au lieu
+        // de faire tomber le rendu.
+        if self.seg_worker.borrow().is_none() {
+            let Some(path) = model_path else { return Ok(()) };
+            if let Err(e) = self.enable_segmentation(std::path::Path::new(&path)) {
+                eprintln!("[segmentation] désactivée : {e}");
+                // Une scène qui reste identique retenterait à chaque frame ; on lève le
+                // verrou plutôt que de journaliser 60 fois par seconde.
+                *self.seg_failed.borrow_mut() = true;
+            }
+            return Ok(());
+        }
+
+        if let Some(mask) = self.seg_inbox.lock().unwrap().take() {
+            self.set_webcam_mask(
+                &mask,
+                crate::segmentation::MODEL_WIDTH,
+                crate::segmentation::MODEL_HEIGHT,
+            )?;
+        }
+
+        if !self.seg_rate.borrow_mut().should_run(std::time::Instant::now()) {
+            return Ok(());
+        }
+        let mut scratch = self.seg_scratch.borrow_mut();
+        // La frame ENTIÈRE, pas le sous-rect dessiné : un crop utilisateur serré amputerait
+        // le sujet en entrée du modèle, et le masque serait faux là où il compte le plus.
+        // Le shader ramène ses coordonnées dans cet espace via `fx.xy`.
+        self.capture_webcam_rgb(
+            wy,
+            wuv,
+            [0.0, 0.0, valid[0], valid[1]],
+            crate::segmentation::MODEL_WIDTH,
+            crate::segmentation::MODEL_HEIGHT,
+            &mut scratch,
+        )?;
+        if let Some(w) = self.seg_worker.borrow().as_ref() {
+            w.submit(&scratch);
+        }
+        Ok(())
+    }
+
+    /// Démarre la segmentation du sujet webcam pour ce compositeur.
+    ///
+    /// Idempotent. Tant qu'elle n'est pas appelée, `compose_frame` ne fait rien de plus et
+    /// la webcam se dessine comme avant — c'est ce qui rend l'effet inerte plutôt que cassé
+    /// sur une build sans modèle.
+    pub fn enable_segmentation(&self, model_path: &std::path::Path) -> Result<()> {
+        if self.seg_worker.borrow().is_some() {
+            return Ok(());
+        }
+        let segmenter = crate::segmentation::Segmenter::load(model_path)?;
+        let inbox = std::sync::Arc::clone(&self.seg_inbox);
+        let worker = crate::segmentation::SegmentationWorker::spawn(segmenter, move |mask, _, _| {
+            // Écrase le masque précédent s'il n'a pas encore été téléversé : c'est le plus
+            // récent qui vaut, jamais une file.
+            *inbox.lock().unwrap() = Some(mask.to_vec());
+        });
+        *self.seg_worker.borrow_mut() = Some(worker);
+        Ok(())
+    }
+
+    /// Éteint l'effet : la webcam se redessine telle quelle à la frame suivante.
+    pub fn clear_webcam_mask(&self) {
+        *self.webcam_mask.borrow_mut() = None;
+    }
+
     /// Soumet sans attendre, et retient le buffer pour `sync`.
     fn submit(&self, cmd: &metal::CommandBufferRef) {
         cmd.commit();
@@ -1391,6 +1738,19 @@ impl Compositor {
         let u_max = scw / (stw.max(1)) as f32;
         let v_max = sch / (sth.max(1)) as f32;
         let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        // Étendue valide de la texture webcam : les décodeurs allouent des textures alignées,
+        // donc la frame n'occupe pas forcément toute la texture. `.max(1)` au dénominateur —
+        // `tex_dims` rend (0, 0) sur une webcam absente, là où le chemin Windows divise sans
+        // garde parce qu'il a toujours les deux frames.
+        let w_valid = [wcw / (wtw.max(1)) as f32, wch / (wth.max(1)) as f32];
+
+        // Segmentation, AVANT d'ouvrir le command buffer de composition : `capture_webcam_rgb`
+        // attend son propre buffer, et attendre au milieu de la frame sérialiserait CPU et GPU.
+        // Dernier point où `wtw/wth/wcw/wch` sont en portée sans emprunt de `self.scene` —
+        // `pump_segmentation` emprunte la scène lui-même.
+        if let Some((wy, wuv)) = webcam_tex.as_ref() {
+            self.pump_segmentation(wy, wuv, w_valid)?;
+        }
 
         let scene_ref = self.scene.borrow();
         let cursor_ref = self.cursor.borrow();
@@ -1618,7 +1978,40 @@ impl Compositor {
                 g.scene_preset.as_deref(),
                 Some("dual-frame") | Some("vertical-stack")
             );
-            if cfg.shadow && !webcam_is_block && g.shape_fade > 0.0 {
+            // Effet d'arrière-plan : le mode vient de la scène, le masque par pixel de
+            // l'inférence. Les DEUX sont requis — un mode sans masque rendrait la webcam
+            // invisible en détourage, donc tant que rien n'a été segmenté on dessine la
+            // piste telle quelle. C'est aussi ce qui rend le premier lancement gracieux.
+            let mask = self.webcam_mask.borrow();
+            let effect = scene_ref
+                .as_ref()
+                .and_then(|s| s.webcam_effect.as_ref())
+                .filter(|_| mask.is_some())
+                .map(|e| (e.shader_code(), e))
+                .filter(|(code, _)| *code > 0.0);
+
+            let (effect_code, blur_intensity, bg_color) = match effect {
+                Some((code, e)) if code > 2.5 => {
+                    // Fond personnalisé : seule une couleur plate se peint dans le shader.
+                    // Un dégradé ou une image passeraient par une texture, ce que ce calque
+                    // ne porte pas encore — on retombe alors sur du noir plutôt que sur du
+                    // hasard.
+                    let col = match &e.background {
+                        Some(SceneBackground::Color { color }) => {
+                            parse_hex(color).unwrap_or([0.0, 0.0, 0.0, 1.0])
+                        }
+                        _ => [0.0, 0.0, 0.0, 1.0],
+                    };
+                    (code, 0.0, col)
+                }
+                Some((code, e)) => (code, e.blur_intensity.clamp(0.0, 1.0), [0.0, 0.0, 0.0, 1.0]),
+                None => (0.0, 0.0, [0.0, 0.0, 0.0, 1.0]),
+            };
+
+            // L'ombre appartient à la bulle PiP. En détourage il n'y a plus de bulle — une
+            // ombre portée par un rectangle invisible se lit comme un artefact.
+            let is_cutout = effect_code == 1.0;
+            if cfg.shadow && !webcam_is_block && !is_cutout && g.shape_fade > 0.0 {
                 self.draw_shadow(
                     enc,
                     g.w_dst,
@@ -1629,6 +2022,18 @@ impl Compositor {
                     WEBCAM_SHADOW_OPACITY * g.shape_fade,
                 );
             }
+            // Metal tolère l'index 3 non lié tant que `fx.z` reste à 0 : la branche n'est
+            // pas prise, la texture n'est pas échantillonnée. Dès qu'il monte, elle doit
+            // l'être sur TOUT draw capable de la prendre — ici il n'y en a qu'un. L'état
+            // d'un encodeur est rémanent, donc lier avant le draw suffit, et l'ombre qui
+            // précède est en mode 2, que `ps_main` garde hors de la branche (`mode < 0.5`).
+            //
+            // Pas de déliaison après coup, contrairement au chemin Windows qui remet le slot
+            // t3 à `None` : cet état meurt avec l'encodeur, et les annotations en ouvrent un
+            // autre. Il n'y a rien sur quoi fuir.
+            if let Some(m) = mask.as_ref() {
+                enc.set_fragment_texture(3, Some(&m.tex));
+            }
             self.draw_video(
                 enc,
                 &LayerCB {
@@ -1637,7 +2042,8 @@ impl Compositor {
                     quad_px: g.w_px,
                     radius_px: g.w_radius,
                     mode: 0.0,
-                    color: [0.0, 0.0, 0.0, 1.0],
+                    color: bg_color,
+                    fx: [w_valid[0], w_valid[1], effect_code, blur_intensity],
                     src_prev: [u0, cv0, u1, cv1],
                     dst_prev: g.w_dst_prev,
                     mb: [g.mb_taps, 1.0, 1.0, 0.0],
@@ -1935,7 +2341,537 @@ impl Compositor {
 
 #[cfg(test)]
 mod tests {
-    
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // Segmentation du sujet webcam
+    //
+    // Il n'y a PAS de banc hors Windows : `poc-d3d` est `cfg(windows)` dans son propre
+    // `Cargo.toml`, donc le `--cfg C8 --scene …` qui a prouvé le chemin Windows n'existe
+    // pas ici. Ce sont ces tests qui tiennent le rôle, et ils rendent de vrais pixels sur
+    // le device Metal du système plutôt que d'inspecter des champs : ce que le portage
+    // ajoute (une capture relue, un upload R8, une liaison à l'index 3, une branche
+    // `fx.z`) est précisément ce qu'aucun `cargo build` ne peut vérifier.
+    // -----------------------------------------------------------------------
+
+    /// Luma BT.709 limited d'un gris neutre : `yuv709_limited` fait `(Y - 16) / 219` sur
+    /// les trois canaux quand la chroma vaut 128, donc 235 rend du blanc franc et 16 du
+    /// noir franc. Ces deux valeurs rendent les assertions de couleur calculables à la main.
+    const Y_WHITE: u8 = 235;
+    const Y_BLACK: u8 = 16;
+    const UV_NEUTRAL: u8 = 128;
+
+    fn region(w: u32, h: u32) -> metal::MTLRegion {
+        metal::MTLRegion {
+            origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            size: metal::MTLSize { width: w as u64, height: h as u64, depth: 1 },
+        }
+    }
+
+    /// Une paire de plans NV12 synthétiques, sous forme de `MTLTexture` — ce que
+    /// `nv12_srvs` produirait d'une vraie frame, sans avoir à décoder quoi que ce soit.
+    fn nv12_textures(
+        device: &metal::Device,
+        w: u32,
+        h: u32,
+        luma: impl Fn(u32, u32) -> u8,
+    ) -> (metal::Texture, metal::Texture) {
+        let y = make_texture(
+            device,
+            metal::MTLPixelFormat::R8Unorm,
+            w,
+            h,
+            metal::MTLStorageMode::Shared,
+            metal::MTLTextureUsage::ShaderRead,
+        );
+        let mut plane = vec![0u8; (w * h) as usize];
+        for row in 0..h {
+            for col in 0..w {
+                plane[(row * w + col) as usize] = luma(col, row);
+            }
+        }
+        y.replace_region(region(w, h), 0, plane.as_ptr() as *const std::ffi::c_void, w as u64);
+
+        let (uw, uh) = (w / 2, h / 2);
+        let uv = make_texture(
+            device,
+            metal::MTLPixelFormat::RG8Unorm,
+            uw,
+            uh,
+            metal::MTLStorageMode::Shared,
+            metal::MTLTextureUsage::ShaderRead,
+        );
+        let chroma = vec![UV_NEUTRAL; (uw * uh * 2) as usize];
+        uv.replace_region(
+            region(uw, uh),
+            0,
+            chroma.as_ptr() as *const std::ffi::c_void,
+            (uw * 2) as u64,
+        );
+        (y, uv)
+    }
+
+    /// Masque 0 sur la moitié gauche, 255 sur la droite. La frontière tombe pile au milieu,
+    /// donc un échantillon pris au quart et un aux trois quarts sont loin du dégradé que le
+    /// filtrage linéaire pose sur la couture.
+    fn half_mask(w: u32, h: u32) -> Vec<u8> {
+        (0..w * h).map(|i| if i % w < w / 2 { 0u8 } else { 255u8 }).collect()
+    }
+
+    #[test]
+    fn the_webcam_capture_comes_back_as_interleaved_rgb_at_model_resolution() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        // Moitié gauche noire, moitié droite blanche : la capture doit rendre les deux dans
+        // le bon sens. Une inversion d'axe passerait un test de taille sans se voir.
+        let (y, uv) = nv12_textures(&gpu.device, 64, 64, |col, _| {
+            if col < 32 { Y_BLACK } else { Y_WHITE }
+        });
+
+        let mut out = Vec::new();
+        unsafe {
+            comp.capture_webcam_rgb(
+                &y,
+                &uv,
+                [0.0, 0.0, 1.0, 1.0],
+                crate::segmentation::MODEL_WIDTH,
+                crate::segmentation::MODEL_HEIGHT,
+                &mut out,
+            )
+            .expect("capture_webcam_rgb");
+        }
+
+        let (w, h) = (
+            crate::segmentation::MODEL_WIDTH as usize,
+            crate::segmentation::MODEL_HEIGHT as usize,
+        );
+        assert_eq!(out.len(), w * h * 3, "le modèle veut du RGB8 entrelacé, sans alpha");
+
+        let px = |buf: &[u8], col: usize, row: usize| -> [u8; 3] {
+            let i = (row * w + col) * 3;
+            [buf[i], buf[i + 1], buf[i + 2]]
+        };
+        let left = px(&out, w / 4, h / 2);
+        let right = px(&out, 3 * w / 4, h / 2);
+        assert!(left.iter().all(|&c| c < 24), "moitié gauche pas noire : {left:?}");
+        assert!(right.iter().all(|&c| c > 231), "moitié droite pas blanche : {right:?}");
+
+        // Deuxième capture sur le même buffer : c'est le régime établi (30 fois par
+        // seconde), et il ne doit ni réallouer ni traîner les octets du tour précédent.
+        let capacity = out.capacity();
+        unsafe {
+            comp.capture_webcam_rgb(
+                &y,
+                &uv,
+                [0.0, 0.0, 1.0, 1.0],
+                crate::segmentation::MODEL_WIDTH,
+                crate::segmentation::MODEL_HEIGHT,
+                &mut out,
+            )
+            .expect("deuxième capture");
+        }
+        assert_eq!(out.len(), w * h * 3);
+        assert_eq!(out.capacity(), capacity, "le scratch se réalloue d'une frame à l'autre");
+        assert_eq!(px(&out, w / 4, h / 2), left);
+        assert_eq!(px(&out, 3 * w / 4, h / 2), right);
+    }
+
+    #[test]
+    fn a_capture_of_zero_size_is_refused_rather_than_rendered() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        let (y, uv) = nv12_textures(&gpu.device, 16, 16, |_, _| Y_WHITE);
+        let mut out = Vec::new();
+        let err = unsafe { comp.capture_webcam_rgb(&y, &uv, [0.0, 0.0, 1.0, 1.0], 0, 144, &mut out) };
+        assert!(err.is_err(), "une cible de largeur nulle doit être refusée");
+    }
+
+    #[test]
+    fn the_mask_texture_is_allocated_once_and_a_short_buffer_is_refused() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        let (w, h) = (crate::segmentation::MODEL_WIDTH, crate::segmentation::MODEL_HEIGHT);
+        let mask = vec![255u8; (w * h) as usize];
+
+        comp.set_webcam_mask(&mask, w, h).expect("premier téléversement");
+        let first = comp.webcam_mask.borrow().as_ref().map(|m| m.tex.as_ptr());
+        comp.set_webcam_mask(&mask, w, h).expect("deuxième téléversement");
+        let second = comp.webcam_mask.borrow().as_ref().map(|m| m.tex.as_ptr());
+        assert_eq!(
+            first, second,
+            "la texture est recréée à chaque frame alors que la résolution du modèle est fixe"
+        );
+
+        // Un masque trop court doit être refusé, pas lu hors bornes : `replace_region` lit
+        // `width` octets par ligne sans rien savoir de la longueur de la tranche.
+        assert!(comp.set_webcam_mask(&mask[..(w * h) as usize - 1], w, h).is_err());
+        assert!(comp.set_webcam_mask(&mask, 0, h).is_err());
+        assert!(comp.clear_webcam_mask() == () && comp.webcam_mask.borrow().is_none());
+    }
+
+    /// Le test qui compte : le masque DÉCOUPE vraiment la caméra.
+    ///
+    /// Il rend le calque webcam plein cadre sur le RT avec `fx.z = 1` (détourage) et un
+    /// masque mi-fond mi-sujet, puis relit les pixels. Il couvre d'un coup les trois choses
+    /// que le portage ajoute et qu'aucune compilation ne vérifie : l'upload R8, la liaison
+    /// de la texture à l'index 3, et la branche `fx.z` de `ps_main` sur un vrai device.
+    #[test]
+    fn the_mask_actually_cuts_the_camera_out() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let comp = super::Compositor::new_sized(&gpu, 64, 64).expect("Compositor::new_sized");
+        comp.set_webcam_mask(&half_mask(8, 8), 8, 8).expect("set_webcam_mask");
+        let (y, uv) = nv12_textures(&gpu.device, 16, 16, |_, _| Y_WHITE);
+
+        // Fond bleu franc : une couleur que la caméra (blanche, chroma neutre) ne peut pas
+        // produire, donc « il reste du bleu » signifie « la caméra a été découpée ici ».
+        let cmd = gpu.context.new_command_buffer();
+        let enc = comp
+            .begin_pass(
+                cmd,
+                &comp.rt,
+                Some(metal::MTLClearColor::new(0.0, 0.0, 1.0, 1.0)),
+                &comp.pipeline_main,
+            )
+            .expect("begin_pass");
+        {
+            let mask = comp.webcam_mask.borrow();
+            enc.set_fragment_texture(3, Some(&mask.as_ref().expect("masque posé").tex));
+        }
+        unsafe {
+            comp.draw_video(
+                enc,
+                &LayerCB {
+                    dst: [0.0, 0.0, 1.0, 1.0],
+                    src: [0.0, 0.0, 1.0, 1.0],
+                    quad_px: [64.0, 64.0],
+                    mode: 0.0,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    // fx.xy = étendue valide (toute la texture ici), fx.z = 1 → détourage.
+                    fx: [1.0, 1.0, 1.0, 0.0],
+                    src_prev: [0.0, 0.0, 1.0, 1.0],
+                    dst_prev: [0.0, 0.0, 1.0, 1.0],
+                    mb: [1.0, 1.0, 1.0, 0.0],
+                    ..Default::default()
+                },
+                &y,
+                &uv,
+            );
+        }
+        enc.end_encoding();
+        comp.submit(cmd);
+        let (rw, rh, rgba) = unsafe { comp.readback_direct().expect("readback_direct") };
+        assert_eq!((rw, rh), (64, 64));
+
+        let px = |col: usize, row: usize| -> [u8; 4] {
+            let i = (row * rw as usize + col) * 4;
+            [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+        };
+        let cut = px(16, 32);
+        let kept = px(48, 32);
+        assert_eq!(cut, [0, 0, 255, 255], "masque à 0 : le fond doit rester visible");
+        assert_eq!(kept, [255, 255, 255, 255], "masque à 255 : la caméra doit rester opaque");
+    }
+
+    /// Même montage, mode fond personnalisé (`fx.z = 3`) : là où le masque dit « fond », le
+    /// shader doit peindre `color` — c'est le seul mode où `LayerCB::color` cesse d'être
+    /// du noir opaque décoratif et porte une valeur que le portage doit transmettre.
+    #[test]
+    fn the_custom_background_colour_replaces_the_masked_out_pixels() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let comp = super::Compositor::new_sized(&gpu, 64, 64).expect("Compositor::new_sized");
+        comp.set_webcam_mask(&half_mask(8, 8), 8, 8).expect("set_webcam_mask");
+        let (y, uv) = nv12_textures(&gpu.device, 16, 16, |_, _| Y_WHITE);
+
+        let cmd = gpu.context.new_command_buffer();
+        let enc = comp
+            .begin_pass(
+                cmd,
+                &comp.rt,
+                Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0)),
+                &comp.pipeline_main,
+            )
+            .expect("begin_pass");
+        {
+            let mask = comp.webcam_mask.borrow();
+            enc.set_fragment_texture(3, Some(&mask.as_ref().expect("masque posé").tex));
+        }
+        unsafe {
+            comp.draw_video(
+                enc,
+                &LayerCB {
+                    dst: [0.0, 0.0, 1.0, 1.0],
+                    src: [0.0, 0.0, 1.0, 1.0],
+                    quad_px: [64.0, 64.0],
+                    mode: 0.0,
+                    color: [1.0, 0.0, 0.0, 1.0],
+                    fx: [1.0, 1.0, 3.0, 0.0],
+                    src_prev: [0.0, 0.0, 1.0, 1.0],
+                    dst_prev: [0.0, 0.0, 1.0, 1.0],
+                    mb: [1.0, 1.0, 1.0, 0.0],
+                    ..Default::default()
+                },
+                &y,
+                &uv,
+            );
+        }
+        enc.end_encoding();
+        comp.submit(cmd);
+        let (rw, _, rgba) = unsafe { comp.readback_direct().expect("readback_direct") };
+        let px = |col: usize, row: usize| -> [u8; 4] {
+            let i = (row * rw as usize + col) * 4;
+            [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+        };
+        assert_eq!(px(16, 32), [255, 0, 0, 255], "fond masqué : la couleur custom doit peindre");
+        assert_eq!(px(48, 32), [255, 255, 255, 255], "sujet : la caméra doit rester intacte");
+    }
+
+
+    // -----------------------------------------------------------------------
+    // `compose_frame` de bout en bout
+    //
+    // Les tests ci-dessus prouvent les pièces ; ceux-ci prouvent le CÂBLAGE — que
+    // `compose_frame` porte bien `fx`/`color` sur le calque webcam, qu'il lie le masque, et
+    // qu'il ne lève `fx.z` qu'une fois un masque réellement téléversé. Ils passent par de
+    // vraies `AVFrame` VideoToolbox (des `CVPixelBufferRef` IOSurface-backed), donc par le
+    // MÊME `nv12_srvs` que le décodeur : aucun raccourci n'est pris sur le seam de frame.
+    //
+    // Aucun n'a besoin d'ONNX Runtime : le masque est posé à la main par `set_webcam_mask`.
+    // C'est délibéré — ce que le portage ajoute côté GPU doit être vérifiable là où
+    // l'inférence n'est pas installée, ce qui est le cas de la CI.
+    // -----------------------------------------------------------------------
+
+    /// Une `AVFrame` VideoToolbox synthétique. `compose_frame` ne lit que `format`,
+    /// `data[3]`, `width` et `height` : le reste peut rester à zéro.
+    struct FakeFrame {
+        frame: Box<AVFrame>,
+        _pb: crate::mac_frames::CVPixelBufferRef,
+    }
+
+    impl FakeFrame {
+        fn new(w: u32, h: u32, luma: impl Fn(u32, u32) -> u8) -> FakeFrame {
+            let mut y = vec![0u8; (w * h) as usize];
+            for row in 0..h {
+                for col in 0..w {
+                    y[(row * w + col) as usize] = luma(col, row);
+                }
+            }
+            let uv = vec![UV_NEUTRAL; (w * (h / 2)) as usize];
+            let pb = crate::mac_frames::nv12_pixel_buffer_from_planes(w, h, &y, &uv)
+                .expect("CVPixelBuffer NV12");
+            let mut frame: Box<AVFrame> = Box::new(unsafe { std::mem::zeroed() });
+            frame.format = crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX as i32;
+            frame.data[3] = pb.as_ptr() as *mut u8;
+            frame.width = w as i32;
+            frame.height = h as i32;
+            FakeFrame { frame, _pb: pb }
+        }
+
+        fn as_ptr(&self) -> *const AVFrame {
+            &*self.frame as *const AVFrame
+        }
+    }
+
+    /// Scène PiP minimale. `effect` est le JSON de `webcamEffect` (`"null"` pour aucun).
+    ///
+    /// `effects.shadow` vaut 0 À DESSEIN : ce curseur ne pilote plus que l'ombre de l'écran,
+    /// alors que celle du PiP est fixe (`WEBCAM_SHADOW_OPACITY`) et ne dépend que de
+    /// `cfg.shadow`. Le mettre à zéro est donc ce qui isole les deux — sinon un test sur
+    /// `cfg.shadow` mesure les deux ombres à la fois et ne dit plus rien de la caméra.
+    fn pip_scene_json(effect: &str) -> String {
+        format!(
+            r##"{{"clips":[],
+                "layout":{{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle",
+                           "webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},
+                "effects":{{"padding":0.18,"blur":false,"shadow":0,"roundnessFrac":0.05,"motionBlur":0}},
+                "background":{{"kind":"color","color":"#0080ff"}},
+                "zoomRegions":[],"annotations":[],
+                "cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,
+                           "clipToBounds":false,"theme":"default"}},
+                "cropByClip":[],
+                "webcamEffect":{effect},
+                "output":{{"width":1920,"height":1080,"fps":30}}}}"##
+        )
+    }
+
+    /// Compose une frame et rend le RGBA du RT. `screen` est gris moyen, `webcam` blanche :
+    /// le blanc franc devient alors la SIGNATURE de la caméra, une couleur qu'aucun autre
+    /// calque de cette scène ne produit, donc comptable sans connaître la géométrie du PiP.
+    ///
+    /// Le fond est un bleu franc et NON du noir : le PiP par défaut tombe dans la marge, hors
+    /// de l'écran, et une ombre noire sur un fond noir ne se voit pas — le contrôle du test
+    /// d'ombre passerait alors pour une suppression réussie.
+    fn compose_pip(comp: &super::Compositor, effect: &str, shadow: bool) -> Vec<u8> {
+        let scene = crate::scene::Scene::from_json(&pip_scene_json(effect)).expect("scene json");
+        comp.set_live_params(live_params_from_scene(&scene));
+        comp.set_has_webcam(true);
+        comp.set_scene(Some(scene));
+
+        let screen = FakeFrame::new(128, 128, |_, _| 126);
+        let webcam = FakeFrame::new(64, 64, |_, _| Y_WHITE);
+        let mut cfg = crate::config::Cfg::c8();
+        cfg.bg_blur = false;
+        cfg.zoom = false;
+        cfg.layout_anim = false;
+        cfg.cursor = false;
+        cfg.mblur_n = 1;
+        cfg.shadow = shadow;
+        unsafe {
+            comp.compose_frame(screen.as_ptr(), webcam.as_ptr(), 0.0, &cfg)
+                .expect("compose_frame");
+            let (_, _, rgba) = comp.readback_direct().expect("readback_direct");
+            rgba
+        }
+    }
+
+    /// Pixels quasi blancs = pixels de caméra encore visibles.
+    fn camera_pixels(rgba: &[u8]) -> usize {
+        rgba.chunks_exact(4)
+            .filter(|px| px[0] > 240 && px[1] > 240 && px[2] > 240)
+            .count()
+    }
+
+    const NO_EFFECT: &str = "null";
+    const CUTOUT: &str = r#"{"mode":"transparent","blurIntensity":0,"background":null,"modelPath":null}"#;
+
+    /// Le piège que le brief nomme : un mode SANS masque ne doit rien changer.
+    ///
+    /// `effect_code` doit rester à 0 tant que rien n'a été segmenté, sinon le détourage rend
+    /// une webcam invisible sur les premières frames — le temps que l'inférence rende son
+    /// premier masque, c'est-à-dire à chaque ouverture de l'éditeur. L'assertion est
+    /// octet pour octet : « inchangé » ne souffre pas d'à-peu-près.
+    #[test]
+    fn a_mode_without_a_mask_composites_exactly_like_no_effect_at_all() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        let plain = compose_pip(&comp, NO_EFFECT, true);
+        let requested = compose_pip(&comp, CUTOUT, true);
+        assert!(
+            comp.webcam_mask.borrow().is_none(),
+            "aucun masque n'a été téléversé : `modelPath` est absent, donc rien ne segmente"
+        );
+        assert!(camera_pixels(&plain) > 200, "la caméra n'est pas à l'écran, le test ne prouve rien");
+        assert_eq!(plain, requested, "un mode sans masque a changé des pixels");
+    }
+
+    /// Et une fois le masque là, le détourage doit VRAIMENT découper — dans la bonne
+    /// proportion. Le masque couvre la moitié de la caméra, donc la moitié de ses pixels
+    /// doit disparaître. Compter plutôt que d'échantillonner un point évite de coder en dur
+    /// la géométrie du PiP, qui appartient à `plan_frame` et non à ce portage.
+    #[test]
+    fn compose_frame_cuts_the_camera_out_once_a_mask_exists() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        let whole = camera_pixels(&compose_pip(&comp, NO_EFFECT, true));
+        assert!(whole > 200, "la caméra n'est pas à l'écran, le test ne prouve rien");
+
+        let (mw, mh) = (crate::segmentation::MODEL_WIDTH, crate::segmentation::MODEL_HEIGHT);
+        comp.set_webcam_mask(&half_mask(mw, mh), mw, mh).expect("set_webcam_mask");
+        let cut = camera_pixels(&compose_pip(&comp, CUTOUT, true));
+
+        let expected = whole as f32 / 2.0;
+        assert!(
+            (cut as f32 - expected).abs() < expected * 0.15,
+            "détourage : {cut} pixels de caméra restants pour ~{expected:.0} attendus \
+             (entier : {whole})"
+        );
+    }
+
+    /// L'ombre portée du PiP doit disparaître en détourage : une ombre projetée par un
+    /// rectangle devenu invisible se lit comme un artefact. Le test le prouve sans jamais
+    /// localiser l'ombre — en détourage, `cfg.shadow` ne doit plus rien changer du tout.
+    ///
+    /// Le contrôle est ce qui empêche l'assertion d'être vide : sans effet, `cfg.shadow`
+    /// DOIT changer des pixels, sinon la première moitié passerait aussi pour une scène où
+    /// aucune ombre n'a jamais été dessinée.
+    #[test]
+    fn the_pip_shadow_is_suppressed_in_cutout_mode() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        assert_ne!(
+            compose_pip(&comp, NO_EFFECT, true),
+            compose_pip(&comp, NO_EFFECT, false),
+            "contrôle : sans effet, l'ombre du PiP doit bel et bien se voir"
+        );
+
+        let (mw, mh) = (crate::segmentation::MODEL_WIDTH, crate::segmentation::MODEL_HEIGHT);
+        comp.set_webcam_mask(&half_mask(mw, mh), mw, mh).expect("set_webcam_mask");
+        assert_eq!(
+            compose_pip(&comp, CUTOUT, true),
+            compose_pip(&comp, CUTOUT, false),
+            "en détourage, l'ombre est encore dessinée"
+        );
+    }
+
+    /// Le tour complet, celui qui a besoin d'ONNX Runtime : capture → inférence → masque →
+    /// composite, entraîné par `compose_frame` seul. Se saute proprement sans la
+    /// bibliothèque, ce que fait la CI — cf. `segmentation::runtime_available`.
+    #[test]
+    fn the_whole_loop_produces_a_mask_from_compose_frame_alone() {
+        if !crate::segmentation::runtime_available() {
+            eprintln!("ONNX Runtime absent (ORT_DYLIB_PATH) — test sauté");
+            return;
+        }
+        let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../public/mediapipe/selfie_segmentation/selfie_segmentation_landscape.onnx");
+        if !model.is_file() {
+            eprintln!("modèle absent ({}) — test sauté", model.display());
+            return;
+        }
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        let effect = format!(
+            r#"{{"mode":"transparent","blurIntensity":0,"background":null,"modelPath":{}}}"#,
+            serde_json::to_string(&model.to_string_lossy()).expect("chemin sérialisable")
+        );
+
+        // Le limiteur est à 30 Hz : une frame par tour ne suffirait pas, et l'inférence est
+        // asynchrone. On laisse au worker le temps de rendre un masque, sans jamais
+        // l'attendre dans le rendu — ce qui est précisément le contrat.
+        let mut uploaded = false;
+        for _ in 0..40 {
+            let _ = compose_pip(&comp, &effect, true);
+            if comp.webcam_mask.borrow().is_some() {
+                uploaded = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+        assert!(
+            uploaded,
+            "aucun masque n'est remonté : la boucle capture → inférence → upload est rompue"
+        );
+        assert!(
+            !*comp.seg_failed.borrow(),
+            "la segmentation s'est éteinte d'elle-même"
+        );
+    }
 
     /// Le pendant macOS de `compositor_windows`'s `every_shader_entry_point_compiles`.
     ///
