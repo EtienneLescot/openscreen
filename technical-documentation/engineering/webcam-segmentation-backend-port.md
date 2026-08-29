@@ -6,25 +6,26 @@ Context and the measurements behind the design: [webcam-segmentation.md](webcam-
 
 ## Where it stands
 
-The feature is complete on Windows and inert elsewhere. The split is deliberate:
+The feature is complete on Windows and macOS, and inert on Linux. The split is deliberate:
 
 | piece | Windows | macOS | Linux |
 |---|---|---|---|
-| shader branch on `fx.z` | done | **done** | **done** |
+| shader branch on `fx.z` | done | done | **done** |
 | mask texture binding | `t3` | `texture(3)` | `@binding(4)` |
-| `capture_webcam_rgb` | done | **missing** | **missing** |
-| `set_webcam_mask` | done | **missing** | **missing** |
-| `pump_segmentation` call | done | **missing** | **missing** |
-| `fx` on the webcam layer | done | **missing** | **missing** |
+| `capture_webcam_rgb` | done | done | **missing** |
+| `set_webcam_mask` | done | done | **missing** |
+| `pump_segmentation` call | done | done | **missing** |
+| `fx` on the webcam layer | done | done | **missing** |
 | inference (`segmentation.rs`) | shared | shared | shared |
 
 The shader half landed on all three at once on purpose: it is the part that must not drift
 between back-ends, it is mechanical, and the Metal and WGSL versions are checked by CI (see
 Verification). Everything below is the per-back-end half.
 
-`RightPanes.tsx`'s `supportsWebcamSegmentation()` hides the control off Windows. **Delete that
-gate for your platform in the same PR that lands the port** — it exists so users are not offered a
-setting that does nothing, and it becomes a lie the moment the port works.
+`RightPanes.tsx`'s `supportsWebcamSegmentation()` now admits `win32` and `darwin`, and still hides
+the control on Linux. **Delete that gate for your platform in the same PR that lands the port** —
+it exists so users are not offered a setting that does nothing, and it becomes a lie the moment
+the port works.
 
 ## What you are adding
 
@@ -94,6 +95,20 @@ the `--cfg C8 --scene …` route used to prove the Windows path does not exist f
 instead, and say in the PR what you actually saw on screen — a mask that composites is not the
 same claim as a mask that is correct.
 
+What the macOS port left behind, as the model for the Linux one — `compositor_macos::tests`, all
+rendering real pixels on the system device and all readable without ONNX Runtime, because the
+mask is posted by hand with `set_webcam_mask` and inference is not what these are testing:
+
+| test | what it would catch |
+|---|---|
+| `the_webcam_capture_comes_back_as_interleaved_rgb_at_model_resolution` | a readback that is RGBA, mirrored, or reallocating every frame |
+| `the_mask_actually_cuts_the_camera_out` | an unbound texture at index 3, or a mask that reaches the shader as noise |
+| `the_custom_background_colour_replaces_the_masked_out_pixels` | `color` not carried onto the webcam `LayerCB` |
+| `a_mode_without_a_mask_composites_exactly_like_no_effect_at_all` | `effect_code` leaving 0 too early — the invisible-webcam trap, asserted byte for byte |
+| `compose_frame_cuts_the_camera_out_once_a_mask_exists` | `fx` not carried, by counting camera pixels rather than pinning PiP geometry |
+| `the_pip_shadow_is_suppressed_in_cutout_mode` | the shadow of an invisible box — with a control render, so the assertion cannot pass vacuously |
+| `the_whole_loop_produces_a_mask_from_compose_frame_alone` | capture → inference → upload, driven by `compose_frame` alone. The only one that needs ONNX Runtime, and it skips cleanly without it |
+
 ## macOS specifics
 
 - **Device and queue.** `d3d_macos.rs:66-72` — `Gpu { device: metal::Device, context:
@@ -116,6 +131,16 @@ same claim as a mask that is correct.
   Commit and `wait_until_completed()` on the capture's own command buffer, leaving `last_cmd`
   alone.
 - **Mask upload** is `replace_region` (the pattern is at `:774-782`).
+- **`synchronizeResource` was not needed, and this was checked rather than assumed.** The
+  `Private` → blit → `Shared` → `get_bytes` shape reads back correctly as-is; `Shared` is not
+  `Managed`, so there is nothing to synchronise. It is also the same shape `rt_read` and
+  `nv12_read_y` have used in production all along, so it carries no support risk the existing
+  readbacks do not already carry.
+- **No double buffer on the mask.** `set_webcam_mask` rewrites a `Shared` texture the GPU could
+  in principle still be sampling — except that it cannot: all three macOS frame paths drain the
+  queue before returning (`readback_direct` and `rgb_to_nv12` do `submit` + `sync`,
+  `read_nv12_scaled` does `sync`), so nothing is in flight when `compose_frame` next calls
+  `pump_segmentation`. If that invariant ever changes, this is the code that breaks.
 
 ## Linux specifics
 
