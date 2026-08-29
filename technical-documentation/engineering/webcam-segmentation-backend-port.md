@@ -6,26 +6,26 @@ Context and the measurements behind the design: [webcam-segmentation.md](webcam-
 
 ## Where it stands
 
-The feature is complete on Windows and macOS, and inert on Linux. The split is deliberate:
+The feature is complete on all three back-ends.
 
 | piece | Windows | macOS | Linux |
 |---|---|---|---|
-| shader branch on `fx.z` | done | done | **done** |
+| shader branch on `fx.z` | done | done | done |
 | mask texture binding | `t3` | `texture(3)` | `@binding(4)` |
-| `capture_webcam_rgb` | done | done | **missing** |
-| `set_webcam_mask` | done | done | **missing** |
-| `pump_segmentation` call | done | done | **missing** |
-| `fx` on the webcam layer | done | done | **missing** |
+| `capture_webcam_rgb` | done | done | done |
+| `set_webcam_mask` | done | done | done |
+| `pump_segmentation` call | done | done | done |
+| `fx` on the webcam layer | done | done | done |
 | inference (`segmentation.rs`) | shared | shared | shared |
 
 The shader half landed on all three at once on purpose: it is the part that must not drift
 between back-ends, it is mechanical, and the Metal and WGSL versions are checked by CI (see
-Verification). Everything below is the per-back-end half.
+Verification). Everything below is the per-back-end half, and it is what each port added.
 
-`RightPanes.tsx`'s `supportsWebcamSegmentation()` now admits `win32` and `darwin`, and still hides
-the control on Linux. **Delete that gate for your platform in the same PR that lands the port** —
-it exists so users are not offered a setting that does nothing, and it becomes a lie the moment
-the port works.
+`RightPanes.tsx`'s `supportsWebcamSegmentation()` is **gone**: it existed so users were not
+offered a setting that did nothing, and once the last back-end captured a frame it admitted every
+platform and had become a lie. A fourth back-end would need it back — and would need to land the
+gate and the port in the same PR, as the first three did.
 
 ## What you are adding
 
@@ -115,6 +115,24 @@ Plus `seg_visual_renders_the_four_modes_from_a_real_photo`, opt-in behind
 assertions above can only say the mask *composites*; a mask that is *correct* on real hair
 against a real background is a judgement, and this is what you look at to make it.
 
+`compositor_linux::tests` is the same set, one test wider. It adds
+`a_capture_whose_rows_need_padding_is_depadded_correctly`, because the padding trap below is the
+one thing the shipped resolution can never exercise: 256 px of RGBA is 1024 bytes, already
+aligned, so at the size that actually runs the depad branch is dead code. The test captures at
+100 px — 400 bytes of payload in a 512-byte stride — and samples several rows, since a wrong
+depad does not produce noise but a shear of 28 px per row.
+
+Two more things differ from macOS, both forced by the host:
+
+- **`Gpu::create_auto`, not `Gpu::create`.** `create` is hardware-strict and the Linux CI runner
+  has no GPU, so the strict constructor would make every one of these tests skip silently on the
+  only machine that runs them automatically. `create_auto` falls back to lavapipe, which is what
+  the job installs `mesa-vulkan-drivers` for.
+- **The frames are built by hand.** There is no `CVPixelBuffer` equivalent to lean on: the tests
+  allocate the NV12-split pair themselves and pack a `linux_frames::VkFrameTex` carrier into
+  `AVFrame::data[0]`, exactly as `CpuFrames::attach_carrier` does. They therefore still go through
+  the real `nv12_srvs`, so no shortcut is taken on the frame seam.
+
 ## macOS specifics
 
 - **Device and queue.** `d3d_macos.rs:66-72` — `Gpu { device: metal::Device, context:
@@ -149,6 +167,25 @@ against a real background is a judgement, and this is what you look at to make i
   `pump_segmentation`. If that invariant ever changes, this is the code that breaks.
 
 ## Linux specifics
+
+What the port settled, beyond the notes below:
+
+- **`make_bind` resolves the mask itself**, rather than every call site passing it. It already
+  builds one bind group per draw and the layout requires binding 4, so the mask is bound on every
+  draw and `dummy_view()` is the fallback in the one place that decides. Nothing else changed at
+  the ~15 call sites.
+- **The capture readback is its own thing, not a fourth entry on `ReadbackRing`.** The ring exists
+  to *avoid* waiting; the capture must wait, because the frame it reads is the worker's input for
+  this tick. What it borrows from the ring is the lesson, not the code:
+  `WaitForSubmissionIndex`, never `Maintain::Wait`.
+- **`pump_segmentation` is called behind a scene check in `compose_frame`, not only inside
+  itself.** It re-checks anyway — the body is the Windows one verbatim — but on this back-end
+  `nv12_srvs` *allocates* two `TextureView`s per call, so reaching the function at all would cost
+  two allocations a frame on every project that has no effect. The feature has to cost zero when
+  it is off, and here that is a call-site property.
+- **`Queue::write_texture` for the mask, and it is not subject to the 256-byte rule.** That rule
+  is `copy_texture_to_buffer`'s. `linux_frames::upload` already writes NV12 planes with swscale's
+  SIMD strides through the same call.
 
 - **Webcam textures.** `nv12_srvs` (`compositor_linux.rs:779-791`) delegates to
   `linux_frames::nv12_planes`, which builds **fresh `TextureView`s on every call** — there is no
