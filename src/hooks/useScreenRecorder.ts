@@ -48,6 +48,31 @@ const RECORDING_FILE_PREFIX = "recording-";
 const VIDEO_FILE_EXTENSION = ".webm";
 const WEBCAM_FILE_SUFFIX = "-webcam";
 
+/**
+ * The cursor mode a BROWSER-pipeline take can actually honour, which is not always the
+ * one the user picked.
+ *
+ * Only win32 reaches that pipeline through `getDisplayMedia`, the sole browser API here
+ * that can exclude the system cursor (`cursor: "never"`). Everywhere else the
+ * desktop-capture stream bakes the real cursor into the pixels, so keeping
+ * "editable-overlay" would start cursor telemetry and have the editor composite a
+ * SECOND, synthetic cursor on top of it.
+ *
+ * This only bites when a platform falls back to browser capture with the editable cursor
+ * selected — on macOS 12 that is now the normal path (#515), and on Linux it is the
+ * no-PipeWire path, where the same latent defect lives.
+ *
+ * One function rather than the expression inlined twice: the mode reported to the main
+ * process at start and the mode persisted at finalize have to agree, and they are ~1200
+ * lines apart.
+ */
+function effectiveBrowserCursorMode(
+	platform: string,
+	requested: CursorCaptureMode,
+): CursorCaptureMode {
+	return platform === "win32" ? requested : "system";
+}
+
 const AUDIO_BITRATE_VOICE = 128_000;
 const AUDIO_BITRATE_SYSTEM = 192_000;
 
@@ -550,7 +575,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 								? { videoData: webcamVideoData, fileName: webcamFileName }
 								: undefined,
 						createdAt: activeRecordingId,
-						cursorCaptureMode,
+						// What this take actually did, not what was requested. Only the browser
+						// pipeline reaches this finalizer (stopRecording returns earlier for all
+						// three native paths), and off win32 it cannot exclude the system cursor
+						// — so the mode reported to the main process was forced to "system" and
+						// the stored metadata has to agree. It is user-visible: `openscreen
+						// project show` prints it.
+						cursorCaptureMode: effectiveBrowserCursorMode(
+							window.electronAPI.getPlatform(),
+							cursorCaptureMode,
+						),
 						durationMs: duration,
 					});
 
@@ -1676,19 +1710,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		preparedRecordingId?: number | null,
 	) => {
 		const platform = window.electronAPI.getPlatform();
-
-		// Only the win32 branch below reaches the browser pipeline through
-		// getDisplayMedia, which is the sole browser API here that can exclude the
-		// system cursor (`cursor: "never"`). Everywhere else the desktop-capture
-		// stream bakes the real cursor into the pixels, so reporting
-		// "editable-overlay" to the main process would start cursor telemetry and
-		// have the editor composite a SECOND, synthetic cursor on top of it.
-		//
-		// This only bites when a platform falls back to browser capture with the
-		// editable cursor selected — on macOS 12 that is now the normal path (#515),
-		// and on Linux it is the no-PipeWire path, where the same latent defect lives.
-		const browserCursorCaptureMode: CursorCaptureMode =
-			platform === "win32" ? cursorCaptureMode : "system";
+		const browserCursorCaptureMode = effectiveBrowserCursorMode(platform, cursorCaptureMode);
 
 		try {
 			if (!isCountdownRunActive(countdownRunToken)) {

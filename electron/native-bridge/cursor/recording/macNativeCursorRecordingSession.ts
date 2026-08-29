@@ -124,11 +124,22 @@ export async function requestMacCursorAccessibilityAccess(): Promise<MacCursorAc
 
 	// The return value is the signal, not a side effect: it says whether OpenScreen.app
 	// itself is trusted, independently of whether the child helper can be launched.
+	//
+	// `false`, so this is a silent read. Prompting here would ask for Accessibility
+	// BEFORE discovering whether the helper can run at all — and in every branch below
+	// where it cannot (missing-helper, error, exited, timeout) the grant is not what is
+	// missing, so the prompt is exactly the noise this function now exists to stop.
+	//
+	// Nothing is lost on the one path that does ask the user for the grant: reaching
+	// `not-determined` means the helper RAN, and it calls AXIsProcessTrustedWithOptions
+	// with kAXTrustedCheckOptionPrompt itself on every start
+	// (OpenScreenMacOSCursorHelper/main.swift), which is what puts OpenScreen in the
+	// Accessibility list for the user to tick.
 	let accessibilityTrusted = false;
 	try {
-		accessibilityTrusted = systemPreferences.isTrustedAccessibilityClient(true);
+		accessibilityTrusted = systemPreferences.isTrustedAccessibilityClient(false);
 	} catch {
-		// Continue with helper probing; it can trigger the same macOS prompt.
+		// Continue with helper probing; the helper performs the same check itself.
 	}
 
 	const helperPath = findMacCursorHelperPath();
@@ -237,6 +248,10 @@ export class MacNativeCursorRecordingSession implements CursorRecordingSession {
 		this.previousLeftButtonDown = false;
 		this.consecutiveOutsideSamples = 0;
 
+		// `true` here, unlike the silent read in requestMacCursorAccessibilityAccess: the
+		// return value is discarded, so prompting IS the point. Recording is starting and
+		// the helper is about to spawn, so this is the moment the grant can still change
+		// what the take records.
 		try {
 			systemPreferences.isTrustedAccessibilityClient(true);
 		} catch {
