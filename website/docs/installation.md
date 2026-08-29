@@ -23,7 +23,7 @@ Download the latest installer for your platform from the [download page](/downlo
 | | Minimum | Recommended |
 |---|---|---|
 | **Windows** | Windows 10 version 1903 (build 18362) or later, Intel 8th Gen / AMD Ryzen 2000 series or newer | Windows 11, Intel 12th Gen / AMD Ryzen 4000 series or newer |
-| **macOS** | macOS 12 (Monterey); macOS 13 (Ventura) or later for native ScreenCaptureKit capture — on macOS 12 recording falls back to the [browser pipeline](#platform-differences), with fewer capabilities | macOS 14 or later |
+| **macOS** | macOS 13 (Ventura) — required by ScreenCaptureKit for capture | macOS 14 or later |
 | **Linux** | `xdg-desktop-portal` and PipeWire for native capture and system audio (default on Ubuntu 22.04+, Fedora 34+) — recording still works without them through the [browser-capture fallback](#platform-differences), with fewer capabilities. Recording mouse clicks on Wayland additionally needs your user in the `input` group — see [Mouse clicks on Wayland](#mouse-clicks-on-wayland) | Same, kept up to date |
 | **RAM** | 8 GB | 16 GB |
 
@@ -131,10 +131,10 @@ The editing tools are the same everywhere — zooms, backgrounds, crop/trim/spee
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| Capture pipeline | Native (ScreenCaptureKit) on macOS 13+; browser pipeline on macOS 12 | Native (Windows Graphics Capture) | Browser pipeline |
+| Capture pipeline | Native (ScreenCaptureKit) | Native (Windows Graphics Capture) | Browser pipeline |
 | Custom cursor themes / click effects | ✅ | ✅ | ✅ on Wayland — click capture needs the `input` group ([details](#mouse-clicks-on-wayland)) |
 | Webcam | Native capture | Native capture | Browser capture (still works as PiP) |
-| System audio | macOS 13+; permission prompt on 14.2+; not available on macOS 12 and below | Works out of the box | Needs PipeWire (default on Ubuntu 22.04+, Fedora 34+) |
+| System audio | Works out of the box; permission prompt on macOS 14.2+ | Works out of the box | Needs PipeWire (default on Ubuntu 22.04+, Fedora 34+) |
 | MP4 export | ✅ | ✅ | ✅ (software encode) |
 | GIF export | ✅ | ✅ | ✅ |
 | On-device transcription | Metal (Apple Silicon) / CPU | Vulkan / CPU | Vulkan / CPU |

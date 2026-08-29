@@ -135,7 +135,7 @@ interface Window {
 			success: boolean;
 			available: boolean;
 			helperPath?: string;
-			reason?: "unsupported-platform" | "unsupported-os" | "missing-helper" | string;
+			reason?: "unsupported-platform" | "missing-helper" | string;
 			error?: string;
 		}>;
 		startNativeWindowsRecording: (
