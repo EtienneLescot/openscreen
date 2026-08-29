@@ -34,12 +34,23 @@ const SUPPORTED_FLOOR = 12;
  * SwiftPM allows — `.macOS(.v12)` and `.macOS("12.3")`.
  */
 function declaredMacOsFloor(source) {
-	const enumMatch = source.match(/\.macOS\(\s*\.v(\d+)(?:_\d+)?\s*\)/);
+	// Scoped to the platforms block, with comments stripped from it, rather than matched
+	// across the whole manifest. That block is preceded by a long comment discussing these
+	// very version numbers, so a file-wide match is one careless edit away from reading the
+	// prose instead of the declaration — and reporting a floor the build does not use is
+	// the one failure this guard must not have.
+	const block = source.match(/\bplatforms\s*:\s*\[([\s\S]*?)\]/)?.[1];
+	if (!block) {
+		return null;
+	}
+	const declarations = block.replace(/\/\/[^\n]*/g, "");
+
+	const enumMatch = declarations.match(/\.macOS\(\s*\.v(\d+)(?:_\d+)?\s*\)/);
 	if (enumMatch) {
 		return Number(enumMatch[1]);
 	}
 
-	const stringMatch = source.match(/\.macOS\(\s*"(\d+)(?:\.\d+)*"\s*\)/);
+	const stringMatch = declarations.match(/\.macOS\(\s*"(\d+)(?:\.\d+)*"\s*\)/);
 	return stringMatch ? Number(stringMatch[1]) : null;
 }
 
@@ -66,5 +77,25 @@ describe("macOS native helper deployment target", () => {
 		expect(declaredMacOsFloor("platforms: [ .macOS(.v10_15) ]")).toBe(10);
 		expect(declaredMacOsFloor('platforms: [ .macOS("12.3") ]')).toBe(12);
 		expect(declaredMacOsFloor("platforms: [ .iOS(.v16) ]")).toBeNull();
+	});
+
+	it("reads the declaration, not prose that happens to mention a version", () => {
+		// The real manifest carries exactly this shape: a comment about the floor sitting
+		// directly above the floor. Matching file-wide would report 12 while the build used
+		// 13 — a guard that passes for the very bug it exists to catch.
+		const decoyAbove = [
+			"// It was .macOS(.v12) until this changed; see issue #515.",
+			"platforms: [",
+			"\t.macOS(.v13)",
+			"],",
+		].join("\n");
+		expect(declaredMacOsFloor(decoyAbove)).toBe(13);
+
+		const decoyInside = ["platforms: [", "\t// was .macOS(.v12)", "\t.macOS(.v13)", "],"].join(
+			"\n",
+		);
+		expect(declaredMacOsFloor(decoyInside)).toBe(13);
+
+		expect(declaredMacOsFloor("// .macOS(.v12) with no platforms block at all")).toBeNull();
 	});
 });

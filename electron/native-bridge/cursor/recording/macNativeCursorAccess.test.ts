@@ -15,20 +15,23 @@ vi.mock("node:child_process", async (importOriginal) => {
 	return { ...actual, spawn, default: { ...((actual as WithDefault).default ?? {}), spawn } };
 });
 
-vi.mock("node:fs", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("node:fs")>();
-	// No helper binary exists in a test checkout; pretend the first candidate path
-	// is executable so path resolution is not what is under test.
-	return {
-		...actual,
-		accessSync: vi.fn(),
-		default: { ...((actual as WithDefault).default ?? {}), accessSync: vi.fn() },
-	};
-});
-
 const mocks = vi.hoisted(() => ({
 	isTrustedAccessibilityClient: vi.fn(() => true),
+	// Shared rather than two separate vi.fn()s so a test can make every candidate path
+	// unreadable and reach the missing-helper branch.
+	accessSync: vi.fn(),
 }));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	// No helper binary exists in a test checkout; by default pretend the first candidate
+	// path is executable so path resolution is not what is under test.
+	return {
+		...actual,
+		accessSync: mocks.accessSync,
+		default: { ...((actual as WithDefault).default ?? {}), accessSync: mocks.accessSync },
+	};
+});
 
 vi.mock("electron", () => ({
 	systemPreferences: { isTrustedAccessibilityClient: mocks.isTrustedAccessibilityClient },
@@ -73,6 +76,7 @@ beforeEach(() => {
 	spawnMock.mockReturnValue(helper as unknown as ReturnType<typeof spawn>);
 	mocks.isTrustedAccessibilityClient.mockReset();
 	mocks.isTrustedAccessibilityClient.mockReturnValue(true);
+	mocks.accessSync.mockReset();
 	const silence = () => {
 		// The access probe logs every helper diagnostic; keep the test output readable.
 	};
@@ -153,6 +157,39 @@ describe("requestMacCursorAccessibilityAccess", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	/**
+	 * The other half of #515's conflation, and the branch whose dialog used to tell the
+	 * user to run a build script. No helper on disk is not a permission problem either.
+	 */
+	it("reports an absent helper as unavailable, not as a denial", async () => {
+		mocks.accessSync.mockImplementation(() => {
+			throw new Error("ENOENT");
+		});
+		mocks.isTrustedAccessibilityClient.mockReturnValue(false);
+
+		const access = await requestMacCursorAccessibilityAccess();
+
+		expect(access).toMatchObject({ success: true, granted: false, status: "missing-helper" });
+		expect(access.accessibilityTrusted).toBe(false);
+		expect(isMacCursorHelperUnavailable(access.status)).toBe(true);
+		// Nothing was spawned: there was nothing to spawn.
+		expect(spawnMock).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The probe must not raise the macOS Accessibility prompt. It runs before the helper
+	 * is even located, so on every unavailable branch it would be asking for a grant that
+	 * is not what is missing.
+	 */
+	it("reads Accessibility trust without prompting", async () => {
+		await settle(requestMacCursorAccessibilityAccess(), () =>
+			helper.emitEvent({ type: "ready", timestampMs: 1, accessibilityTrusted: true }),
+		);
+
+		expect(mocks.isTrustedAccessibilityClient).toHaveBeenCalledWith(false);
+		expect(mocks.isTrustedAccessibilityClient).not.toHaveBeenCalledWith(true);
 	});
 
 	it("keeps the app's own trust separate from the helper's fate", async () => {
