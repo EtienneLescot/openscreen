@@ -353,6 +353,14 @@ jobs:
       - name: Build Metal compositor addon
         run: npm run build:native:compositor:mac
 
+      # Third step this job has to spell out, same reason as the two above: it is in
+      # `npm run build:mac`, which this job does not run. Unlike the compositor addon,
+      # a missing ONNX Runtime does not fail the pack — the webcam background effect
+      # just stays off — so nothing would catch the omission. No-ops on x64: upstream
+      # publishes no osx-x64 asset, and the script says so and exits 0.
+      - name: Stage ONNX Runtime
+        run: npm run stage:onnxruntime
+
       - name: Package .app bundle
         run: npx electron-builder --mac --${{ matrix.arch }} --dir --publish never
         env:

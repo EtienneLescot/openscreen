@@ -34,6 +34,22 @@ so they are identical by construction rather than by two implementations kept in
 
 Windows and macOS run all four stages; Linux carries the composite stage only (see *Not done*).
 
+**How the runtime gets there.** The crate links `ort` with `load-dynamic`, so nothing is needed to
+*build*; at runtime `ensureOnnxRuntimeOnPath` looks for the library next to the addon in
+`electron/native/bin/<tag>/`, the convention `whisper-stt` already uses.
+`scripts/stage-onnxruntime.mjs` puts it there, pinned by tag **and** sha256 — the discipline
+`fetch-ffmpeg.mjs` applies to its own vendored binaries, and this file ships inside every
+installer. The digests come from the release metadata GitHub records at upload, so `--pin`
+re-generates the table after a version bump without pulling 124 MB. `stage-onnxruntime.test.mjs`
+guards the table the way `fetch-ffmpeg.test.mjs` guards ffmpeg's, including the failure specific to
+this one: asset names interpolate `VERSION`, so a bump silently re-points all three downloads while
+leaving the digests below them stale.
+
+It runs from `build:win`, `build:mac` and `build:linux` — and, separately, as its own step in the
+macOS CI job, which spells its steps out instead of calling `build:mac` and has already lost the
+compositor addon that way once. `onnxruntime-node` was considered and rejected: 296 MB unpacked,
+which would roughly triple the installer for three platforms' worth of providers we do not use.
+
 The model is `public/mediapipe/selfie_segmentation/selfie_segmentation_landscape.onnx`, derived
 from the vendored `.tflite` by `scripts/convert-selfie-segmentation-to-onnx.py`. Its path is
 resolved by the **main process** in `resolveSceneAssetPaths`, the same place the wallpaper and
@@ -79,12 +95,13 @@ not an alpha channel, so nothing has to survive a codec that cannot carry one.
   `RightPanes.tsx`). A visible setting that changes nothing is worse than an absent one; it
   comes back for a platform the moment that platform's capture lands. What Linux still needs is
   `capture_webcam_rgb` and `set_webcam_mask` against the `ReadbackRing` it already has.
-- **ONNX Runtime is not staged.** The crate links `ort` with `load-dynamic`, so nothing is needed
-  to *build*; at runtime `ensureOnnxRuntimeOnPath` looks for the library next to the addon in
-  `electron/native/bin/<tag>/`, the convention `whisper-stt` already uses. Until a CI job puts it
-  there — the `build-whisper-stt.yml` pattern, roughly 15 MB per platform — the effect stays off.
-  `onnxruntime-node` was considered and rejected: 296 MB unpacked, which would roughly triple the
-  installer for three platforms' worth of providers we do not use.
+- **Intel Macs get no runtime.** Upstream publishes no `osx-x64` asset for ONNX Runtime 1.29.0
+  (arm64 only), so `runtime_available()` is false there and the mask never arrives. The control is
+  still shown, because `supportsWebcamSegmentation` gates on platform and the renderer cannot see
+  the arch — which makes this the one case that violates the rule the gate exists to enforce: a
+  setting that changes nothing. Fixing it properly means exposing the capability rather than
+  guessing it — `runtime_available()` through the addon on the `probeBackend` pattern — which also
+  covers the dev checkout and `--dir` builds where nothing was staged.
 
 ## The constraint that shapes any fix
 
