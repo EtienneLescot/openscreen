@@ -1250,14 +1250,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					return false;
 				}
 
-				// macOS 12: the helper is present but ScreenCaptureKit capture is gated to
-				// 13+, so fall back to the browser pipeline rather than refusing to record.
-				// Windows does the same at the equivalent branch above, and Linux below.
-				if (availability.reason === "unsupported-os") {
-					console.warn("Native macOS capture needs macOS 13 or later; using browser capture.");
-					return false;
-				}
-
 				throw new Error(
 					availability.reason === "missing-helper"
 						? "Native macOS capture helper is not available."

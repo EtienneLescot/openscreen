@@ -65,7 +65,7 @@ Every platform has a recommended route below. On Windows that is the Microsoft S
 ### System requirements
 
 - **Windows**: version 1903+ (build 18362) with Intel 8th Gen / AMD Ryzen 2000 series or newer minimum; Windows 11 with Intel 12th Gen / Ryzen 4000 series or newer recommended
-- **macOS**: 12 (Monterey) or later; macOS 13 (Ventura) or later for native ScreenCaptureKit capture. On macOS 12 recording falls back to the browser pipeline, with fewer capabilities (see [Platform differences](#platform-differences))
+- **macOS**: 13 (Ventura) or later — required by ScreenCaptureKit for capture
 - **Linux**: `xdg-desktop-portal` and PipeWire for native capture and system audio; recording still works without them through the browser-capture fallback, with fewer capabilities (see [Platform differences](#platform-differences))
 - **RAM**: 8 GB minimum, 16 GB recommended
 
@@ -170,11 +170,11 @@ You may need to grant screen recording permissions depending on your desktop env
 
 Everything in the editor and export is the same on macOS, Windows, and Linux: zooms, backgrounds, motion blur, crop/trim/speed, blur regions, annotations, auto-captions, AI editing, projects, export, and all languages. All three now record through a native capture pipeline; the remaining differences are narrower than they used to be:
 
-- **Native recording**: macOS (ScreenCaptureKit), Windows (Windows Graphics Capture), and Linux (PipeWire via the ScreenCast portal) all record through a native pipeline for higher quality and clean window-level capture. The browser pipeline stays as an automatic fallback on Linux if the helper isn't available, and on macOS 12, where ScreenCaptureKit capture requires macOS 13.
+- **Native recording**: macOS (ScreenCaptureKit), Windows (Windows Graphics Capture), and Linux (PipeWire via the ScreenCast portal) all record through a native pipeline for higher quality and clean window-level capture. On Linux the browser pipeline stays as an automatic fallback if the helper isn't available.
 - **Custom cursors**: on macOS and Windows the real cursor is captured with shape, type, and clicks. Linux captures position and cursor shape through the portal, so cursor themes and the editable cursor overlay work there too — but the portal reports no mouse button events, so **click effects remain macOS and Windows only**.
 - **Webcam**: Windows muxes the webcam natively into the recording; macOS and Linux record it alongside as a separate file. It works as a picture-in-picture overlay on all three.
 - **System audio** support varies by OS:
-  - **macOS**: requires macOS 13+. On macOS 14.2+ you'll be prompted to grant audio capture permission. macOS 12 and below can't capture system audio (mic still works).
+  - **macOS**: works on every supported version. On macOS 14.2+ you'll be prompted to grant audio capture permission.
   - **Windows**: works out of the box.
   - **Linux**: needs PipeWire (default on Ubuntu 22.04+, Fedora 34+). Older PulseAudio-only setups may not capture system audio (mic should still work).
 

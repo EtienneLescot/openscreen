@@ -4,27 +4,26 @@ import PackageDescription
 
 let package = Package(
 	name: "OpenScreenScreenCaptureKitHelper",
-	// PACKAGE-WIDE, and SwiftPM has no per-target override — so this floor is also
-	// the floor of `openscreen-macos-cursor-helper`, which needs nothing newer than
-	// 10.15. It was set to .v13 in b9e21347, when ScreenCaptureKit was the only thing
-	// in here; the cursor helper arrived in b2f9afab and silently inherited it.
+	// macOS 13 is DELIBERATE, and it is the same number the app declares in
+	// electron-builder.json5 (`mac.minimumSystemVersion`) and promises in the README.
+	// Those three must move together; scripts/check-macos-deployment-target.test.mjs
+	// asserts this one never rises above what the app declares.
 	//
-	// That is not a cosmetic mismatch. At a deployment target >= 13 the linker resolves
-	// the Swift Foundation overlay symbols against Foundation.framework directly and
-	// DROPS /usr/lib/swift/libswiftFoundation.dylib from the load commands (the SDK's
-	// `$ld$previous$/usr/lib/swift/libswiftFoundation.dylib$1.0.0$1$10.15$13.0$…`
-	// directives are the cutover). On macOS 12 those symbols live only in that dylib,
-	// which the binary no longer loads, so dyld kills the helper before it prints its
-	// `ready` line — which the app then reported as a denied Accessibility grant.
-	// See issue #515.
+	// It has to be at least 13 regardless: ScreenCaptureRecorder is
+	// `@available(macOS 13.0, *)` and its main() hard-guards `#available(macOS 13.0, *)`,
+	// because SCStream's usable surface starts there.
 	//
-	// .v12 and not "12.3": at 12.0 ScreenCaptureKit is WEAK-linked, so a 12.0–12.2 host
-	// still execs the capture helper and reaches the legible `HelperError.unsupportedMacOS`
-	// guard in ScreenCaptureRecorder.main(). At 12.3 it becomes a hard LC_LOAD_DYLIB and
-	// that host dies in dyld instead. Native capture still requires macOS 13 — that floor
-	// is enforced in Swift by `@available(macOS 13.0, *)` on ScreenCaptureRecorder.
+	// What this block is NOT allowed to become is higher than the declared floor, which is
+	// how #515 happened. The floor was set here when ScreenCaptureKit was the only target;
+	// openscreen-macos-cursor-helper was added later and inherited it, because SwiftPM has
+	// no per-target override. The app then advertised macOS 12 while shipping a 13-only
+	// helper, and the damage was not the version number: at a deployment target >= 13 the
+	// linker resolves the Swift Foundation overlay symbols against Foundation.framework and
+	// drops /usr/lib/swift/libswiftFoundation.dylib from the load commands, so on macOS 12
+	// the helper died in dyld before it could speak — which the app reported to the user as
+	// a denied Accessibility grant.
 	platforms: [
-		.macOS(.v12)
+		.macOS(.v13)
 	],
 	products: [
 		.executable(

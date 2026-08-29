@@ -981,24 +981,6 @@ async function findNativeMacCaptureHelperPath() {
 	return null;
 }
 
-/**
- * ScreenCaptureRecorder is `@available(macOS 13.0, *)` and its `main()` hard-guards
- * `#available(macOS 13.0, *)`, so on macOS 12 the helper binary exists, execs, and then
- * exits with `unsupportedMacOS`. Answering that here lets the renderer take the browser
- * fallback deliberately, the way Windows and Linux already do, instead of discovering it
- * as an opaque spawn failure (#515).
- */
-function isMacScreenCaptureKitOsSupported() {
-	if (process.platform !== "darwin") {
-		return false;
-	}
-
-	const [major] = process.getSystemVersion().split(".").map(Number);
-	// Fail OPEN on an unparseable version: refusing would push every healthy Mac onto
-	// the browser pipeline, which is far worse than letting the helper answer for itself.
-	return !Number.isFinite(major) || major >= 13;
-}
-
 function isWindowsGraphicsCaptureOsSupported() {
 	if (process.platform !== "win32") {
 		return false;
@@ -2121,10 +2103,6 @@ export function registerIpcHandlers(
 	ipcMain.handle("is-native-mac-capture-available", async () => {
 		if (process.platform !== "darwin") {
 			return { success: true, available: false, reason: "unsupported-platform" };
-		}
-
-		if (!isMacScreenCaptureKitOsSupported()) {
-			return { success: true, available: false, reason: "unsupported-os" };
 		}
 
 		const helperPath = await findNativeMacCaptureHelperPath();
