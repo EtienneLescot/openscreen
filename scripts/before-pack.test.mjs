@@ -197,8 +197,19 @@ describe("machoMinOs", () => {
 });
 
 describe("checkMacOsVersionFloor", () => {
-	it("passes a payload built at the floor", () => {
-		withPayload({ a: thinMachO("12.0"), b: thinMachO("11.0") }, (dir) => {
+	/**
+	 * Fixtures are derived from the floor rather than written as literals. An earlier
+	 * revision hardcoded the then-current floor as "the offending version", and raising
+	 * the floor silently turned the offender into a compliant binary — the guard's own
+	 * tests stopped testing it. The exact versions were never the point; being on the
+	 * wrong side of the floor is.
+	 */
+	const floorMajor = Number(testing().MAC_MIN_OS_FLOOR.split(".")[0]);
+	const above = (bump = 1) => `${floorMajor + bump}.0`;
+	const below = () => `${floorMajor - 1}.0`;
+
+	it("passes a payload built at or below the floor", () => {
+		withPayload({ a: thinMachO(testing().MAC_MIN_OS_FLOOR), b: thinMachO(below()) }, (dir) => {
 			expect(() => testing().checkMacOsVersionFloor(dir)).not.toThrow();
 		});
 	});
@@ -209,7 +220,7 @@ describe("checkMacOsVersionFloor", () => {
 	 * hits it to understand the consequence rather than just raise the constant.
 	 */
 	it("refuses a binary built above the floor, and says which and why", () => {
-		withPayload({ "openscreen-macos-cursor-helper": thinMachO("13.0") }, (dir) => {
+		withPayload({ "openscreen-macos-cursor-helper": thinMachO(above()) }, (dir) => {
 			let message = "";
 			try {
 				testing().checkMacOsVersionFloor(dir);
@@ -217,8 +228,8 @@ describe("checkMacOsVersionFloor", () => {
 				message = err.message;
 			}
 			expect(message).toContain("openscreen-macos-cursor-helper");
-			expect(message).toContain("macOS 13.0.0");
-			expect(message).toContain("12.0");
+			expect(message).toContain(`macOS ${above()}.0`);
+			expect(message).toContain(testing().MAC_MIN_OS_FLOOR);
 			expect(message).toContain("#515");
 			// The mechanism, so nobody "fixes" it by assuming dyld gates on the number.
 			expect(message).toContain("Symbol not found");
@@ -227,7 +238,11 @@ describe("checkMacOsVersionFloor", () => {
 
 	it("reports every offender, not just the first", () => {
 		withPayload(
-			{ ok: thinMachO("12.0"), bad1: thinMachO("13.0"), bad2: thinMachO("26.0") },
+			{
+				ok: thinMachO(testing().MAC_MIN_OS_FLOOR),
+				bad1: thinMachO(above(1)),
+				bad2: thinMachO(above(2)),
+			},
 			(dir) => {
 				expect(() => testing().checkMacOsVersionFloor(dir)).toThrow(/bad1[\s\S]*bad2/);
 			},
@@ -252,23 +267,22 @@ describe("checkMacOsVersionFloor", () => {
 });
 
 describe("MAC_MIN_OS_FLOOR", () => {
-	it("is no higher than the oldest macOS the README promises", () => {
-		const readme = readFileSync(path.join(path.dirname(BEFORE_PACK), "..", "README.md"), "utf8");
-		const claimed = readme.match(/^-\s+\*\*macOS\*\*:\s*(\d+(?:\.\d+)?)/m);
-		expect(claimed, "no macOS line found in README.md system requirements").not.toBeNull();
+	it("matches the floor the .app declares to LaunchServices", () => {
+		const config = readFileSync(
+			path.join(path.dirname(BEFORE_PACK), "..", "electron-builder.json5"),
+			"utf8",
+		);
+		const declared = config.match(/"minimumSystemVersion"\s*:\s*"([\d.]+)"/);
+		expect(
+			declared,
+			'no "minimumSystemVersion" in electron-builder.json5 — without it the .app ' +
+				"inherits Electron's own floor, which is what let #515 ship",
+		).not.toBeNull();
 
 		const { MAC_MIN_OS_FLOOR } = testing();
-		const asNumbers = (v) => v.split(".").map(Number);
-		const [floorMajor, floorMinor = 0] = asNumbers(MAC_MIN_OS_FLOOR);
-		const [claimedMajor, claimedMinor = 0] = asNumbers(claimed[1]);
-
-		// One-directional: building for older than advertised is harmless, building for
-		// newer is the bug. So floor <= claimed, not floor === claimed.
-		expect(
-			floorMajor * 1000 + floorMinor,
-			`before-pack.cjs builds for macOS ${MAC_MIN_OS_FLOOR} but README.md promises ` +
-				`${claimed[1]} or later. Shipping binaries that cannot run on a version the ` +
-				"README claims to support is issue #515.",
-		).toBeLessThanOrEqual(claimedMajor * 1000 + claimedMinor);
+		const norm = (v) => v.split(".").concat(["0", "0"]).slice(0, 2).join(".");
+		// Equal, not merely <=: a pack-time guard looser than the app's own declaration
+		// would wave through exactly the binaries LaunchServices then refuses to run.
+		expect(norm(MAC_MIN_OS_FLOOR)).toBe(norm(declared[1]));
 	});
 });
