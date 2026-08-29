@@ -514,16 +514,13 @@ const MAX_SYMBOL_VERSION = { GLIBC: "2.35", GLIBCXX: "3.4.30", CXXABI: "1.3.13" 
  * The oldest macOS anything in the payload may demand — the macOS twin of
  * MAX_SYMBOL_VERSION above, and the same class of bug on a different libc.
  *
- * Keep in step with README.md's system requirements and with Electron's own
- * LSMinimumSystemVersion, which the .app inherits verbatim (electron-builder writes the
- * key only when `mac.minimumSystemVersion` is set, and it is not).
- *
- * before-pack.test.mjs ties this to the README so the two cannot drift apart quietly. The
- * invariant it asserts is one-directional on purpose: this floor must be no HIGHER than
- * the oldest macOS the README promises. Building for something older than we advertise is
- * harmless; building for something newer is #515.
+ * Must equal `mac.minimumSystemVersion` in electron-builder.json5, which is what the .app
+ * tells LaunchServices; before-pack.test.mjs asserts exactly that, so the two cannot drift
+ * apart quietly. Not read from the config at runtime because this hook must keep working
+ * if that file is ever restructured — a guard that throws while parsing is a guard that
+ * gets deleted.
  */
-const MAC_MIN_OS_FLOOR = "12.0";
+const MAC_MIN_OS_FLOOR = "13.0";
 
 /**
  * The one supported way past the ceiling, for the one case it does not fit: a developer

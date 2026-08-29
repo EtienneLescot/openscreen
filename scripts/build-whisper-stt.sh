@@ -74,9 +74,9 @@ readonly OS_ARCH="$(os_arch_tag)"
 readonly OUT_DIR="${OUT_ROOT}/${OS_ARCH}"
 
 # Kept beside the other build constants so it is greppable next to the ffmpeg one in
-# scripts/fetch-ffmpeg-macos.mjs; the two must agree, and both must be <= the app's
-# LSMinimumSystemVersion.
-readonly MACOS_DEPLOYMENT_TARGET="12.0"
+# scripts/fetch-ffmpeg-macos.mjs; the two must agree, and both must match
+# `mac.minimumSystemVersion` in electron-builder.json5.
+readonly MACOS_DEPLOYMENT_TARGET="13.0"
 
 # Determine the default backend flag for this host.
 backend_flag_for_host() {
@@ -310,8 +310,8 @@ BUILD_FLAGS=()
 if [[ -n "${DEFAULT_FLAG}" ]]; then
   BUILD_FLAGS+=("${DEFAULT_FLAG}")
 fi
-# Pin the macOS floor the app actually ships against (Electron's own
-# LSMinimumSystemVersion, and what README/installation.md promise). Without it CMake
+# Pin the macOS floor the app actually ships against (`mac.minimumSystemVersion` in
+# electron-builder.json5). Without it CMake
 # defaults the deployment target to the BUILD MACHINE's SDK, so whisper-stt-server and
 # the libwhisper/libggml*/libparakeet dylibs inherit whatever macOS built them —
 # measured 26.0 on the shipped v1.10.0 payload, and ~15.x from CI's `macos-latest`,
