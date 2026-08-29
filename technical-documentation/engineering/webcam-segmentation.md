@@ -29,8 +29,10 @@ so they are identical by construction rather than by two implementations kept in
 |---|---|
 | capture | `Compositor::capture_webcam_rgb` renders the webcam NV12 into a 256x144 RGBA target and reads it back |
 | inference | `segmentation.rs`, ONNX Runtime CPU EP, own thread, 30 Hz, `intra_op_num_threads = 2` |
-| upload | `Compositor::set_webcam_mask`, from the render thread, into a DYNAMIC R8 texture |
+| upload | `Compositor::set_webcam_mask`, from the render thread, into a DYNAMIC R8 texture (Windows) / a `Shared` R8 texture written by `replace_region` (Metal) |
 | composite | `ps_main`, `t3` / `texture(3)` / `@binding(4)`, branch on `fx.z` |
+
+Windows and macOS run all four stages; Linux carries the composite stage only (see *Not done*).
 
 The model is `public/mediapipe/selfie_segmentation/selfie_segmentation_landscape.onnx`, derived
 from the vendored `.tflite` by `scripts/convert-selfie-segmentation-to-onnx.py`. Its path is
@@ -63,19 +65,20 @@ not an alpha channel, so nothing has to survive a codec that cannot carry one.
 
 ### Not done
 
-- **macOS and Linux have the shader half only.** All three back-ends carry the same branch, but
-  only Windows captures and uploads a mask, so `fx.z` never leaves 0 on the other two and the
-  effect is inert there. That is deliberate: the shader is the part that must not drift, and it
-  is also the part that cannot be verified from a Windows machine, so it is the half worth
-  landing blind.
+- **Linux has the shader half only.** All three back-ends carry the same branch, but Linux does
+  not yet capture or upload a mask, so `fx.z` never leaves 0 there and the effect is inert. That
+  split was deliberate: the shader is the part that must not drift, and it is also the part that
+  cannot be verified from a Windows machine, so it was the half worth landing blind.
 
-  **The control is therefore hidden off Windows** (`supportsWebcamSegmentation` in
+  macOS now has the other half too — `capture_webcam_rgb` renders the camera into a 256x144
+  `Private` target and blits to a `Shared` mirror for `get_bytes` (the readback shape the module
+  header already prescribed, on the capture's **own** command buffer so `last_cmd` stays the
+  `render_nv12` one), and `set_webcam_mask` uploads R8 through `replace_region`.
+
+  **The control is therefore hidden on Linux only** (`supportsWebcamSegmentation` in
   `RightPanes.tsx`). A visible setting that changes nothing is worse than an absent one; it
-  comes back for a platform the moment that platform's capture lands. What each one still needs
-  is `capture_webcam_rgb` and `set_webcam_mask` — a 256x144 render plus a readback, and an R8
-  texture upload — against machinery both back-ends already have (`read_nv12_scaled` on macOS,
-  the `Readback` buffers on Linux). Neither can be compiled here, so both belong on a machine
-  that builds them.
+  comes back for a platform the moment that platform's capture lands. What Linux still needs is
+  `capture_webcam_rgb` and `set_webcam_mask` against the `ReadbackRing` it already has.
 - **ONNX Runtime is not staged.** The crate links `ort` with `load-dynamic`, so nothing is needed
   to *build*; at runtime `ensureOnnxRuntimeOnPath` looks for the library next to the addon in
   `electron/native/bin/<tag>/`, the convention `whisper-stt` already uses. Until a CI job puts it
