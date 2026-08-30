@@ -327,6 +327,11 @@ pub struct Compositor {
     seg_capture: RefCell<Option<SegCapture>>,
     /// Worker d'inférence, absent tant que `enable_segmentation` n'a pas été appelé.
     seg_worker: RefCell<Option<crate::segmentation::SegmentationWorker>>,
+    /// Segmenteur tenu SUR LE THREAD DE RENDU, utilisé à la place du worker en mode
+    /// déterministe. Voir `set_segmentation_deterministic`.
+    seg_sync: RefCell<Option<crate::segmentation::Segmenter>>,
+    /// Export : cadence par frame et inférence synchrone, au lieu de l'horloge et du worker.
+    seg_deterministic: std::cell::Cell<bool>,
     /// Boîte aux lettres du worker. Le masque est déposé depuis le thread d'inférence et
     /// téléversé depuis le thread de rendu : aucun appel Metal ne traverse de thread.
     seg_inbox: std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>,
@@ -619,6 +624,8 @@ impl Compositor {
             webcam_mask: RefCell::new(None),
             seg_capture: RefCell::new(None),
             seg_worker: RefCell::new(None),
+            seg_sync: RefCell::new(None),
+            seg_deterministic: std::cell::Cell::new(false),
             seg_inbox: std::sync::Arc::new(std::sync::Mutex::new(None)),
             seg_rate: RefCell::new(crate::segmentation::RateLimiter::new(SEGMENTATION_HZ)),
             seg_scratch: RefCell::new(Vec::new()),
@@ -1573,15 +1580,22 @@ impl Compositor {
         // Démarrage paresseux, piloté par la scène : personne n'a à appeler
         // `enable_segmentation` à la main, et un modèle introuvable éteint l'effet au lieu
         // de faire tomber le rendu.
-        if self.seg_worker.borrow().is_none() {
+        if self.seg_worker.borrow().is_none() && self.seg_sync.borrow().is_none() {
             let Some(path) = model_path else { return Ok(()) };
             if let Err(e) = self.enable_segmentation(std::path::Path::new(&path)) {
                 eprintln!("[segmentation] désactivée : {e}");
                 // Une scène qui reste identique retenterait à chaque frame ; on lève le
                 // verrou plutôt que de journaliser 60 fois par seconde.
                 *self.seg_failed.borrow_mut() = true;
+                return Ok(());
             }
-            return Ok(());
+            // En preview on rend cette frame sans masque : le worker vient de démarrer et
+            // l'effet apparaîtra dans quelques millisecondes, ce que personne ne voit. À
+            // l'export cette frame part dans le fichier — on enchaîne donc sur la capture et
+            // l'inférence plutôt que de la laisser sortir non détourée.
+            if !self.seg_deterministic.get() {
+                return Ok(());
+            }
         }
 
         if let Some(mask) = self.seg_inbox.lock().unwrap().take() {
@@ -1592,7 +1606,12 @@ impl Compositor {
             )?;
         }
 
-        if !self.seg_rate.borrow_mut().should_run(std::time::Instant::now()) {
+        // La cadence horloge est le bon réglage en preview et le mauvais à l'export, où les
+        // frames défilent aussi vite que la machine décode : le nombre de frames couvertes par
+        // un masque dépendrait alors de la charge. En déterministe, une inférence par frame.
+        if !self.seg_deterministic.get()
+            && !self.seg_rate.borrow_mut().should_run(std::time::Instant::now())
+        {
             return Ok(());
         }
         let mut scratch = self.seg_scratch.borrow_mut();
@@ -1607,7 +1626,26 @@ impl Compositor {
             crate::segmentation::MODEL_HEIGHT,
             &mut scratch,
         )?;
-        if let Some(w) = self.seg_worker.borrow().as_ref() {
+        if self.seg_deterministic.get() {
+            // Synchrone : le masque doit exister avant que cette frame ne soit composée, sinon
+            // on retombe sur le défaut qu'on corrige. Une inférence ratée laisse le masque
+            // précédent, comme le fait le worker.
+            let mut sync = self.seg_sync.borrow_mut();
+            if let Some(seg) = sync.as_mut() {
+                match seg.run(&scratch) {
+                    Ok(mask) => {
+                        let mask = mask.to_vec();
+                        drop(sync);
+                        self.set_webcam_mask(
+                            &mask,
+                            crate::segmentation::MODEL_WIDTH,
+                            crate::segmentation::MODEL_HEIGHT,
+                        )?;
+                    }
+                    Err(e) => eprintln!("[segmentation] frame ignorée : {e}"),
+                }
+            }
+        } else if let Some(w) = self.seg_worker.borrow().as_ref() {
             w.submit(&scratch);
         }
         Ok(())
@@ -1619,10 +1657,18 @@ impl Compositor {
     /// la webcam se dessine comme avant — c'est ce qui rend l'effet inerte plutôt que cassé
     /// sur une build sans modèle.
     pub fn enable_segmentation(&self, model_path: &std::path::Path) -> Result<()> {
-        if self.seg_worker.borrow().is_some() {
+        if self.seg_worker.borrow().is_some() || self.seg_sync.borrow().is_some() {
             return Ok(());
         }
         let segmenter = crate::segmentation::Segmenter::load(model_path)?;
+        // En déterministe, le segmenteur reste ici : l'inférence tourne sur le thread de rendu,
+        // donc le masque de la frame N est prêt AVANT qu'elle ne soit composée. Le worker est un
+        // choix de preview — ne jamais bloquer l'affichage — et c'est exactement ce qui rend
+        // l'export irreproductible, le masque arrivant quelques frames plus tard selon la charge.
+        if self.seg_deterministic.get() {
+            *self.seg_sync.borrow_mut() = Some(segmenter);
+            return Ok(());
+        }
         let inbox = std::sync::Arc::clone(&self.seg_inbox);
         let worker = crate::segmentation::SegmentationWorker::spawn(segmenter, move |mask, _, _| {
             // Écrase le masque précédent s'il n'a pas encore été téléversé : c'est le plus
@@ -1631,6 +1677,39 @@ impl Compositor {
         });
         *self.seg_worker.borrow_mut() = Some(worker);
         Ok(())
+    }
+
+    /// Bascule la segmentation en mode reproductible, pour l'export.
+    ///
+    /// En preview, la cadence suit l'horloge (30 Hz réels) et l'inférence tourne sur un worker :
+    /// c'est le bon choix, l'affichage ne doit jamais attendre. À l'export les frames sont rendues
+    /// aussi vite que la machine décode, sans rapport avec le temps réel — et ces deux choix
+    /// deviennent alors des bugs. La cadence horloge fait dépendre le nombre de frames couvertes
+    /// par un masque de la vitesse de la machine, et le worker asynchrone rend les premières
+    /// frames AVANT que le premier masque n'existe : elles partent dans le fichier avec le vrai
+    /// arrière-plan de la webcam. Deux exports du même projet ne donnent donc pas les mêmes
+    /// pixels, ce qui casse l'invariant « l'export est identique à la preview ».
+    ///
+    /// En déterministe : une inférence PAR FRAME, synchrone. Plus coûteux (~3 ms/frame), mais
+    /// l'export est hors ligne et chaque frame porte le masque calculé depuis SA propre image.
+    ///
+    /// À appeler avant la première frame — c'est ce qui décide comment `enable_segmentation`
+    /// s'installe.
+    pub fn set_segmentation_deterministic(&self, on: bool) {
+        if self.seg_deterministic.get() == on {
+            return;
+        }
+        self.seg_deterministic.set(on);
+        // Changer de mode change le MOTEUR, et `enable_segmentation` est idempotent sur la
+        // PRÉSENCE d'un moteur : sans démonter celui qui ne correspond plus, le drapeau mentirait.
+        // Un compositeur qui a déjà servi en preview garderait son worker, `seg_sync` resterait
+        // vide, et l'export entier ne ferait AUCUNE inférence. Le démarrage paresseux de
+        // `pump_segmentation` réinstalle le bon moteur à la frame suivante.
+        *self.seg_worker.borrow_mut() = None;
+        *self.seg_sync.borrow_mut() = None;
+        // Et le masque que le worker démonté avait peut-être déjà déposé : il vient de l'autre
+        // mode, il n'a rien à faire sur la première frame de celui-ci.
+        *self.seg_inbox.lock().unwrap() = None;
     }
 
     /// Éteint l'effet : la webcam se redessine telle quelle à la frame suivante.
