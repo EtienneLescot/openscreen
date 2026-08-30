@@ -30,16 +30,80 @@ const PACKAGE_SWIFT = path.join(ROOT, "electron", "native", "screencapturekit", 
 const BUILDER_CONFIG = path.join(ROOT, "electron-builder.json5");
 
 /**
+ * Drops `//` comments, ignoring any that appear inside a string — electron-builder.json5
+ * is heavily commented, and its comments discuss the very keys parsed below.
+ *
+ * String-aware rather than a plain `s.replace(/\/\/.*$/gm, "")` because the config also
+ * carries URLs, whose `//` a naive strip would eat.
+ */
+function stripJson5Comments(source) {
+	let out = "";
+	let inString = false;
+	for (let i = 0; i < source.length; i++) {
+		const ch = source[i];
+		if (inString) {
+			out += ch;
+			if (ch === "\\") {
+				out += source[++i] ?? "";
+			} else if (ch === '"') {
+				inString = false;
+			}
+			continue;
+		}
+		if (ch === '"') {
+			inString = true;
+			out += ch;
+			continue;
+		}
+		if (ch === "/" && source[i + 1] === "/") {
+			while (i < source.length && source[i] !== "\n") i++;
+			out += "\n";
+			continue;
+		}
+		out += ch;
+	}
+	return out;
+}
+
+/** The body of a top-level `"<key>": { ... }` object, brace-matched. */
+function objectBody(source, key) {
+	const opener = new RegExp(`"${key}"\\s*:\\s*{`).exec(source);
+	if (!opener) {
+		return null;
+	}
+	let depth = 0;
+	for (let i = opener.index + opener[0].length - 1; i < source.length; i++) {
+		if (source[i] === "{") depth++;
+		else if (source[i] === "}" && --depth === 0) {
+			return source.slice(opener.index + opener[0].length, i);
+		}
+	}
+	return null;
+}
+
+/**
  * The floor the .app itself declares, read rather than duplicated — a second copy of this
  * number is the thing most likely to drift, and drift is the whole failure mode.
  *
- * Regex rather than a JSON5 parse to keep this dependency-free and runnable anywhere; the
- * key is a plain string literal in a hand-maintained config.
+ * Scoped to the `mac` object with comments stripped, not the first match in the file, for
+ * the same reason declaredMacOsFloor() is scoped to `platforms:`: a guard fooled by prose
+ * passes for the bug it exists to catch. Both parsers had this shape; only one of them had
+ * been hardened.
+ *
+ * Hand-rolled rather than a JSON5 parse to keep this dependency-free and runnable on every
+ * CI platform.
  */
-function declaredAppFloor() {
-	const source = readFileSync(BUILDER_CONFIG, "utf8");
-	const match = source.match(/"minimumSystemVersion"\s*:\s*"(\d+)(?:\.\d+)*"/);
+function declaredAppFloorFrom(source) {
+	const mac = objectBody(stripJson5Comments(source), "mac");
+	if (!mac) {
+		return null;
+	}
+	const match = mac.match(/"minimumSystemVersion"\s*:\s*"(\d+)(?:\.\d+)*"/);
 	return match ? Number(match[1]) : null;
+}
+
+function declaredAppFloor() {
+	return declaredAppFloorFrom(readFileSync(BUILDER_CONFIG, "utf8"));
 }
 
 /**
@@ -95,6 +159,40 @@ describe("macOS native helper deployment target", () => {
 		expect(declaredMacOsFloor("platforms: [ .macOS(.v10_15) ]")).toBe(10);
 		expect(declaredMacOsFloor('platforms: [ .macOS("12.3") ]')).toBe(12);
 		expect(declaredMacOsFloor("platforms: [ .iOS(.v16) ]")).toBeNull();
+	});
+
+	it("reads the mac block's floor, not the first match in the file", () => {
+		// Both failure shapes the real config invites: a comment discussing the key
+		// (electron-builder.json5 carries a long one directly above it), and another
+		// platform block that could grow the same key later.
+		const decoyComment = [
+			'// was "minimumSystemVersion": "12.0" before #515',
+			'"mac": {',
+			'\t"minimumSystemVersion": "13.0",',
+			"}",
+		].join("\n");
+		expect(declaredAppFloorFrom(decoyComment)).toBe(13);
+
+		const decoySibling = [
+			'"win": {',
+			'\t"minimumSystemVersion": "99.0",',
+			"},",
+			'"mac": {',
+			'\t"minimumSystemVersion": "13.0",',
+			"}",
+		].join("\n");
+		expect(declaredAppFloorFrom(decoySibling)).toBe(13);
+
+		// A URL's `//` must survive the comment strip, or the mac block is lost with it.
+		const withUrl = [
+			'"publish": [{ "url": "https://example.invalid/feed" }],',
+			'"mac": {',
+			'\t"minimumSystemVersion": "13.0",',
+			"}",
+		].join("\n");
+		expect(declaredAppFloorFrom(withUrl)).toBe(13);
+
+		expect(declaredAppFloorFrom('"win": { "minimumSystemVersion": "13.0" }')).toBeNull();
 	});
 
 	it("reads the declaration, not prose that happens to mention a version", () => {
