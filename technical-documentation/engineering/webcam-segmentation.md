@@ -157,7 +157,7 @@ else if (effect > 0.5) alpha = alpha * m;                      // cutout
 What is *not* cheap is producing that mask on the device that consumes it.
 
 - The compositor renders on its own `ID3D11Device` in the **main** process — feature level 11_1
-  only (`d3d_windows.rs:75` bails on anything else), default adapter (`pAdapter = None`), and
+  only (`d3d_windows.rs:75` requests it, `:204` bails on anything else), default adapter (`pAdapter = None`), and
   `SetMultithreadProtected(true)`.
 - MediaPipe runs in the **renderer** process. No JS API exposes a shared DXGI handle from ANGLE,
   so zero-copy between the two is unreachable from that side.

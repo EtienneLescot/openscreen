@@ -1,5 +1,12 @@
 # Brief — segmentation experiment ladder (round 3: settle the execution provider)
 
+> **This round has been run and closed.** It is kept as the record of what was asked and under
+> which constraints, not as work to do. The answer it produced — CPU execution provider, 256x144,
+> 30 Hz, two intra-op threads — and the reasoning that followed are in
+> [webcam-segmentation.md](webcam-segmentation.md); the compositor has since been built on it.
+> Read the requirements below as the brief that was issued, and do not tighten them for a run that
+> is over: a later round needs its own brief.
+
 Self-contained brief for an agent on a test machine. Read
 [webcam-segmentation.md](webcam-segmentation.md) for the decision this feeds.
 
@@ -19,8 +26,12 @@ the workload is **memory-bandwidth-bound per pixel**; input resolution is the le
 It is the only unknown left that changes the architecture. The CPU EP already measures **21 %
 faster than DirectML** in isolation here (2.476 vs 3.119 ms p10) and it never touches the
 contended GPU queue. If that holds under load, it removes the D3D11↔D3D12 shared-handle interop,
-the adapter-LUID matching, the cross-queue fence and the DirectML packaging cost — on all three
-platforms at once.
+the adapter-LUID matching, the cross-queue fence and the DirectML packaging cost.
+
+That last clause was written as "on all three platforms at once", and it overreached: the
+measurement behind it is **one Windows box**. What it actually settles is that the Windows build
+needs no GPU execution path. macOS and Linux inherit the *architecture* — no interop, no second
+device — because they were then built that way, not because either was measured. Neither has been.
 
 The risk that could kill it: this box is a **4-core / 8-thread** Ryzen 5 7520U. An ONNX Runtime
 CPU session that grabs every core will fight the compositor's own CPU work. **Thread count is the
@@ -102,7 +113,9 @@ Then, in prose:
 ## Do not pursue
 
 - ORT session hygiene and hand-fused SE compute shaders — round 2 measured the total fixed cost at
-  0.43 ms, so both cap at ~14 %.
+  0.43 ms. That is **14 % of DirectML's 3.119 ms p10**, the provider it was measured against; it is
+  17 % of the CPU EP's 2.476 ms. The cap is a share of whichever provider you are standing on, not
+  a universal 14 %.
 - Inputs below 128×80: at 64×48 the model emits an all-background mask. It breaks, it does not
   degrade. Both dimensions must also be **divisible by 16** or the skip-connection `Add`s fail.
 - **RobustVideoMatting** — GPL-3.0 against an MIT app.
