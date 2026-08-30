@@ -858,7 +858,10 @@ fn run<W: Write>(
                     let (width, height) = (frame.crop.width, frame.crop.height);
                     mailbox.recycle(frame.pixels);
                     match staged {
-                        Ok(capture::StageOutcome::Staged) => {
+                        // A real frame, or a pause-freeze — neither is an import
+                        // failure, so end any run of them. (A freeze holds the last
+                        // picture; `advance` is a no-op while paused.)
+                        Ok(capture::StageOutcome::Staged | capture::StageOutcome::Frozen) => {
                             consecutive_drops = 0;
                         }
                         // Recoverable: one frame the GPU could not import. Warn so it

@@ -244,6 +244,13 @@ pub struct Capture {
 pub enum StageOutcome {
     /// A new frame was staged; `advance` will encode it.
     Staged,
+    /// The recording is paused, so the incoming frame was deliberately ignored and
+    /// the held picture kept frozen at the pause instant (pause is app-side, but the
+    /// compositor keeps streaming). A distinct outcome on purpose: it is NOT
+    /// `Staged` — nothing new was staged, so a caller counting encoded frames must
+    /// not tally it — and NOT `Dropped` — nothing failed, so it must not count
+    /// toward the import-failure budget that ends a recording.
+    Frozen,
     /// A recoverable per-frame failure — one dmabuf the GPU could not map, or a
     /// transient EAGAIN. The frame is skipped and `advance` holds the previously
     /// staged one forward, so a single bad frame costs one frame, not the whole
@@ -400,16 +407,19 @@ impl Capture {
         // to hold that privacy boundary, so the staged picture is frozen at the
         // pause instant instead.
         //
-        // Reported as `Staged`, not `Dropped`: `Dropped` is the GPU-import
-        // failure signal, which warns per frame and ends the recording past
-        // MAX_CONSECUTIVE_IMPORT_FAILURES — a pause longer than that many frames
-        // would abort the file. Nothing failed here.
+        // Its own `Frozen`, not `Dropped` and not `Staged`. Not `Dropped`: that is
+        // the GPU-import failure signal, which warns per frame and ends the
+        // recording past MAX_CONSECUTIVE_IMPORT_FAILURES, so a pause longer than
+        // that many frames would abort the file — nothing failed here. Not `Staged`
+        // either: nothing was staged, so anything downstream that counts encoded
+        // frames or reasons about import health must be able to tell a freeze from
+        // a real frame rather than have it hidden behind `Staged`.
         //
         // Ahead of the dmabuf path so the freeze covers the zero-copy route as
         // well, and so `mark_started` stays untouched: a pause that arrives
         // before the first frame must leave the capture unstarted.
         if self.paused_at.is_some() {
-            return Ok(StageOutcome::Staged);
+            return Ok(StageOutcome::Frozen);
         }
 
         // Zero-copy dmabuf path: import the tiled GPU buffer into an NV12 VAAPI
@@ -1222,7 +1232,11 @@ mod tests {
         // Pause BEFORE any frame is staged, then a frame arrives during the pause.
         capture.pause();
         let staged = capture.stage(&frame(320, 240, shim::constants().video_format_bgrx));
-        assert!(staged.is_ok(), "staging while paused is a no-op, not an error: {staged:?}");
+        assert_eq!(
+            staged.expect("staging while paused is a no-op, not an error"),
+            StageOutcome::Frozen,
+            "a frame arriving while paused is Frozen — not Staged (nothing staged) nor Dropped (nothing failed)",
+        );
         assert!(!capture.started(), "a frame received while paused must not start the timeline");
 
         let summary = capture.finish().expect("finish");
