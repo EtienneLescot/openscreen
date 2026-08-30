@@ -25,82 +25,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { declaredAppFloorFrom } from "./macos-floor.mjs";
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_SWIFT = path.join(ROOT, "electron", "native", "screencapturekit", "Package.swift");
 const BUILDER_CONFIG = path.join(ROOT, "electron-builder.json5");
-
-/**
- * Drops `//` comments, ignoring any that appear inside a string — electron-builder.json5
- * is heavily commented, and its comments discuss the very keys parsed below.
- *
- * String-aware rather than a plain `s.replace(/\/\/.*$/gm, "")` because the config also
- * carries URLs, whose `//` a naive strip would eat.
- */
-function stripJson5Comments(source) {
-	let out = "";
-	let inString = false;
-	for (let i = 0; i < source.length; i++) {
-		const ch = source[i];
-		if (inString) {
-			out += ch;
-			if (ch === "\\") {
-				out += source[++i] ?? "";
-			} else if (ch === '"') {
-				inString = false;
-			}
-			continue;
-		}
-		if (ch === '"') {
-			inString = true;
-			out += ch;
-			continue;
-		}
-		if (ch === "/" && source[i + 1] === "/") {
-			while (i < source.length && source[i] !== "\n") i++;
-			out += "\n";
-			continue;
-		}
-		out += ch;
-	}
-	return out;
-}
-
-/** The body of a top-level `"<key>": { ... }` object, brace-matched. */
-function objectBody(source, key) {
-	const opener = new RegExp(`"${key}"\\s*:\\s*{`).exec(source);
-	if (!opener) {
-		return null;
-	}
-	let depth = 0;
-	for (let i = opener.index + opener[0].length - 1; i < source.length; i++) {
-		if (source[i] === "{") depth++;
-		else if (source[i] === "}" && --depth === 0) {
-			return source.slice(opener.index + opener[0].length, i);
-		}
-	}
-	return null;
-}
-
-/**
- * The floor the .app itself declares, read rather than duplicated — a second copy of this
- * number is the thing most likely to drift, and drift is the whole failure mode.
- *
- * Scoped to the `mac` object with comments stripped, not the first match in the file, for
- * the same reason declaredMacOsFloor() is scoped to `platforms:`: a guard fooled by prose
- * passes for the bug it exists to catch. Both parsers had this shape; only one of them had
- * been hardened.
- *
- * Hand-rolled rather than a JSON5 parse to keep this dependency-free and runnable on every
- * CI platform.
- */
-function declaredAppFloorFrom(source) {
-	const mac = objectBody(stripJson5Comments(source), "mac");
-	if (!mac) {
-		return null;
-	}
-	const match = mac.match(/"minimumSystemVersion"\s*:\s*"(\d+)(?:\.\d+)*"/);
-	return match ? Number(match[1]) : null;
-}
 
 function declaredAppFloor() {
 	return declaredAppFloorFrom(readFileSync(BUILDER_CONFIG, "utf8"));
