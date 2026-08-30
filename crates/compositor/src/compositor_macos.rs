@@ -42,6 +42,15 @@ use anyhow::{anyhow, Result};
 use metal::foreign_types::ForeignType;
 use std::cell::RefCell;
 
+/// Budget du cache de textures image (`img_cache`), en octets. Même valeur et même raison que
+/// `compositor_windows::IMG_CACHE_BUDGET_BYTES`.
+///
+/// Doit tenir le JEU ACTIF d'une frame — au pire un wallpaper d'écran ET un fond de caméra, que
+/// rien n'empêche d'être deux 7680x7680 à 225 Mo pièce. Sous ce seuil l'éviction ne peut plus
+/// rendre de mémoire sans toucher au jeu actif, ce qu'elle refuse de faire. 512 Mo borne la fuite
+/// (1 774 Mo mesurés en parcourant les 18 wallpapers livrés) en laissant le jeu actif résident.
+const IMG_CACHE_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // CVMetalTextureCache — le pont CVPixelBuffer → MTLTexture
 // ---------------------------------------------------------------------------
@@ -262,8 +271,15 @@ pub struct Compositor {
     last_cmd: RefCell<Option<metal::CommandBuffer>>,
     /// Wallpapers décodés, indexés par chemin (ou par data-URI pour les annotations image).
     /// Le décode + upload coûte des millisecondes ; le faire à chaque frame ferait chuter la
-    /// preview sur un fond image.
-    img_cache: RefCell<std::collections::HashMap<String, (metal::Texture, u32, u32)>>,
+    /// preview sur un fond image. L'entrée reste néanmoins évinçable dès qu'elle sort du jeu
+    /// actif d'une frame — cf. `cached_image`.
+    img_cache: RefCell<std::collections::HashMap<String, (metal::Texture, u32, u32, u64)>>,
+    /// Compteur d'accès de `img_cache`, pour l'ordre LRU. Un compteur plutôt que l'index de
+    /// frame : une frame touche plusieurs entrées, et il faut pouvoir les ordonner entre elles.
+    img_tick: std::cell::Cell<u64>,
+    /// Valeur de `img_tick` au début de la frame en cours. Tout ce qui a été touché depuis
+    /// appartient au jeu actif et ne peut pas être évincé — voir `cached_image`.
+    img_frame_start: std::cell::Cell<u64>,
 
     // --- Engine : render targets ---
     /// Render target principal RGBA8. Cible de `compose_frame`. `Private` : c'est une
@@ -599,6 +615,8 @@ impl Compositor {
             metal_texture_cache: cache,
             last_cmd: RefCell::new(None),
             img_cache: RefCell::new(std::collections::HashMap::new()),
+            img_tick: std::cell::Cell::new(0),
+            img_frame_start: std::cell::Cell::new(0),
             rt,
             rt_read,
             nv12_y,
@@ -852,6 +870,50 @@ impl Compositor {
         Ok((tex, w, h))
     }
 
+    /// Ouvre une frame du point de vue de `img_cache` : tout ce qui sera touché après cet appel
+    /// est le jeu actif, et devient inévinçable jusqu'à la frame suivante.
+    fn begin_image_frame(&self) {
+        self.img_frame_start.set(self.img_tick.get());
+    }
+
+    /// Texture d'un fichier image, décodée une seule fois puis réutilisée.
+    ///
+    /// Le cache était NON BORNÉ, et c'est un vrai coût : les wallpapers livrés pèsent 23,7 Mo sur
+    /// disque mais 1 774 Mo une fois décodés en RGBA8 — `wallpaper8.jpg` fait 7680x7680, soit
+    /// 225 Mo à lui seul. Parcourir le sélecteur les chargeait tous et n'en libérait aucun.
+    ///
+    /// L'éviction est LRU sous un budget en octets, et ne touche jamais une texture que la frame
+    /// EN COURS a déjà servie : sans ça, un fond d'écran et un fond de caméra un peu gros se
+    /// chasseraient l'un l'autre à chaque frame, et un décodage coûte 129 ms contre les ~3,5 ms
+    /// d'une frame. Si le jeu actif dépasse à lui seul le budget, on dépasse le budget.
+    fn cached_image(&self, path: &str) -> Result<(metal::Texture, u32, u32)> {
+        let tick = self.img_tick.get() + 1;
+        self.img_tick.set(tick);
+        // Emprunt isolé dans un `let` pour qu'il soit relâché AVANT le `borrow_mut` —
+        // même piège que côté Windows (double emprunt RefCell à la première frame image).
+        let hit = self.img_cache.borrow().get(path).cloned();
+        if let Some((tex, w, h, _)) = hit {
+            self.img_cache.borrow_mut().insert(path.to_string(), (tex.clone(), w, h, tick));
+            return Ok((tex, w, h));
+        }
+        let (tex, w, h) = self.load_image_texture(path)?;
+        let mut cache = self.img_cache.borrow_mut();
+        cache.insert(path.to_string(), (tex.clone(), w, h, tick));
+        // La politique vit dans `frame_geometry` : les trois backends la partagent, comme la
+        // géométrie, plutôt que d'entretenir trois copies qui finiraient par diverger.
+        let entries: Vec<(String, u64, u64)> = cache
+            .iter()
+            .map(|(k, e)| (k.clone(), e.1 as u64 * e.2 as u64 * 4, e.3))
+            .collect();
+        let protect_from = self.img_frame_start.get();
+        for key in
+            crate::frame_geometry::lru_evictions(&entries, IMG_CACHE_BUDGET_BYTES, protect_from)
+        {
+            cache.remove(&key);
+        }
+        Ok((tex, w, h))
+    }
+
     /// Fond wallpaper image, cover-fit sur le ratio de SORTIE (mode 6).
     ///
     /// Le crop de recouvrement se calcule contre le vrai ratio de sortie, pas contre celui
@@ -878,17 +940,7 @@ impl Compositor {
         radius_px: f32,
         output_aspect: f32,
     ) -> Result<()> {
-        // Emprunt isolé dans un `let` pour qu'il soit relâché AVANT le `borrow_mut` —
-        // même piège que côté Windows (double emprunt RefCell à la première frame image).
-        let cached = self.img_cache.borrow().get(path).cloned();
-        let (tex, iw, ih) = match cached {
-            Some(v) => v,
-            None => {
-                let loaded = self.load_image_texture(path)?;
-                self.img_cache.borrow_mut().insert(path.to_string(), loaded.clone());
-                loaded
-            }
-        };
+        let (tex, iw, ih) = self.cached_image(path)?;
         let ai = iw as f32 / ih.max(1) as f32;
         let ao = output_aspect;
         let (u0, v0, u1, v1) = if ai > ao {
@@ -1773,15 +1825,7 @@ impl Compositor {
         sprite: &crate::scene::SceneCursorSprite,
         clip: [f32; 4],
     ) -> Result<()> {
-        let cached = self.img_cache.borrow().get(sprite.path.as_str()).cloned();
-        let (tex, iw, ih) = match cached {
-            Some(v) => v,
-            None => {
-                let loaded = self.load_image_texture(&sprite.path)?;
-                self.img_cache.borrow_mut().insert(sprite.path.clone(), loaded.clone());
-                loaded
-            }
-        };
+        let (tex, iw, ih) = self.cached_image(sprite.path.as_str())?;
         let (rw, rh) = (self.render_w as f32, self.render_h as f32);
         let ar = iw as f32 / ih.max(1) as f32;
         let (pw, ph) = if ar >= 1.0 { (size_px, size_px / ar) } else { (size_px * ar, size_px) };
@@ -1882,6 +1926,7 @@ impl Compositor {
         frame: f32,
         cfg: &Cfg,
     ) -> Result<()> {
+        self.begin_image_frame();
         if Self::pixel_buffer_of(screen).is_none() {
             return self.clear_rt();
         }
