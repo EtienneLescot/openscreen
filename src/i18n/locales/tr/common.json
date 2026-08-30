@@ -40,7 +40,8 @@
 		"services": "Servisler",
 		"hide": "OpenScreen’i Gizle",
 		"hideOthers": "Diğerlerini Gizle",
-		"unhide": "Tümünü Göster"
+		"unhide": "Tümünü Göster",
+		"saveDiagnostics": "Teşhis Verilerini Kaydet"
 	},
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} kullanılabilir. Mevcut sürümünüz {{currentVersion}}.",
@@ -50,12 +51,6 @@
 		"blockedLocation": "Güncellemeden önce OpenScreen'i Uygulamalar klasörüne taşıyın.",
 		"failed": "Güncellemeler denetlenemedi.",
 		"downloadFailed": "Güncelleme indirilemedi."
-	},
-	"playback": {
-		"play": "Oynat",
-		"pause": "Duraklat",
-		"fullscreen": "Tam Ekran",
-		"exitFullscreen": "Tam Ekrandan Çık"
 	},
 	"units": {
 		"pixelsPerSecond": "{{value}} piks/sn",

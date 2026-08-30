@@ -519,7 +519,7 @@ unit falls back to the original words (`untranslatedUnits`,
 
 Caption appearance lives in `document.legacyEditor.captions`, accessed
 through `getCaptionSettings` / `patchCaptionSettings`
-([`src/lib/ai-edition/captions/settings.ts:279,324`](../../src/lib/ai-edition/captions/settings.ts:279)).
+([`src/lib/ai-edition/captions/settings.ts:387,445`](../../src/lib/ai-edition/captions/settings.ts:387)).
 
 | Field | Default | Notes |
 |---|---|---|
@@ -528,11 +528,11 @@ through `getCaptionSettings` / `patchCaptionSettings`
 | `fontSize` | `48` | Pixels at a 1080-high frame; `annotationFontSizeFraction` turns that into a fraction of the box being drawn into (`src/lib/ai-edition/annotationScale.ts`), resolution-free. |
 | `fontFamily`, `fontWeight`, `color` | `Inter`, `bold`, `#ffffff` | Drawn from the same font families `src/index.css` already loads — anything else would render in the preview but fall back to a default in the export canvas. |
 | `backgroundEnabled`, `backgroundColor`, `backgroundOpacity` | `true`, `#000000`, `0.55` | When off, the text draws straight over the video with no plate. |
-| `verticalPosition` | `bottom` | `top` / `middle` / `bottom`. `captionBandRect` anchors the band; `offsetY` nudges it from there. |
-| `offsetY` | `0` | Fine nudge in % of **frame** height, on top of the anchor. Positive moves down. |
-| `offsetX` | `0` | Fine nudge in % of **frame** width. Positive moves toward the right edge of the exported frame — frame geometry, so an RTL interface locale never mirrors it. |
-| `width` | `80` | Band width in % of frame width. |
-| `minWordsPerLine` / `maxWordsPerLine` | `2` / `7` | Line-group bounds; `groupTimedCaptionWordsIntoLines` packs inside the range, `[1, 12]` after clamp. |
+| `anchorV` | `bottom` | `bottom` / `top` — which frame edge the drawn block is pinned to. It grows AWAY from that edge, so the edge never moves. |
+| `insetY` | `5` (12.5 on a vertical export) | Distance from the edge named by `anchorV` to the near edge of what is DRAWN, in % of frame height. Always ≥ 0. |
+| `anchorH` | `center` | `left` / `center` / `right` — which edge of the block is pinned horizontally, and the ragged edge when the text wraps. |
+| `insetX` | the column's own margin | Distance from the edge named by `anchorH`. Ignored when `anchorH` is `center`, which has no edge to measure from. |
+| `minWordsPerLine` / `maxWordsPerLine` | `2` / `7` | Line-group bounds; `groupTimedCaptionWordsIntoLines` packs inside the range, `[1, 12]` after clamp. Also the only control over how much text is on screen — there is no width slider. |
 
 #### Coordinate space
 
@@ -558,45 +558,68 @@ The **font denominator follows the same box.** Flipping the rect without the
 denominator would hold a caption still while its glyphs kept shrinking with the
 padding slider, which is why both come off one `anchor` local in each backend.
 
-#### Reach
+#### Anchoring
 
-`CAPTION_BAND_HEIGHT_PCT = 22`
+**A caption is placed by pinning one edge of the drawn block, never by centring it
+in a box.** `captionBoxRect`
 ([`src/lib/ai-edition/captions/settings.ts`](../../src/lib/ai-edition/captions/settings.ts))
-is generous enough for two wrapped lines at the default size — the
-renderers clip to it, so it is deliberately not tight.
+returns the box plus a `verticalAlign`, and the compositor puts the block flush
+against that edge of it. The invariant, which the tests assert as a property:
 
-The band is a **box**; the visible caption is a strip centred inside it. All three
-rasterizers centre the text vertically, so a box stopped flush against the frame
-edge leaves its glyphs half a band short of it. `captionOffsetRange` therefore
-lets the box hang off the top or bottom by exactly its empty margin — the ink
-reaches the edge, and nothing drawn leaves the frame. The size of that margin is
-derived from `fontSize`, because the slice of the band that carries ink is: a
-200px caption fills the whole band, gets no overhang, and stays whole.
+> Bottom anchor: the drawn block's bottom edge is at `100 − insetY` % of frame
+> height. Top anchor: its top edge is at `insetY` %. For every font size, every
+> background state, every word count, every wrap outcome, every output resolution.
 
-`captionOffsetRange` is also what the inspector's sliders take their bounds from,
-so the reachable span and the slider span are the same span. Before #396 both
-ends were hardcoded to ±45 while the result was clamped separately, which left
-the bottom anchor honouring only −45…+3 — nearly half the slider moved the handle
-and nothing else.
+No estimate of the block's height participates in placing it. The box's height is
+**headroom** — how many lines can be drawn before the renderer clips — so being
+wrong about it costs a clipped fourth line, not a moved subtitle.
 
-#### Position presets
+That distinction is the whole of the redesign. The model this replaced put the
+caption in a fixed 22 % box and let all three rasterizers centre the ink inside it.
+A centred block moves BOTH its edges as it grows, so:
 
-`verticalPosition` and `offsetX`/`offsetY` are independent fields — a preset is
-not a separate mode the offsets are locked out of, it's just a point on the same
-range the slider already covers. `activeVerticalPositionPreset` /
-`activeHorizontalPositionPreset` (`settings.ts`, right after `captionOffsetRange`)
-read "is a preset active" back out of that: a preset counts as active only while
-its axis' offset is (within a small epsilon) exactly the value that preset would
-set, so dragging a slider away from a preset silently un-highlights it with no
-separate "active preset" field to keep in sync. Clicking a preset writes that
-clean value back (`offsetY: 0` for a vertical preset; `captionHorizontalPositionOffset`
-for a horizontal one) rather than leaving whatever nudge was already there, which
-is what makes the click read as "go here" instead of "go here, plus whatever was
-left over." `CaptionHorizontalPosition` (left/center/right) is a new axis of
-meaning distinct from `CaptionTextAlign` (same three words, but for aligning the
-text *inside* the band) — there is no stored `horizontalPosition` field; it is
-derived from `offsetX` exactly the way the vertical preset is derived from
-`offsetY`.
+- wrapping to another line shifted the caption vertically, and so did anything that
+  changed wrapping — which is how the *width* slider ended up moving the caption on
+  the *vertical* axis;
+- the box had to be allowed to hang off the frame by its own empty margin for the
+  glyphs to reach the edge at all, and that margin was derived from `fontSize`;
+- the offset therefore had to be signed and clamped against a reachable range that
+  moved with four other fields, which is why the inspector could show `-7.3 %` —
+  a number that corresponds to nothing in any subtitle format.
+
+All of that is deleted. An inset is a distance from a named edge, so it means the
+same thing whatever else changes, and `patchCaptionSettings` has no re-clamping
+pass any more.
+
+Bottom-anchored growth is not an invention here: it is the default in every
+subtitle format. `tts:displayAlign="after"` (TTML/IMSC, which the BBC requires on
+every region), `\an2` with `MarginV` measured from the bottom (ASS), `line:auto`
+resolving to −1 and pushing the box upward (WebVTT), roll-up scrolling (CEA-708).
+Deliberately absent: a "middle" anchor. XSL 1.1 defines `display-align: center` as
+keeping both edge distances equal — which is precisely the pathology above — and a
+bottom anchor with a large `insetY` reaches the same place while still growing
+upward.
+
+#### The column, and why there is no width control
+
+`captionSafeColumn` derives the wrap width from the output aspect — 68 % of a 16:9
+frame, 90 % of a squarer or vertical one (the BBC line-length table; 68 % at 48 px
+on 1080p is ≈45 characters, inside the Netflix 42 / BBC 37 band). It is never
+stored and never exposed.
+
+It used to be a `width` slider, and that control could not be understood: the
+background plate hugs the TEXT, not the box, so moving it changed nothing visible
+until the text happened to be long enough to wrap. What it actually controlled is
+how much text is on screen — a question `minWordsPerLine` / `maxWordsPerLine`
+already answers in words rather than in percent.
+
+The horizontal axis has one control, `anchorH`, which reaches the rasterizers as
+the existing `textAlign`. That is not a coincidence: their plate maths already
+snaps the plate onto the box's left or right edge (`text_linux.rs`'s `plate_x`,
+and its two mirrors), so the alignment *is* the pivot. The model before this had
+two controls fighting over that one outcome — `offsetX` moved an invisible band and
+`textAlign` moved the text inside it — and neither could be read without seeing the
+band.
 
 The Captions pane itself
 ([`src/components/ai-edition/CaptionsPane.tsx`](../../src/components/ai-edition/CaptionsPane.tsx))
@@ -656,25 +679,23 @@ it deletes data
 ## Known gaps
 
 - **Language selector.** The "Regenerate as" picker offers `"auto"` plus
-  every language the `small` multilingual model resolves. There are two
-  copies of it in the tree — `MediaStage.tsx`'s Media stage panel
+  every language the `small` multilingual model resolves. There is one
+  copy of it — `MediaStage.tsx`'s Media stage panel
   ([`src/components/ai-edition/v4/MediaStage.tsx`](../../src/components/ai-edition/v4/MediaStage.tsx)),
-  the one actually mounted by `NewEditorShell`, and `SourceTranscriptModal`
-  ([`src/components/ai-edition/Modals.tsx`](../../src/components/ai-edition/Modals.tsx)),
-  which is currently unreachable: `LeftPanel` (its only mount site) is only
-  ever rendered with `active="chat"` by `NewEditorShell.tsx`, so the
-  `MediaPane` branch that would render it never runs. Both are kept correct
-  rather than deleting the unreachable one, since nothing marks it dead code
-  and a future rewire could reach it. `TRANSCRIPT_LANGUAGE_CODES` in
+  the one `NewEditorShell` mounts. A second, unreachable copy lived in the
+  v3 left panel's transcript modal until it was deleted along with the rest
+  of that orphaned surface (see
+  [decisions.md](decisions.md)) — it had already absorbed two language
+  fixes that never reached a user. `TRANSCRIPT_LANGUAGE_CODES` in
   [`src/lib/ai-edition/schema/index.ts`](../../src/lib/ai-edition/schema/index.ts)
   mirrors whisper.cpp's own `g_lang` table verbatim — a code outside that
   list fails to resolve a language id in `wparams.language`
   (`electron/native/whisper-stt/src/main.cpp`) — and `languageLabel` /
   `sortedLanguageOptions` in
   [`src/lib/ai-edition/transcription/languageLabels.ts`](../../src/lib/ai-edition/transcription/languageLabels.ts)
-  are the single place both pickers build their options and labels from, so
-  the two copies cannot drift from each other the way two hand-duplicated
-  lists would. Option labels come from `Intl.DisplayNames` in the active UI
+  are the single place the picker builds its options and labels from, so a
+  future second entry point cannot drift from it the way a hand-duplicated
+  list would. Option labels come from `Intl.DisplayNames` in the active UI
   locale, falling back to whisper.cpp's own English name for a code that
   locale's ICU data can't resolve. Forcing a language skips detection on the
   first window and slightly improves WER.

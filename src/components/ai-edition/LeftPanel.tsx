@@ -1,29 +1,21 @@
-import { ArrowLeft, Check, Film, Loader2, MessageSquare, Plus, Search, X } from "lucide-react";
+import { ArrowLeft, Check, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { useEditorDialogActions, useEditorDialogSection } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
-import type { AxcutAsset } from "@/lib/ai-edition/schema";
 import {
 	applyAgentDocumentIfCurrent,
 	runAgentTurn,
 } from "@/lib/ai-edition/store/agentDocumentApply";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
-import {
-	useAssetTranscriptions,
-	useTranscriptionStore,
-} from "@/lib/ai-edition/store/transcriptionStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
-import { splitRoundedTime } from "@/lib/ai-edition/timeline/format";
-import type { AssetTranscriptionView } from "@/lib/ai-edition/transcription/status";
 import { nativeBridgeClient } from "@/native/client";
 import type {
 	AiEditionChatEvent,
 	AiEditionLlmConfig,
 	AiEditionToolCallSummary,
 } from "@/native/contracts";
-import { formatBytes } from "@/utils/formatBytes";
 import {
 	getReasoningEffortLabel,
 	getReasoningEffortOptions,
@@ -32,285 +24,9 @@ import {
 } from "../../../electron/ai-edition/provider-registry";
 import { ChatWelcome } from "./ChatWelcome";
 import { canSendChat } from "./chatAvailability";
-import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
+import { ChatHistoryModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
-import { TranscriptionStatusDot } from "./TranscriptionStatus";
 import { useChatBudget } from "./useChatBudget";
-
-export type LeftTab = "chat" | "media";
-
-const THUMB_PALETTE = ["thumbRed", "thumbGreen", "thumbAmber", "thumbCyan"] as const;
-
-// `h:mm:ss.t`, hours always shown — a third shape, so it formats itself rather
-// than calling into format.ts. It shares `splitRoundedTime` because the carry is
-// the part that must not be re-derived: deriving the minute field from the raw
-// value while the second field rounded is what rendered `0:00:60.0`.
-function formatTimecode(sec: number | undefined): string {
-	if (!sec || !Number.isFinite(sec)) return "0:00:00.0";
-	const { totalMinutes, seconds } = splitRoundedTime(sec);
-	const h = Math.floor(totalMinutes / 60);
-	const m = totalMinutes % 60;
-	// padStart(4), not (3): "5.0" is already 3 chars, so a single-digit second
-	// rendered as `0:00:5.0` instead of `0:00:05.0`.
-	return `${h}:${m.toString().padStart(2, "0")}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
-
-function basename(path: string): string {
-	return path.split(/[\\/]/).pop() ?? path;
-}
-
-function MediaList({
-	assets,
-	onOpenTranscript,
-	transcriptions,
-}: {
-	assets: AxcutAsset[];
-	onOpenTranscript?: (asset: AxcutAsset) => void;
-	/** Per-asset transcription state, keyed by asset id (see transcriptionStore). */
-	transcriptions: Record<string, AssetTranscriptionView>;
-}) {
-	const t = useScopedT("editor");
-	if (assets.length === 0) {
-		return (
-			<p
-				style={{
-					font: "400 12px var(--font-body)",
-					color: "var(--muted)",
-					padding: "16px var(--sp-4)",
-					textAlign: "center",
-					lineHeight: 1.5,
-				}}
-			>
-				{t("leftPanel.emptyHint")}
-			</p>
-		);
-	}
-	return (
-		<ul className={styles.mediaList}>
-			{assets.map((asset, i) => {
-				const label = asset.label || basename(asset.originalPath);
-				const tc = formatTimecode(asset.durationSec);
-				const size = formatBytes(asset.sizeBytes);
-				const palette = THUMB_PALETTE[i % THUMB_PALETTE.length];
-				const transcription = transcriptions[asset.id] ?? {
-					assetId: asset.id,
-					status: "idle" as const,
-				};
-
-				return (
-					<li
-						className={styles.mediaCard}
-						key={asset.id}
-						title={asset.originalPath}
-						draggable
-						onDragStart={(e) => {
-							e.dataTransfer.setData("application/x-axcut-asset", asset.id);
-							e.dataTransfer.effectAllowed = "copy";
-						}}
-					>
-						<button
-							type="button"
-							style={{
-								display: "flex",
-								flexDirection: "column",
-								border: 0,
-								background: "none",
-								padding: 0,
-								cursor: "pointer",
-								font: "inherit",
-								textAlign: "left",
-								width: "100%",
-							}}
-							onClick={() => onOpenTranscript?.(asset)}
-						>
-							<div className={`${styles.thumb} ${styles[palette]}`} aria-hidden>
-								<Film size={22} />
-							</div>
-							<div className={styles.mediaMeta}>
-								<div className={styles.name}>{label}</div>
-								<div className={styles.row}>
-									<TranscriptionStatusDot view={transcription} />
-									<span className={styles.timecode}>{tc}</span>
-									<span className={styles.size}>{size}</span>
-								</div>
-							</div>
-						</button>
-					</li>
-				);
-			})}
-		</ul>
-	);
-}
-
-export function MediaPane() {
-	const t = useScopedT("editor");
-	const projectId = useProjectStore((s) => s.projectId);
-	const document = useProjectStore((s) => s.document);
-	const addAsset = useProjectStore((s) => s.addAsset);
-	// Transcripts land on their own (transcriptionStore's background pass); the
-	// pane reports where each one is at and offers a per-asset re-run.
-	const transcriptions = useAssetTranscriptions();
-	const requestTranscription = useTranscriptionStore((s) => s.request);
-	const [query, setQuery] = useState("");
-	const [busy, setBusy] = useState(false);
-	const [srcTranscriptAsset, setSrcTranscriptAsset] = useState<AxcutAsset | null>(null);
-	const selectedTranscription = srcTranscriptAsset
-		? transcriptions[srcTranscriptAsset.id]
-		: undefined;
-
-	const handleImport = async () => {
-		if (!projectId) {
-			toast.error(t("mediaStage.openProjectFirst"));
-			return;
-		}
-		const picker = await window.electronAPI?.openVideoFilePicker();
-		if (!picker?.success || !picker.path) return;
-		setBusy(true);
-		try {
-			const label = picker.name || basename(picker.path);
-			await addAsset(picker.path, label);
-			toast.success(t("mediaStage.added", { label }));
-		} catch (err) {
-			toast.error(t("mediaStage.couldNotAddAsset"), {
-				description: err instanceof Error ? err.message : String(err),
-			});
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	const filtered = (document?.assets ?? []).filter((a) => {
-		if (!query) return true;
-		const text = `${a.label} ${a.originalPath}`.toLowerCase();
-		return text.includes(query.toLowerCase());
-	});
-
-	return (
-		<aside className={styles.panel}>
-			<header className={styles.panelHead}>
-				<h2>{t("leftPanel.mediaTitle")}</h2>
-			</header>
-			<div style={{ padding: "10px var(--sp-3) 8px" }}>
-				<div
-					style={{
-						display: "flex",
-						alignItems: "center",
-						gap: 8,
-						padding: "6px 10px",
-						background: "var(--surface-warm)",
-						border: "1px solid var(--border-soft)",
-						borderRadius: "var(--r-md)",
-						color: "var(--meta)",
-					}}
-				>
-					<Search size={14} />
-					<input
-						type="text"
-						placeholder={t("leftPanel.searchPlaceholder")}
-						value={query}
-						onChange={(e) => setQuery(e.target.value)}
-						style={{
-							flex: 1,
-							border: 0,
-							background: "transparent",
-							outline: "none",
-							font: "13px var(--font-body)",
-							color: "var(--fg)",
-						}}
-					/>
-					{query ? (
-						<button
-							type="button"
-							onClick={() => setQuery("")}
-							aria-label={t("leftPanel.clearSearch")}
-							style={{
-								background: "transparent",
-								border: 0,
-								color: "var(--meta)",
-								cursor: "pointer",
-							}}
-						>
-							<X size={12} />
-						</button>
-					) : null}
-				</div>
-			</div>
-			<div className={styles.panelBody} style={{ padding: "4px var(--sp-3) 8px" }}>
-				<MediaList
-					assets={filtered}
-					onOpenTranscript={setSrcTranscriptAsset}
-					transcriptions={transcriptions}
-				/>
-			</div>
-			<button
-				type="button"
-				className={styles.importBtn}
-				onClick={handleImport}
-				disabled={!projectId || busy}
-			>
-				<Plus size={14} />
-				{t("mediaStage.importMedia")}
-			</button>
-			{document?.transcript ? (
-				<div
-					style={{
-						margin: "0 var(--sp-3) 8px",
-						padding: "6px 10px",
-						borderRadius: 999,
-						background: "var(--success-soft)",
-						color: "var(--success)",
-						font: "500 11px/1 var(--font-mono)",
-						letterSpacing: "0.04em",
-						display: "inline-flex",
-						alignItems: "center",
-						gap: 6,
-					}}
-				>
-					<span
-						style={{
-							width: 6,
-							height: 6,
-							borderRadius: "50%",
-							background: "var(--success)",
-						}}
-					/>
-					{t("leftPanel.transcriptReadyBadge")}
-				</div>
-			) : null}
-			<SourceTranscriptModal
-				open={srcTranscriptAsset !== null}
-				onClose={() => setSrcTranscriptAsset(null)}
-				assetLabel={srcTranscriptAsset?.label ?? ""}
-				assetPath={srcTranscriptAsset?.originalPath ?? ""}
-				tcFormatted={formatTimecode(srcTranscriptAsset?.durationSec)}
-				transcript={
-					srcTranscriptAsset && document?.transcripts
-						? (document.transcripts.find((t) => t.assetId === srcTranscriptAsset.id) ?? null)
-						: null
-				}
-				isTranscribing={
-					selectedTranscription?.status === "running" || selectedTranscription?.status === "queued"
-				}
-				isFailed={selectedTranscription?.status === "failed"}
-				failureMessage={
-					selectedTranscription?.failure
-						? selectedTranscription.failure.kind === "error"
-							? selectedTranscription.failure.message
-							: t("mediaStage.noAudioTrackHint")
-						: undefined
-				}
-				onRegenerate={(language) => {
-					if (!srcTranscriptAsset) return Promise.resolve();
-					return requestTranscription(srcTranscriptAsset.id, language);
-				}}
-			/>
-		</aside>
-	);
-}
-
-export function LeftPanel({ active }: { active: LeftTab }) {
-	return active === "chat" ? <ChatStripPanel /> : <MediaPane />;
-}
 
 interface ChatDisplayMessage {
 	id?: string;
@@ -726,7 +442,7 @@ function ThinkingBlock({
 	);
 }
 
-function ChatStripPanel() {
+export function ChatStripPanel() {
 	const t = useScopedT("editor");
 	const tc = useScopedT("common");
 	// The Auto-enhance confirmation is timeline-owned copy, fired from here —
@@ -1964,37 +1680,6 @@ function ChatStripPanel() {
 						document.body,
 					)
 				: null}
-		</aside>
-	);
-}
-
-const RAIL_BUTTONS: Array<{ id: LeftTab; labelKey: string; icon: React.ElementType }> = [
-	{ id: "chat", labelKey: "leftRail.chat", icon: MessageSquare },
-	{ id: "media", labelKey: "leftRail.media", icon: Film },
-];
-
-export function LeftRail({
-	active,
-	onChange,
-}: {
-	active: LeftTab;
-	onChange: (id: LeftTab) => void;
-}) {
-	const t = useScopedT("editor");
-	return (
-		<aside className={`${styles.rail} ${styles.leftRail}`} aria-label={t("leftRail.ariaLabel")}>
-			{RAIL_BUTTONS.map(({ id, labelKey, icon: Icon }) => (
-				<button
-					type="button"
-					key={id}
-					title={t(labelKey)}
-					aria-label={t(labelKey)}
-					aria-pressed={active === id}
-					onClick={() => onChange(id)}
-				>
-					<Icon size={18} />
-				</button>
-			))}
 		</aside>
 	);
 }

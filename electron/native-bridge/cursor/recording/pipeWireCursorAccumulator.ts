@@ -57,6 +57,11 @@ export type PipeWireHelperEvent =
 			visible: boolean;
 			assetId?: string;
 			asset?: PipeWireCursorAssetPayload;
+			/** `"click"` on the sample coinciding with a left-button press the
+			 *  helper read from evdev; absent on a plain move (see the helper's
+			 *  input.rs). The helper never emits the `"move"` default — that word
+			 *  is filled in below so it lives in exactly one place. */
+			interactionType?: "move" | "click";
 	  }
 	| {
 			event: "audio-source";
@@ -166,8 +171,10 @@ export class PipeWireCursorAccumulator {
 			cx: clamp(payload.x / width, 0, 1),
 			cy: clamp(payload.y / height, 0, 1),
 			visible: payload.visible,
-			// Wayland exposes no click events to an unprivileged process.
-			interactionType: "move",
+			// The portal never reports a button; the helper tags a sample "click"
+			// only when it read a left-button press from evdev (needs the user in
+			// the `input` group). Everything else — the common case — is a move.
+			interactionType: payload.interactionType ?? "move",
 			...(payload.assetId ? { assetId: payload.assetId } : {}),
 		});
 

@@ -109,7 +109,7 @@ describe("ProviderSettings, reached from the app menu", () => {
 		"media",
 		"rec",
 	])("opens in %s mode, where the chat panel that used to own it does not exist", (mode) => {
-		// The reason the state was lifted. LeftPanel renders only under `mode === "edit" &&
+		// The reason the state was lifted. ChatStripPanel renders only under `mode === "edit" &&
 		// chatOpen`, so before this change the row would have been dead in both of these.
 		renderEditorChrome("en", mode);
 

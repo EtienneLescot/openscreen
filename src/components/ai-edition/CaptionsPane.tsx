@@ -9,28 +9,13 @@
 // translation is stored beside the transcript, keyed by segment id, and picking
 // "Original" goes straight back to the SSOT text.
 
-import type { LucideIcon } from "lucide-react";
-import {
-	AlignHorizontalJustifyCenter,
-	AlignHorizontalJustifyEnd,
-	AlignHorizontalJustifyStart,
-	Captions as CaptionsIcon,
-	Languages,
-	Loader2,
-	Trash2,
-} from "lucide-react";
+import { Captions as CaptionsIcon, Languages, Loader2, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
-import type {
-	CaptionHorizontalPosition,
-	CaptionTextAlign,
-	CaptionVerticalPosition,
-} from "@/lib/ai-edition/captions";
+import type { CaptionAnchorH, CaptionAnchorV } from "@/lib/ai-edition/captions";
 import {
-	activeHorizontalPositionPreset,
-	activeVerticalPositionPreset,
-	captionHorizontalPositionOffset,
-	captionOffsetRange,
+	CAPTION_INSET_X_MAX,
+	CAPTION_INSET_Y_MAX,
 	untranslatedUnits,
 } from "@/lib/ai-edition/captions";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -43,16 +28,6 @@ import { nativeBridgeClient } from "@/native";
 import { ColorField } from "./ColorField";
 import styles from "./NewEditorShell.module.css";
 import { SliderCell, Toggle } from "./RightPanes";
-
-/** A hundred stops across whatever span the offset currently has.
- *
- *  The bounds are geometry, so they are rarely round numbers. A fixed `step` of 1
- *  would leave `max` unreachable whenever the span isn't a whole number of steps —
- *  the caption would stop just short of the frame edge, which is the very thing
- *  #396 is about. Deriving the step from the span puts both ends exactly on a stop. */
-function sliderStep(range: { min: number; max: number }): number {
-	return Math.max((range.max - range.min) / 100, Number.EPSILON);
-}
 
 /** The families `src/index.css` already loads for on-canvas text — anything else
  *  would render in the preview but fall back to a default in the export canvas. */
@@ -141,11 +116,6 @@ export function CaptionsPane() {
 
 	const disabled = !hasDocument;
 	const languageOptions = useMemo(() => Object.values(translations), [translations]);
-
-	// The reach depends on the anchor, the width and the font size, so it moves as the
-	// user works. Taking the sliders' bounds from the same function the geometry clamps
-	// with is what keeps every position on them a position the band can actually take.
-	const offsetRange = useMemo(() => captionOffsetRange(settings), [settings]);
 
 	const handleTranslate = async () => {
 		const doc = useProjectStore.getState().document;
@@ -478,98 +448,84 @@ export function CaptionsPane() {
 				) : null}
 
 				{/* ── Placement ──────────────────────────────────────────── */}
+				{/* One control per axis, each naming the edge it measures from. The old pane
+				    had four that overlapped: a band width nothing drew, an offset measured
+				    against that invisible band, and a text alignment fighting the offset for
+				    the same visual outcome. */}
 				<div className={styles.sectionLabel}>{t("captions.position")}</div>
-				<Segmented<CaptionVerticalPosition>
-					value={activeVerticalPositionPreset(settings)}
+				<Segmented<CaptionAnchorV>
+					value={settings.anchorV}
 					disabled={disabled}
 					options={[
-						{ value: "top", label: t("captions.positionTop") },
-						{ value: "middle", label: t("captions.positionMiddle") },
-						{ value: "bottom", label: t("captions.positionBottom") },
+						{ value: "bottom", label: t("captions.anchorBottom") },
+						{ value: "top", label: t("captions.anchorTop") },
 					]}
-					// A preset button is a shortcut to a clean position, not a nudge on top
-					// of one — resetting the offset is what makes clicking it feel like
-					// "go here" instead of "go here, plus whatever was left over".
-					onChange={(verticalPosition) => void set({ verticalPosition, offsetY: 0 })}
+					// No offset to reset: the inset means the same thing on both anchors, so
+					// flipping mirrors the caption to the same distance from the opposite edge.
+					onChange={(anchorV) => void set({ anchorV })}
 				/>
-				<Segmented<CaptionHorizontalPosition>
-					value={activeHorizontalPositionPreset(settings)}
-					// Mirrors the horizontal slider's own disabled condition just below: a
-					// full-width band has nowhere left or right to go.
-					disabled={disabled || offsetRange.x.max <= offsetRange.x.min}
-					options={[
-						{
-							value: "left",
-							label: t("captions.positionLeft"),
-							icon: AlignHorizontalJustifyStart,
-						},
-						{
-							value: "center",
-							label: t("captions.positionCenter"),
-							icon: AlignHorizontalJustifyCenter,
-						},
-						{
-							value: "right",
-							label: t("captions.positionRight"),
-							icon: AlignHorizontalJustifyEnd,
-						},
-					]}
-					onChange={(preset) =>
-						void set({ offsetX: captionHorizontalPositionOffset(settings, preset) })
-					}
-				/>
+				<p
+					style={{
+						margin: "6px var(--sp-4) 10px",
+						font: "400 11px/1.5 var(--font-body)",
+						color: "var(--meta)",
+					}}
+				>
+					{settings.anchorV === "bottom"
+						? t("captions.anchorHintBottom")
+						: t("captions.anchorHintTop")}
+				</p>
 				<div className={styles.sliderGrid}>
 					<SliderCell
-						label={t("captions.verticalOffset")}
-						value={settings.offsetY}
-						min={offsetRange.y.min}
-						max={offsetRange.y.max}
-						step={sliderStep(offsetRange.y)}
+						label={
+							settings.anchorV === "bottom"
+								? t("captions.distanceFromBottom")
+								: t("captions.distanceFromTop")
+						}
+						value={settings.insetY}
+						min={0}
+						max={CAPTION_INSET_Y_MAX}
+						step={0.5}
 						decimals={1}
 						suffix="%"
 						disabled={disabled}
-						onChange={(v) => setLive({ offsetY: v })}
-						onCommit={() => void commit()}
-					/>
-					<SliderCell
-						label={t("captions.horizontalOffset")}
-						value={settings.offsetX}
-						min={offsetRange.x.min}
-						max={offsetRange.x.max}
-						step={sliderStep(offsetRange.x)}
-						decimals={1}
-						suffix="%"
-						// A full-width band is already flush with both frame edges, so there is
-						// no travel to offer. Leaving the slider live would let the user drag a
-						// control that cannot move anything, which reads as a bug.
-						disabled={disabled || offsetRange.x.max <= offsetRange.x.min}
-						onChange={(v) => setLive({ offsetX: v })}
-						onCommit={() => void commit()}
-					/>
-					<SliderCell
-						label={t("captions.width")}
-						value={settings.width}
-						min={20}
-						max={100}
-						suffix="%"
-						disabled={disabled}
-						onChange={(v) => setLive({ width: v })}
+						onChange={(v) => setLive({ insetY: v })}
 						onCommit={() => void commit()}
 					/>
 				</div>
 
-				{/* ── Text align (inside the band — a different axis from Position) ── */}
-				<div className={styles.sectionLabel}>{t("captions.textAlign")}</div>
-				<Segmented<CaptionTextAlign>
-					value={settings.textAlign}
+				<Segmented<CaptionAnchorH>
+					value={settings.anchorH}
 					disabled={disabled}
 					options={[
 						{ value: "left", label: t("captions.alignLeft") },
 						{ value: "center", label: t("captions.alignCenter") },
 						{ value: "right", label: t("captions.alignRight") },
 					]}
-					onChange={(textAlign) => void set({ textAlign })}
+					onChange={(anchorH) => void set({ anchorH })}
 				/>
+				{/* Centre has no edge to measure from, so the control is ABSENT rather than
+				    disabled — a dead slider reads as a bug. */}
+				{settings.anchorH === "center" ? null : (
+					<div className={styles.sliderGrid}>
+						<SliderCell
+							label={
+								settings.anchorH === "left"
+									? t("captions.distanceFromLeft")
+									: t("captions.distanceFromRight")
+							}
+							value={settings.insetX}
+							min={0}
+							max={CAPTION_INSET_X_MAX}
+							step={0.5}
+							decimals={1}
+							suffix="%"
+							disabled={disabled}
+							onChange={(v) => setLive({ insetX: v })}
+							onCommit={() => void commit()}
+						/>
+					</div>
+				)}
 
 				{/* ── Line length ────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.lineLength")}</div>
@@ -636,39 +592,25 @@ function Segmented<T extends string>({
 	disabled,
 	onChange,
 }: {
-	/** `null` means no option is currently active — e.g. a free-dragged slider
-	 *  has moved off every preset this row offers. */
-	value: T | null;
-	options: ReadonlyArray<{
-		value: T;
-		label: string;
-		/** Renders in place of the text label when given (with `label` still used
-		 *  as the accessible name and hover title) — for a row that would otherwise
-		 *  repeat another row's words for a different axis of meaning. */
-		icon?: LucideIcon;
-	}>;
+	value: T;
+	options: ReadonlyArray<{ value: T; label: string }>;
 	disabled?: boolean;
 	onChange: (next: T) => void;
 }) {
 	return (
 		<div className={styles.paneTabs}>
-			{options.map((option) => {
-				const Icon = option.icon;
-				return (
-					<button
-						type="button"
-						key={option.value}
-						className={value === option.value ? styles.isActive : ""}
-						aria-pressed={value === option.value}
-						aria-label={Icon ? option.label : undefined}
-						title={Icon ? option.label : undefined}
-						disabled={disabled}
-						onClick={() => onChange(option.value)}
-					>
-						{Icon ? <Icon size={14} /> : option.label}
-					</button>
-				);
-			})}
+			{options.map((option) => (
+				<button
+					type="button"
+					key={option.value}
+					className={value === option.value ? styles.isActive : ""}
+					aria-pressed={value === option.value}
+					disabled={disabled}
+					onClick={() => onChange(option.value)}
+				>
+					{option.label}
+				</button>
+			))}
 		</div>
 	);
 }

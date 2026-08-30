@@ -80,98 +80,142 @@ export function findMacCursorHelperPath() {
 	return null;
 }
 
-export async function requestMacCursorAccessibilityAccess() {
+/**
+ * Why `granted: false` is not the same question as "did the user deny Accessibility".
+ *
+ * `not-determined` is the ONLY genuine denial: the helper ran, asked, and was told no.
+ * The other four mean the helper never got to ask — it is absent from the build, the
+ * loader killed it, it crashed, or it hung. Reporting those as a denial is what made
+ * #515 unfixable from the user's side: on macOS 12 the helper died in dyld, and the app
+ * answered by telling the user to grant a permission they had already granted.
+ */
+export type MacCursorAccessStatus =
+	| "granted"
+	| "not-determined"
+	| "missing-helper"
+	| "error"
+	| "exited"
+	| "timeout";
+
+export interface MacCursorAccessResult {
+	success: boolean;
+	granted: boolean;
+	status: MacCursorAccessStatus;
+	/**
+	 * Whether *the app* holds Accessibility trust, read from the main process rather
+	 * than from the helper. This is what separates the two failure modes: a helper that
+	 * could not run while this is `true` is a broken build, not a missing grant.
+	 */
+	accessibilityTrusted: boolean;
+	error?: string;
+}
+
+/** True when the helper never got far enough to answer the permission question. */
+export function isMacCursorHelperUnavailable(status: MacCursorAccessStatus) {
+	return (
+		status === "missing-helper" || status === "error" || status === "exited" || status === "timeout"
+	);
+}
+
+export async function requestMacCursorAccessibilityAccess(): Promise<MacCursorAccessResult> {
 	if (process.platform !== "darwin") {
-		return { success: true, granted: true, status: "granted" };
+		return { success: true, granted: true, status: "granted", accessibilityTrusted: true };
 	}
 
+	// The return value is the signal, not a side effect: it says whether OpenScreen.app
+	// itself is trusted, independently of whether the child helper can be launched.
+	//
+	// `false`, so this is a silent read. Prompting here would ask for Accessibility
+	// BEFORE discovering whether the helper can run at all — and in every branch below
+	// where it cannot (missing-helper, error, exited, timeout) the grant is not what is
+	// missing, so the prompt is exactly the noise this function now exists to stop.
+	//
+	// Nothing is lost on the one path that does ask the user for the grant: reaching
+	// `not-determined` means the helper RAN, and it calls AXIsProcessTrustedWithOptions
+	// with kAXTrustedCheckOptionPrompt itself on every start
+	// (OpenScreenMacOSCursorHelper/main.swift), which is what puts OpenScreen in the
+	// Accessibility list for the user to tick.
+	let accessibilityTrusted = false;
 	try {
-		systemPreferences.isTrustedAccessibilityClient(true);
+		accessibilityTrusted = systemPreferences.isTrustedAccessibilityClient(false);
 	} catch {
-		// Continue with helper probing; it can trigger the same macOS prompt.
+		// Continue with helper probing; the helper performs the same check itself.
 	}
 
 	const helperPath = findMacCursorHelperPath();
 	if (!helperPath) {
-		return { success: true, granted: false, status: "missing-helper" };
+		return { success: true, granted: false, status: "missing-helper", accessibilityTrusted };
 	}
 
-	return new Promise<{ success: boolean; granted: boolean; status: string; error?: string }>(
-		(resolve) => {
-			const child = spawn(helperPath, [JSON.stringify({ sampleIntervalMs: 250 })], {
-				stdio: ["ignore", "pipe", "pipe"],
+	return new Promise<MacCursorAccessResult>((resolve) => {
+		const child = spawn(helperPath, [JSON.stringify({ sampleIntervalMs: 250 })], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let settled = false;
+		let lineBuffer = "";
+		const finish = (result: Omit<MacCursorAccessResult, "accessibilityTrusted">) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			clearTimeout(timer);
+			if (!child.killed) {
+				child.kill("SIGTERM");
+			}
+			resolve({ ...result, accessibilityTrusted });
+		};
+		const timer = setTimeout(() => {
+			finish({
+				success: false,
+				granted: false,
+				status: "timeout",
+				error: "Timed out waiting for macOS cursor helper",
 			});
-			let settled = false;
-			let lineBuffer = "";
-			const finish = (result: {
-				success: boolean;
-				granted: boolean;
-				status: string;
-				error?: string;
-			}) => {
-				if (settled) {
-					return;
-				}
-				settled = true;
-				clearTimeout(timer);
-				if (!child.killed) {
-					child.kill("SIGTERM");
-				}
-				resolve(result);
-			};
-			const timer = setTimeout(() => {
-				finish({
-					success: false,
-					granted: false,
-					status: "timeout",
-					error: "Timed out waiting for macOS cursor helper",
-				});
-			}, READY_TIMEOUT_MS);
+		}, READY_TIMEOUT_MS);
 
-			child.stdout.setEncoding("utf8");
-			child.stdout.on("data", (chunk: string) => {
-				lineBuffer += chunk;
-				const lines = lineBuffer.split(/\r?\n/);
-				lineBuffer = lines.pop() ?? "";
-				for (const line of lines) {
-					const trimmed = line.trim();
-					if (!trimmed) {
-						continue;
-					}
-					try {
-						const event = JSON.parse(trimmed) as MacCursorEvent;
-						if (event.type === "ready") {
-							finish({
-								success: true,
-								granted: event.accessibilityTrusted === true,
-								status: event.accessibilityTrusted === true ? "granted" : "not-determined",
-							});
-							return;
-						}
-					} catch {
-						// Ignore non-JSON helper output.
-					}
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (chunk: string) => {
+			lineBuffer += chunk;
+			const lines = lineBuffer.split(/\r?\n/);
+			lineBuffer = lines.pop() ?? "";
+			for (const line of lines) {
+				const trimmed = line.trim();
+				if (!trimmed) {
+					continue;
 				}
-			});
+				try {
+					const event = JSON.parse(trimmed) as MacCursorEvent;
+					if (event.type === "ready") {
+						finish({
+							success: true,
+							granted: event.accessibilityTrusted === true,
+							status: event.accessibilityTrusted === true ? "granted" : "not-determined",
+						});
+						return;
+					}
+				} catch {
+					// Ignore non-JSON helper output.
+				}
+			}
+		});
 
-			child.once("error", (error) => {
-				finish({
-					success: false,
-					granted: false,
-					status: "error",
-					error: error.message,
-				});
+		child.once("error", (error) => {
+			finish({
+				success: false,
+				granted: false,
+				status: "error",
+				error: error.message,
 			});
-			child.once("exit", (code, signal) => {
-				finish({
-					success: false,
-					granted: false,
-					status: "exited",
-					error: `macOS cursor helper exited before ready (code=${code}, signal=${signal})`,
-				});
+		});
+		child.once("exit", (code, signal) => {
+			finish({
+				success: false,
+				granted: false,
+				status: "exited",
+				error: `macOS cursor helper exited before ready (code=${code}, signal=${signal})`,
 			});
-		},
-	);
+		});
+	});
 }
 
 function normalizeCursorType(value: unknown): NativeCursorType | null {
@@ -204,6 +248,10 @@ export class MacNativeCursorRecordingSession implements CursorRecordingSession {
 		this.previousLeftButtonDown = false;
 		this.consecutiveOutsideSamples = 0;
 
+		// `true` here, unlike the silent read in requestMacCursorAccessibilityAccess: the
+		// return value is discarded, so prompting IS the point. Recording is starting and
+		// the helper is about to spawn, so this is the moment the grant can still change
+		// what the take records.
 		try {
 			systemPreferences.isTrustedAccessibilityClient(true);
 		} catch {

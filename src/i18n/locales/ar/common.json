@@ -40,7 +40,8 @@
 		"services": "خدمات",
 		"hide": "إخفاء OpenScreen",
 		"hideOthers": "إخفاء الآخرين",
-		"unhide": "إظهار الكل"
+		"unhide": "إظهار الكل",
+		"saveDiagnostics": "حفظ التشخيصات"
 	},
 	"updates": {
 		"available": "يتوفر OpenScreen {{latestVersion}}. الإصدار المثبت هو {{currentVersion}}.",
@@ -50,12 +51,6 @@
 		"blockedLocation": "انقل OpenScreen إلى مجلد التطبيقات قبل التحديث.",
 		"failed": "تعذّر التحقق من وجود تحديثات.",
 		"downloadFailed": "تعذّر تنزيل التحديث."
-	},
-	"playback": {
-		"play": "تشغيل",
-		"pause": "ايقاف مؤقت",
-		"fullscreen": "ملء الشاشة",
-		"exitFullscreen": "خروج من ملء الشاشة"
 	},
 	"units": {
 		"pixelsPerSecond": "{{value}} بكسل/ثانية",

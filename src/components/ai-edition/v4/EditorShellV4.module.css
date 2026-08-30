@@ -1626,7 +1626,12 @@
 	display: grid;
 	place-items: center;
 	border-radius: 7px;
-	color: var(--muted);
+	/* The chip itself is a fixed dark frosted-glass overlay regardless of
+	   theme (it sits on top of an arbitrary video thumbnail), so its icon
+	   needs the "light text on a dark overlay" token, not --muted — which
+	   is tuned for the app's own light/dark surfaces and reads as
+	   near-invisible against this chip in light theme. */
+	color: var(--overlay-text);
 	background: color-mix(in srgb, #080a0d 55%, transparent);
 	border: 1px solid rgba(255, 255, 255, 0.08);
 	backdrop-filter: blur(8px);

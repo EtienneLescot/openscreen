@@ -69,7 +69,10 @@ import {
 	LinuxNativeCaptureSession,
 } from "../native-bridge/capture/linuxNativeCaptureSession";
 import { createCursorRecordingSession } from "../native-bridge/cursor/recording/factory";
-import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
+import {
+	isMacCursorHelperUnavailable,
+	requestMacCursorAccessibilityAccess,
+} from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
 import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { toHelperRect } from "../native-bridge/helperCoordinates";
@@ -1353,6 +1356,12 @@ function readNativeWindowsEncoderSelection(output: string) {
 			// which is what `salvageNativeWindowsFragmentedCapture` asks.
 			container?: string;
 			preferSoftwareEncoder?: boolean;
+			// Whether BeginWriting() actually landed on a hardware H.264 MFT, as
+			// opposed to `video` above, which only says which configuration path
+			// was tried. "default" plus a software runtime means the machine never
+			// got hardware acceleration in the first place -- see
+			// kVideoEncoderRuntime* in mf_encoder.h.
+			videoEncoderRuntime?: string;
 		};
 	} catch {
 		return null;
@@ -1658,6 +1667,66 @@ async function resolveMediaLinksForVideo(videoPath: string): Promise<{
 	return { resolvedVia: "none" };
 }
 
+/**
+ * Writes the diagnostic bundle a bug report needs: app/OS facts, the native
+ * helpers' raw stdout/stderr (which is where `[stop-timing]` and
+ * `encoder-selection` land — see nativeWindowsCaptureStop.ts), and the main
+ * process's own recent console output. Shared by the renderer's IPC call and
+ * the menu/tray "Save Diagnostics" entry point in main.ts, which has no
+ * renderer-side `projectState`/`logs` to offer and does not need to.
+ */
+export async function exportDiagnosticFile(payload: {
+	error: string;
+	stack?: string;
+	projectState: unknown;
+	logs: string[];
+}) {
+	const { filePath, canceled } = await dialog.showSaveDialog({
+		title: "Save Diagnostic File",
+		defaultPath: `openscreen-diagnostic-${Date.now()}.json`,
+		filters: [{ name: "JSON", extensions: ["json"] }],
+	});
+
+	if (canceled || !filePath) return { success: false, canceled: true };
+
+	const HELPER_OUTPUT_MAX_BYTES = 64 * 1024;
+	const tail = (s: string, max: number) => (s.length <= max ? s : s.slice(s.length - max));
+
+	const diagnostic = {
+		timestamp: new Date().toISOString(),
+		appVersion: app.getVersion(),
+		platform: process.platform,
+		arch: process.arch,
+		// The same fact the About box leads with, and for the same reason: it is what
+		// explains why a copy does or does not offer an update check. This file is the
+		// artifact users actually attach, so it must not be the one that omits it.
+		channel: getInstallChannel(),
+		osRelease: os.release(),
+		osVersion: os.version(),
+		totalMemoryMB: Math.round(os.totalmem() / 1024 / 1024),
+		nodeVersion: process.versions.node,
+		electronVersion: process.versions.electron,
+		chromeVersion: process.versions.chrome,
+		error: payload.error,
+		stack: payload.stack,
+		projectState: payload.projectState,
+		recentLogs: payload.logs,
+		helperOutput: {
+			windows: tail(nativeWindowsCaptureOutput, HELPER_OUTPUT_MAX_BYTES),
+			mac: tail(nativeMacCaptureOutput, HELPER_OUTPUT_MAX_BYTES),
+		},
+		mainProcessLogs: mainLogBuffer.snapshot(),
+	};
+
+	try {
+		await fs.writeFile(filePath, JSON.stringify(diagnostic, null, 2), "utf-8");
+		return { success: true, path: filePath };
+	} catch (error) {
+		console.error("Failed to write diagnostic file:", error);
+		return { success: false, error: String(error) };
+	}
+}
+
 export function registerIpcHandlers(
 	createEditorWindow: () => void,
 	createSourceSelectorWindow: () => BrowserWindow,
@@ -1847,14 +1916,27 @@ export function registerIpcHandlers(
 	ipcMain.handle("request-native-mac-cursor-access", async () => {
 		const access = await requestMacCursorAccessibilityAccess();
 
-		// When the editable cursor can't get Accessibility trust, pop a native dialog
-		// that deep-links to the Accessibility pane (mirrors the Screen Recording flow).
+		// Pop the native Accessibility dialog ONLY for a genuine denial — the helper ran,
+		// asked, and was told no. Every other !granted status means the helper never got
+		// to ask (absent from the build, killed by the loader, crashed, hung), and telling
+		// the user to grant a permission they may well already hold is what made #515
+		// impossible to escape. Those degrade silently instead; the recorder falls back to
+		// position-only cursor telemetry and the countdown still runs.
 		if (process.platform === "darwin" && !access.granted) {
+			if (isMacCursorHelperUnavailable(access.status)) {
+				console.warn(
+					`[cursor-macos] editable cursor unavailable (status=${access.status}${
+						access.error ? `, error=${access.error}` : ""
+					}); the app ${
+						access.accessibilityTrusted ? "does" : "does not"
+					} hold Accessibility trust. Recording continues with position-only cursor telemetry.`,
+				);
+				return access;
+			}
+
 			const mainWin = getMainWindow();
 			const detail =
-				access.status === "missing-helper"
-					? "The cursor helper couldn't be found in this build, so the editable cursor can't be enabled. Rebuild the native helper (npm run build:native:mac) or switch the HUD cursor mode to system."
-					: "Allow OpenScreen under System Settings → Privacy & Security → Accessibility, then press record again to start the countdown.";
+				"Allow OpenScreen under System Settings → Privacy & Security → Accessibility, then press record again to start the countdown.";
 			const messageOptions = {
 				type: "warning",
 				buttons: ["Open Accessibility Settings", "Cancel"],
@@ -2531,6 +2613,7 @@ export function registerIpcHandlers(
 					path: outputPath,
 					helperPath,
 					videoEncoderSelection: encoderSelection?.video ?? null,
+					videoEncoderRuntime: encoderSelection?.videoEncoderRuntime ?? null,
 					webcamUnavailable,
 					microphoneDefaulted,
 				};
@@ -4085,55 +4168,8 @@ export function registerIpcHandlers(
 
 	ipcMain.handle(
 		"save-diagnostic",
-		async (
-			_,
-			payload: { error: string; stack?: string; projectState: unknown; logs: string[] },
-		) => {
-			const { filePath, canceled } = await dialog.showSaveDialog({
-				title: "Save Diagnostic File",
-				defaultPath: `openscreen-diagnostic-${Date.now()}.json`,
-				filters: [{ name: "JSON", extensions: ["json"] }],
-			});
-
-			if (canceled || !filePath) return { success: false, canceled: true };
-
-			const HELPER_OUTPUT_MAX_BYTES = 64 * 1024;
-			const tail = (s: string, max: number) => (s.length <= max ? s : s.slice(s.length - max));
-
-			const diagnostic = {
-				timestamp: new Date().toISOString(),
-				appVersion: app.getVersion(),
-				platform: process.platform,
-				arch: process.arch,
-				// The same fact the About box leads with, and for the same reason: it is what
-				// explains why a copy does or does not offer an update check. This file is the
-				// artifact users actually attach, so it must not be the one that omits it.
-				channel: getInstallChannel(),
-				osRelease: os.release(),
-				osVersion: os.version(),
-				totalMemoryMB: Math.round(os.totalmem() / 1024 / 1024),
-				nodeVersion: process.versions.node,
-				electronVersion: process.versions.electron,
-				chromeVersion: process.versions.chrome,
-				error: payload.error,
-				stack: payload.stack,
-				projectState: payload.projectState,
-				recentLogs: payload.logs,
-				helperOutput: {
-					windows: tail(nativeWindowsCaptureOutput, HELPER_OUTPUT_MAX_BYTES),
-					mac: tail(nativeMacCaptureOutput, HELPER_OUTPUT_MAX_BYTES),
-				},
-				mainProcessLogs: mainLogBuffer.snapshot(),
-			};
-
-			try {
-				await fs.writeFile(filePath, JSON.stringify(diagnostic, null, 2), "utf-8");
-				return { success: true, path: filePath };
-			} catch (error) {
-				console.error("Failed to write diagnostic file:", error);
-				return { success: false, error: String(error) };
-			}
-		},
+		async (_, payload: { error: string; stack?: string; projectState: unknown; logs: string[] }) =>
+			exportDiagnosticFile(payload),
 	);
 
 	// One instance each, not one per call. DocumentService serialises saves of a

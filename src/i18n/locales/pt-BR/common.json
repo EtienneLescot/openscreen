@@ -40,7 +40,8 @@
 		"services": "Serviços",
 		"hide": "Ocultar OpenScreen",
 		"hideOthers": "Ocultar Outros",
-		"unhide": "Mostrar Todos"
+		"unhide": "Mostrar Todos",
+		"saveDiagnostics": "Salvar Diagnósticos"
 	},
 	"updates": {
 		"available": "O OpenScreen {{latestVersion}} está disponível. Você está usando a versão {{currentVersion}}.",
@@ -50,12 +51,6 @@
 		"blockedLocation": "Mova o OpenScreen para a pasta Aplicativos antes de atualizar.",
 		"failed": "Não foi possível verificar atualizações.",
 		"downloadFailed": "Não foi possível baixar a atualização."
-	},
-	"playback": {
-		"play": "Play",
-		"pause": "Pause",
-		"fullscreen": "Tela Cheia",
-		"exitFullscreen": "Sair da Tela Cheia"
 	},
 	"units": {
 		"pixelsPerSecond": "{{value}} pixels/s",
