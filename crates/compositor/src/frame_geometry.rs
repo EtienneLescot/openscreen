@@ -55,6 +55,18 @@ pub struct LayerCB {
     pub src_prev: [f32; 4],
     pub dst_prev: [f32; 4],
     pub mb: [f32; 4], // mb[0] = nombre de taps de motion blur
+    /// Incrustation couleur, mode 0 uniquement : [keyCb, keyCr, seuil, adoucissement].
+    /// Les deux seuils sont en unités de TEXTURE du plan UV (ce que `texUV.Sample` rend),
+    /// donc le shader n'a aucune conversion à faire — cf. `chroma_key_uniform`.
+    pub chroma_key: [f32; 4],
+    /// [actif (0/1), désaturation du débord, 0, 0].
+    ///
+    /// Deux `float4` dédiés plutôt qu'un squat des cases libres de `fx`/`mb` : ces deux
+    /// champs signifient déjà cinq choses différentes selon le mode (2/8/9/10/12/13), et un
+    /// sixième sens aliasé est exactement le piège que le reste du fichier passe son temps à
+    /// documenter. `Default` les met à zéro, donc TOUS les draws existants (écran, curseur,
+    /// annotations, ombres) restent corrects et désactivés sans être touchés.
+    pub chroma_fx: [f32; 4],
 }
 
 pub const OUT_W: u32 = 1920;
@@ -623,6 +635,17 @@ pub struct LiveParams {
     /// `timeline_walk.rs` for every export. Defaults `true` (draw) so fixture/bench renders
     /// and any caller that never sets it keep their old behavior.
     pub has_webcam: bool,
+    /// Incrustation couleur (fond vert) de la CAMÉRA seule. `false` par défaut → aucun
+    /// changement pour un appelant qui l'ignore (bench, fixtures, GUI standalone).
+    pub chroma_enabled: bool,
+    /// Couleur clé en RGB 0..1, déjà parsée depuis le hex (`parse_hex_color`).
+    pub chroma_color: [f32; 3],
+    /// 0..1, espace SLIDER. La conversion en distance de chrominance vit dans
+    /// `chroma_key_uniform`, pas ici : deux chemins alimentent ces champs (la scène pour
+    /// l'export, l'inspector pour la preview) et ils doivent aboutir au même uniforme.
+    pub chroma_similarity: f32,
+    pub chroma_smoothness: f32,
+    pub chroma_spill: f32,
 }
 
 fn same_source_path(a: &str, b: &str) -> bool {
@@ -663,9 +686,19 @@ impl Default for LiveParams {
             cursor_bounce_scale: 1.0,
             cursor_motion_blur: 0.0,
             has_webcam: true,
+            chroma_enabled: false,
+            chroma_color: DEFAULT_CHROMA_COLOR,
+            chroma_similarity: 0.32,
+            chroma_smoothness: 0.1,
+            chroma_spill: 0.3,
         }
     }
 }
+
+/// `#00b140`, le vert « studio » de la SMPTE — le fond réellement vendu comme fond vert, là
+/// où le `#00ff00` pur n'est ni un tissu ni une peinture. Doit rester identique au défaut TS
+/// (`DEFAULT_WEBCAM_CHROMA_KEY_COLOR`).
+const DEFAULT_CHROMA_COLOR: [f32; 3] = [0.0, 0.694, 0.251];
 
 /// "rectangle"|"circle"|"square"|"rounded" -> code webcam_shape (0/1/2/3). Partagé entre le
 /// live (`live.rs::set_param_str`) et l'export (construit `LiveParams` depuis la scène) — une
@@ -677,6 +710,61 @@ pub fn webcam_shape_code(shape: &str) -> u32 {
         "square" => 2,
         _ => 3, // "rounded" (défaut)
     }
+}
+
+/// Ce que vaut « Similarity 1 » en distance de chrominance : le rayon CENTRE → COIN du plan
+/// UV. Les sliders 0..1 se projettent sur cette échelle, pas sur 0..1 — un seuil de « 1 » en
+/// unités de texture n'aurait aucun rapport avec la taille réelle de l'espace.
+///
+/// La géométrie : Cb et Cr valent chacun ±0,5 au plus, et le plan les stocke en
+/// `(128 + 224·c) / 255`, donc chaque composante couvre `224/255 = 0,8784`. La diagonale
+/// complète du carré vaut `0,8784·√2 = 1,2423`, et son DEMI — la distance du centre à un
+/// coin — `0,6211`.
+///
+/// C'est le demi et non la diagonale entière, pour une raison qui se vérifie : une clé
+/// quelconque est au plus à un rayon de n'importe quelle couleur atteignable dès lors
+/// qu'elle est proche du centre, et les fonds réels (vert studio à 0,313 du neutre) le sont.
+/// Prendre la diagonale entière doublerait l'échelle sans rien rendre atteignable de plus,
+/// et tasserait toute la plage utile — un fond vert se détoure autour de 0,2, soit le
+/// réglage par défaut 0,32 — dans le premier dixième du slider.
+///
+/// Conséquence exacte dont dépend le golden `compose_linux_incrustation_couleur` : une clé
+/// posée sur le NEUTRE (`#808080`, pile au centre) avec Similarity à 1 couvre tout le plan,
+/// donc efface n'importe quel pixel, quel que soit le contenu de la fixture.
+const CHROMA_MAX_DIST: f32 = 0.621_144_8;
+
+/// `LiveParams` → les deux `float4` d'incrustation du `LayerCB`.
+///
+/// LE point de convergence des deux chemins. La preview alimente `LiveParams` depuis
+/// l'inspector (`live.rs`), l'export depuis la scène (`live_params_from_scene`) ; les deux
+/// aboutissent ici, donc les seuils ne peuvent pas être mappés différemment de part et
+/// d'autre. C'est aussi le seul endroit qui connaît la matrice BT.709 inverse — le shader
+/// compare directement à ce que `texUV.Sample` lui rend, sans aucune conversion.
+///
+/// L'inverse de `yuv709_limited` (cf. `rgb2uv` dans `shaders.hlsl`) :
+///   yp = 0,2126·r + 0,7152·g + 0,0722·b
+///   cb = (b − yp) / 1,8556      cr = (r − yp) / 1,5748
+///   plan UV = (128 + 224·c) / 255
+///
+/// Comparer la clé à l'inverse de la matrice que le shader applique lui-même rend la
+/// distance nulle sur la couleur choisie PAR CONSTRUCTION, quelle que soit la colorimétrie
+/// réelle du fichier.
+pub fn chroma_key_uniform(lp: &LiveParams) -> ([f32; 4], [f32; 4]) {
+    if !lp.chroma_enabled {
+        return ([0.0; 4], [0.0; 4]);
+    }
+    let [r, g, b] = lp.chroma_color;
+    let yp = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    let cb = (b - yp) / 1.8556;
+    let cr = (r - yp) / 1.5748;
+    let key_cb = (128.0 + 224.0 * cb) / 255.0;
+    let key_cr = (128.0 + 224.0 * cr) / 255.0;
+    let similarity = lp.chroma_similarity.clamp(0.0, 1.0) * CHROMA_MAX_DIST;
+    let smoothness = lp.chroma_smoothness.clamp(0.0, 1.0) * CHROMA_MAX_DIST;
+    (
+        [key_cb, key_cr, similarity, smoothness],
+        [1.0, lp.chroma_spill.clamp(0.0, 1.0), 0.0, 0.0],
+    )
 }
 
 /// Construit les `LiveParams` équivalents à ce que l'inspector pousse en live, mais depuis la
@@ -696,6 +784,29 @@ pub fn live_params_from_scene(s: &crate::scene::Scene) -> LiveParams {
         webcam_size_scale: s.layout.webcam_size,
         webcam_mirror: s.layout.webcam_mirror,
         webcam_shape: webcam_shape_code(&s.layout.webcam_shape),
+        // Absent de la scène ⇒ incrustation coupée : c'est ce que l'app envoie quand
+        // l'utilisateur l'a désactivée, et c'est aussi ce que produit tout payload antérieur.
+        chroma_enabled: s.layout.chroma_key.is_some(),
+        chroma_color: s
+            .layout
+            .chroma_key
+            .as_ref()
+            .and_then(|k| parse_hex(&k.color))
+            .map(|c| [c[0], c[1], c[2]])
+            .unwrap_or(DEFAULT_CHROMA_COLOR),
+        chroma_similarity: s
+            .layout
+            .chroma_key
+            .as_ref()
+            .map(|k| k.similarity)
+            .unwrap_or(0.32),
+        chroma_smoothness: s
+            .layout
+            .chroma_key
+            .as_ref()
+            .map(|k| k.smoothness)
+            .unwrap_or(0.1),
+        chroma_spill: s.layout.chroma_key.as_ref().map(|k| k.spill).unwrap_or(0.3),
         cursor_size_scale: s.cursor.size,
         cursor_bounce_scale: s.cursor.click_bounce,
         cursor_motion_blur: s.cursor.motion_blur,
@@ -1532,7 +1643,7 @@ mod tests {
     #[test]
     fn layer_cb_matches_the_shader_constant_buffer() {
         use std::mem::{align_of, offset_of, size_of};
-        assert_eq!(size_of::<LayerCB>(), 128);
+        assert_eq!(size_of::<LayerCB>(), 160);
         assert_eq!(align_of::<LayerCB>(), 16);
         for (name, got, want) in [
             ("dst", offset_of!(LayerCB, dst), 0),
@@ -1545,9 +1656,74 @@ mod tests {
             ("src_prev", offset_of!(LayerCB, src_prev), 80),
             ("dst_prev", offset_of!(LayerCB, dst_prev), 96),
             ("mb", offset_of!(LayerCB, mb), 112),
+            ("chroma_key", offset_of!(LayerCB, chroma_key), 128),
+            ("chroma_fx", offset_of!(LayerCB, chroma_fx), 144),
         ] {
             assert_eq!(got, want, "offset de `{name}`");
         }
+    }
+
+    /// La couleur choisie doit tomber à distance NULLE de la clé — c'est toute la raison de
+    /// dériver `chroma_key_uniform` de l'inverse exact de `yuv709_limited` plutôt que d'une
+    /// matrice « proche ». On refait ici le trajet du shader : couleur → uniforme → plan UV.
+    #[test]
+    fn the_picked_colour_lands_exactly_on_the_key() {
+        for color in [[0.0, 0.694, 0.251], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] {
+            let lp = LiveParams {
+                chroma_enabled: true,
+                chroma_color: color,
+                ..LiveParams::default()
+            };
+            let (key, fx) = chroma_key_uniform(&lp);
+            assert_eq!(fx[0], 1.0, "actif");
+            // Ce que le plan UV contiendrait pour cette couleur (`rgb2uv` du shader).
+            let [r, g, b] = color;
+            let yp = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let uv_cb = (128.0 + 224.0 * (b - yp) / 1.8556) / 255.0;
+            let uv_cr = (128.0 + 224.0 * (r - yp) / 1.5748) / 255.0;
+            let dist = ((uv_cb - key[0]).powi(2) + (uv_cr - key[1]).powi(2)).sqrt();
+            assert!(dist < 1e-6, "distance {dist} pour {color:?}");
+        }
+    }
+
+    /// Coupée, l'incrustation doit rendre un uniforme entièrement nul : c'est le drapeau que
+    /// le shader teste, et c'est aussi ce que `LayerCB::default()` écrit pour tous les autres
+    /// calques (écran, curseur, annotations) qui partagent le mode 0.
+    #[test]
+    fn a_disabled_key_emits_a_zeroed_uniform() {
+        let (key, fx) = chroma_key_uniform(&LiveParams::default());
+        assert_eq!(key, [0.0; 4]);
+        assert_eq!(fx, [0.0; 4]);
+    }
+
+    /// `CHROMA_MAX_DIST` doit rester le rayon CENTRE → COIN du plan de chrominance.
+    ///
+    /// C'est la propriété dont dépend le golden `compose_linux_incrustation_couleur` : une
+    /// clé neutre à Similarity 1 y efface tout le calque, ce qui n'est vrai que si le seuil
+    /// atteint exactement le coin. Une constante « arrondie au propre » (0,62) ferait
+    /// survivre une frange de pixels saturés et le golden échouerait sur une fixture, pas
+    /// sur une régression — d'où cette vérification, qui dit POURQUOI la valeur est celle-là.
+    #[test]
+    fn max_similarity_from_a_neutral_key_reaches_every_corner() {
+        let neutral = LiveParams {
+            chroma_enabled: true,
+            chroma_color: [0.5, 0.5, 0.5], // Cb = Cr = 0 → pile au centre du plan
+            chroma_similarity: 1.0,
+            ..LiveParams::default()
+        };
+        let (key, _) = chroma_key_uniform(&neutral);
+        let centre = 128.0 / 255.0;
+        assert!((key[0] - centre).abs() < 1e-6, "clé neutre hors du centre : {}", key[0]);
+        assert!((key[1] - centre).abs() < 1e-6, "clé neutre hors du centre : {}", key[1]);
+        // Coin du plan : les deux composantes à leur extrême (Cb = Cr = ±0,5).
+        let corner = (128.0 + 224.0 * 0.5) / 255.0;
+        let to_corner =
+            ((corner - key[0]).powi(2) + (corner - key[1]).powi(2)).sqrt();
+        assert!(
+            key[2] >= to_corner - 1e-5,
+            "seuil max {} < distance au coin {to_corner}",
+            key[2],
+        );
     }
 
     /// Le pivot doit rester collé à `center` quand le sprite grandit — c'est exactement ce qui

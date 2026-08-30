@@ -214,6 +214,18 @@ export interface SceneLayout {
 	 */
 	webcamShape: "rectangle" | "circle" | "square" | "rounded";
 	webcamMirror: boolean;
+	/**
+	 * Green-screen key for the camera, or absent when the user has it off. The colour
+	 * crosses as a hex STRING, not as chroma coordinates: the native side has to own that
+	 * conversion anyway (the live-preview path pushes the colour through a string param),
+	 * and converting here as well would put two copies of the same BT.709 matrix on either
+	 * side of the boundary, free to drift. See `src/lib/webcamChromaKey.ts`.
+	 *
+	 * Omitted entirely when disabled rather than sent with `enabled: false` — a scene that
+	 * never mentions the key is the same scene older builds produce, so the payload stays
+	 * byte-identical for the overwhelmingly common case.
+	 */
+	chromaKey?: SceneChromaKey;
 	/** Normalized position (0..1) for the webcam centre, or null to use the preset default. */
 	webcamPosition: { cx: number; cy: number } | null;
 	/** Webcam shrinks while a zoom region is active. */
@@ -290,6 +302,19 @@ export interface SceneLayout {
  * `screenRadiusFrac`/`webcamRadiusFrac` above — no length crosses this contract in
  * pixels, per-clip or not.
  */
+/**
+ * Chroma key for the camera layer. Mirrors `SceneChromaKey` in
+ * `crates/compositor/src/scene.rs`; the thresholds are 0..1 slider space and the native
+ * side maps them into chroma-plane distance (one mapping, one place).
+ */
+export interface SceneChromaKey {
+	/** `#rrggbb`. */
+	color: string;
+	similarity: number;
+	smoothness: number;
+	spill: number;
+}
+
 export interface ResolvedClipLayout {
 	screenRect: SceneRect;
 	webcamRect: SceneRect | null;
@@ -740,6 +765,19 @@ export function buildSceneDescription(
 			// rectangle, whatever shape the user last picked under picture-in-picture.
 			webcamShape: computedLayout?.webcamRect?.maskShape ?? settings.webcamMaskShape,
 			webcamMirror: settings.webcamMirrored,
+			// Spread, so the key is ABSENT (not `undefined`) when off — `JSON.stringify`
+			// drops an undefined value anyway, but an absent property also keeps the
+			// object shape identical to what a build without this feature produces.
+			...(settings.webcamChromaKey.enabled
+				? {
+						chromaKey: {
+							color: settings.webcamChromaKey.color,
+							similarity: settings.webcamChromaKey.similarity,
+							smoothness: settings.webcamChromaKey.smoothness,
+							spill: settings.webcamChromaKey.spill,
+						},
+					}
+				: {}),
 			webcamPosition: settings.webcamPosition,
 			// Gated by the preset: the block layouts size their camera off the screen
 			// box, so it must never shrink mid-zoom (the UI hides the toggle too).

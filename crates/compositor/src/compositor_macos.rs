@@ -32,7 +32,8 @@ use crate::ffi::AVFrame;
 // les deux backends — cf. `frame_geometry`, qui documente les divergences que
 // l'unification a corrigées.
 pub use crate::frame_geometry::{
-    live_params_from_scene, webcam_shape_code, FIXTURE_FRAMES, LayerCB, LiveParams, OUT_H, OUT_W,
+    chroma_key_uniform, live_params_from_scene, webcam_shape_code, FIXTURE_FRAMES, LayerCB,
+    LiveParams, OUT_H, OUT_W,
 };
 use crate::frame_geometry::{parse_hex, FrameGeometryInput, SCREEN_SHADOW_OFFSET_FRAC,
     SCREEN_SHADOW_SPREAD_FRAC, WEBCAM_SHADOW_OFFSET_FRAC, WEBCAM_SHADOW_OPACITY,
@@ -1618,7 +1619,15 @@ impl Compositor {
                 g.scene_preset.as_deref(),
                 Some("dual-frame") | Some("vertical-stack")
             );
-            if cfg.shadow && !webcam_is_block && g.shape_fade > 0.0 {
+            // ...et PAS quand l'incrustation couleur est active. L'ombre est celle de la
+            // BULLE : un rectangle arrondi opaque qui flotte au-dessus de la scene. Detourer
+            // le fond supprime cette bulle — il ne reste que le sujet — et l'ombre devient
+            // alors un rectangle sombre visible DERRIERE lui, la ou le fond vient d'etre
+            // rendu transparent. Mesure sur un export de controle : le fond detoure ressortait
+            // a 0,65x la couleur de l'ecran, soit exactement WEBCAM_SHADOW_OPACITY.
+            // Meme raison que `shape_fade` retire l'ombre au plein ecran : plus de bulle,
+            // plus d'ombre.
+            if cfg.shadow && !webcam_is_block && g.shape_fade > 0.0 && !lp.chroma_enabled {
                 self.draw_shadow(
                     enc,
                     g.w_dst,
@@ -1629,6 +1638,8 @@ impl Compositor {
                     WEBCAM_SHADOW_OPACITY * g.shape_fade,
                 );
             }
+            // Incrustation couleur : le SEUL draw qui la porte (cf. `compositor_windows`).
+            let (chroma_key, chroma_fx) = chroma_key_uniform(&lp);
             self.draw_video(
                 enc,
                 &LayerCB {
@@ -1641,6 +1652,8 @@ impl Compositor {
                     src_prev: [u0, cv0, u1, cv1],
                     dst_prev: g.w_dst_prev,
                     mb: [g.mb_taps, 1.0, 1.0, 0.0],
+                    chroma_key,
+                    chroma_fx,
                     ..Default::default()
                 },
                 wy,

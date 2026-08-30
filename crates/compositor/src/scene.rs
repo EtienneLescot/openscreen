@@ -41,6 +41,17 @@ pub struct SceneLayout {
     /// bloc découpent toujours un rectangle (côté app, cf. `computeCompositeLayout`).
     pub webcam_shape: String,
     pub webcam_mirror: bool,
+    /// Incrustation couleur (fond vert) de la caméra, ou None quand l'utilisateur l'a coupée.
+    ///
+    /// L'app envoie la couleur en HEX, pas en coordonnées de chrominance : la conversion doit
+    /// de toute façon exister ici (le chemin preview pousse la couleur via un paramètre
+    /// STRING, cf. `live.rs::set_param_str`), et la refaire côté TS mettrait deux copies de la
+    /// même matrice BT.709 de part et d'autre de la frontière, libres de diverger en silence.
+    ///
+    /// `#[serde(default)]` : le champ est absent de tous les payloads antérieurs et de toutes
+    /// les fixtures — absent ⇒ None ⇒ aucune incrustation, exactement l'ancien rendu.
+    #[serde(default)]
+    pub chroma_key: Option<SceneChromaKey>,
     /// position normalisée (0..1) du centre webcam, ou None → défaut du preset.
     pub webcam_position: Option<WebcamPosition>,
     /// la webcam rétrécit pendant un zoom actif.
@@ -106,6 +117,19 @@ pub struct SceneLayout {
     /// `#[serde(default)]` : ancien payload / tests → None → table Rust historique.
     #[serde(default)]
     pub webcam_radius_frac: Option<f32>,
+}
+
+/// Incrustation couleur de la caméra. Miroir de `SceneChromaKey` (TS,
+/// `src/native/sceneDescription.ts`). Les seuils sont en espace SLIDER 0..1 ; leur passage en
+/// distance de chrominance se fait dans `chroma_key_uniform` — une seule fois, un seul endroit.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneChromaKey {
+    /// "#rrggbb".
+    pub color: String,
+    pub similarity: f32,
+    pub smoothness: f32,
+    pub spill: f32,
 }
 
 /// La moitié du layout qui dépend de la FORME de la source, résolue pour un clip.
@@ -601,6 +625,20 @@ mod tests {
         let s = Scene::from_json(json).expect("parse sans webcam_rect");
         assert!(s.layout.webcam_rect.is_none());
         assert_eq!(s.layout.preset, "picture-in-picture");
+        // Même payload : aucune mention de l'incrustation ⇒ coupée. C'est le cas de TOUS les
+        // projets antérieurs, et c'est ce qui garantit qu'aucun d'eux ne se met à incruster.
+        assert!(s.layout.chroma_key.is_none());
+    }
+
+    #[test]
+    fn parses_the_chroma_key_payload() {
+        let json = r##"{"clips":[],"layout":{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"chromaKey":{"color":"#00b140","similarity":0.4,"smoothness":0.15,"spill":0.25},"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0},"background":{"kind":"color","color":"#000000"},"zoomRegions":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1920,"height":1080,"fps":null}}"##;
+        let s = Scene::from_json(json).expect("parse avec chromaKey");
+        let k = s.layout.chroma_key.expect("chroma_key présent");
+        assert_eq!(k.color, "#00b140");
+        assert_eq!(k.similarity, 0.4);
+        assert_eq!(k.smoothness, 0.15);
+        assert_eq!(k.spill, 0.25);
     }
 }
 

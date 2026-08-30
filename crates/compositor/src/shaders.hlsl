@@ -13,6 +13,8 @@ cbuffer Layer : register(b0)
     float4 src_prev;  // src à la frame précédente (flou de mouvement par vélocité)
     float4 dst_prev;  // dst à la frame précédente
     float4 mb;        // mb.x = nombre de taps de motion blur (1 = désactivé)
+    float4 chroma_key; // mode 0 : keyCb, keyCr, seuil, adoucissement (unités du plan UV)
+    float4 chroma_fx;  // chroma_fx.x = incrustation active, .y = désaturation du débord
 };
 
 struct VSOut
@@ -410,6 +412,9 @@ float4 ps_main(VSOut i) : SV_Target
     }
 
     float3 rgb;
+    // Couverture de l'incrustation couleur : 1 = pixel gardé. Neutre par défaut, écrite
+    // uniquement par le mode 0 ci-dessous, appliquée à `alpha` après le if/else.
+    float chroma_keep = 1.0;
     if (mode < 0.5)
     {
         // flou de mouvement par vélocité (§8) : pour CE pixel sortie, uv à la frame
@@ -435,13 +440,52 @@ float4 ps_main(VSOut i) : SV_Target
             }
             rgb = acc / (float) taps;
         }
+
+        // INCRUSTATION COULEUR (fond vert), CAMÉRA uniquement. Le mode 0 dessine aussi
+        // l'écran, qui laisse ces deux float4 à zéro : la branche est alors uniformément
+        // fausse, donc gratuite, et l'enregistrement d'écran ne peut pas être incrusté par
+        // accident.
+        //
+        // DEDANS le mode 0, et pas dans la queue commune que le mode 1 (couleur pleine)
+        // traverse aussi : le mode 0 est le seul à avoir une texture NV12 liée, donc c'est
+        // le seul où `texUV` veut dire quelque chose. Y enfermer le bloc rend ça structurel
+        // au lieu de dépendre de la discipline des appelants à laisser `chroma_fx` à zéro
+        // sur les autres calques. (Vérifié, contrairement à ce qu'une version antérieure de
+        // ce commentaire affirmait : naga accepte parfaitement `textureSample` dans la
+        // queue commune — l'analyse d'uniformité n'est PAS la raison.)
+        //
+        // La clé est calculée dans le plan CHROMA, pas en RGB. La source est du NV12 :
+        // `texUV` est déjà là, et ignorer la luma est précisément ce qui fait tenir le
+        // masque quand le fond est éclairé de façon inégale (une ombre sur le tissu reste
+        // le même vert). Aucune conversion ici : `chroma_key.xy` arrive DÉJÀ dans les
+        // unités que `texUV` rend, via l'inverse exact de `yuv709_limited` (cf.
+        // `chroma_key_uniform`, Rust).
+        //
+        // Le plan UV est en demi-résolution, donc le bord du masque est adouci à cette
+        // échelle. Ça se lit comme un feather naturel sur une silhouette et ça perd les
+        // mèches de cheveux isolées — même compromis que `ffmpeg -vf chromakey`.
+        if (chroma_fx.x > 0.5)
+        {
+            float2 cbcr = texUV.Sample(samp, i.uv);
+            float dist = length(cbcr - chroma_key.xy);
+            float t0 = chroma_key.z;
+            // `+1e-4` : à adoucissement nul, smoothstep aurait des bornes égales et le
+            // masque partirait en NaN plutôt qu'en bord net.
+            chroma_keep = smoothstep(t0, t0 + chroma_key.w + 1e-4, dist);
+            // DÉBORD : près de la clé, le vert renvoyé par le fond teinte encore le sujet.
+            // On désature vers la luma plutôt que de retirer du vert, ce qui garde la teinte
+            // de la peau au lieu de la faire virer au magenta.
+            float spill = chroma_fx.y * saturate(1.0 - dist / max(t0 * 2.0, 1e-4));
+            float luma = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+            rgb = lerp(rgb, float3(luma, luma, luma), spill);
+        }
     }
     else
     {
         rgb = color.rgb;
     }
 
-    float alpha = color.a;
+    float alpha = color.a * chroma_keep;
     if (radius_px > 0.0)
     {
         // `quad_px` est en px de SORTIE (le render target porte la géométrie de sortie) et

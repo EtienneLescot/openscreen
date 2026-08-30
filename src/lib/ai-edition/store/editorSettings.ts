@@ -30,6 +30,11 @@ import {
 } from "@/components/video-editor/types";
 import { DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { DEFAULT_WALLPAPER } from "@/lib/wallpaper";
+import {
+	DEFAULT_WEBCAM_CHROMA_KEY,
+	normaliseChromaKeySettings,
+	type WebcamChromaKeySettings,
+} from "@/lib/webcamChromaKey";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
 import type { AxcutDocument } from "../schema";
 
@@ -93,6 +98,7 @@ export interface EditorSettingsSnapshot {
 	webcamReactiveZoom: boolean;
 	webcamSizePreset: WebcamSizePreset;
 	webcamPosition: WebcamPosition | null;
+	webcamChromaKey: WebcamChromaKeySettings;
 	webcamCropRegion: CropRegion;
 	/** Where the crop window sits in the room the zoom leaves it, 0..1 per axis.
 	 *  Authoritative: `webcamCropRegion.x/y` are rebuilt from it on read. */
@@ -124,6 +130,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	webcamReactiveZoom: DEFAULT_WEBCAM_REACTIVE_ZOOM,
 	webcamSizePreset: DEFAULT_WEBCAM_SIZE_PRESET,
 	webcamPosition: DEFAULT_WEBCAM_POSITION,
+	webcamChromaKey: DEFAULT_WEBCAM_CHROMA_KEY,
 	webcamCropRegion: DEFAULT_CROP_REGION,
 	webcamCropPan: DEFAULT_CROP_PAN,
 	audioGainDb: 0,
@@ -154,6 +161,7 @@ interface LegacyShape {
 	webcamReactiveZoom?: boolean;
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: WebcamPosition | null;
+	webcamChromaKey?: WebcamChromaKeySettings;
 	webcamCropRegion?: CropRegion;
 	webcamCropPan?: CropPan;
 	audioGainDb?: number;
@@ -224,6 +232,10 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 		),
 		webcamSizePreset: num(legacy?.webcamSizePreset, DEFAULT_EDITOR_SETTINGS.webcamSizePreset),
 		webcamPosition: normaliseWebcamPosition(legacy?.webcamPosition),
+		// Every field is re-validated on read rather than trusted: this blob is a
+		// `passthrough()` envelope, so a hand-edited project (or one written by an
+		// older build) can hold anything at all under this key.
+		webcamChromaKey: normaliseChromaKeySettings(legacy?.webcamChromaKey),
 		webcamCropRegion: webcamCrop,
 		webcamCropPan: webcamCropPan,
 		// Same bound the slider offers and the native `finish_audio` clamps to. Two
@@ -254,6 +266,8 @@ export interface EditorSettingsPatch {
 	webcamReactiveZoom?: boolean;
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: WebcamPosition | null;
+	/** Partial: merged onto the stored key, so a toggle doesn't reset the colour. */
+	webcamChromaKey?: Partial<WebcamChromaKeySettings>;
 	webcamCropRegion?: CropRegion;
 	webcamCropPan?: CropPan;
 	audioGainDb?: number;
@@ -266,15 +280,23 @@ function nextLegacy(current: LegacyShape | null, patch: EditorSettingsPatch): Le
 	// Spread, but only over keys the patch actually set — a plain {...base,
 	// ...patch} would write undefined over a value the caller left alone.
 	// `cursor` is handled separately below: its keys are renamed (size ->
-	// cursorSize), so it is not a straight passthrough.
+	// cursorSize), so it is not a straight passthrough. `webcamChromaKey` is
+	// separate for the other reason — the patch carries a PARTIAL of it, so a
+	// straight spread would drop the colour every time the toggle moves.
 	// The Pick keeps what the 16 `if`s used to check: a patch key with no
 	// LegacyShape counterpart fails to compile instead of leaking into the
 	// persisted blob.
-	const { cursor: _cursor, ...rest } = patch;
+	const { cursor: _cursor, webcamChromaKey: _chroma, ...rest } = patch;
 	const defined = Object.fromEntries(
 		Object.entries(rest).filter(([, v]) => v !== undefined),
-	) as Partial<Pick<LegacyShape, keyof Omit<EditorSettingsPatch, "cursor">>>;
+	) as Partial<Pick<LegacyShape, keyof Omit<EditorSettingsPatch, "cursor" | "webcamChromaKey">>>;
 	const next: LegacyShape = { ...base, ...defined };
+	if (patch.webcamChromaKey) {
+		next.webcamChromaKey = normaliseChromaKeySettings({
+			...normaliseChromaKeySettings(base.webcamChromaKey),
+			...patch.webcamChromaKey,
+		});
+	}
 	if (patch.cursor) {
 		const c = patch.cursor;
 		if (c.size !== undefined) next.cursorSize = c.size;

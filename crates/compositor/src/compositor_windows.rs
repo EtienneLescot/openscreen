@@ -6,8 +6,8 @@ use crate::config::Cfg;
 // pour le pourquoi. `pub use` sur les constantes : `pipeline_windows.rs`, `live.rs` et
 // `crates/poc-d3d/src/app.rs` les lisent via `crate::compositor::…`, et ce chemin doit
 // rester valable.
-pub use crate::frame_geometry::{live_params_from_scene, webcam_shape_code, LayerCB,
-    LiveParams, FIXTURE_FRAMES, HALF_H, HALF_W, OUT_H, OUT_W};
+pub use crate::frame_geometry::{chroma_key_uniform, live_params_from_scene, webcam_shape_code,
+    LayerCB, LiveParams, FIXTURE_FRAMES, HALF_H, HALF_W, OUT_H, OUT_W};
 use crate::frame_geometry::{
     cover_crop_uv, cover_uv_rect, cursor_sprite_dst, decode_data_uri, ease_in_out_cubic, lerp,
     lerp4, parse_hex, preset_placements, remap_box, screen_source_rect, timeline, CursorPlacement,
@@ -1538,7 +1538,15 @@ impl Compositor {
                 scene_preset.as_deref(),
                 Some("dual-frame") | Some("vertical-stack"),
             );
-            if cfg.shadow && !webcam_is_block && shape_fade > 0.0 {
+            // ...et PAS quand l'incrustation couleur est active. L'ombre est celle de la
+            // BULLE : un rectangle arrondi opaque qui flotte au-dessus de la scene. Detourer
+            // le fond supprime cette bulle — il ne reste que le sujet — et l'ombre devient
+            // alors un rectangle sombre visible DERRIERE lui, la ou le fond vient d'etre
+            // rendu transparent. Mesure sur un export de controle : le fond detoure ressortait
+            // a 0,65x la couleur de l'ecran, soit exactement WEBCAM_SHADOW_OPACITY.
+            // Meme raison que `shape_fade` retire l'ombre au plein ecran : plus de bulle,
+            // plus d'ombre.
+            if cfg.shadow && !webcam_is_block && shape_fade > 0.0 && !lp.chroma_enabled {
                 let strength = WEBCAM_SHADOW_OPACITY * shape_fade;
                 self.draw_shadow(
                     w_dst,
@@ -1549,6 +1557,11 @@ impl Compositor {
                     strength,
                 );
             }
+            // Incrustation couleur : le SEUL draw qui la porte. L'écran partage le mode 0 et
+            // garde `..Default::default()`, donc ses deux `float4` sont nuls et la branche du
+            // shader est uniformément fausse pour lui — coût nul, et aucun risque d'incruster
+            // l'enregistrement d'écran.
+            let (chroma_key, chroma_fx) = chroma_key_uniform(&lp);
             self.draw_video(
                 &LayerCB {
                     dst: w_dst,
@@ -1560,6 +1573,8 @@ impl Compositor {
                     src_prev: [u0, sv0, u1, sv1], // src fixe (pas de zoom webcam)
                     dst_prev: w_dst_prev,
                     mb: [mb_taps, 1.0, 1.0, 0.0],
+                    chroma_key,
+                    chroma_fx,
                     ..Default::default()
                 },
                 &wy,

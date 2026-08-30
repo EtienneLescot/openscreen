@@ -23,6 +23,12 @@ struct Layer {
     src_prev: vec4<f32>,
     dst_prev: vec4<f32>,
     mb: vec4<f32>,
+    // Inutilisés ici, mais le struct doit rester le MÊME que dans `layer.wgsl` : les deux
+    // partagent `LayerCB` côté Rust et leurs bind group layouts déclarent tous deux
+    // `min_binding_size = size_of::<LayerCB>()`. Une copie restée en arrière n'échoue pas
+    // à la compilation du module — elle échoue à la création du bind group, loin d'ici.
+    chroma_key: vec4<f32>,
+    chroma_fx: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> layer: Layer;

@@ -631,10 +631,21 @@ struct InspectorParams {
     cursor_smoothing: f32,
     /// 0..1 : force du flou de mouvement DU CURSEUR (indépendant du motion blur écran).
     cursor_motion_blur: f32,
+    /// Incrustation couleur de la caméra. Ces champs DOIVENT exister ici en plus de la scène :
+    /// la preview construit ses `LiveParams` depuis cet inspector et ne lit jamais la copie de
+    /// la scène (cf. `render_thread`), alors que l'export fait l'inverse via
+    /// `live_params_from_scene`. Ne câbler qu'un des deux chemins donne une incrustation qui
+    /// marche à l'écran et disparaît à l'export, ou le contraire.
+    chroma_enabled: bool,
+    chroma_color: [f32; 3],
+    chroma_similarity: f32,
+    chroma_smoothness: f32,
+    chroma_spill: f32,
 }
 
 impl Default for InspectorParams {
     fn default() -> Self {
+        let chroma = LiveParams::default();
         Self {
             bg_blur: false,
             bg_color: [0.10, 0.11, 0.14, 1.0],
@@ -650,6 +661,13 @@ impl Default for InspectorParams {
             cursor_bounce_scale: 1.0,
             cursor_smoothing: 0.0,
             cursor_motion_blur: 0.0,
+            // Repris de `LiveParams::default()` plutôt que recopiés : preview et export
+            // doivent partir du même état, et une valeur écrite deux fois finit par diverger.
+            chroma_enabled: chroma.chroma_enabled,
+            chroma_color: chroma.chroma_color,
+            chroma_similarity: chroma.chroma_similarity,
+            chroma_smoothness: chroma.chroma_smoothness,
+            chroma_spill: chroma.chroma_spill,
         }
     }
 }
@@ -904,6 +922,7 @@ impl LiveView {
             match key {
                 "backgroundBlur" => p.bg_blur = value,
                 "webcamMirror" => p.webcam_mirror = value,
+                "webcamChromaEnabled" => p.chroma_enabled = value,
                 "cursorShow" => p.cursor_show = value,
                 _ => {}
             }
@@ -922,6 +941,11 @@ impl LiveView {
                 "motionBlur" => p.mblur_taps = (1.0 + value.clamp(0.0, 1.0) * 15.0).round() as u32,
                 "padding" => p.padding = v.clamp(0.0, 1.0),
                 "webcamSize" => p.webcam_size_scale = v.max(0.05),
+                // Espace SLIDER 0..1 : leur passage en distance de chrominance vit dans
+                // `chroma_key_uniform`, avec celui de l'export.
+                "webcamChromaSimilarity" => p.chroma_similarity = v.clamp(0.0, 1.0),
+                "webcamChromaSmoothness" => p.chroma_smoothness = v.clamp(0.0, 1.0),
+                "webcamChromaSpill" => p.chroma_spill = v.clamp(0.0, 1.0),
                 "cursorSize" => p.cursor_size_scale = v.max(0.0),
                 "cursorClickBounce" => p.cursor_bounce_scale = v.max(0.0),
                 "cursorSmoothing" => p.cursor_smoothing = v.clamp(0.0, 1.0),
@@ -942,6 +966,15 @@ impl LiveView {
                 }
                 "webcamShape" => {
                     p.webcam_shape = crate::compositor::webcam_shape_code(value);
+                }
+                "webcamChromaColor" => {
+                    // Une couleur illisible laisse la précédente en place plutôt que de
+                    // retomber sur un défaut : l'utilisateur tape dans un champ hex, et
+                    // reverdir l'incrustation à chaque frappe incomplète serait pire que
+                    // de ne rien faire jusqu'à ce que la valeur soit complète.
+                    if let Some(c) = crate::frame_geometry::parse_hex(value) {
+                        p.chroma_color = [c[0], c[1], c[2]];
+                    }
                 }
                 _ => {}
             }
@@ -1491,6 +1524,11 @@ unsafe fn render_thread(
             cursor_bounce_scale: ip.cursor_bounce_scale,
             cursor_motion_blur: ip.cursor_motion_blur,
             has_webcam: has_real_webcam,
+            chroma_enabled: ip.chroma_enabled,
+            chroma_color: ip.chroma_color,
+            chroma_similarity: ip.chroma_similarity,
+            chroma_smoothness: ip.chroma_smoothness,
+            chroma_spill: ip.chroma_spill,
         });
         // Lissage ressort-amortisseur : re-génère la piste (240 Hz) uniquement quand la valeur
         // change (pas à chaque frame — le resample+ressort parcourt tout l'enregistrement).

@@ -889,6 +889,38 @@ describe("buildSceneDescription.settings mapping", () => {
 		expect(scene.cursor.theme).toBe("macos-dark");
 	});
 
+	it("omits layout.chromaKey entirely when the key is off", () => {
+		// Not `enabled: false` — ABSENT. That is what every project predating the
+		// feature emits, and what the Rust `#[serde(default)]` resolves to None.
+		const scene = buildSceneDescription(makeDoc({ legacyEditor: {} }));
+		expect(scene.layout.chromaKey).toBeUndefined();
+		expect(JSON.stringify(scene.layout)).not.toContain("chromaKey");
+	});
+
+	it("emits layout.chromaKey with the colour and thresholds when the key is on", () => {
+		const scene = buildSceneDescription(
+			makeDoc({
+				legacyEditor: {
+					webcamChromaKey: {
+						enabled: true,
+						color: "#00b140",
+						similarity: 0.4,
+						smoothness: 0.15,
+						spill: 0.25,
+					},
+				},
+			}),
+		);
+		// The colour crosses as a HEX STRING: the native side owns the BT.709
+		// conversion, because the live-preview path can only carry it as a string.
+		expect(scene.layout.chromaKey).toEqual({
+			color: "#00b140",
+			similarity: 0.4,
+			smoothness: 0.15,
+			spill: 0.25,
+		});
+	});
+
 	it("populates layout.webcamRect with computeCompositeLayout's webcamRect, in fractions", () => {
 		// PiP @ 25% doit produire un rect (fractions) aligné avec `computeCompositeLayout`.
 		// Parité preview ↔ natif : la valeur que `PreviewCanvas` pose dans `.webcamSlot` est

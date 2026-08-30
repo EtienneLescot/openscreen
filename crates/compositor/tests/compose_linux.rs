@@ -997,6 +997,161 @@ fn compose_linux_forme_webcam_cercle() {
     );
 }
 
+/// L'incrustation couleur (fond vert) DECOUPE reellement des pixels de la camera, et le
+/// fait SELECTIVEMENT.
+///
+/// La fixture n'est pas un fond vert, donc on ne peut pas mesurer un vrai detourage. Ce
+/// que ce test epingle est la chaine complete, qui est ce qui casse en pratique :
+/// `Scene` -> `live_params_from_scene` -> `chroma_key_uniform` -> les deux float4 du
+/// `LayerCB` -> la branche du shader -> l'alpha du calque camera. Deux mesures suffisent
+/// a la prouver sans fond vert :
+///
+///   - cle sur le NEUTRE (`#808080`) avec `similarity = 1` : la camera ENTIERE disparait
+///     et l'ecran repasse dessous. Ce n'est pas une esperance sur le contenu de la
+///     fixture mais une propriete geometrique — le neutre tombe pile au centre du plan
+///     de chrominance et `CHROMA_MAX_DIST` EST le rayon centre → coin, donc le seuil
+///     couvre tout le plan (voir sa doc dans `frame_geometry.rs`). Une empreinte qui
+///     reste pleine signifie que l'uniforme n'arrive pas jusqu'au shader.
+///   - une couleur cle ABSENTE de l'image (magenta) a seuil serre : l'empreinte doit
+///     rester intacte. Sans cette seconde mesure, un shader qui effacerait la camera
+///     quoi qu'il arrive passerait la premiere.
+///
+/// La selectivite par couleur elle-meme est verrouillee cote unitaire par
+/// `the_picked_colour_lands_exactly_on_the_key` (`frame_geometry.rs`), qui refait le
+/// trajet de la matrice BT.709 sans avoir besoin d'un GPU.
+#[test]
+fn compose_linux_incrustation_couleur() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux incrustation: opt-in. Skip.");
+        return;
+    }
+    let webcam_fixture = "../fixture/webcam.mp4";
+    if !Path::new(webcam_fixture).is_file() {
+        eprintln!("compose_linux incrustation: pas de fixture webcam. Skip.");
+        return;
+    }
+
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open screen");
+    let mut cam = Decoder::open(webcam_fixture, &gpu).expect("Decoder::open webcam");
+
+    // `chroma` est insere tel quel dans `layout` : "" = pas de cle (payload d'avant la
+    // fonctionnalite), sinon l'objet complet.
+    let scene = |preset: &str, chroma: &str| {
+        format!(
+            r##"{{"clips":[],"layout":{{"preset":"{preset}","webcamSize":1.6,"webcamShape":"rectangle","webcamMirror":false{chroma},"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0.1,"blur":false,"shadow":0,"roundnessFrac":0.0,"motionBlur":0}},"background":{{"kind":"color","color":"#00ff00"}},"zoomRegions":[],"annotations":[],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":30}}}}"##
+        )
+    };
+
+    let mut render = |preset: &str, chroma: &str| -> Vec<u8> {
+        let parsed = Scene::from_json(&scene(preset, chroma)).expect("scene json");
+        // Meme raison qu'au test de forme : `compose_frame` lit les LiveParams, pas la
+        // scene brute — et c'est par la que l'incrustation transite a l'export.
+        comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
+        comp.set_scene(Some(parsed));
+        unsafe {
+            let sf = screen.seek_to(1.0).expect("seek screen");
+            let wf = cam.seek_to(1.0).expect("seek webcam");
+            let mut cfg = Cfg::c8();
+            cfg.shadow = false;
+            comp.compose_frame(sf, wf, 1.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback").2
+        }
+    };
+
+    let none = render("no-webcam", "");
+    let off = render("picture-in-picture", "");
+    // Cle au CENTRE du plan de chrominance + seuil au maximum = rayon centre → coin :
+    // aucun pixel possible n'est hors du seuil. Effacement garanti par la geometrie, pas
+    // par le contenu de la fixture (que ce test ne connait pas).
+    let keyed_all = render(
+        "picture-in-picture",
+        r##","chromaKey":{"color":"#808080","similarity":1.0,"smoothness":0.0,"spill":0.0}"##,
+    );
+    // Magenta pur, absent de la fixture, avec un seuil serre : rien ne doit tomber.
+    let keyed_none = render(
+        "picture-in-picture",
+        r##","chromaKey":{"color":"#ff00ff","similarity":0.02,"smoothness":0.0,"spill":0.0}"##,
+    );
+    write_ppm("compose_linux_chroma_off", W, H, &off);
+    write_ppm("compose_linux_chroma_all", W, H, &keyed_all);
+
+    // Nombre de pixels qui changent quand la camera apparait = son empreinte.
+    let footprint = |with: &[u8]| -> u32 {
+        with.chunks_exact(4)
+            .zip(none.chunks_exact(4))
+            .filter(|(a, b)| {
+                (a[0] as i32 - b[0] as i32).abs()
+                    + (a[1] as i32 - b[1] as i32).abs()
+                    + (a[2] as i32 - b[2] as i32).abs()
+                    > 24
+            })
+            .count() as u32
+    };
+
+    let n_off = footprint(&off);
+    let n_all = footprint(&keyed_all);
+    let n_none = footprint(&keyed_none);
+    println!(
+        "compose_linux incrustation : sans cle={n_off} px, seuil max={n_all} px, couleur absente={n_none} px"
+    );
+
+    assert!(n_off > 1000, "la camera n'est pas dessinee du tout ({n_off} px)");
+    assert!(
+        (n_all as f32) < n_off as f32 * 0.02,
+        "cle au centre + seuil max : la camera devrait avoir entierement disparu, il reste \
+         {n_all} px sur {n_off} — les float4 d'incrustation n'atteignent pas le shader ?"
+    );
+    assert!(
+        (n_none as f32) > n_off as f32 * 0.98,
+        "couleur cle absente de l'image : la camera devrait etre intacte ({n_none} px sur \
+         {n_off}) — l'incrustation efface sans regarder la couleur ?"
+    );
+
+    // L'OMBRE de la bulle PiP doit disparaitre avec elle. Sinon le fond detoure laisse voir
+    // un rectangle sombre derriere le sujet : l'ombre est dessinee SOUS la camera, donc la
+    // rendre transparente la revele au lieu de la supprimer. Mesure sur un export de
+    // controle avant le correctif : le fond detoure ressortait a 0,65x la couleur du calque
+    // du dessous, soit exactement WEBCAM_SHADOW_OPACITY (0,35 de noir).
+    //
+    // `cfg.shadow = true` ici (contrairement au `render` ci-dessus) : sans ombre demandee,
+    // le test ne pourrait pas constater son absence.
+    let mut render_shadowed = |chroma: &str| -> Vec<u8> {
+        let parsed = Scene::from_json(&scene("picture-in-picture", chroma)).expect("scene json");
+        comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
+        comp.set_scene(Some(parsed));
+        unsafe {
+            let sf = screen.seek_to(1.0).expect("seek screen");
+            let wf = cam.seek_to(1.0).expect("seek webcam");
+            let mut cfg = Cfg::c8();
+            cfg.shadow = true;
+            comp.compose_frame(sf, wf, 1.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback").2
+        }
+    };
+    let shadow_keyed = render_shadowed(
+        r##","chromaKey":{"color":"#808080","similarity":1.0,"smoothness":0.0,"spill":0.0}"##,
+    );
+    // Camera entierement detouree + ombre supprimee ⇒ la frame doit etre celle SANS camera.
+    let residue = shadow_keyed
+        .chunks_exact(4)
+        .zip(none.chunks_exact(4))
+        .filter(|(a, b)| {
+            (a[0] as i32 - b[0] as i32).abs()
+                + (a[1] as i32 - b[1] as i32).abs()
+                + (a[2] as i32 - b[2] as i32).abs()
+                > 24
+        })
+        .count();
+    println!("compose_linux incrustation : residu avec ombre demandee = {residue} px");
+    assert!(
+        (residue as f32) < n_off as f32 * 0.02,
+        "incrustation totale mais {residue} px different encore du rendu sans camera — \
+         l'ombre de la bulle PiP reste dessinee sous un calque devenu transparent"
+    );
+}
+
 /// Un enregistrement SANS camera ne doit rien dessiner dans la boite PiP.
 ///
 /// Le cas est reproduit tel quel : le decodeur « webcam » recoit la frame de

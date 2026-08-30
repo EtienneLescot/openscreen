@@ -33,7 +33,8 @@ use crate::ffi::AVFrame;
 // Re-exports que le code partage (live.rs, compositor-view-napi) consomme via
 // `crate::compositor::…`, a l'identique de `compositor_macos`.
 pub use crate::frame_geometry::{
-    live_params_from_scene, webcam_shape_code, FIXTURE_FRAMES, LayerCB, LiveParams, OUT_H, OUT_W,
+    chroma_key_uniform, live_params_from_scene, webcam_shape_code, FIXTURE_FRAMES, LayerCB,
+    LiveParams, OUT_H, OUT_W,
 };
 use crate::frame_geometry::{
     cursor_sprite_dst, parse_hex, plan_cursor, plan_frame, CursorPlacement, CursorPlanInput,
@@ -44,10 +45,22 @@ use crate::scene::{Scene, SceneBackground};
 const LAYER_WGSL: &str = include_str!("vk_shaders/layer.wgsl");
 const BLUR_WGSL: &str = include_str!("vk_shaders/blur.wgsl");
 
-/// `&LayerCB` -> `&[u8; 128]`. `LayerCB` est `#[repr(C, align(16))]`, son layout
-/// EST le buffer uniforme WGSL (16 vec4 + 1 vec2 + 2 f32 = 128 octets).
+/// `&LayerCB` -> ses octets bruts. `LayerCB` est `#[repr(C, align(16))]`, son layout EST le
+/// buffer uniforme WGSL.
+///
+/// La taille est DÉRIVÉE, pas écrite : elle l'était en dur (128), ce qui rendait tout ajout de
+/// champ silencieusement tronquant — le struct grandit, la copie non, et le shader lit du
+/// vieux contenu sans que rien ne lève. `min_binding_size` plus bas suit la même règle.
 fn layer_bytes(cb: &LayerCB) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(cb as *const LayerCB as *const u8, 128) }
+    unsafe {
+        std::slice::from_raw_parts(cb as *const LayerCB as *const u8, std::mem::size_of::<LayerCB>())
+    }
+}
+
+/// Taille du buffer uniforme de calque, pour `min_binding_size`. `unwrap` : `size_of` d'un
+/// struct non vide n'est jamais 0, la seule condition d'échec de `BufferSize::new`.
+fn layer_uniform_size() -> wgpu::BufferSize {
+    wgpu::BufferSize::new(std::mem::size_of::<LayerCB>() as u64).unwrap()
 }
 
 /// Une copie RT -> staging DEJA SOUMISE, dont le mapping est arme mais pas
@@ -226,7 +239,7 @@ impl Compositor {
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(128),
+                            min_binding_size: Some(layer_uniform_size()),
                         },
                         count: None,
                     },
@@ -308,7 +321,7 @@ impl Compositor {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(128),
+                        min_binding_size: Some(layer_uniform_size()),
                     },
                     count: None,
                 },
@@ -1249,6 +1262,9 @@ impl Compositor {
             // precedente, et un rect source qui ne correspond pas au calque
             // dessine ferait diverger la trainee vers une zone de la texture qui
             // n'a jamais ete affichee. Seul `dst_prev` porte le mouvement.
+            //
+            // Incrustation couleur : le SEUL draw qui la porte (cf. `compositor_windows`).
+            let (chroma_key, chroma_fx) = chroma_key_uniform(&lp);
             let cb = LayerCB {
                 dst: g.w_dst,
                 src: [u0, cv0, u1, cv1],
@@ -1259,6 +1275,8 @@ impl Compositor {
                 src_prev: [u0, cv0, u1, cv1],
                 dst_prev: g.w_dst_prev,
                 mb: [g.mb_taps, 1.0, 1.0, 0.0],
+                chroma_key,
+                chroma_fx,
                 ..Default::default()
             };
             self.make_bind(&cb, Some((wy, wuv)), &dummy)
@@ -1268,9 +1286,13 @@ impl Compositor {
         // vertical-stack) : la camera y est collee a l'ecran comme une tuile,
         // et une ombre entre les deux dessinerait une couture. Meme condition
         // que macOS.
+        // `!lp.chroma_enabled` : cf. `compositor_windows` — l'ombre est celle de la bulle
+        // opaque, et l'incrustation supprime la bulle. La garder laisse un rectangle sombre
+        // visible derriere le sujet detoure.
         let webcam_shadow = (cfg.shadow
             && g.shape_fade > 0.0
             && webcam_draw.is_some()
+            && !lp.chroma_enabled
             && !matches!(
                 g.scene_preset.as_deref(),
                 Some("dual-frame") | Some("vertical-stack")

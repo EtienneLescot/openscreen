@@ -107,6 +107,28 @@ current editor settings to a `SceneDescription` JSON string. It resolves:
   like a single recorded ratio; `layout.layoutByClip` is index-aligned with
   `clips` and `cropByClip` and the Rust `for_clip_window` selects the entry for
   the clip being composed.
+- **Chroma key.** `layout.chromaKey` (`{ color, similarity, smoothness, spill }`) is
+  present only while the key is on; absent is how "off" and every pre-feature payload
+  both look, and the Rust field is `#[serde(default)] Option<SceneChromaKey>`. The
+  colour crosses as a **hex string**, not as chroma coordinates: the native side has to
+  own that BT.709 conversion regardless, because the live-preview path can only carry a
+  colour as a string param, and converting on both sides would put two copies of one
+  matrix either side of the boundary. `chroma_key_uniform` (`frame_geometry.rs`) is the
+  single place that converts, and it feeds the two `LayerCB` `float4`s the camera's
+  mode-0 draw carries — the screen's own mode-0 draw leaves them zeroed.
+  **The scene is only half the wiring.** Export builds its `LiveParams` from the scene
+  (`live_params_from_scene`), but the live preview builds them from the *inspector*
+  struct and never reads the scene's copy, so the key also travels as five live params
+  (`webcamChroma*`, pushed by `pushAllNativeParams`). This is not belt-and-braces: wiring
+  only one road yields a key that works in the preview and vanishes on export, or the
+  reverse. `webcamMirror` and `webcamShape` are dual for the same reason.
+  Enabling the key also suppresses the PiP drop shadow. That shadow belongs to the
+  opaque floating *bubble*; once the backdrop is keyed out there is no bubble, and the
+  shadow — drawn as a full rounded rect *beneath* the camera — shows through the newly
+  transparent pixels as a dark rectangle behind the subject. Measured on a control
+  export before the fix, the keyed area read 0.65x the layer below it: exactly
+  `WEBCAM_SHADOW_OPACITY`. Same reasoning that already drops the shadow at full-camera
+  (`shape_fade`).
 - **Lengths as fractions.** Every length that crosses the contract is a fraction
   of its own reference box — `roundnessFrac` of the output frame's short side,
   `screenRadiusFrac` of the screen box's short side, annotation `x/y/w/h` of the

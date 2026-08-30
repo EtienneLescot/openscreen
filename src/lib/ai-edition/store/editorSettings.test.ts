@@ -144,6 +144,39 @@ describe("patchEditorSettings", () => {
 		expect(snap.webcamPosition).toEqual({ cx: 1, cy: 0 });
 	});
 
+	it("leaves the chroma key off for a project that never mentions it", () => {
+		// Every project recorded before this feature. The camera has to come back
+		// exactly as it was shot, so "no setting" can only mean "no key".
+		expect(getEditorSettings(baseDoc).webcamChromaKey.enabled).toBe(false);
+	});
+
+	it("merges a partial chroma-key patch instead of replacing the object", () => {
+		// The toggle and each slider patch ONE field. A straight spread would drop
+		// the picked colour every time the user moved a slider.
+		const picked = patchEditorSettings(baseDoc, {
+			webcamChromaKey: { color: "#123456", enabled: true },
+		});
+		const tuned = patchEditorSettings(picked, { webcamChromaKey: { similarity: 0.5 } });
+		const snap = getEditorSettings(tuned);
+		expect(snap.webcamChromaKey.color).toBe("#123456");
+		expect(snap.webcamChromaKey.enabled).toBe(true);
+		expect(snap.webcamChromaKey.similarity).toBe(0.5);
+	});
+
+	it("normalises a malformed persisted chroma key on read", () => {
+		const doc: AxcutDocument = {
+			...baseDoc,
+			legacyEditor: {
+				webcamChromaKey: { enabled: true, color: "#0F0", similarity: 9, spill: "lots" },
+			},
+		};
+		const key = getEditorSettings(doc).webcamChromaKey;
+		expect(key.enabled).toBe(true);
+		expect(key.color).toBe("#00ff00");
+		expect(key.similarity).toBe(1);
+		expect(key.spill).toBe(DEFAULT_EDITOR_SETTINGS.webcamChromaKey.spill);
+	});
+
 	it("preserves a non-zero crop at the bottom-right edge", () => {
 		const doc: AxcutDocument = {
 			...baseDoc,

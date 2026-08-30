@@ -38,12 +38,14 @@ import type {
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
+import { stopChromaPick, useChromaPicking } from "@/lib/ai-edition/store/chromaPickStore";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { resolveActiveCameraTrack } from "@/lib/ai-edition/timeline/camera";
 import { createPlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
+import { mapSlotPointToVideoPixel, sampleVideoPixelHex } from "@/lib/ai-edition/webcamEyedropper";
 import {
 	computeCameraFullscreenRect,
 	computeCompositeLayout,
@@ -53,6 +55,7 @@ import {
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { computeCameraFullscreenProgress } from "@/lib/zoomMath/cameraFullscreenUtils";
+import { isNativeCompositorActive, setNativeParam } from "@/native/nativeCompositorStore";
 import { clamp, clamp01 } from "@/utils/math";
 import { AnnotationLayer } from "./AnnotationLayer";
 import { NativeCompositorOverlay } from "./NativeCompositorOverlay";
@@ -120,6 +123,9 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	const assets = document?.assets ?? [];
 	const frameRef = useRef<HTMLDivElement | null>(null);
 	const webcamSlotRef = useRef<HTMLDivElement | null>(null);
+	// Chroma-key eyedropper: armed from the Layout pane, consumed here.
+	const isPickingChroma = useChromaPicking();
+	const webcamVideoRef = useRef<HTMLVideoElement | null>(null);
 	// One clock per mounted canvas, shared between the screen preview (writer)
 	// and the webcam overlay (reader) — see playback-clock.ts.
 	const clockRefHolder = useRef<ReturnType<typeof createPlaybackClockRef>>();
@@ -348,6 +354,62 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		clockRef,
 	};
 
+	// Escape leaves pick mode. Without it the only way out is to pick a colour,
+	// and the camera stays revealed over the composed frame — the user would read
+	// that as the preview having broken.
+	useEffect(() => {
+		if (!isPickingChroma) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") stopChromaPick();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [isPickingChroma]);
+
+	/**
+	 * Sample the pixel under the pointer out of the RAW camera and make it the key.
+	 *
+	 * Runs on pointer DOWN, ahead of the drag handler, and swallows the event: the
+	 * same slot is the drag hitbox for repositioning the PiP, and a pick that also
+	 * nudged the camera would be a trap.
+	 */
+	const handleChromaPick = (event: ReactPointerEvent<HTMLDivElement>) => {
+		event.preventDefault();
+		event.stopPropagation();
+		const slot = webcamSlotRef.current;
+		const video = webcamVideoRef.current;
+		// Always disarm, even when the sample fails — an eyedropper that stays
+		// armed after a click reads as a frozen editor.
+		stopChromaPick();
+		if (!slot || !video) return;
+		const rect = slot.getBoundingClientRect();
+		const at = mapSlotPointToVideoPixel(
+			{ x: event.clientX - rect.left, y: event.clientY - rect.top },
+			{ width: rect.width, height: rect.height },
+			{ width: video.videoWidth, height: video.videoHeight },
+			settings.webcamMirrored,
+			// The same crop `WebcamOverlay` puts on the element as an `object-view-box`.
+			// Passing it is what makes the pick land on the pixel under the pointer once
+			// the camera is zoomed; without it the sample drifts with the zoom.
+			settings.webcamCropRegion,
+		);
+		if (!at) return;
+		const hex = sampleVideoPixelHex(video, at);
+		if (!hex) return;
+		// `setLive` + `commit`: one user gesture, one undo entry — the same pairing
+		// the drag handler above uses.
+		setLive({ webcamChromaKey: { color: hex, enabled: true } });
+		// The live preview builds its params from these pushes and never re-reads the
+		// scene, so without them the native window keeps keying on the OLD colour until
+		// something else re-pushes — the pick would look like it did nothing. Same
+		// pairing the chroma controls in `RightPanes` use.
+		if (isNativeCompositorActive()) {
+			setNativeParam("webcamChromaColor", hex);
+			setNativeParam("webcamChromaEnabled", true);
+		}
+		void commit();
+	};
+
 	const handleWebcamPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
 		if (settings.webcamLayoutPreset !== "picture-in-picture") return;
 		if (isPlaying) return;
@@ -462,10 +524,12 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 					className={styles.webcamSlot}
 					style={{
 						...webcamStyle,
-						cursor: isPipGrab && !isPlaying ? "grab" : "default",
+						cursor: isPickingChroma ? "crosshair" : isPipGrab && !isPlaying ? "grab" : "default",
 						touchAction: "none",
 					}}
-					onPointerDown={isPipGrab ? handleWebcamPointerDown : undefined}
+					onPointerDown={
+						isPickingChroma ? handleChromaPick : isPipGrab ? handleWebcamPointerDown : undefined
+					}
 					aria-label={te("preview.webcamPreview")}
 				>
 					<WebcamOverlay
@@ -474,6 +538,10 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 						onTimeChange={props.onTimeChange}
 						isPlaying={isPlaying}
 						clockRef={clockRef}
+						onVideoElement={(el) => {
+							webcamVideoRef.current = el;
+						}}
+						revealVideo={isPickingChroma}
 						borderRadius={
 							effectiveLayout?.webcamRect?.borderRadius ?? layout.webcamRect.borderRadius
 						}
