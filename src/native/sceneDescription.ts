@@ -15,7 +15,11 @@
  * contract — do not change the exported types.
  */
 
-import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
+import type {
+	CameraFullscreenRegion,
+	SpeedRegion,
+	WebcamBackgroundMode,
+} from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION, getZoomScale } from "@/components/video-editor/types";
 import { annotationFontSizeFraction } from "@/lib/ai-edition/annotationScale";
 import {
@@ -421,6 +425,24 @@ export interface SceneDescription {
 	cropByClip: Array<{ x: number; y: number; width: number; height: number } | null>;
 	/** Output frame. `fps` null = use the first clip's source fps. */
 	output: { width: number; height: number; fps: number | null };
+	/** Webcam background effect. Omitted when the mode is "none". */
+	webcamEffect?: SceneWebcamEffect;
+}
+
+/**
+ * The webcam background effect, as the compositor needs it.
+ *
+ * Carries the MODE and its parameters only — never pixels. The per-pixel subject mask is
+ * produced by the segmentation running in the compositor process and reaches the shader as a
+ * texture. An earlier design baked the composite here and shipped it as a video track; the codec
+ * could not carry alpha, and preview and export drifted apart.
+ */
+export interface SceneWebcamEffect {
+	mode: WebcamBackgroundMode;
+	/** 0..1, only meaningful for "blur". */
+	blurIntensity: number;
+	/** Background behind the subject for "custom", parsed like `settings.wallpaper`. */
+	background?: SceneBackground;
 }
 
 /** Parse the settings wallpaper string into the discriminated SceneBackground union. */
@@ -966,5 +988,16 @@ export function buildSceneDescription(
 		})),
 		cropByClip,
 		output: { ...pickOutputDims(document, settings.aspectRatio), fps: null },
+		// Omitted rather than sent as `{mode:"none"}`: the Rust side defaults the field, and
+		// every project without a webcam effect would otherwise carry it for nothing.
+		...(settings.webcamBackgroundMode !== "none"
+			? {
+					webcamEffect: {
+						mode: settings.webcamBackgroundMode,
+						blurIntensity: settings.webcamBlurIntensity,
+						background: parseWallpaper(settings.webcamWallpaper),
+					},
+				}
+			: {}),
 	};
 }

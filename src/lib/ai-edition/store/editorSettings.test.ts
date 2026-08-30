@@ -240,4 +240,34 @@ describe("patchEditorSettings", () => {
 		expect(snap.webcamCropRegion.x).toBeCloseTo(0.375);
 		expect(snap.webcamCropRegion.y).toBeCloseTo(0.45);
 	});
+
+	it("round-trips webcam background settings through legacyEditor", () => {
+		const patched = patchEditorSettings(baseDoc, {
+			webcamBackgroundMode: "custom",
+			webcamWallpaper: "#ff0080",
+			webcamBlurIntensity: 0.8,
+		});
+		const snap = getEditorSettings(patched);
+		expect(snap.webcamBackgroundMode).toBe("custom");
+		expect(snap.webcamWallpaper).toBe("#ff0080");
+		expect(snap.webcamBlurIntensity).toBe(0.8);
+	});
+
+	// `legacyEditor` is user-writable JSON. An unknown mode used to flow straight through
+	// as a WebcamBackgroundMode, so the export pre-render ran and `renderSegmentedWebcam`
+	// matched no branch — encoding a blank webcam track.
+	it("falls back to the default when the stored webcam background mode is unknown", () => {
+		const doc = {
+			...baseDoc,
+			legacyEditor: { webcamBackgroundMode: "hologram" },
+		} as typeof baseDoc;
+		expect(getEditorSettings(doc).webcamBackgroundMode).toBe("none");
+	});
+
+	it("clamps a stored webcam blur intensity into 0..1", () => {
+		const tooHigh = { ...baseDoc, legacyEditor: { webcamBlurIntensity: 1000 } } as typeof baseDoc;
+		expect(getEditorSettings(tooHigh).webcamBlurIntensity).toBe(1);
+		const negative = { ...baseDoc, legacyEditor: { webcamBlurIntensity: -3 } } as typeof baseDoc;
+		expect(getEditorSettings(negative).webcamBlurIntensity).toBe(0);
+	});
 });

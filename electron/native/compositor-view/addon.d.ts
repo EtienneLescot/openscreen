@@ -104,10 +104,21 @@ export interface ClipInput {
  *  all, so the view will fail with its own, more specific message. */
 export type CompositorBackend = "hardware" | "cpu" | "none";
 
+/** Whether this machine can segment the camera, and if not, what is missing. Mirrored in
+ *  `src/native/contracts.ts` for the renderer, the same way `CompositorBackend` is — the addon
+ *  boundary and the IPC boundary each own their shape. */
+export type SegmentationSupport = "ready" | "no-runtime" | "no-model" | "none";
+
 export interface CompositorViewAddon {
 	/** What this machine offers, asked without allocating a view — the export dialog
 	 *  needs the answer before any preview exists. Cached native-side. */
 	probeBackend(): CompositorBackend;
+
+	/** Whether the ONNX Runtime library is where the app staged it, and therefore whether a
+	 *  segmentation mask can be produced at all. Asked of the machine rather than guessed from
+	 *  the platform: upstream publishes no ONNX build for Intel Macs, and a dev checkout or a
+	 *  `--dir` build has none either. */
+	segmentationRuntimeAvailable(): boolean;
 
 	/** Allocates an offscreen compositor view sized to `rect.width`x`rect.height` (the
 	 *  target preview resolution; `rect.x` / `rect.y` are vestigial and ignored native-side).

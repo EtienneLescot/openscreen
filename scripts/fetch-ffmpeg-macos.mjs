@@ -29,6 +29,20 @@ const ROOT = path.join(__dirname, "..");
 const CRATES_DIR = path.join(ROOT, "crates");
 
 /** Pinned release. The directory name is what build.rs looks for. */
+// The macOS floor the app ships against — keep in step with `mac.minimumSystemVersion`
+// in electron-builder.json5, which is what the .app tells LaunchServices.
+//
+// Without it, clang defaults the deployment target
+// to the BUILD MACHINE's SDK, so the vendored dylibs inherit whatever macOS built them —
+// measured 26.0 on a local build and ~15.x from CI's `macos-latest`, a floor that moves on
+// its own every time GitHub rolls that image. That is the same class of leak the configure
+// comment below guards against for Homebrew packages, and it is the one it missed.
+//
+// Note this is NOT a loader version gate: dyld does not refuse a dylib whose minos exceeds
+// the running OS (verified). Setting it is what makes the LINKER enforce macOS 12 symbol
+// availability, which is the thing that actually breaks at load time. See issue #515.
+const MACOS_DEPLOYMENT_TARGET = "13.0";
+
 const VERSION = "8.1.2";
 const TARBALL_SHA256 = "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c";
 const DEST = path.join(CRATES_DIR, "thirdparty", `ffmpeg-n${VERSION}-macos64-lgpl-shared`);
@@ -202,6 +216,10 @@ run(
 		"--disable-x86asm",
 		`--arch=${process.arch === "arm64" ? "arm64" : "x86_64"}`,
 		"--cc=clang",
+		// Both, not just cflags: the deployment target has to reach the link step too, or
+		// the dylibs are stamped with the build machine's floor however they were compiled.
+		`--extra-cflags=-mmacosx-version-min=${MACOS_DEPLOYMENT_TARGET}`,
+		`--extra-ldflags=-mmacosx-version-min=${MACOS_DEPLOYMENT_TARGET}`,
 	],
 	{ cwd: src },
 );

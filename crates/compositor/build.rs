@@ -10,6 +10,8 @@ fn main() {
 
     if target_is_macos {
         point_libclang_at_the_xcode_toolchain();
+    } else if target_os == "linux" {
+        drop_unusable_libclang_path();
     }
 
     // Le pin ffmpeg est porté par `.cargo/config.toml` ; sur Windows c'est le
@@ -29,28 +31,25 @@ fn main() {
         // un dev l'a posé à la main pour macOS, jamais quand il vient du pin Windows.
         env::var("MAC_FFMPEG_DIR")
             .ok()
-            .filter(|v| Path::new(v).join("include").exists())
-            .or_else(|| {
-                // `thirdparty/` est frère de `compositor/`, sous `crates/` — c'est aussi
-                // ce que le pin Windows désigne (`relative = true` dans
-                // `crates/.cargo/config.toml`, relatif au dossier de la config).
-                // build.rs s'exécute avec cwd = racine du crate, pas `crates/`, donc on
-                // remonte depuis CARGO_MANIFEST_DIR plutôt que d'écrire un chemin relatif
-                // qui viserait `crates/compositor/thirdparty/`.
-                let candidate = Path::new(&env::var("CARGO_MANIFEST_DIR").ok()?)
-                    .parent()?
-                    .join("thirdparty")
-                    .join("ffmpeg-n8.1.2-macos64-lgpl-shared");
-                candidate
-                    .join("include")
-                    .exists()
-                    .then(|| candidate.to_string_lossy().to_string())
-            })
+            .filter(|v| usable_ffmpeg_tree(Path::new(v)))
+            .or_else(|| vendored_ffmpeg_tree("ffmpeg-n8.1.2-macos64-lgpl-shared"))
             .or_else(|| {
                 env::var("FFMPEG_DIR")
                     .ok()
-                    .filter(|v| Path::new(v).join("include").exists())
+                    .filter(|v| usable_ffmpeg_tree(Path::new(v)))
             })
+    } else if target_os == "linux" {
+        // Même piège que LIBCLANG_PATH, même remède : le `FFMPEG_DIR` du `[env]` global
+        // désigne l'arbre win64, qui n'existe pas ici, donc on ne l'accepte que s'il
+        // pointe sur un arbre RÉEL — c'est-à-dire quand un dev ou
+        // scripts/build-linux-compositor-addon.mjs l'a posé à la main. Sinon on retombe
+        // sur l'emplacement vendorisé conventionnel, dans le même ordre que ce script
+        // (`resolveFfmpegDir`), pour qu'un `cargo check` nu et un build via npm voient
+        // le même arbre.
+        env::var("FFMPEG_DIR")
+            .ok()
+            .filter(|v| usable_ffmpeg_tree(Path::new(v)))
+            .or_else(|| vendored_ffmpeg_tree("ffmpeg-linux64-lgpl-shared"))
     } else {
         env::var("FFMPEG_DIR").ok()
     };
@@ -58,9 +57,12 @@ fn main() {
     let include_dir = match ff.as_ref() {
         Some(v) => Path::new(v).join("include").to_string_lossy().to_string(),
         None => panic!(
-            "crates/compositor build.rs: FFMPEG_DIR non défini (target={}). \
+            "crates/compositor build.rs: aucun arbre ffmpeg utilisable (target={}). \
              Sur Windows, voir crates/.cargo/config.toml. Sur macOS, poser \
-             MAC_FFMPEG_DIR ou vendoriser thirdparty/ffmpeg-n8.1.2-macos64-lgpl-shared.",
+             MAC_FFMPEG_DIR ou vendoriser thirdparty/ffmpeg-n8.1.2-macos64-lgpl-shared. \
+             Sur Linux, poser FFMPEG_DIR ou vendoriser \
+             thirdparty/ffmpeg-linux64-lgpl-shared (arbre *shared*, avec include/ et \
+             lib/ — celui de scripts/fetch-ffmpeg.mjs est statique et ne convient pas).",
             target_os
         ),
     };
@@ -69,7 +71,7 @@ fn main() {
     if let Some(v) = ff.as_ref() {
         let lib_dir = Path::new(v).join("lib");
         println!("cargo:rustc-link-search=native={}", lib_dir.display());
-        for lib in ["avformat", "avcodec", "avutil", "swscale", "swresample"] {
+        for lib in ["avformat", "avcodec", "avutil", "swscale", "swresample", "avfilter"] {
             println!("cargo:rustc-link-lib=dylib={}", lib);
         }
     }
@@ -315,4 +317,110 @@ fn point_libclang_at_the_xcode_toolchain() {
         // découverte par défaut de clang-sys, qui sait aussi chercher toute seule.
         None => env::remove_var("LIBCLANG_PATH"),
     }
+}
+
+/// Un arbre ffmpeg exploitable : `include/` pour bindgen ET `lib/` pour le linkage.
+///
+/// Les deux, pas seulement le premier : la section « linkage » plus bas pose un
+/// `rustc-link-search` sur `<tree>/lib` et réclame avformat/avcodec/avutil/swscale/
+/// swresample. Un arbre n'ayant que les en-têtes passait le filtre, écartait le repli
+/// vers un arbre vendorisé complet, et échouait bien plus tard sur un `cannot find
+/// -lavformat` qui ne désigne pas sa cause. `resolveFfmpegDir()` dans
+/// scripts/build-linux-compositor-addon.mjs vérifie déjà les deux — c'est la même règle
+/// des deux côtés.
+fn usable_ffmpeg_tree(dir: &Path) -> bool {
+    dir.join("include").is_dir() && dir.join("lib").is_dir()
+}
+
+/// L'arbre ffmpeg vendorisé sous `crates/thirdparty/<name>`, s'il existe vraiment.
+///
+/// `thirdparty/` est frère de `compositor/`, sous `crates/` — c'est aussi ce que le pin
+/// Windows désigne (`relative = true` dans `crates/.cargo/config.toml`, relatif au
+/// dossier de la config). build.rs s'exécute avec cwd = racine du crate, pas `crates/`,
+/// donc on remonte depuis CARGO_MANIFEST_DIR plutôt que d'écrire un chemin relatif qui
+/// viserait `crates/compositor/thirdparty/`.
+fn vendored_ffmpeg_tree(name: &str) -> Option<String> {
+    let candidate = Path::new(&env::var("CARGO_MANIFEST_DIR").ok()?)
+        .parent()?
+        .join("thirdparty")
+        .join(name);
+    usable_ffmpeg_tree(&candidate).then(|| candidate.to_string_lossy().to_string())
+}
+
+/// Même remède que le versant macOS, pour la même cause.
+///
+/// `crates/.cargo/config.toml` pose `LIBCLANG_PATH` dans un `[env]` GLOBAL, faute de
+/// `[target.<cfg>.env]` en cargo. La valeur est celle de Windows
+/// (`C:\Program Files\LLVM\bin`) et elle est donc renseignée sous Linux aussi, où
+/// clang-sys la prend au mot : il ne regarde nulle part ailleurs et abandonne sur
+/// « Unable to find libclang », alors qu'un `libclang.so` de distribution est presque
+/// toujours installé. Un `cargo check -p openscreen-compositor` nu échouait donc sur
+/// une Ubuntu de série — exactement ce que `freestanding_header_args()` juste au-dessus
+/// s'emploie à éviter par ailleurs.
+///
+/// On ne devine pas le bon chemin : clang-sys sait chercher tout seul (LD_LIBRARY_PATH,
+/// PATH, /usr/lib/llvm-*/lib …). Il suffit de ne pas lui mentir. Une valeur posée par le
+/// dev et réellement utilisable est conservée telle quelle — `force = false` fait déjà
+/// gagner l'environnement réel sur la config, et on ne casse pas un choix explicite.
+fn drop_unusable_libclang_path() {
+    println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
+    let Ok(value) = env::var("LIBCLANG_PATH") else {
+        return;
+    };
+    // clang-sys accepte DEUX formes : un fichier bibliothèque, ou un répertoire qui en
+    // contient un (`search_libclang_directories` : « Check if the path is a matching
+    // file », puis « … a directory containing a matching file »). Ne traiter que le
+    // répertoire retirerait un `LIBCLANG_PATH` parfaitement valide pointant sur
+    // `/usr/lib/llvm-N/lib/libclang.so.1`.
+    let path = Path::new(&value);
+    let usable = if path.is_file() {
+        path.file_name()
+            .is_some_and(|n| is_libclang_filename(&n.to_string_lossy()))
+    } else {
+        std::fs::read_dir(path).is_ok_and(|entries| {
+            entries
+                .flatten()
+                // `is_file()` autant que le nom : `read_dir` rend aussi les
+                // sous-répertoires et les fichiers spéciaux, et un répertoire qui
+                // s'appellerait `libclang.so` passerait le seul test de nom — clang-sys
+                // le retiendrait puis échouerait à le charger, sans repli possible.
+                .any(|e| {
+                    e.path().is_file() && is_libclang_filename(&e.file_name().to_string_lossy())
+                })
+        })
+    };
+    if !usable {
+        env::remove_var("LIBCLANG_PATH");
+    }
+}
+
+/// Les motifs EXACTS que clang-sys cherche sous Linux : `libclang.so`,
+/// `libclang-<v>.so`, `libclang.so.<v>`, `libclang-<v>.so.<v>`.
+///
+/// Coller aux motifs, et pas seulement au préfixe, parce que `search_libclang_directories`
+/// s'arrête net sur `LIBCLANG_PATH` quand la variable est posée — « Search only the path
+/// indicated by the relevant environment variable » — sans jamais retomber sur
+/// `llvm-config`, le PATH ou les répertoires connus. Conserver un chemin qui ne contient
+/// qu'un `libclang_extra.so` ou un `libclang.software` reviendrait donc à condamner le
+/// build, exactement comme le faisait la valeur Windows.
+///
+/// `libclang-cpp.*` est écarté d'entrée : clang-sys l'écarte lui-même
+/// (`filename.contains("-cpp.")`), `libclang_shared` ayant été renommé `libclang-cpp` à
+/// partir de Clang 10.
+fn is_libclang_filename(name: &str) -> bool {
+    if name.contains("-cpp.") {
+        return false;
+    }
+    let Some(rest) = name.strip_prefix("libclang") else {
+        return false;
+    };
+    // Soit `libclang.so…`, soit `libclang-<v>.so…` avec un `<v>` non vide.
+    let rest = match rest.strip_prefix('-') {
+        Some(versioned) => match versioned.find(".so") {
+            None | Some(0) => return false,
+            Some(i) => &versioned[i..],
+        },
+        None => rest,
+    };
+    rest == ".so" || rest.starts_with(".so.")
 }

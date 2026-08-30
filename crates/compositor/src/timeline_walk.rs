@@ -164,6 +164,14 @@ pub(crate) unsafe fn walk_composited_timeline(
 
     let mut frames: u64 = 0;
 
+    // L'export doit être reproductible : deux rendus du même projet, les mêmes pixels. Cette
+    // boucle avance aussi vite que la machine décode, sans rapport avec le temps réel, alors que
+    // la segmentation est cadencée à l'horloge et calculée sur un worker — deux choix faits pour
+    // la preview, et qui deviennent ici des bugs : le nombre de frames couvertes par un masque
+    // suivrait la charge machine, et les premières frames sortiraient AVANT le premier masque,
+    // donc avec le vrai arrière-plan de la webcam gravé dans le fichier.
+    comp.set_segmentation_deterministic(true);
+
     for (clip_index, clip) in clips.iter().enumerate() {
         // Le preset de layout est GLOBAL (un seul panneau pour toute la timeline) mais la
         // caméra est PAR CLIP : un projet mélange sans problème un enregistrement avec webcam
@@ -329,6 +337,8 @@ pub(crate) unsafe fn walk_composited_timeline(
 
     comp.set_cursor_time(None);
     comp.set_timeline_time(None);
+    // Le compositeur est réutilisé par la preview après un export : lui rendre sa cadence.
+    comp.set_segmentation_deterministic(false);
     Ok(frames)
 }
 

@@ -741,11 +741,18 @@ export function V4Timeline({
 	// Drag a lane pill to move it (mode "move", keeps duration) or resize one
 	// edge (mode "l"/"r"). Zoom/speed/annotation are timeline-ms; trims map
 	// back to source-seconds through their carrying clip.
+	const selectPill = useCallback(
+		(pill: LanePill, additive: boolean) => {
+			tl.selectRegion(pill.kind, pill.id, { additive });
+		},
+		[tl],
+	);
+
 	const startPillDrag = useCallback(
 		(e: ReactPointerEvent, pill: LanePill, dragMode: "move" | "l" | "r") => {
 			e.preventDefault();
 			e.stopPropagation();
-			tl.selectRegion(pill.kind, pill.id, { additive: e.shiftKey });
+			selectPill(pill, e.shiftKey);
 			// Scale drag deltas against the canvas (full zoomed timeline) width, so a
 			// drag tracks the cursor exactly regardless of padding, scrollbar or zoom.
 			const el = canvasRef.current;
@@ -857,7 +864,7 @@ export function V4Timeline({
 			window.addEventListener("pointermove", move);
 			window.addEventListener("pointerup", up);
 		},
-		[tl, total, clips, pxPerSec],
+		[tl, selectPill, total, clips, pxPerSec],
 	);
 
 	// Live preview geometry for an audio track being dragged (issue #350), the
@@ -1365,6 +1372,24 @@ export function V4Timeline({
 						: {}),
 				}}
 				onPointerDown={seg.interactive ? (e) => startPillDrag(e, p, "move") : undefined}
+				// A pill is focusable and announced as a button, so Enter and Space have to
+				// activate it — without this a keyboard user could tab to a region and then
+				// reach nothing that acts on a selection: Delete, copy/paste, the inspector.
+				//
+				// `nativeEvent.stopPropagation()`, not just the synthetic one: the editor
+				// shell listens on WINDOW, above React's root container, and Space is bound
+				// to play/pause there. Stopping only the synthetic event would select the
+				// pill and toggle playback in the same keystroke.
+				onKeyDown={
+					seg.interactive
+						? (e) => {
+								if (e.key !== "Enter" && e.key !== " ") return;
+								e.preventDefault();
+								e.nativeEvent.stopPropagation();
+								selectPill(p, e.shiftKey);
+							}
+						: undefined
+				}
 				title={p.label}
 			>
 				{seg.interactive ? (

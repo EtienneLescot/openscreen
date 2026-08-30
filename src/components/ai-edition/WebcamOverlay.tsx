@@ -160,13 +160,12 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 		return null;
 	}
 
-	const showError = hasError;
-	// ponytail: the layout computes the final borderRadius (preset fraction
-	// for dual-frame/overlay, 0 for stack, half-circle for circle PiP, etc.).
-	// Push it onto the <video> itself so it actually clips the camera
-	// content; the container stays a transparent, overflow:hidden wrapper.
-	const style: React.CSSProperties = {
-		display: showError ? "none" : "block",
+	// ponytail: the layout computes the final borderRadius (preset fraction for
+	// dual-frame/overlay, 0 for stack, half-circle for circle PiP, etc.). Push it onto
+	// the element that actually carries the pixels so it clips the camera content; the
+	// container stays a transparent, overflow:hidden wrapper.
+	const videoStyle: React.CSSProperties = {
+		display: hasError ? "none" : "block",
 		transform: settings.webcamMirrored ? "scaleX(-1)" : undefined,
 		clipPath: getCssClipPath(props.webcamMaskShape) ?? undefined,
 		borderRadius: `${props.borderRadius}px`,
@@ -186,11 +185,6 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 			preload="metadata"
 			onError={() => setHasError(true)}
 			onLoadedMetadata={(event) => {
-				// ponytail: cache the REAL webcam dimensions so the composite layout
-				// shapes its box to match the actual camera aspect (otherwise we'd ship
-				// a 4:3 box for a 16:9 webcam and the Rust `fit_cam_aspect` closure
-				// would shrink the 16:9 content inside a 4:3 box — visible empty margin
-				// inside the PiP container).
 				const target = event.currentTarget;
 				const w = target.videoWidth;
 				const h = target.videoHeight;
@@ -209,7 +203,7 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 					}
 				}
 			}}
-			style={style}
+			style={videoStyle}
 		/>
 	);
 }

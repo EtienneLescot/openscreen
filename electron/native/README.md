@@ -209,9 +209,14 @@ electron/native/bin/linux-x64/openscreen-pipewire-helper '{"probeOnly":true}'
 
 ### Known gaps
 
-- **Mouse clicks are unobtainable.** Wayland exposes no portal for input events
-  and `/dev/input/event*` is `root:input`, so every sample's `interactionType` is
-  `"move"`.
+- **Mouse clicks need the `input` group.** Wayland exposes no portal for input
+  events, so the helper reads left-button presses straight from evdev
+  (`/dev/input/event*`). Those nodes are `root:input`, so a user outside the
+  `input` group gets no readable device and every sample's `interactionType`
+  stays `"move"` — the same as before. When a device is readable, the coinciding
+  sample is tagged `"click"`. Scope is deliberately narrow: `BTN_LEFT` only,
+  never keystrokes (see `pipewire-capture/src/input.rs`), and
+  `OPENSCREEN_DISABLE_CLICK_CAPTURE=1` turns it off entirely.
 - **The user picks a source twice.** Electron's `desktopCapturer` raises its own
   portal dialog for the video, and this helper raises a second one for the cursor.
   Collapsing them requires one portal session serving both, which is why the

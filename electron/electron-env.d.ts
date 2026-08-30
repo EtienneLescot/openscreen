@@ -81,7 +81,10 @@ interface Window {
 		requestNativeMacCursorAccess: () => Promise<{
 			success: boolean;
 			granted: boolean;
-			status: string;
+			// "not-determined" is the only genuine denial; the rest mean the helper
+			// never got to ask. See macNativeCursorRecordingSession.ts.
+			status: "granted" | "not-determined" | "missing-helper" | "error" | "exited" | "timeout";
+			accessibilityTrusted: boolean;
 			error?: string;
 		}>;
 		assetBaseUrl: string;
