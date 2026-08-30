@@ -52,12 +52,6 @@
 		"failed": "アップデートを確認できませんでした。",
 		"downloadFailed": "アップデートをダウンロードできませんでした。"
 	},
-	"playback": {
-		"play": "再生",
-		"pause": "一時停止",
-		"fullscreen": "全画面表示",
-		"exitFullscreen": "全画面表示を終了"
-	},
 	"units": {
 		"pixelsPerSecond": "{{value}} px/秒",
 		"pixels": "{{value}} px"

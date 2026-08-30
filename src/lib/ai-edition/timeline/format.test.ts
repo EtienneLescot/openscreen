@@ -62,9 +62,9 @@ describe("formatMs", () => {
 	});
 });
 
-// Exported so LeftPanel's `formatTimecode` (h:mm:ss.t, a third shape that formats
-// itself) shares the carry instead of re-deriving it. Pinned here because that
-// caller has no test of its own.
+// Both formatters above depend on this carry, so it is pinned directly: a
+// regression reads as one failing case here rather than as two failing format
+// assertions that don't say why.
 describe("splitRoundedTime", () => {
 	it("carries a second that rounds up to 60 into the minute field", () => {
 		expect(splitRoundedTime(59.96)).toEqual({ totalMinutes: 1, seconds: 0 });

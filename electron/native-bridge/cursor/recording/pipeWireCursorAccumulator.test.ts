@@ -56,11 +56,23 @@ describe("PipeWireCursorAccumulator", () => {
 		expect(point.timeMs).toBe(500);
 	});
 
-	it("reports every sample as a move, because Wayland exposes no buttons", () => {
+	it("defaults a sample with no interaction to a move", () => {
+		// The helper omits interactionType on the common case, so the accumulator
+		// owns the "move" fallback. This is what the user not being in the `input`
+		// group looks like: every sample arrives bare.
 		const accumulator = new PipeWireCursorAccumulator(100);
 		accumulator.reset(0);
 		accumulator.addSample(sample(10, 5, 5));
 		expect(accumulator.toRecordingData().samples[0].interactionType).toBe("move");
+	});
+
+	it("preserves a click the helper read from evdev", () => {
+		const accumulator = new PipeWireCursorAccumulator(100);
+		accumulator.reset(0);
+		accumulator.addSample(sample(10, 5, 5, { interactionType: "click" }));
+		accumulator.addSample(sample(20, 6, 6));
+		const { samples } = accumulator.toRecordingData();
+		expect(samples.map((s) => s.interactionType)).toEqual(["click", "move"]);
 	});
 
 	it("re-bases onto the video's start and drops what came before it", () => {
