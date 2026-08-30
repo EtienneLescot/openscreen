@@ -131,7 +131,7 @@ The editing tools are the same everywhere — zooms, backgrounds, crop/trim/spee
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| Capture pipeline | Native (ScreenCaptureKit) | Native (Windows Graphics Capture) | Browser pipeline |
+| Capture pipeline | Native (ScreenCaptureKit) | Native (Windows Graphics Capture) | Native (PipeWire via the ScreenCast portal); browser fallback without the helper, losing hardware encode and cursor telemetry |
 | Custom cursor themes / click effects | ✅ | ✅ | ✅ on Wayland — click capture needs the `input` group ([details](#mouse-clicks-on-wayland)) |
 | Webcam | Native capture | Native capture | Browser capture (still works as PiP) |
 | System audio | Works out of the box; permission prompt on macOS 14.2+ | Works out of the box | Needs PipeWire (default on Ubuntu 22.04+, Fedora 34+) |
