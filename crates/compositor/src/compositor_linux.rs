@@ -51,6 +51,15 @@ use crate::scene::{Scene, SceneBackground};
 const LAYER_WGSL: &str = include_str!("vk_shaders/layer.wgsl");
 const BLUR_WGSL: &str = include_str!("vk_shaders/blur.wgsl");
 
+/// Budget du cache de textures image (`img_cache`), en octets.
+///
+/// Doit tenir le JEU ACTIF d'une frame -- au pire un wallpaper d'ecran ET un
+/// fond de camera, que rien n'empeche d'etre deux 7680x7680 a 225 Mo piece.
+/// Sous ce seuil l'eviction ne peut plus rendre de memoire sans toucher au jeu
+/// actif, ce qu'elle refuse de faire. 512 Mo borne la fuite (1 774 Mo mesures
+/// en parcourant les 18 wallpapers livres) en laissant le jeu actif resident.
+const IMG_CACHE_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
 /// `&LayerCB` -> `&[u8; 128]`. `LayerCB` est `#[repr(C, align(16))]`, son layout
 /// EST le buffer uniforme WGSL (16 vec4 + 1 vec2 + 2 f32 = 128 octets).
 fn layer_bytes(cb: &LayerCB) -> &[u8] {
@@ -224,8 +233,20 @@ pub struct Compositor {
     text_raster: Option<crate::text::TextRasterizer>,
 
     /// Cache des sprites curseur (PNG RGBA -> texture wgpu), par chemin. Meme
-    /// role que `img_cache` cote macOS : un sprite chargé une fois par session.
-    img_cache: RefCell<std::collections::HashMap<String, (wgpu::Texture, u32, u32)>>,
+    /// role que `img_cache` cote macOS. Charge une fois, PAS pour la session : l'entree
+    /// est evincable des qu'elle sort du jeu actif d'une frame, et un retour dessus la
+    /// rechargera -- cf. `cached_image`.
+    /// Le quatrieme champ du tuple est le tick d'usage, qui donne l'ordre LRU
+    /// -- cf. `cached_image`.
+    img_cache: RefCell<std::collections::HashMap<String, (wgpu::Texture, u32, u32, u64)>>,
+    /// Compteur d'acces de `img_cache`, pour l'ordre LRU. Un compteur plutot
+    /// que l'index de frame : une frame touche plusieurs entrees, et il faut
+    /// pouvoir les ordonner entre elles.
+    img_tick: std::cell::Cell<u64>,
+    /// Valeur de `img_tick` au debut de la frame en cours. Tout ce qui a ete
+    /// touche depuis appartient au jeu actif et ne peut pas etre evince -- voir
+    /// `cached_image`.
+    img_frame_start: std::cell::Cell<u64>,
 
     /// Copie mipmappee de la frame composee, lue par les annotations « flou »
     /// (mode 10). `ann_copy` garde la texture en vie, `ann_copy_view` porte tous
@@ -565,6 +586,8 @@ impl Compositor {
             timeline_time: RefCell::new(None),
             text_raster: crate::text::TextRasterizer::new().ok(),
             img_cache: RefCell::new(std::collections::HashMap::new()),
+            img_tick: std::cell::Cell::new(0),
+            img_frame_start: std::cell::Cell::new(0),
             ann_copy,
             ann_copy_view,
             ann_copy_mips,
@@ -1119,6 +1142,52 @@ impl Compositor {
         Ok((tex, w, h))
     }
 
+    /// Ouvre une frame du point de vue d'`img_cache` : tout ce qui sera touche
+    /// apres cet appel est le jeu actif, et devient inevincable jusqu'a la
+    /// frame suivante.
+    fn begin_image_frame(&self) {
+        self.img_frame_start.set(self.img_tick.get());
+    }
+
+    /// Texture d'un fichier image, decodee une seule fois puis reutilisee.
+    ///
+    /// Le cache etait NON BORNE, et c'est un vrai cout : les wallpapers livres
+    /// pesent 23,7 Mo sur disque mais 1 774 Mo une fois decodes en RGBA8 --
+    /// `wallpaper8.jpg` fait 7680x7680, soit 225 Mo a lui seul. Parcourir le
+    /// selecteur les chargeait tous et n'en liberait aucun.
+    ///
+    /// L'eviction est LRU sous un budget en octets, et ne touche jamais une
+    /// texture que la frame EN COURS a deja servie : sans ca, un fond d'ecran
+    /// et un fond de camera un peu gros se chasseraient l'un l'autre a chaque
+    /// frame, et un decodage coute 129 ms contre les ~3,5 ms d'une frame. Si le
+    /// jeu actif depasse a lui seul le budget, on depasse le budget.
+    fn cached_image(&self, path: &str) -> Result<(wgpu::Texture, u32, u32)> {
+        let tick = self.img_tick.get() + 1;
+        self.img_tick.set(tick);
+        // Recherche isolee dans un `let` pour que l'emprunt immuable soit
+        // relache AVANT le `borrow_mut` (piege du double emprunt 1re frame).
+        let hit = self.img_cache.borrow().get(path).cloned();
+        if let Some((tex, w, h, _)) = hit {
+            self.img_cache.borrow_mut().insert(path.to_string(), (tex.clone(), w, h, tick));
+            return Ok((tex, w, h));
+        }
+        let (tex, w, h) = self.load_image_texture(path)?;
+        let mut cache = self.img_cache.borrow_mut();
+        cache.insert(path.to_string(), (tex.clone(), w, h, tick));
+        // La politique vit dans `frame_geometry` : les trois backends la
+        // partagent, comme la geometrie, plutot que d'entretenir trois copies
+        // qui finiraient par diverger.
+        let entries: Vec<(String, u64, u64)> =
+            cache.iter().map(|(k, e)| (k.clone(), e.1 as u64 * e.2 as u64 * 4, e.3)).collect();
+        let protect_from = self.img_frame_start.get();
+        for key in
+            crate::frame_geometry::lru_evictions(&entries, IMG_CACHE_BUDGET_BYTES, protect_from)
+        {
+            cache.remove(&key);
+        }
+        Ok((tex, w, h))
+    }
+
     /// Calque image (mode 6) couvrant `dst`, en cover-fit contre `aspect` -- le
     /// ratio du RECT vise, et non celui de la sortie : le rognage se calcule
     /// contre la zone qu'on remplit, ce qui permet a la bulle webcam d'emprunter
@@ -1135,17 +1204,7 @@ impl Compositor {
         aspect: f32,
         dummy: &wgpu::TextureView,
     ) -> Result<BgDraw> {
-        // Charge (ou recupere du cache) l'image. Emprunt isole AVANT le
-        // borrow_mut (piege du double emprunt 1re frame, cf. macOS).
-        let cached = self.img_cache.borrow().get(path).cloned();
-        let (tex, iw, ih) = match cached {
-            Some(v) => v,
-            None => {
-                let v = self.load_image_texture(path)?;
-                self.img_cache.borrow_mut().insert(path.to_string(), v.clone());
-                v
-            }
-        };
+        let (tex, iw, ih) = self.cached_image(path)?;
         // Cover-fit : l'image remplit tout le rect, on rogne l'axe long.
         let ai = iw as f32 / ih.max(1) as f32;
         let src = if ai > aspect {
@@ -1679,6 +1738,7 @@ impl Compositor {
         frame: f32,
         cfg: &Cfg,
     ) -> Result<()> {
+        self.begin_image_frame();
         if Self::pixel_buffer_of(screen).is_none() {
             return self.clear_rt();
         }
@@ -2413,21 +2473,13 @@ impl Compositor {
                 .as_deref()
                 .and_then(|t| sprites.get(t))
                 .or_else(|| sprites.get("arrow"))?;
-            // Charge (ou recupere du cache) le sprite. Emprunt isole AVANT le
-            // borrow_mut, comme cote macOS (piege du double emprunt 1re frame).
-            let cached = self.img_cache.borrow().get(sprite.path.as_str()).cloned();
-            let (tex, iw, ih) = match cached {
-                Some(v) => v,
-                None => match self.load_image_texture(&sprite.path) {
-                    Ok(v) => {
-                        self.img_cache.borrow_mut().insert(sprite.path.clone(), v.clone());
-                        v
-                    }
-                    Err(e) => {
-                        eprintln!("[curseur] sprite \"{}\" : {e:#}", sprite.path);
-                        return None;
-                    }
-                },
+            // Charge (ou recupere du cache) le sprite.
+            let (tex, iw, ih) = match self.cached_image(&sprite.path) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("[curseur] sprite \"{}\" : {e:#}", sprite.path);
+                    return None;
+                }
             };
             // Ratio preserve : le sprite tient dans un carre de `size_px` de cote.
             let ar = iw as f32 / ih.max(1) as f32;

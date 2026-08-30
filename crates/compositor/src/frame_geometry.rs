@@ -1302,8 +1302,83 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
     })
 }
 
+/// Les clés à évincer d'un cache de textures pour repasser sous `budget`, la moins récemment
+/// utilisée d'abord. `entries` porte `(clé, octets, tick d'usage)`.
+///
+/// `protect_from` est le tick au DÉBUT DE LA FRAME EN COURS : toute entrée touchée depuis est
+/// intouchable. Protéger la seule entrée qu'on vient de poser ne suffit pas — une frame échantillonne
+/// plusieurs textures (fond d'écran, fond de caméra, sprites de curseur), et évincer l'une d'elles
+/// parce qu'une autre vient d'arriver la ferait recharger à la frame suivante, puis rechasser la
+/// suivante : le cache se mettrait à battre au lieu de servir. Un décodage mesuré à 129 ms en
+/// release contre les ~3,5 ms d'une frame, c'est un échange qu'aucun budget mémoire ne justifie.
+///
+/// Si le jeu actif dépasse à lui seul le budget, la fonction s'arrête AU-DESSUS du budget plutôt
+/// que d'y toucher. Dépasser est le moindre mal.
+///
+/// Partagé plutôt que recopié dans chaque backend, pour la raison qui vaut pour tout ce module :
+/// trois copies d'une politique d'éviction finiraient par diverger sans que rien ne le dise.
+pub fn lru_evictions(entries: &[(String, u64, u64)], budget: u64, protect_from: u64) -> Vec<String> {
+    let mut total: u64 = entries.iter().map(|(_, bytes, _)| *bytes).sum();
+    if total <= budget {
+        return Vec::new();
+    }
+    let mut candidates: Vec<&(String, u64, u64)> =
+        entries.iter().filter(|(_, _, tick)| *tick < protect_from).collect();
+    candidates.sort_by_key(|(_, _, tick)| *tick);
+    let mut out = Vec::new();
+    for (key, bytes, _) in candidates {
+        if total <= budget {
+            break;
+        }
+        total -= bytes;
+        out.push(key.clone());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    use super::lru_evictions;
+
+    /// `(clé, octets, tick)` — le tick croît avec l'usage, donc le plus petit est le plus ancien.
+    fn e(key: &str, mb: u64, tick: u64) -> (String, u64, u64) {
+        (key.to_string(), mb * 1024 * 1024, tick)
+    }
+
+    const BUDGET: u64 = 512 * 1024 * 1024;
+
+    #[test]
+    fn evicts_nothing_while_under_budget() {
+        assert!(lru_evictions(&[e("a", 100, 1), e("b", 100, 2)], BUDGET, 2).is_empty());
+    }
+
+    /// La plus ancienne part d'abord, et on s'arrête DÈS qu'on repasse sous le budget : évincer
+    /// au-delà ne rendrait que des rechargements.
+    #[test]
+    fn evicts_oldest_first_and_stops_at_the_budget() {
+        let entries = [e("vieux", 100, 1), e("moyen", 100, 2), e("neuf", 100, 9)];
+        assert_eq!(lru_evictions(&entries, 250 * 1024 * 1024, 9), vec!["vieux".to_string()]);
+    }
+
+    /// TOUT le jeu actif de la frame est protégé, pas seulement la dernière entrée posée. Une
+    /// frame qui échantillonne un fond d'écran ET un fond de caméra ne doit pas voir le premier
+    /// évincé parce que le second vient d'arriver — sinon les deux se chassent l'un l'autre à
+    /// chaque frame.
+    #[test]
+    fn protects_every_texture_used_this_frame() {
+        // frame commencée au tick 5 : `ecran` et `camera` servent tous deux maintenant.
+        let entries = [e("vieux", 100, 2), e("ecran", 400, 5), e("camera", 400, 6)];
+        assert_eq!(lru_evictions(&entries, BUDGET, 5), vec!["vieux".to_string()]);
+    }
+
+    /// Jeu actif plus gros que le budget : on rend ce qu'on peut et on reste au-dessus, plutôt que
+    /// de faire disparaître des textures dont cette frame a besoin.
+    #[test]
+    fn gives_up_rather_than_evicting_the_active_set() {
+        let entries = [e("a", 100, 1), e("actif", 900, 5)];
+        assert_eq!(lru_evictions(&entries, 256 * 1024 * 1024, 5), vec!["a".to_string()]);
+    }
+
     use super::*;
 
     /// La scène de référence du golden : un cas qui exerce le padding, le crop, le zoom,

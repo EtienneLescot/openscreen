@@ -31,6 +31,14 @@ use windows::Win32::Graphics::Direct3D::{
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+/// Budget du cache de textures image (`img_cache`), en octets.
+///
+/// Doit tenir le JEU ACTIF d'une frame — au pire un wallpaper d'écran ET un fond de caméra, que
+/// rien n'empêche d'être deux 7680x7680 à 225 Mo pièce. Sous ce seuil l'éviction ne peut plus
+/// rendre de mémoire sans toucher au jeu actif, ce qu'elle refuse de faire. 512 Mo borne la fuite
+/// (1 774 Mo mesurés en parcourant les 18 wallpapers livrés) en laissant le jeu actif résident.
+const IMG_CACHE_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
 
 
 
@@ -143,9 +151,18 @@ pub struct Compositor {
     /// de la source). Séparé de `img_cache` : les wallpapers sont des chemins disque, ces images
     /// des data URL de plusieurs Mo qu'on ne veut pas utiliser comme clés de hachage.
     ann_img_cache: RefCell<HashMap<String, (ID3D11ShaderResourceView, u32, u32, usize)>>,
-    /// Cache des textures wallpaper image (clé = chemin absolu) : décodage/upload une seule
-    /// fois, puis réutilisées par frame. (SRV, largeur, hauteur).
-    img_cache: RefCell<HashMap<String, (ID3D11ShaderResourceView, u32, u32)>>,
+    /// Cache des textures wallpaper image (clé = chemin absolu) : décodé et uploadé une fois,
+    /// puis réutilisé par frame. (SRV, largeur, hauteur, tick d'usage).
+    ///
+    /// « Une fois » et non « une fois pour la session » : l'entrée est évinçable dès qu'elle
+    /// sort du jeu actif d'une frame, et un retour dessus la rechargera — cf. `cached_image`.
+    img_cache: RefCell<HashMap<String, (ID3D11ShaderResourceView, u32, u32, u64)>>,
+    /// Compteur d'accès de `img_cache`, pour l'ordre LRU. Un compteur plutôt que l'index de
+    /// frame : une frame touche plusieurs entrées, et il faut pouvoir les ordonner entre elles.
+    img_tick: std::cell::Cell<u64>,
+    /// Valeur de `img_tick` au début de la frame en cours. Tout ce qui a été touché depuis
+    /// appartient au jeu actif et ne peut pas être évincé — voir `cached_image`.
+    img_frame_start: std::cell::Cell<u64>,
     /// Masque de segmentation du sujet webcam, R8 à la résolution du modèle. Écrit par
     /// `set_webcam_mask` depuis le thread d'inférence, lu au moment de dessiner la webcam.
     /// `None` tant qu'aucune frame n'a été segmentée — l'effet reste alors éteint plutôt que
@@ -602,6 +619,8 @@ impl Compositor {
             text_cache: RefCell::new(HashMap::new()),
             ann_img_cache: RefCell::new(HashMap::new()),
             img_cache: RefCell::new(HashMap::new()),
+            img_tick: std::cell::Cell::new(0),
+            img_frame_start: std::cell::Cell::new(0),
             webcam_mask: RefCell::new(None),
             render_size: Cell::new((out_w, out_h)),
             resize_target: RefCell::new(None),
@@ -822,6 +841,50 @@ impl Compositor {
     /// Fond wallpaper image (cover-fit). `path` = chemin absolu (résolu côté app). Décodé et
     /// uploadé une fois (cache), puis échantillonné en mode 6. Err → l'appelant retombe sur une
     /// couleur plate. Le rect uv `src` recouvre toute la sortie en rognant le débordement.
+    /// Ouvre une frame du point de vue de `img_cache` : tout ce qui sera touché après cet appel
+    /// est le jeu actif, et devient inévinçable jusqu'à la frame suivante.
+    fn begin_image_frame(&self) {
+        self.img_frame_start.set(self.img_tick.get());
+    }
+
+    /// Texture d'un fichier image, décodée une seule fois puis réutilisée.
+    ///
+    /// Le cache était NON BORNÉ, et c'est un vrai coût : les wallpapers livrés pèsent 23,7 Mo sur
+    /// disque mais 1 774 Mo une fois décodés en RGBA8 — `wallpaper8.jpg` fait 7680x7680, soit
+    /// 225 Mo à lui seul. Parcourir le sélecteur les chargeait tous et n'en libérait aucun.
+    ///
+    /// L'éviction est LRU sous un budget en octets, et ne touche jamais une texture que la frame
+    /// EN COURS a déjà servie : sans ça, un fond d'écran et un fond de caméra un peu gros se
+    /// chasseraient l'un l'autre à chaque frame, et un décodage coûte 129 ms contre les ~3,5 ms
+    /// d'une frame. Si le jeu actif dépasse à lui seul le budget, on dépasse le budget.
+    unsafe fn cached_image(&self, path: &str) -> Result<(ID3D11ShaderResourceView, u32, u32)> {
+        let tick = self.img_tick.get() + 1;
+        self.img_tick.set(tick);
+        // La recherche est isolée dans un `let` pour que l'emprunt immuable soit relâché AVANT le
+        // `borrow_mut()` (sinon double-emprunt RefCell → panic sur la 1re frame image).
+        let hit = self.img_cache.borrow().get(path).cloned();
+        if let Some((srv, w, h, _)) = hit {
+            self.img_cache.borrow_mut().insert(path.to_string(), (srv.clone(), w, h, tick));
+            return Ok((srv, w, h));
+        }
+        let (srv, w, h) = self.load_image_srv(path)?;
+        let mut cache = self.img_cache.borrow_mut();
+        cache.insert(path.to_string(), (srv.clone(), w, h, tick));
+        // La politique vit dans `frame_geometry` : les trois backends la partagent, comme la
+        // géométrie, plutôt que d'entretenir trois copies qui finiraient par diverger.
+        let entries: Vec<(String, u64, u64)> = cache
+            .iter()
+            .map(|(k, e)| (k.clone(), e.1 as u64 * e.2 as u64 * 4, e.3))
+            .collect();
+        let protect_from = self.img_frame_start.get();
+        for key in
+            crate::frame_geometry::lru_evictions(&entries, IMG_CACHE_BUDGET_BYTES, protect_from)
+        {
+            cache.remove(&key);
+        }
+        Ok((srv, w, h))
+    }
+
     unsafe fn draw_image_bg(&self, path: &str, output_aspect: f32) -> Result<()> {
         self.draw_image_in(path, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0], 0.0, output_aspect)
     }
@@ -837,17 +900,7 @@ impl Compositor {
         radius_px: f32,
         output_aspect: f32,
     ) -> Result<()> {
-        // NB : la recherche est isolée dans un `let` pour que l'emprunt immuable soit relâché
-        // AVANT le `borrow_mut()` (sinon double-emprunt RefCell → panic sur la 1re frame image).
-        let cached = self.img_cache.borrow().get(path).cloned();
-        let (srv, iw, ih) = match cached {
-            Some(v) => v,
-            None => {
-                let loaded = self.load_image_srv(path)?;
-                self.img_cache.borrow_mut().insert(path.to_string(), loaded.clone());
-                loaded
-            }
-        };
+        let (srv, iw, ih) = self.cached_image(path)?;
         let ai = iw as f32 / ih as f32;
         // Le fond remplit TOUJOURS le cadre (dst=[0,0,1,1], jamais rétréci par `undistort`),
         // mais le canvas interne est un 16:9 fixe étiré ensuite vers le VRAI ratio de sortie
@@ -1369,15 +1422,7 @@ impl Compositor {
         clip: [f32; 4],
     ) -> Result<()> {
         let path = sprite.path.as_str();
-        let cached = self.img_cache.borrow().get(path).cloned();
-        let (srv, iw, ih) = match cached {
-            Some(v) => v,
-            None => {
-                let loaded = self.load_image_srv(path)?;
-                self.img_cache.borrow_mut().insert(path.to_string(), loaded.clone());
-                loaded
-            }
-        };
+        let (srv, iw, ih) = self.cached_image(path)?;
         let ar = iw as f32 / ih as f32;
         let (pw, ph) = if ar >= 1.0 { (size_px, size_px / ar) } else { (size_px * ar, size_px) };
         let hotspot = [sprite.hotspot_x, sprite.hotspot_y];
@@ -1561,6 +1606,7 @@ impl Compositor {
         frame: f32,
         cfg: &Cfg,
     ) -> Result<()> {
+        self.begin_image_frame();
         let (sy, suv) = self.nv12_srvs(screen)?;
         let (wy, wuv) = self.nv12_srvs(webcam)?;
         let (stw, sth) = self.tex_dims(screen);
@@ -2917,6 +2963,86 @@ impl Compositor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Preuve de bout en bout que `img_cache` est borné : charge TOUS les wallpapers livrés,
+    /// une frame par wallpaper — ce que fait le sélecteur quand on le parcourt — et vérifie que
+    /// le total reste sous le budget.
+    ///
+    /// Opt-in : il crée un vrai device D3D11, ce qu'aucun autre test de ce fichier ne fait (celui
+    /// juste en dessous s'en passe volontairement) et qu'un runner sans adaptateur ne peut pas
+    /// fournir. Même convention que le harnais visuel de la segmentation :
+    ///
+    ///     set OPENSCREEN_CACHE_DEMO=1 && cargo test -p openscreen-compositor --release
+    ///         img_cache_stays_under_budget -- --nocapture
+    ///
+    /// Les tests de `lru_evictions` couvrent la POLITIQUE ; celui-ci couvre le CÂBLAGE — que le
+    /// backend l'appelle vraiment, sur les bonnes tailles, et que le budget morde sur nos assets.
+    #[test]
+    fn img_cache_stays_under_budget() {
+        if std::env::var_os("OPENSCREEN_CACHE_DEMO").is_none() {
+            eprintln!("OPENSCREEN_CACHE_DEMO absent — saute (ce test demande un device D3D11)");
+            return;
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("racine du dépôt")
+            .join("public/wallpapers");
+        let mut papers: Vec<_> = std::fs::read_dir(&root)
+            .expect("public/wallpapers")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                matches!(p.extension().and_then(|e| e.to_str()), Some("jpg" | "jpeg" | "png"))
+            })
+            .collect();
+        papers.sort();
+        assert!(papers.len() >= 10, "il faut plusieurs wallpapers pour que le budget morde");
+
+        let gpu = crate::d3d::Gpu::create_backend(crate::d3d::Backend::Hardware, false)
+            .expect("device D3D11");
+        let comp = Compositor::new(&gpu).expect("compositeur");
+
+        let mut cumule = 0u64;
+        let mut pic = 0u64;
+        for path in &papers {
+            // Une frame par wallpaper : c'est le rythme du sélecteur, et c'est ce qui rend
+            // l'entrée précédente évinçable. Dans une même frame elle ne le serait pas.
+            comp.begin_image_frame();
+            let p = path.to_string_lossy().to_string();
+            let (_, w, h) = unsafe { comp.cached_image(&p) }.expect("chargement");
+            cumule += w as u64 * h as u64 * 4;
+            let cache = comp.img_cache.borrow();
+            let total: u64 = cache.values().map(|e| e.1 as u64 * e.2 as u64 * 4).sum();
+            pic = pic.max(total);
+            eprintln!(
+                "  {:<20} {:>5}x{:<5} | cache {:>2} entrées {:>4} Mo | cumulé sans éviction {:>5} Mo",
+                path.file_name().unwrap().to_string_lossy(),
+                w,
+                h,
+                cache.len(),
+                total / 1048576,
+                cumule / 1048576,
+            );
+        }
+        eprintln!(
+            "
+  budget {} Mo | pic observé {} Mo | cumulé si rien n'était évincé {} Mo",
+            IMG_CACHE_BUDGET_BYTES / 1048576,
+            pic / 1048576,
+            cumule / 1048576,
+        );
+        assert!(
+            pic <= IMG_CACHE_BUDGET_BYTES,
+            "le cache a dépassé son budget : {} Mo > {} Mo",
+            pic / 1048576,
+            IMG_CACHE_BUDGET_BYTES / 1048576
+        );
+        assert!(
+            cumule > IMG_CACHE_BUDGET_BYTES,
+            "sans éviction le total ({} Mo) doit dépasser le budget, sinon le test ne prouve rien",
+            cumule / 1048576
+        );
+    }
 
 
     /// Le HLSL est compilé au démarrage du compositeur : jusqu'ici une faute dedans ne se voyait
