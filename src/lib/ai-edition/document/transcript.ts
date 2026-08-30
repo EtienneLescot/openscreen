@@ -5,18 +5,20 @@ const CLOSING_PUNCTUATION = /^[,.;:!?%。，、；：！？…）)\]}>》」』�
 const TRAILING_CLOSING_PUNCTUATION = /[,.;:!?%。，、；：！？…）)\]}>》」』】〕]+$/u;
 const OPENING_PUNCTUATION = /[([<{《「『【〔（]$/u;
 
-function joinSegmentText(language: string, texts: string[]): string {
+// The CJK-compaction rule is deliberately LANGUAGE-AGNOSTIC: two adjacent Han /
+// Hiragana / Katakana characters never carry a space between them in any script
+// that uses them. Gating it on the `language` tag would corrupt transcripts whose
+// stored tag is "auto" (a real persisted value — see transcribe.ts's language
+// fallback) or "yue": the join would inject ASCII spaces between Chinese runs.
+function joinSegmentText(texts: string[]): string {
 	const tokens = texts.map((text) => text.trim()).filter((text) => text.length > 0);
-	const primaryLanguage = language.split("-")[0].toLowerCase();
-	const compactCjk = primaryLanguage === "zh" || primaryLanguage === "ja";
-
 	return tokens.reduce((joined, token) => {
 		if (joined.length === 0) return token;
 		if (CLOSING_PUNCTUATION.test(token) || OPENING_PUNCTUATION.test(joined)) {
 			return joined + token;
 		}
 		const leftContentEdge = joined.replace(TRAILING_CLOSING_PUNCTUATION, "").at(-1) ?? "";
-		if (compactCjk && CJK_EDGE.test(leftContentEdge) && CJK_EDGE.test(token[0] ?? "")) {
+		if (CJK_EDGE.test(leftContentEdge) && CJK_EDGE.test(token[0] ?? "")) {
 			return joined + token;
 		}
 		return `${joined} ${token}`;
@@ -45,9 +47,15 @@ export function setWordText(
 
 	const wordsById = new Map(transcript.words.map((word) => [word.id, word]));
 	for (const referencedWordId of owningSegment.wordIds) {
-		if (!wordsById.has(referencedWordId)) {
+		const referencedWord = wordsById.get(referencedWordId);
+		if (!referencedWord) {
 			throw new Error(
 				`Segment "${owningSegment.id}" references missing word "${referencedWordId}"`,
+			);
+		}
+		if (referencedWord.segmentId !== owningSegment.id) {
+			throw new Error(
+				`Segment "${owningSegment.id}" references word "${referencedWordId}" which belongs to segment "${referencedWord.segmentId}"`,
 			);
 		}
 	}
@@ -55,7 +63,6 @@ export function setWordText(
 	const words = transcript.words.map((word) => (word.id === wordId ? { ...word, text } : word));
 	const updatedWordsById = new Map(words.map((word) => [word.id, word]));
 	const segmentText = joinSegmentText(
-		transcript.language,
 		owningSegment.wordIds.map(
 			(referencedWordId) => updatedWordsById.get(referencedWordId)?.text ?? "",
 		),
