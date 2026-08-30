@@ -1146,7 +1146,11 @@ impl Compositor {
     /// apres cet appel est le jeu actif, et devient inevincable jusqu'a la
     /// frame suivante.
     fn begin_image_frame(&self) {
-        self.img_frame_start.set(self.img_tick.get());
+        // `+ 1` : la premiere entrée de cette frame recevra `img_tick + 1`, et la protection
+        // porte sur `tick >= img_frame_start`. Sans le decalage on protégerait aussi la
+        // DERNIERE entrée de la frame precedente, qui n'appartient plus au jeu actif — le
+        // résident pourrait alors dépasser le budget d'une texture entière.
+        self.img_frame_start.set(self.img_tick.get() + 1);
     }
 
     /// Texture d'un fichier image, decodee une seule fois puis reutilisee.
