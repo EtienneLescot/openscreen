@@ -16,6 +16,7 @@ import type {
 	GifParamsInput,
 	NativeFramePacket,
 	RemuxStats,
+	SegmentationSupport,
 } from "../../native/compositor-view/addon";
 
 /**
@@ -483,6 +484,36 @@ export class CompositorViewService {
 			console.warn("[compositor-view] probeBackend unavailable:", err);
 			return "none";
 		}
+	}
+
+	/** Whether this machine can actually segment the camera, and if not, what is missing.
+	 *
+	 *  Three things have to line up, and each of them has been silently absent at some point:
+	 *  the addon, the ONNX Runtime library, and the model. The renderer used to guess from
+	 *  `process.platform`, which was wrong in both directions — it hid the control on Linux
+	 *  builds that could segment, and shows it on Intel Macs, for which upstream publishes no
+	 *  ONNX binary at all. A dev checkout and a `--dir` build have none staged either.
+	 *
+	 *  Same shape as `probeBackend`: asked without allocating a view, because the panel needs
+	 *  the answer before any preview exists. */
+	probeSegmentation(): SegmentationSupport {
+		const addon = this.ensureAddon();
+		if (!addon) {
+			return "none";
+		}
+		try {
+			if (!addon.segmentationRuntimeAvailable()) {
+				return "no-runtime";
+			}
+		} catch (err) {
+			// An older `.node` predates this probe. Treat as unsupported rather than crashing
+			// the bridge — same contract as `probeBackend`.
+			console.warn("[compositor-view] segmentationRuntimeAvailable unavailable:", err);
+			return "none";
+		}
+		// The model is resolved by this process, not the addon, so it is checked here — and it
+		// is the same lookup `resolveSceneAssetPaths` performs, so the two cannot disagree.
+		return resolveSceneAssetPath(SEGMENTATION_MODEL_ASSET) ? "ready" : "no-model";
 	}
 
 	/** Allocates an offscreen compositor view sized to `rect.width`x`rect.height`.

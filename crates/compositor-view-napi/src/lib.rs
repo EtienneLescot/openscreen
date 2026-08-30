@@ -70,6 +70,22 @@ pub fn probe_backend() -> String {
     .to_string()
 }
 
+/// Si cette machine peut produire un masque de segmentation, c'est-à-dire si la bibliothèque
+/// ONNX Runtime est là où l'app l'a posée.
+///
+/// Sert à NE PAS MENTIR : le contrôle « fond de caméra » est le seul de l'éditeur dont l'effet
+/// dépend d'un binaire optionnel. Sans lui, `Segmenter::load` refuse, le compositeur dessine la
+/// webcam telle quelle, et l'utilisateur clique sur un réglage qui ne fait rien — exactement ce
+/// qu'un contrôle ne doit jamais faire.
+///
+/// Une question posée au système plutôt que devinée depuis la plateforme : `darwin` ne suffit
+/// pas à répondre, puisque l'amont ne publie aucun binaire ONNX pour les Macs Intel, et une
+/// build de dev ou un `--dir` n'en ont pas davantage. Seul l'état réel de la machine le sait.
+#[napi]
+pub fn segmentation_runtime_available() -> bool {
+    openscreen_compositor::segmentation::runtime_available()
+}
+
 #[napi]
 pub fn create_view(
     rect: CompositorViewRect,

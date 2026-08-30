@@ -69,6 +69,19 @@ const HELPER_SOURCE_PATHS = [
  * "present here" is the same thing as "present in the installed app".
  */
 const MAC_REQUIRED = [
+	// Pas d'entrée sur x64 : l'amont ne publie aucun binaire ONNX pour les Macs Intel, donc un
+	// paquet Intel SANS la bibliothèque est correct. `fetch-onnxruntime.mjs` le dit et sort en 0.
+	// L'effet de fond de caméra est le seul dont la présence dépend d'un binaire optionnel, et
+	// son absence ne casse RIEN de visible : `Segmenter::load` refuse, le compositeur dessine la
+	// webcam telle quelle, et le contrôle disparaît de l'éditeur. Un paquet livré sans elle est
+	// donc silencieusement amputé — la panne exacte que cette garde existe pour attraper, et
+	// celle qu'aucun test ne peut voir puisque tout se dégrade proprement.
+	{
+		match: (name) => name === "libonnxruntime.dylib",
+		what: "the ONNX Runtime library the camera-background segmentation loads",
+		breaks: "the camera-background control vanishes from the editor and every effect is a no-op",
+		fix: "Stage it with:\n\n    npm run fetch:onnxruntime",
+	},
 	{
 		match: (name) => name === "compositor_view.node",
 		what: "the Metal compositor addon",
@@ -119,6 +132,17 @@ const MAC_REQUIRED = [
  * `helper-ffmpeg/` subdirectory holds.
  */
 const LINUX_REQUIRED = [
+	// L'effet de fond de caméra est le seul dont la présence dépend d'un binaire optionnel, et
+	// son absence ne casse RIEN de visible : `Segmenter::load` refuse, le compositeur dessine la
+	// webcam telle quelle, et le contrôle disparaît de l'éditeur. Un paquet livré sans elle est
+	// donc silencieusement amputé — la panne exacte que cette garde existe pour attraper, et
+	// celle qu'aucun test ne peut voir puisque tout se dégrade proprement.
+	{
+		match: (name) => name === "libonnxruntime.so",
+		what: "the ONNX Runtime library the camera-background segmentation loads",
+		breaks: "the camera-background control vanishes from the editor and every effect is a no-op",
+		fix: "Stage it with:\n\n    npm run fetch:onnxruntime",
+	},
 	{
 		match: (name) => name === "compositor_view.node",
 		what: "the wgpu/Vulkan compositor addon",
@@ -223,6 +247,17 @@ function checkNativePayload({ dir, required, osLabel, bundleNoun, emptyDirFix })
  * "together here" is the same thing as "together in the installed app".
  */
 const WIN_REQUIRED = [
+	// L'effet de fond de caméra est le seul dont la présence dépend d'un binaire optionnel, et
+	// son absence ne casse RIEN de visible : `Segmenter::load` refuse, le compositeur dessine la
+	// webcam telle quelle, et le contrôle disparaît de l'éditeur. Un paquet livré sans elle est
+	// donc silencieusement amputé — la panne exacte que cette garde existe pour attraper, et
+	// celle qu'aucun test ne peut voir puisque tout se dégrade proprement.
+	{
+		match: (name) => name === "onnxruntime.dll",
+		what: "the ONNX Runtime library the camera-background segmentation loads",
+		breaks: "the camera-background control vanishes from the editor and every effect is a no-op",
+		fix: "Stage it with:\n\n    npm run fetch:onnxruntime",
+	},
 	{
 		match: (name) => name === "compositor_view.node",
 		what: "the D3D11 compositor addon",
