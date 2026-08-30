@@ -103,6 +103,7 @@ describe("symbol-version ceiling", () => {
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { declaredAppVersionFrom } from "./macos-floor.mjs";
 
 /** Packs X.Y.Z the way LC_BUILD_VERSION does: one byte per component, X in the top half. */
 function packVersion(text) {
@@ -268,21 +269,22 @@ describe("checkMacOsVersionFloor", () => {
 
 describe("MAC_MIN_OS_FLOOR", () => {
 	it("matches the floor the .app declares to LaunchServices", () => {
-		const config = readFileSync(
-			path.join(path.dirname(BEFORE_PACK), "..", "electron-builder.json5"),
-			"utf8",
+		// Shared parser rather than a regex of its own: electron-builder.json5 is heavily
+		// commented, its comments name this very key, and a private copy here is how the
+		// two guards drift into one hardened and one not (see scripts/macos-floor.mjs).
+		const declared = declaredAppVersionFrom(
+			readFileSync(path.join(path.dirname(BEFORE_PACK), "..", "electron-builder.json5"), "utf8"),
 		);
-		const declared = config.match(/"minimumSystemVersion"\s*:\s*"([\d.]+)"/);
 		expect(
 			declared,
-			'no "minimumSystemVersion" in electron-builder.json5 — without it the .app ' +
-				"inherits Electron's own floor, which is what let #515 ship",
+			'no "minimumSystemVersion" in the mac block of electron-builder.json5 — without ' +
+				"it the .app inherits Electron's own floor, which is what let #515 ship",
 		).not.toBeNull();
 
 		const { MAC_MIN_OS_FLOOR } = testing();
 		const norm = (v) => v.split(".").concat(["0", "0"]).slice(0, 2).join(".");
 		// Equal, not merely <=: a pack-time guard looser than the app's own declaration
 		// would wave through exactly the binaries LaunchServices then refuses to run.
-		expect(norm(MAC_MIN_OS_FLOOR)).toBe(norm(declared[1]));
+		expect(norm(MAC_MIN_OS_FLOOR)).toBe(norm(declared));
 	});
 });
