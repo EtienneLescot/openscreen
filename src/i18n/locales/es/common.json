@@ -52,12 +52,6 @@
 		"failed": "No se pudieron buscar actualizaciones.",
 		"downloadFailed": "No se pudo descargar la actualización."
 	},
-	"playback": {
-		"play": "Reproducir",
-		"pause": "Pausar",
-		"fullscreen": "Pantalla completa",
-		"exitFullscreen": "Salir de pantalla completa"
-	},
 	"units": {
 		"pixelsPerSecond": "{{value}} píxeles/s",
 		"pixels": "{{value}} píxeles"

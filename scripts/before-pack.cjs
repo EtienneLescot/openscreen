@@ -68,6 +68,26 @@ const HELPER_SOURCE_PATHS = [
  * `mac.extraResources` ships this directory wholesale (`filter: ["darwin-*​/*"]`), so
  * "present here" is the same thing as "present in the installed app".
  */
+/**
+ * L'exigence ONNX Runtime de macOS, séparée parce qu'elle ne vaut QUE sur arm64.
+ *
+ * L'amont ne publie aucun binaire ONNX pour les Macs Intel : `fetch-onnxruntime.mjs` le constate
+ * et sort en 0 sans rien poser. Un paquet x64 sans la bibliothèque est donc CORRECT, et l'exiger
+ * là ferait échouer à l'empaquetage une build parfaitement saine — la garde se retournerait
+ * contre ce qu'elle protège.
+ *
+ * Sur arm64 en revanche son absence ne casse rien de visible : `Segmenter::load` refuse, le
+ * compositeur dessine la webcam telle quelle, et le contrôle disparaît de l'éditeur. Le paquet
+ * est silencieusement amputé, ce qui est exactement la panne que cette garde existe pour
+ * attraper et qu'aucun test ne peut voir puisque tout se dégrade proprement.
+ */
+const MAC_ONNX_REQUIRED = {
+	match: (name) => name === "libonnxruntime.dylib",
+	what: "the ONNX Runtime library the camera-background segmentation loads",
+	breaks: "the camera-background control vanishes from the editor and every effect is a no-op",
+	fix: "Stage it with:\n\n    npm run fetch:onnxruntime",
+};
+
 const MAC_REQUIRED = [
 	{
 		match: (name) => name === "compositor_view.node",
@@ -119,6 +139,17 @@ const MAC_REQUIRED = [
  * `helper-ffmpeg/` subdirectory holds.
  */
 const LINUX_REQUIRED = [
+	// L'effet de fond de caméra est le seul dont la présence dépend d'un binaire optionnel, et
+	// son absence ne casse RIEN de visible : `Segmenter::load` refuse, le compositeur dessine la
+	// webcam telle quelle, et le contrôle disparaît de l'éditeur. Un paquet livré sans elle est
+	// donc silencieusement amputé — la panne exacte que cette garde existe pour attraper, et
+	// celle qu'aucun test ne peut voir puisque tout se dégrade proprement.
+	{
+		match: (name) => name === "libonnxruntime.so",
+		what: "the ONNX Runtime library the camera-background segmentation loads",
+		breaks: "the camera-background control vanishes from the editor and every effect is a no-op",
+		fix: "Stage it with:\n\n    npm run fetch:onnxruntime",
+	},
 	{
 		match: (name) => name === "compositor_view.node",
 		what: "the wgpu/Vulkan compositor addon",
@@ -223,6 +254,17 @@ function checkNativePayload({ dir, required, osLabel, bundleNoun, emptyDirFix })
  * "together here" is the same thing as "together in the installed app".
  */
 const WIN_REQUIRED = [
+	// L'effet de fond de caméra est le seul dont la présence dépend d'un binaire optionnel, et
+	// son absence ne casse RIEN de visible : `Segmenter::load` refuse, le compositeur dessine la
+	// webcam telle quelle, et le contrôle disparaît de l'éditeur. Un paquet livré sans elle est
+	// donc silencieusement amputé — la panne exacte que cette garde existe pour attraper, et
+	// celle qu'aucun test ne peut voir puisque tout se dégrade proprement.
+	{
+		match: (name) => name === "onnxruntime.dll",
+		what: "the ONNX Runtime library the camera-background segmentation loads",
+		breaks: "the camera-background control vanishes from the editor and every effect is a no-op",
+		fix: "Stage it with:\n\n    npm run fetch:onnxruntime",
+	},
 	{
 		match: (name) => name === "compositor_view.node",
 		what: "the D3D11 compositor addon",
@@ -419,13 +461,22 @@ function checkWinNativePayload() {
 }
 
 function checkMacNativePayload(context) {
+	const arch = archTagFor(context);
+	const dir = path.join(ROOT, "electron", "native", "bin", `darwin-${arch}`);
 	checkNativePayload({
-		dir: path.join(ROOT, "electron", "native", "bin", `darwin-${archTagFor(context)}`),
-		required: MAC_REQUIRED,
+		dir,
+		// Voir `MAC_ONNX_REQUIRED` : exiger la bibliothèque sur Intel ferait échouer une build
+		// que l'amont rend impossible à satisfaire.
+		required: arch === "arm64" ? [...MAC_REQUIRED, MAC_ONNX_REQUIRED] : MAC_REQUIRED,
 		osLabel: "macOS",
 		bundleNoun: "the .app",
 		emptyDirFix: `${FIX_MAC}\n\nThe STT helper and the capture helper are separate builds — see\ntechnical-documentation/engineering/build-and-packaging.md.`,
 	});
+
+	// "Complete" is not the same property as "runnable on the macOS we claim". This file
+	// exists because a payload can be whole and still broken; a floor above the supported
+	// one is the second way that happens. See checkMacOsVersionFloor().
+	checkMacOsVersionFloor(dir);
 }
 
 function checkLinuxNativePayload(context) {
@@ -503,6 +554,18 @@ function checkLinuxNativePayload(context) {
  * build-linux and build-whisper-stt.yml).
  */
 const MAX_SYMBOL_VERSION = { GLIBC: "2.35", GLIBCXX: "3.4.30", CXXABI: "1.3.13" };
+
+/**
+ * The oldest macOS anything in the payload may demand — the macOS twin of
+ * MAX_SYMBOL_VERSION above, and the same class of bug on a different libc.
+ *
+ * Must equal `mac.minimumSystemVersion` in electron-builder.json5, which is what the .app
+ * tells LaunchServices; before-pack.test.mjs asserts exactly that, so the two cannot drift
+ * apart quietly. Not read from the config at runtime because this hook must keep working
+ * if that file is ever restructured — a guard that throws while parsing is a guard that
+ * gets deleted.
+ */
+const MAC_MIN_OS_FLOOR = "13.0";
 
 /**
  * The one supported way past the ceiling, for the one case it does not fit: a developer
@@ -718,7 +781,13 @@ function resolveSymbolCeiling() {
 // are the only things standing between this escape hatch and a published package that
 // starts on nobody's machine but the builder's, and they are reachable from a test
 // without a payload to scan — so they are tested rather than trusted.
-exports.__testing = { resolveSymbolCeiling, MAX_SYMBOL_VERSION };
+exports.__testing = {
+	resolveSymbolCeiling,
+	MAX_SYMBOL_VERSION,
+	machoMinOs,
+	checkMacOsVersionFloor,
+	MAC_MIN_OS_FLOOR,
+};
 
 /** Every ELF under `dir`, recursively — the helper's ffmpeg sits in a subdirectory. */
 function elfFilesUnder(dir) {
@@ -817,6 +886,158 @@ function checkLinuxSymbolVersionFloor(dir) {
 					"the floor. It is refused under CI, so it cannot reach a published artifact.\n\n"
 				: "") +
 			"Raising MAX_SYMBOL_VERSION drops a distro the README claims to support.",
+	);
+}
+
+/**
+ * The macOS minimum-OS a Mach-O declares, as "12.0", or null if it declares none.
+ *
+ * Reads LC_BUILD_VERSION (and LC_VERSION_MIN_MACOSX, which is what anything built
+ * against an older SDK carries) straight out of the file. Parsed here rather than
+ * shelled out to `vtool -show-build` for the same reason neededSymbolVersions() does not
+ * use readelf and importedDlls() does not use dumpbin — but with an extra one on top:
+ * this hook runs for the Windows and Linux packs too, and vtool exists on neither, so a
+ * subprocess would have to be skipped on exactly the hosts where skipping is silent.
+ * Parsing makes the guard host-independent instead of conditionally absent.
+ *
+ * Universal binaries are walked slice by slice and the HIGHEST floor wins: an x86_64 half
+ * built on a newer machine strands Intel users just as thoroughly as a thin binary would.
+ */
+function machoMinOs(file) {
+	const b = fs.readFileSync(file);
+	const FAT_MAGIC = 0xcafebabe;
+	const FAT_MAGIC_64 = 0xcafebabf;
+	const MH_MAGIC_64 = 0xfeedfacf;
+	const MH_MAGIC_32 = 0xfeedface;
+	const LC_VERSION_MIN_MACOSX = 0x24;
+	const LC_BUILD_VERSION = 0x32;
+	const PLATFORM_MACOS = 1;
+
+	/** X.Y.Z packed as nibbles: 0x000c0000 is 12.0.0. */
+	const decode = (packed) => `${packed >>> 16}.${(packed >> 8) & 0xff}.${packed & 0xff}`;
+
+	const sliceMinOs = (start) => {
+		const magic = b.readUInt32LE(start);
+		if (magic !== MH_MAGIC_64 && magic !== MH_MAGIC_32) return null;
+		const ncmds = b.readUInt32LE(start + 16);
+		// 32 bytes of mach_header_64 (28 + 4 bytes of `reserved`); 28 for the 32-bit one.
+		let off = start + (magic === MH_MAGIC_64 ? 32 : 28);
+		for (let i = 0; i < ncmds; i++) {
+			if (off + 8 > b.length) return null;
+			const cmd = b.readUInt32LE(off);
+			const cmdsize = b.readUInt32LE(off + 4);
+			if (cmdsize < 8) return null;
+			if (cmd === LC_BUILD_VERSION && b.readUInt32LE(off + 8) === PLATFORM_MACOS) {
+				return decode(b.readUInt32LE(off + 12));
+			}
+			if (cmd === LC_VERSION_MIN_MACOSX) {
+				return decode(b.readUInt32LE(off + 8));
+			}
+			off += cmdsize;
+		}
+		return null;
+	};
+
+	const fat = b.readUInt32BE(0);
+	if (fat === FAT_MAGIC || fat === FAT_MAGIC_64) {
+		const wide = fat === FAT_MAGIC_64;
+		const nfat = b.readUInt32BE(4);
+		let best = null;
+		for (let i = 0; i < nfat; i++) {
+			const entry = 8 + i * (wide ? 32 : 20);
+			const offset = wide ? Number(b.readBigUInt64BE(entry + 8)) : b.readUInt32BE(entry + 8);
+			const found = sliceMinOs(offset);
+			if (found && (!best || compareVersions(found, best) > 0)) best = found;
+		}
+		return best;
+	}
+
+	return sliceMinOs(0);
+}
+
+/** Every Mach-O under `dir`, recursively. Symlinks are skipped — see elfFilesUnder(). */
+function machoFilesUnder(dir) {
+	const found = [];
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			found.push(...machoFilesUnder(full));
+			continue;
+		}
+		if (!entry.isFile()) continue;
+		// By magic, not by extension: the helpers and whisper-stt-server have none, and
+		// the ggml/whisper dylibs come as chains of symlinks onto one real file.
+		const magic = Buffer.alloc(4);
+		const fd = fs.openSync(full, "r");
+		try {
+			fs.readSync(fd, magic, 0, 4, 0);
+		} finally {
+			fs.closeSync(fd);
+		}
+		const le = magic.readUInt32LE(0);
+		const be = magic.readUInt32BE(0);
+		if (le === 0xfeedfacf || le === 0xfeedface || be === 0xcafebabe || be === 0xcafebabf) {
+			found.push(full);
+		}
+	}
+	return found;
+}
+
+/** Nothing we ship may demand a newer macOS than MAC_MIN_OS_FLOOR. */
+function checkMacOsVersionFloor(dir) {
+	const scanned = machoFilesUnder(dir).map((file) => ({
+		name: path.relative(dir, file),
+		minOs: machoMinOs(file),
+	}));
+
+	// Same assertion the Linux floor makes, for the same reason: a guard that quietly
+	// stops looking reports "clean" for the rest of the project's life. Every binary we
+	// ship is built with a deployment target, so reading none from any of them means the
+	// parser broke rather than that the payload is unusually clean.
+	if (scanned.length > 0 && !scanned.some((entry) => entry.minOs)) {
+		throw new Error(
+			`Refusing to package: read no macOS deployment target from any of the ${scanned.length} ` +
+				`Mach-O files in ${path.relative(ROOT, dir)}.\n\n` +
+				"Every one of them carries LC_BUILD_VERSION, so this is a bug in machoMinOs()\n" +
+				"(scripts/before-pack.cjs), not an unusually clean payload. Fix the parser — leaving\n" +
+				"it is how a build that cannot start on the supported macOS gets shipped again.",
+		);
+	}
+
+	const offenders = scanned.filter(
+		(entry) => entry.minOs && compareVersions(entry.minOs, MAC_MIN_OS_FLOOR) > 0,
+	);
+	if (offenders.length === 0) {
+		return;
+	}
+
+	throw new Error(
+		`Refusing to package binaries that demand a newer macOS than the ${MAC_MIN_OS_FLOOR} floor\n` +
+			"the app claims to support.\n\n" +
+			`  looked in: ${path.relative(ROOT, dir)}\n\n` +
+			`${offenders.map((o) => `  - ${o.name} is built for macOS ${o.minOs} (floor ${MAC_MIN_OS_FLOOR})`).join("\n")}\n\n` +
+			"Almost certainly nothing asked for this: clang and CMake default the deployment\n" +
+			"target to the BUILD MACHINE's SDK, so this usually means a build script forgot to\n" +
+			"pin one and the floor followed whatever image compiled it. CI's macos-latest moves\n" +
+			"on its own, so the same source can ship a different floor month to month.\n\n" +
+			"The number itself is not what breaks: dyld does NOT refuse a binary whose minos\n" +
+			"exceeds the running OS. The damage is done at link time — the deployment target\n" +
+			"decides which symbols the linker resolves against the OS instead of emitting\n" +
+			"locally, so a too-high floor leaves strong references to symbols the target macOS\n" +
+			"has never had, and the binary dies in dyld with 'Symbol not found'. That is issue\n" +
+			"#515: a helper built for 13 stranded every macOS 12 user, and the app reported it\n" +
+			"as a denied Accessibility permission.\n\n" +
+			"Pin the deployment target in whichever script built the file:\n\n" +
+			// Derived, not spelled out: this line said `.v12` for a while after the floor
+			// moved to 13, i.e. the guard's own remediation advice contradicted the floor
+			// it was enforcing.
+			`    Swift    platforms: [.macOS(.v${MAC_MIN_OS_FLOOR.split(".")[0]})]      electron/native/screencapturekit/Package.swift\n` +
+			"    CMake    -DCMAKE_OSX_DEPLOYMENT_TARGET  scripts/build-whisper-stt.sh\n" +
+			"    clang    -mmacosx-version-min           scripts/fetch-ffmpeg-macos.mjs\n" +
+			"    rustc    MACOSX_DEPLOYMENT_TARGET       scripts/build-macos-compositor-addon.mjs\n\n" +
+			"To see it yourself:\n\n" +
+			"    vtool -show-build <file>\n\n" +
+			`Raising MAC_MIN_OS_FLOOR drops a macOS version the README claims to support.`,
 	);
 }
 

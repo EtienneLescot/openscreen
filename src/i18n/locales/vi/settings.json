@@ -63,6 +63,14 @@
 			"circle": "Tròn",
 			"square": "Vuông",
 			"rounded": "Bo góc"
+		},
+		"webcamBackground": "Nền máy ảnh",
+		"webcamBlurIntensity": "Độ mờ",
+		"bgModes": {
+			"none": "Gốc",
+			"transparent": "Tách nền",
+			"blur": "Làm mờ",
+			"custom": "Tùy chỉnh"
 		}
 	},
 	"effects": {

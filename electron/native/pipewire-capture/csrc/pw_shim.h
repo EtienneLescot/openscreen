@@ -94,6 +94,37 @@ struct osc_pw_frame {
      * both draw the line in exactly this place.
      */
     int has_crop;
+
+    /*
+     * Zero-copy dmabuf hand-off (issue #507). When `is_dmabuf` is 1, `data` is
+     * NULL and the frame is not CPU-readable — a tiled compositor buffer that
+     * lives on the GPU. The consumer imports it as a VAAPI surface from the
+     * descriptor below instead of reading `data`. When 0, the CPU path above
+     * applies unchanged (shm, or a linear/implicit dmabuf we could mmap).
+     *
+     * When the on_frame callback TAKES a dmabuf frame (returns non-zero), the
+     * PipeWire buffer is NOT re-queued here — `buffer_handle` is retained by the
+     * consumer, which keeps the fds and their CONTENT valid until it has imported
+     * and copied the surface, then calls osc_pw_requeue_buffer. Duplicating the
+     * fds alone would preserve the dmabuf object but not a snapshot of its pixels,
+     * so a re-queued buffer the compositor overwrote could be encoded torn.
+     * `modifier`/`drm_fourcc` describe the tiling and pixel layout.
+     */
+    int is_dmabuf;
+    uint64_t modifier;   /* DRM format modifier of the buffer */
+    uint32_t drm_fourcc; /* DRM fourcc matching `video_format` */
+    int32_t n_planes;    /* number of populated plane_* entries (1..4) */
+    int plane_fd[4];
+    int32_t plane_offset[4];
+    int32_t plane_stride[4];
+    /* The `struct pw_buffer *` this frame came from, opaque to the consumer.
+     * Passed back to osc_pw_requeue_buffer once the import is done. Only set (and
+     * only meaningful) for a dmabuf frame the consumer intends to take. */
+    void *buffer_handle;
+    /* The registration generation of `buffer_handle`. Passed back alongside it so
+     * a re-queue can tell this buffer from a later one PipeWire put in the same
+     * slot after a renegotiation. */
+    uint64_t buffer_generation;
 };
 
 /* The negotiated video format. Reported once, from param_changed. */
@@ -113,8 +144,12 @@ struct osc_pw_callbacks {
     void *user;
     void (*on_format)(void *user, const struct osc_pw_format *format);
     void (*on_cursor)(void *user, const struct osc_pw_cursor *cursor);
-    /* Only ever called when osc_pw_start was given want_video != 0. */
-    void (*on_frame)(void *user, const struct osc_pw_frame *frame);
+    /* Only ever called when osc_pw_start was given want_video != 0. Returns
+     * non-zero to TAKE OWNERSHIP of the PipeWire buffer (`frame->buffer_handle`):
+     * the shim then does NOT re-queue it, and the consumer must later call
+     * osc_pw_requeue_buffer. Zero (the shm/CPU path, and any dmabuf frame the
+     * consumer declines) re-queues immediately as before. */
+    int (*on_frame)(void *user, const struct osc_pw_frame *frame);
     /* Emitted once per negotiated buffer set. `data_type` is the SPA_DATA_* of
      * datas[0]; `metas` is a borrowed "Header:12,Cursor:589872" listing of every
      * metadata block that survived negotiation, which is what distinguishes a
@@ -197,11 +232,29 @@ const char *osc_pw_library_version(void);
  * buffer types; without it neither happens, and a cursor-only session never pays
  * to map a full-screen framebuffer per frame.
  *
+ * `prefer_dmabuf` offers dmabuf before shm so a tiled monitor buffer is imported
+ * on the GPU rather than copied through throttled shm (issue #507); set it only
+ * when the VAAPI import pipeline is available. shm remains the fallback.
+ *
  * Returns NULL on failure, with a message in `err`.
  */
 struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
+                                    int prefer_dmabuf,
                                     const struct osc_pw_callbacks *callbacks, char *err,
                                     size_t err_len);
+
+/*
+ * Re-queues a PipeWire buffer the on_frame callback took ownership of (returned
+ * non-zero for), identified by the `buffer_handle` it was given. Call it once the
+ * frame's pixels have been imported and copied.
+ *
+ * SAFE TO CALL FROM ANY THREAD: it takes the PipeWire thread-loop lock around the
+ * queue, so unlike the shim's own callbacks it must NOT be called from the
+ * PipeWire thread itself (that would deadlock). The consumer requeues from its
+ * own loop, which is a different thread. NULL session or handle is a no-op.
+ */
+void osc_pw_requeue_buffer(struct osc_pw_session *session, void *buffer_handle,
+                           uint64_t buffer_generation);
 
 /* Stops the thread loop, joins it, and frees everything. Safe with NULL. */
 void osc_pw_stop(struct osc_pw_session *session);

@@ -17,6 +17,7 @@ import {
 	Sliders,
 	Trash2,
 } from "lucide-react";
+
 import {
 	type ChangeEvent,
 	type CSSProperties,
@@ -82,6 +83,7 @@ import {
 	type AspectRatio,
 	getAspectRatioLabel,
 } from "@/utils/aspectRatioUtils";
+import { useCanSegmentCamera } from "../../native/hooks/useSegmentationSupport";
 import styles from "./NewEditorShell.module.css";
 
 interface PaneProps {
@@ -216,60 +218,22 @@ export function isSupportedBackgroundImage(type: string, fileName: string): bool
 	return IMAGE_EXTENSIONS.some((extension) => name.endsWith(extension));
 }
 
-// Wallpaper picker — image / solid color / gradient tabs.
-//
-// Wallpapers round-trip through the legacyEditor envelope exactly as they did
-// in the v2 editor: gradient strings stay as-is, colors as `#hex`, and image
-// paths are restricted to `/wallpapers/...` or the user's own data: URLs from
-// the upload custom flow.
-function BackgroundSection() {
+/**
+ * The "upload custom wallpaper" concern: a hidden `<input type=file>` plus the reader
+ * that turns the pick into a `data:` URL.
+ *
+ * A hook rather than part of `WallpaperPicker` because WHERE the input may be mounted is
+ * the caller's problem. `BackgroundSection` renders the picker inside a Popover, and
+ * opening the OS file dialog takes focus, which closes the Popover — an input mounted
+ * inside it would unmount mid-pick and drop the file. That caller mounts `input` outside
+ * the Popover; inline callers mount it next to the picker.
+ */
+function useWallpaperFileInput(onPicked: (dataUrl: string) => void): {
+	pick: () => void;
+	input: ReactNode;
+} {
 	const ts = useScopedT("settings");
-	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
-	const [pickerOpen, setPickerOpen] = useState(false);
-	// Seeded from what the project is actually using, so the picker opens on the tab the
-	// user is already in rather than always on Image.
-	const [tab, setTab] = useState<"image" | "color" | "gradient">(
-		() => classifyWallpaper(settings.wallpaper).kind,
-	);
-	const fileInputRef = useRef<HTMLInputElement | null>(null);
-	const customUrls = useMemoCustomWallpapers(settings.wallpaper);
-
-	// The custom gradient editor emits continuously while the user drags a
-	// color point / angle knob / brightness slider, so mirror the SliderCell
-	// model: preview live with setLive, then persist once the changes settle.
-	const gradientCommitTimer = useRef<number | null>(null);
-	const handleGradientChange = useCallback(
-		(state: GradientEditorState) => {
-			setLive({ wallpaper: buildGradientFromEditor(state) });
-			if (gradientCommitTimer.current !== null) {
-				window.clearTimeout(gradientCommitTimer.current);
-			}
-			gradientCommitTimer.current = window.setTimeout(() => {
-				gradientCommitTimer.current = null;
-				void commit();
-			}, 400);
-		},
-		[setLive, commit],
-	);
-	useEffect(
-		() => () => {
-			if (gradientCommitTimer.current !== null) {
-				window.clearTimeout(gradientCommitTimer.current);
-			}
-		},
-		[],
-	);
-
-	const isSelected = (value: string) => settings.wallpaper === value;
-
-	const handleTabChange = (next: "image" | "color" | "gradient") => {
-		setTab(next);
-	};
-
-	const handlePickFile = () => {
-		if (!hasDocument) return;
-		fileInputRef.current?.click();
-	};
+	const ref = useRef<HTMLInputElement | null>(null);
 
 	const handleFileSelected = (e: ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
@@ -286,11 +250,39 @@ function BackgroundSection() {
 				toast.error(ts("background.imageReadFailed"));
 				return;
 			}
-			void set({ wallpaper: dataUrl });
+			onPicked(dataUrl);
 		};
 		reader.onerror = () => toast.error(ts("background.imageReadFailed"));
 		reader.readAsDataURL(file);
 	};
+
+	return {
+		pick: () => ref.current?.click(),
+		input: (
+			<input
+				ref={ref}
+				type="file"
+				accept={IMAGE_ACCEPT}
+				style={{ display: "none" }}
+				onChange={handleFileSelected}
+			/>
+		),
+	};
+}
+
+// Wallpaper picker — image / solid color / gradient tabs.
+//
+// Wallpapers round-trip through the legacyEditor envelope exactly as they did
+// in the v2 editor: gradient strings stay as-is, colors as `#hex`, and image
+// paths are restricted to `/wallpapers/...` or the user's own data: URLs from
+// the upload custom flow.
+function BackgroundSection() {
+	const ts = useScopedT("settings");
+	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+	const [pickerOpen, setPickerOpen] = useState(false);
+	const { pick: handlePickFile, input: fileInput } = useWallpaperFileInput((dataUrl) =>
+		set({ wallpaper: dataUrl }),
+	);
 
 	return (
 		<>
@@ -330,117 +322,21 @@ function BackgroundSection() {
 					className="w-auto border-0 bg-transparent p-0 shadow-none"
 				>
 					<div className={styles.bgPopover}>
-						{/* role="tab" + aria-selected are what make the tablist above mean
-						    anything: without them a screen reader announces three plain
-						    buttons and never says which one is current. */}
-						<div className={styles.paneTabs} role="tablist">
-							<button
-								type="button"
-								role="tab"
-								aria-selected={tab === "image"}
-								className={tab === "image" ? styles.isActive : ""}
-								onClick={() => handleTabChange("image")}
-							>
-								{ts("background.image")}
-							</button>
-							<button
-								type="button"
-								role="tab"
-								aria-selected={tab === "color"}
-								className={tab === "color" ? styles.isActive : ""}
-								onClick={() => handleTabChange("color")}
-							>
-								{ts("background.color")}
-							</button>
-							<button
-								type="button"
-								role="tab"
-								aria-selected={tab === "gradient"}
-								className={tab === "gradient" ? styles.isActive : ""}
-								onClick={() => handleTabChange("gradient")}
-							>
-								{ts("background.gradient")}
-							</button>
-						</div>
-						{tab === "image" ? (
-							<>
-								<button
-									type="button"
-									className={styles.uploadBtn}
-									disabled={!hasDocument}
-									onClick={handlePickFile}
-								>
-									{ts("background.uploadCustom")}
-								</button>
-								<div className={styles.bgGrid}>
-									{customUrls.map((url) => (
-										<button
-											type="button"
-											key={`custom-${url.slice(-32)}`}
-											className={`${styles.bgThumb} ${isSelected(url) ? styles.isActive : ""}`}
-											style={{ background: `center/cover no-repeat url(${url})` }}
-											aria-label={ts("background.customWallpaper")}
-											disabled={!hasDocument}
-											onClick={() => void set({ wallpaper: url })}
-										/>
-									))}
-									{WALLPAPER_PATHS.map((path, i) => {
-										// Grid swatch paints the small pre-generated thumbnail (see
-										// WALLPAPER_THUMB_PATHS) — selecting it still stores/applies `path`,
-										// the full-res original, unchanged.
-										const previewUrl = resolveImageWallpaperUrl(WALLPAPER_THUMB_PATHS[i]);
-										return (
-											<button
-												type="button"
-												key={path}
-												className={`${styles.bgThumb} ${isSelected(path) ? styles.isActive : ""}`}
-												style={{ background: `center/cover no-repeat url(${previewUrl})` }}
-												aria-label={ts("background.imageLabel", { index: i + 1 })}
-												disabled={!hasDocument}
-												onClick={() => void set({ wallpaper: path })}
-											/>
-										);
-									})}
-								</div>
-							</>
-						) : tab === "color" ? (
-							<BackgroundColorTab
-								value={settings.wallpaper}
-								hasDocument={hasDocument}
-								isSelected={isSelected}
-								onPick={(color) => void set({ wallpaper: color })}
-							/>
-						) : (
-							<>
-								<div className={styles.bgGrid}>
-									{GRAD_PRESETS.map((bg, i) => (
-										<button
-											type="button"
-											key={bg}
-											className={`${styles.bgThumb} ${isSelected(bg) ? styles.isActive : ""}`}
-											style={{ background: bg }}
-											aria-label={ts("background.gradientLabel", { index: i + 1 })}
-											disabled={!hasDocument}
-											onClick={() => void set({ wallpaper: bg })}
-										/>
-									))}
-								</div>
-								{hasDocument ? <GradientEditor onChange={handleGradientChange} /> : null}
-							</>
-						)}
+						<WallpaperPicker
+							value={settings.wallpaper}
+							hasDocument={hasDocument}
+							onChange={(url) => void set({ wallpaper: url })}
+							onLiveChange={(url) => setLive({ wallpaper: url })}
+							onCommit={commit}
+							onPickFile={handlePickFile}
+						/>
 					</div>
 				</PopoverContent>
 			</Popover>
 			{/* Stays mounted OUTSIDE the popover: opening the OS file dialog takes focus,
 			    which closes the popover and would unmount the input mid-pick, dropping the
 			    file. It has no layout to cost us here. */}
-			<input
-				ref={fileInputRef}
-				type="file"
-				accept={IMAGE_ACCEPT}
-				style={{ display: "none" }}
-				onChange={handleFileSelected}
-			/>
+			{fileInput}
 			{/* Reads in the order it acts: pick a background, then blur it. Lived under
 			    "Effects" while that was a separate facet, which is how a control named
 			    "Blur BG" ended up in the tab that doesn't say background. */}
@@ -504,16 +400,26 @@ function useMemoCustomWallpapers(current: string): string[] {
 	return cached;
 }
 
+function normaliseHex(raw: string): string | null {
+	const trimmed = raw.trim();
+	if (!trimmed) return null;
+	const withHash = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+	if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(withHash)) return null;
+	return withHash.toLowerCase();
+}
+
 function BackgroundColorTab({
 	value,
 	hasDocument,
 	isSelected,
 	onPick,
+	updateNative = true,
 }: {
 	value: string;
 	hasDocument: boolean;
 	isSelected: (v: string) => boolean;
 	onPick: (next: string) => void;
+	updateNative?: boolean;
 }) {
 	const ts = useScopedT("settings");
 	const [hexDraft, setHexDraft] = useState(value.startsWith("#") ? value : "#000000");
@@ -524,7 +430,7 @@ function BackgroundColorTab({
 		const next = normaliseHex(hexDraft);
 		if (next) {
 			onPick(next);
-			if (isNativeCompositorActive()) {
+			if (updateNative && isNativeCompositorActive()) {
 				setNativeParam("backgroundColor", next);
 			}
 		}
@@ -542,7 +448,7 @@ function BackgroundColorTab({
 						disabled={!hasDocument}
 						onClick={() => {
 							onPick(c);
-							if (isNativeCompositorActive()) {
+							if (updateNative && isNativeCompositorActive()) {
 								setNativeParam("backgroundColor", c);
 							}
 						}}
@@ -597,12 +503,166 @@ function BackgroundColorTab({
 	);
 }
 
-function normaliseHex(raw: string): string | null {
-	const trimmed = raw.trim();
-	if (!trimmed) return null;
-	const withHash = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
-	if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(withHash)) return null;
-	return withHash.toLowerCase();
+export interface WallpaperPickerProps {
+	value: string;
+	hasDocument: boolean;
+	onChange: (val: string) => void;
+	onLiveChange?: (val: string) => void;
+	onCommit?: () => void;
+	updateNativeBackground?: boolean;
+	/** Opens the OS file dialog. The hidden `<input>` it clicks belongs to the caller
+	 *  (see `useWallpaperFileInput`): where it may be mounted depends on the caller. */
+	onPickFile: () => void;
+}
+
+export function WallpaperPicker({
+	value,
+	hasDocument,
+	onChange,
+	onLiveChange,
+	onCommit,
+	updateNativeBackground = true,
+	onPickFile,
+}: WallpaperPickerProps) {
+	const ts = useScopedT("settings");
+	// Seeded from what is actually in use, so the picker opens on the tab the user is
+	// already in rather than always on Image.
+	const [tab, setTab] = useState<"image" | "color" | "gradient">(
+		() => classifyWallpaper(value).kind,
+	);
+	const customUrls = useMemoCustomWallpapers(value);
+
+	const gradientCommitTimer = useRef<number | null>(null);
+	const handleGradientChange = useCallback(
+		(state: GradientEditorState) => {
+			const grad = buildGradientFromEditor(state);
+			if (onLiveChange) onLiveChange(grad);
+			else onChange(grad);
+			if (gradientCommitTimer.current !== null) {
+				window.clearTimeout(gradientCommitTimer.current);
+			}
+			gradientCommitTimer.current = window.setTimeout(() => {
+				gradientCommitTimer.current = null;
+				if (onCommit) void onCommit();
+			}, 400);
+		},
+		[onChange, onLiveChange, onCommit],
+	);
+	useEffect(
+		() => () => {
+			if (gradientCommitTimer.current !== null) {
+				window.clearTimeout(gradientCommitTimer.current);
+			}
+		},
+		[],
+	);
+
+	const isSelected = (candidate: string) => value === candidate;
+
+	const handleTabChange = (next: "image" | "color" | "gradient") => {
+		setTab(next);
+	};
+
+	return (
+		<>
+			{/* role="tab" + aria-selected are what make the tablist mean anything: without
+			    them a screen reader announces three plain buttons and never says which one
+			    is current. */}
+			<div className={styles.paneTabs} role="tablist">
+				<button
+					type="button"
+					role="tab"
+					aria-selected={tab === "image"}
+					className={tab === "image" ? styles.isActive : ""}
+					onClick={() => handleTabChange("image")}
+				>
+					{ts("background.image")}
+				</button>
+				<button
+					type="button"
+					role="tab"
+					aria-selected={tab === "color"}
+					className={tab === "color" ? styles.isActive : ""}
+					onClick={() => handleTabChange("color")}
+				>
+					{ts("background.color")}
+				</button>
+				<button
+					type="button"
+					role="tab"
+					aria-selected={tab === "gradient"}
+					className={tab === "gradient" ? styles.isActive : ""}
+					onClick={() => handleTabChange("gradient")}
+				>
+					{ts("background.gradient")}
+				</button>
+			</div>
+			{tab === "image" ? (
+				<>
+					<button
+						type="button"
+						className={styles.uploadBtn}
+						disabled={!hasDocument}
+						onClick={onPickFile}
+					>
+						{ts("background.uploadCustom")}
+					</button>
+					<div className={styles.bgGrid}>
+						{customUrls.map((url) => (
+							<button
+								type="button"
+								key={`custom-${url.slice(-32)}`}
+								className={`${styles.bgThumb} ${isSelected(url) ? styles.isActive : ""}`}
+								style={{ background: `center/cover no-repeat url(${url})` }}
+								aria-label={ts("background.customWallpaper")}
+								disabled={!hasDocument}
+								onClick={() => onChange(url)}
+							/>
+						))}
+						{WALLPAPER_PATHS.map((path, i) => {
+							const previewUrl = resolveImageWallpaperUrl(WALLPAPER_THUMB_PATHS[i]);
+							return (
+								<button
+									type="button"
+									key={path}
+									className={`${styles.bgThumb} ${isSelected(path) ? styles.isActive : ""}`}
+									style={{ background: `center/cover no-repeat url(${previewUrl})` }}
+									aria-label={ts("background.imageLabel", { index: i + 1 })}
+									disabled={!hasDocument}
+									onClick={() => onChange(path)}
+								/>
+							);
+						})}
+					</div>
+				</>
+			) : tab === "color" ? (
+				<BackgroundColorTab
+					value={value}
+					hasDocument={hasDocument}
+					isSelected={isSelected}
+					onPick={(color) => onChange(color)}
+					updateNative={updateNativeBackground}
+				/>
+			) : (
+				<>
+					<div className={styles.bgGrid}>
+						{GRAD_PRESETS.map((bg, i) => (
+							<button
+								type="button"
+								key={bg}
+								className={`${styles.bgThumb} ${isSelected(bg) ? styles.isActive : ""}`}
+								style={{ background: bg }}
+								aria-label={ts("background.gradientLabel", { index: i + 1 })}
+								disabled={!hasDocument}
+								onClick={() => onChange(bg)}
+							/>
+						))}
+					</div>
+					{hasDocument ? <GradientEditor onChange={handleGradientChange} /> : null}
+				</>
+			)}
+		</>
+	);
 }
 
 /** Which clip a transcript cut lands on. The clip id is what makes the cut land on ONE
@@ -964,9 +1024,17 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 				);
 				return;
 			}
-			// typing/pasting free text is non-destructive by design
-			// (the user's transcript edits come via the Source Transcript
-			// modal, not here). Block inserts to keep the projection stable.
+			// Inserts are blocked to keep the projection stable: every run of text
+			// here maps back to a `transcript.words` entry by id, and free text has
+			// no id to land on. Deletion is fine because it goes through
+			// `cutNativeSelection`, which resolves the selection to word ids first.
+			//
+			// This used to defer to `SourceTranscriptModal`, deleted with the v3
+			// media pane — it never got past read-only, so it was never the answer
+			// it was cited as. Editing a word's TEXT therefore has no in-app path
+			// today. Adding one means a word-level mutation alongside
+			// `skipWordRange`, reached from here; lifting this guard on its own
+			// would only desynchronise the DOM from `words`.
 			if (inputEvent.inputType === "insertText" || inputEvent.inputType === "insertFromPaste") {
 				event.preventDefault();
 			}
@@ -1830,9 +1898,61 @@ const CAMERA_SHAPES: Array<{
 	},
 ];
 
+// The camera-background control used to be gated on the platform: the mask is produced by the
+// native compositor, and Linux carried the shader branch with nothing feeding it, so `fx.z`
+// never left 0 there and the setting would have changed nothing. The Linux back-end now
+// captures the frame and uploads the mask like the other two, so the gate had become a lie
+// and is gone — all three platforms segment.
+const CAMERA_BACKGROUND_MODES: Array<{
+	value: "none" | "transparent" | "blur" | "custom";
+	labelKey: string;
+	icon: ReactNode;
+}> = [
+	{
+		value: "none",
+		labelKey: "layout.bgModes.none",
+		icon: <rect x="3" y="3" width="18" height="18" rx="2" strokeDasharray="3 3" />,
+	},
+	{
+		value: "transparent",
+		labelKey: "layout.bgModes.transparent",
+		icon: (
+			<>
+				<circle cx="12" cy="8" r="4" />
+				<path d="M6 20v-2a6 6 0 0 1 12 0v2" />
+			</>
+		),
+	},
+	{
+		value: "blur",
+		labelKey: "layout.bgModes.blur",
+		icon: (
+			<>
+				<circle cx="12" cy="12" r="9" strokeDasharray="2 2" />
+				<circle cx="12" cy="12" r="4" />
+			</>
+		),
+	},
+	{
+		value: "custom",
+		labelKey: "layout.bgModes.custom",
+		icon: (
+			<>
+				<rect x="3" y="3" width="18" height="18" rx="2" />
+				<circle cx="8.5" cy="8.5" r="1.5" />
+				<path d="m21 15-5-5L5 21" />
+			</>
+		),
+	},
+];
+
 export function LayoutPane() {
+	const canSegmentCamera = useCanSegmentCamera();
 	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+	const { pick: handlePickWebcamWallpaper, input: webcamWallpaperInput } = useWallpaperFileInput(
+		(dataUrl) => set({ webcamWallpaper: dataUrl }),
+	);
 	const document = useProjectStore((s) => s.document);
 	// A project can hold clips with no camera attached at all (plain imports or a
 	// recording made without a webcam). Keep the saved camera preference for later, but
@@ -2032,6 +2152,88 @@ export function LayoutPane() {
 						/>
 					</div>
 				</div>
+			) : null}
+			{/* Le seul contrôle de l'éditeur dont l'effet dépend d'un binaire optionnel : sans la
+			    bibliothèque ONNX Runtime, le compositeur dessine la webcam telle quelle et le réglage
+			    ne fait rien. On demande donc à la machine plutôt que de deviner depuis la plateforme —
+			    `process.platform` se trompait dans les deux sens : il cachait le contrôle sur des
+			    builds Linux capables de segmenter, et le montrait sur les Macs Intel, pour lesquels
+			    l'amont ne publie aucun binaire ONNX. */}
+			{canSegmentCamera ? (
+				<>
+					<div className={styles.sectionLabel}>{ts("layout.webcamBackground")}</div>
+					<div
+						style={{
+							display: "grid",
+							gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+							gap: 8,
+							padding: "0 var(--sp-4) 12px",
+						}}
+					>
+						{CAMERA_BACKGROUND_MODES.map((mode) => {
+							const isActive = settings.webcamBackgroundMode === mode.value;
+							return (
+								<button
+									type="button"
+									key={mode.value}
+									className={`${styles.cursorCell} ${isActive ? styles.isActive : ""}`}
+									style={{
+										flexDirection: "column",
+										gap: 4,
+										padding: 8,
+										display: "flex",
+										alignItems: "center",
+										minWidth: 0,
+									}}
+									disabled={layoutControlsDisabled}
+									onClick={() => {
+										void set({ webcamBackgroundMode: mode.value });
+									}}
+								>
+									<svg
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2"
+										width={22}
+										height={22}
+									>
+										{mode.icon}
+									</svg>
+									<span style={{ font: "500 11px/1 var(--font-body)" }}>{ts(mode.labelKey)}</span>
+								</button>
+							);
+						})}
+					</div>
+					{settings.webcamBackgroundMode === "blur" ? (
+						<div className={styles.sliderGrid}>
+							<SliderCell
+								label={ts("layout.webcamBlurIntensity")}
+								value={Math.round(settings.webcamBlurIntensity * 100)}
+								min={0}
+								max={100}
+								suffix="%"
+								disabled={layoutControlsDisabled}
+								onChange={(next) => setLive({ webcamBlurIntensity: next / 100 })}
+								onCommit={() => void commit()}
+							/>
+						</div>
+					) : null}
+					{settings.webcamBackgroundMode === "custom" ? (
+						<div style={{ padding: "0 var(--sp-4) 12px" }}>
+							<WallpaperPicker
+								value={settings.webcamWallpaper}
+								hasDocument={hasDocument && !layoutControlsDisabled}
+								onChange={(url) => void set({ webcamWallpaper: url })}
+								onLiveChange={(url) => setLive({ webcamWallpaper: url })}
+								onCommit={commit}
+								updateNativeBackground={false}
+								onPickFile={handlePickWebcamWallpaper}
+							/>
+							{webcamWallpaperInput}
+						</div>
+					) : null}
+				</>
 			) : null}
 			<div className={styles.sectionLabel}>{ts("layout.webcamFraming")}</div>
 			<div className={styles.sliderGrid}>

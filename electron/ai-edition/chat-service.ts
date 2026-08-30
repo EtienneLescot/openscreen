@@ -438,7 +438,7 @@ export async function runChat(
 		success: true,
 		assistantMessage,
 		// ponytail: belt and braces on `editsAllowed`. This returned document is
-		// the ONLY path to disk (LeftPanel → applyAgentDocument → saveDocument),
+		// the ONLY path to disk (ChatStripPanel → applyAgentDocument → saveDocument),
 		// so it is where a write that somehow escaped the executor's guard would
 		// still land. Cheap, and it makes the setting's guarantee structural
 		// rather than dependent on one predicate holding everywhere.

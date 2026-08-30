@@ -39,6 +39,10 @@ VSOut vs_main(uint vid : SV_VertexID)
 Texture2D<float>  texY  : register(t0);
 Texture2D<float2> texUV : register(t1);
 Texture2D<float4> texImg : register(t2); // wallpaper image RGBA (fond, mode 6)
+// Masque de segmentation du sujet, 0 = fond, 1 = sujet. Produit par `segmentation.rs` a la
+// resolution du modele (256x144) ; l'upscale vers la resolution webcam est fait par le sampler
+// lineaire, ce qui est exactement le filtrage qu'on veut sur un masque.
+Texture2D<float> texMask : register(t3);
 SamplerState samp : register(s0);
 
 // BT.709 limited -> RGB (§7 E1), matrice en dur, range mesuré en S1.
@@ -76,6 +80,22 @@ float sd_round_rect(float2 p, float2 halfsz, float r)
 {
     float2 q = abs(p) - halfsz + r;
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// Couverture du quad avec coins arrondis, pour les modes qui retournent AVANT la queue de
+// `ps_main` (5 gradient, 6 image). Ils s'en passaient tant qu'ils ne servaient qu'au fond plein
+// cadre, qui n'a pas de rayon ; depuis que la bulle webcam peut porter un dégradé ou une image,
+// sans ça le fond déborde en carré opaque sur les coins arrondis de la bulle et mange l'ombre.
+// Renvoie 1.0 quand aucun rayon n'est demandé — le fond plein cadre est donc inchangé.
+float quad_round_alpha(float2 local, float2 quad_px, float radius_px)
+{
+    if (radius_px <= 0.0 || quad_px.x <= 0.0 || quad_px.y <= 0.0)
+    {
+        return 1.0;
+    }
+    float2 halfsz = quad_px * 0.5;
+    float d = sd_round_rect(local - halfsz, halfsz, radius_px);
+    return 1.0 - smoothstep(0.0, 1.5, d); // même feather ~1.5px que la queue
 }
 
 // Intersection de deux droites données par (normale, offset) : n·x = d. Cramer.
@@ -152,6 +172,26 @@ float3 quad_inverse_bilinear(float2 P, float2 c00, float2 c10, float2 c11, float
     float3 r0 = quad_st_for_root(q / k2, e, f, g, h);
     float3 r1 = quad_st_for_root(abs(q) > 0.0 ? k0 / q : q / k2, e, f, g, h);
     return (r0.z > 0.5) ? r0 : r1;
+}
+
+// Fond floute pour le mode "blur" de la webcam. Rayon en UV pour rester isotrope quel que soit
+// le rect source. 25 taps ponderes par la distance : assez doux pour un fond, assez court pour
+// tenir dans le budget d'une frame webcam (qui n'occupe qu'une fraction de la sortie).
+float3 blur_webcam_bg(float2 uv, float intensity, float2 qpx)
+{
+    float2 step = (max(intensity, 0.0) * 12.0 + 2.0) / max(qpx, 1.0);
+    float3 sum = 0.0;
+    float total = 0.0;
+    [unroll] for (int dy = -2; dy <= 2; dy++)
+    {
+        [unroll] for (int dx = -2; dx <= 2; dx++)
+        {
+            float w = 1.0 / (1.0 + length(float2(dx, dy)));
+            sum += sample_yuv(saturate(uv + float2(dx, dy) * step)) * w;
+            total += w;
+        }
+    }
+    return sum / max(total, 1e-4);
 }
 
 float4 ps_main(VSOut i) : SV_Target
@@ -352,7 +392,8 @@ float4 ps_main(VSOut i) : SV_Target
     // recouvrement), i.uv l'interpole. Opaque.
     if (mode > 5.5)
     {
-        return float4(texImg.Sample(samp, i.uv).rgb, 1.0);
+        float a = quad_round_alpha(i.local, quad_px, radius_px);
+        return float4(texImg.Sample(samp, i.uv).rgb * a, a); // prémultiplié
     }
 
     // mode 5 : gradient linéaire 2 stops (parité web wallpaper dégradé). color = stop0,
@@ -362,9 +403,15 @@ float4 ps_main(VSOut i) : SV_Target
     {
         float2 dir = fx.xy;
         float denom = max(abs(dir.x) + abs(dir.y), 1e-4);
-        float t = saturate(0.5 + dot(i.pout - 0.5, dir) / denom);
+        // Paramétré sur le QUAD dès qu'il en a un (la bulle webcam), sinon sur la sortie. Pour le
+        // fond plein cadre les deux coïncident ; pour une bulle dans un coin, `pout` ne montrerait
+        // que la tranche du dégradé plein cadre qui passe dessous, jamais la rampe complète que
+        // le sélecteur affiche.
+        float2 gp = (quad_px.x > 0.0 && quad_px.y > 0.0) ? (i.local / quad_px) : i.pout;
+        float t = saturate(0.5 + dot(gp - 0.5, dir) / denom);
         float3 g = lerp(color.rgb, src.xyz, t);
-        return float4(g, 1.0); // opaque, prémultiplié (a=1)
+        float a = quad_round_alpha(i.local, quad_px, radius_px);
+        return float4(g * a, a); // prémultiplié
     }
 
     // mode 4 : curseur custom (dot + ring, dessiné depuis les maths). color = teinte.
@@ -410,6 +457,8 @@ float4 ps_main(VSOut i) : SV_Target
     }
 
     float3 rgb;
+    // 1 sauf en mode detourage, ou il porte le masque du sujet (cf. la branche fx.z ci-dessous).
+    float alpha_mask = 1.0;
     if (mode < 0.5)
     {
         // flou de mouvement par vélocité (§8) : pour CE pixel sortie, uv à la frame
@@ -435,13 +484,41 @@ float4 ps_main(VSOut i) : SV_Target
             }
             rgb = acc / (float) taps;
         }
+
+        // Effet d'arriere-plan webcam. fx.z : 1 = detourage, 2 = flou, 3 = fond personnalise.
+        // `color` porte la couleur de fond du mode 3, fx.w l'intensite du flou du mode 2.
+        // fx.xy porte l'etendue VALIDE de la texture webcam (wcw/wtw, wch/wth) : le masque a
+        // ete produit sur la frame ENTIERE, pas sur le sous-rect dessine, pour que le modele
+        // ne se fasse pas amputer le sujet par un crop utilisateur. Il faut donc ramener uv,
+        // qui vit dans l'espace source, dans cet espace-la.
+        // Le masque est absent (texture 1x1 noire) tant que la segmentation n'a pas produit sa
+        // premiere frame : `person` vaut alors 0 et le mode 1 rendrait la webcam invisible, donc
+        // c'est l'appelant qui ne met fx.z a autre chose que 0 qu'une fois un masque disponible.
+        float effect = fx.z;
+        if (effect > 0.5)
+        {
+            float2 mask_uv = uv_now / max(fx.xy, 1e-6);
+            float person = saturate(texMask.Sample(samp, mask_uv));
+            if (effect > 2.5)
+            {
+                rgb = lerp(color.rgb, rgb, person);
+            }
+            else if (effect > 1.5)
+            {
+                rgb = lerp(blur_webcam_bg(uv_now, fx.w, quad_px), rgb, person);
+            }
+            else
+            {
+                alpha_mask = person;
+            }
+        }
     }
     else
     {
         rgb = color.rgb;
     }
 
-    float alpha = color.a;
+    float alpha = color.a * alpha_mask;
     if (radius_px > 0.0)
     {
         // `quad_px` est en px de SORTIE (le render target porte la géométrie de sortie) et

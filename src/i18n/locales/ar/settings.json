@@ -63,6 +63,14 @@
 			"circle": "دائرة",
 			"square": "مربع",
 			"rounded": "زوايا مستديرة"
+		},
+		"webcamBackground": "خلفية الكاميرا",
+		"webcamBlurIntensity": "شدة الضبابية",
+		"bgModes": {
+			"none": "الأصلي",
+			"transparent": "تفريغ",
+			"blur": "تمويه",
+			"custom": "مخصص"
 		}
 	},
 	"effects": {

@@ -326,11 +326,9 @@ export function MediaStage({
 									{transcriptionLabel(selectedTranscription)}
 								</span>
 								{/* The language whisper resolved on the first chunk, which every later
-								    chunk was then pinned to. It had a pill in SourceTranscriptModal,
-								    but that lives under LeftPanel's `MediaPane` — and the only mount
-								    site is `<LeftPanel active="chat" />`, a literal, so it renders
-								    `ChatStripPanel` and nothing else. The value was reaching the
-								    document and being displayed nowhere. It belongs next to
+								    chunk was then pinned to. Its only pill used to live in the v3 left
+								    panel's transcript modal, which nothing mounted, so the value was
+								    reaching the document and being displayed nowhere. It belongs next to
 								    "Regenerate as" below in any case: that selector is the control
 								    you set BECAUSE of what was detected. */}
 								{transcript?.language && transcript.language !== "auto" ? (

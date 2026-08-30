@@ -45,6 +45,7 @@
 #include <spa/utils/result.h>
 
 #include "pw_shim.h"
+#include "dmabuf_modifiers.h"
 
 /* Defined next to osc_map_dmabuf; used earlier, at format negotiation. */
 static int osc_debug_enabled(void);
@@ -61,15 +62,42 @@ static int osc_debug_enabled(void);
  * header would put libdrm-dev in the build path of every contributor and CI
  * runner for two integers. That is the same trade the dlopen above makes.
  *
- * These two are the ONLY modifiers this helper advertises, and the reason is
- * osc_map_dmabuf(): a linear or implicit buffer can be read through a plain
- * mmap of the dmabuf fd, while a tiled or compression-enabled one cannot — its
- * bytes are not in raster order, so handing them to the encoder would produce a
- * scrambled recording rather than an error. Anything else needs a real GPU
- * import (EGL/gbm), which this helper deliberately does not link.
+ * LINEAR and INVALID are the universal fallbacks: a linear or implicit buffer
+ * can be read through a plain mmap of the dmabuf fd (osc_map_dmabuf). Tiled or
+ * compression-enabled buffers cannot — their bytes are not in raster order — so
+ * they require a real GPU import, which is being added for the VAAPI path (see
+ * issue #507 and docs/dmabuf-vaapi-plan.md). The additional importable modifiers
+ * are enumerated at runtime via EGL (osc_query_dmabuf_modifiers).
  */
 #define OSC_DRM_FORMAT_MOD_LINEAR 0ULL
 #define OSC_DRM_FORMAT_MOD_INVALID 0x00ffffffffffffffULL
+
+/* DRM fourccs for the 32-bit RGB formats we offer. XRGB8888 = fourcc('X','R',
+ * '2','4'); the others follow the same little-endian spelling. Used to enumerate
+ * importable modifiers and to describe a dmabuf to the GPU importer. Spelled out
+ * for the same reason as the modifiers above. */
+#define OSC_DRM_FORMAT_XRGB8888 0x34325258u /* SPA BGRx */
+#define OSC_DRM_FORMAT_ARGB8888 0x34325241u /* SPA BGRA */
+#define OSC_DRM_FORMAT_XBGR8888 0x34324258u /* SPA RGBx */
+#define OSC_DRM_FORMAT_ABGR8888 0x34324241u /* SPA RGBA */
+
+/* SPA video format (byte order B,G,R,x ...) → the matching DRM fourcc (a
+ * little-endian 32-bit word), for the GPU dmabuf import. 0 = unmapped. */
+static uint32_t osc_spa_format_to_drm_fourcc(uint32_t spa_format)
+{
+    switch (spa_format) {
+    case SPA_VIDEO_FORMAT_BGRx:
+        return OSC_DRM_FORMAT_XRGB8888;
+    case SPA_VIDEO_FORMAT_BGRA:
+        return OSC_DRM_FORMAT_ARGB8888;
+    case SPA_VIDEO_FORMAT_RGBx:
+        return OSC_DRM_FORMAT_XBGR8888;
+    case SPA_VIDEO_FORMAT_RGBA:
+        return OSC_DRM_FORMAT_ABGR8888;
+    default:
+        return 0;
+    }
+}
 
 /*
  * Mapped dmabuf fds, keyed by fd.
@@ -85,6 +113,11 @@ static int osc_debug_enabled(void);
  * rather than trusting that.
  */
 #define OSC_MAX_DMABUF_MAPS 32
+
+/* The negotiated buffer pool is at most 16 (SPA_PARAM_BUFFERS below), plus a
+ * transient overlap while a renegotiation swaps the set. 32 covers it with room
+ * to spare, and a full table only means a held buffer is treated as stale. */
+#define OSC_MAX_LIVE_BUFFERS 32
 
 struct osc_dmabuf_map {
     int fd;
@@ -179,14 +212,38 @@ struct osc_pw_session {
     struct spa_video_info_raw format;
     int buffer_info_reports;
     int want_video;
+    /* Set by the caller when the VAAPI dmabuf-import pipeline is available, which
+     * makes the stream offer dmabuf BEFORE shm so a tiled monitor buffer is
+     * imported on the GPU instead of copied through throttled shm (issue #507).
+     * shm stays in the offer as the fallback, so a compositor that cannot produce
+     * dmabuf still negotiates. */
+    int prefer_dmabuf;
     /* Set from the negotiated format's SPA_VIDEO_FLAG_MODIFIER, which is what
      * decides whether buffers arrive as dmabuf fds or shared memory. */
     int uses_dmabuf;
+    /* Latched when a dmabuf buffer cannot be CPU-mmap'd (a tiled buffer on, e.g.,
+     * AMD/mutter). Frames then travel as raw dmabuf descriptors for a GPU import
+     * (issue #507) instead of the shared-memory path. */
+    int import_dmabuf;
     struct osc_dmabuf_map dmabuf_maps[OSC_MAX_DMABUF_MAPS];
     /* fd whose DMA_BUF_SYNC_START has not been closed by its END yet, or -1.
      * The bracket has to span the on_frame callback, not just osc_read_frame,
      * because the callback is where the pixels are actually read. */
     int dmabuf_sync_fd;
+    /* Every pw_buffer the stream currently owns, added in osc_on_add_buffer and
+     * cleared in osc_on_remove_buffer. A dmabuf frame the consumer holds for a
+     * GPU import (issue #507) keeps the pw_buffer pointer, but a renegotiation
+     * destroys the buffer set — so osc_pw_requeue_buffer must check the handle is
+     * still here before touching it, or it would queue freed storage.
+     *
+     * Pointer equality alone is not enough: PipeWire reuses these wrapper slots,
+     * so a renegotiation can register a NEW buffer at the SAME address as one the
+     * consumer still holds. Each registration therefore carries a unique
+     * `generation`, and a retained handle is only re-queued when BOTH the pointer
+     * and its generation match — an ABA guard. `next_generation` never repeats. */
+    struct pw_buffer *live_buffers[OSC_MAX_LIVE_BUFFERS];
+    uint64_t live_generations[OSC_MAX_LIVE_BUFFERS];
+    uint64_t next_generation;
 };
 
 struct osc_pw_audio_api osc_audio_api;
@@ -394,7 +451,8 @@ static const struct spa_pod *osc_build_enum_format(struct spa_pod_builder *build
  * which needs a GPU query, so letting the producer fixate is both simpler and
  * one fewer round trip that can go wrong.
  */
-static const struct spa_pod *osc_build_enum_format_dmabuf(struct spa_pod_builder *builder)
+static const struct spa_pod *osc_build_enum_format_dmabuf(struct spa_pod_builder *builder,
+                                                          int prefer_dmabuf)
 {
     struct spa_pod_frame object_frame;
     struct spa_pod_frame choice_frame;
@@ -415,9 +473,29 @@ static const struct spa_pod *osc_build_enum_format_dmabuf(struct spa_pod_builder
      * tolerating the key. */
     spa_pod_builder_prop(builder, SPA_FORMAT_VIDEO_modifier, SPA_POD_PROP_FLAG_MANDATORY);
     spa_pod_builder_push_choice(builder, &choice_frame, SPA_CHOICE_Enum, 0);
-    /* Default first, then every alternative — the default is repeated, same
+    /* Advertise the modifiers our GPU's EGL can import, so a tiled compositor
+     * buffer — the common case on AMD/mutter — negotiates as dmabuf instead of
+     * falling back to the throttled shm path (issue #507). LINEAR and INVALID
+     * stay as universal fallbacks. Modifiers match across the 32-bit RGB formats
+     * we offer, so enumerating XRGB8888 is representative.
+     *
+     * ONLY when prefer_dmabuf: the tiled modifiers are advertised solely when the
+     * VAAPI import pipeline is available. Otherwise a producer that offers no shm
+     * format (some wlroots/portal setups) could select a tiled buffer we cannot
+     * read, where before it would have fallen to a CPU-mappable LINEAR/INVALID
+     * dmabuf. Offering just those two keeps that path intact.
+     *
+     * Default first, then every alternative — the default is repeated, same
      * idiom as SPA_POD_CHOICE_ENUM_Id above. */
-    spa_pod_builder_long(builder, (int64_t)OSC_DRM_FORMAT_MOD_LINEAR);
+    uint64_t egl_mods[128];
+    int egl_mod_count =
+        prefer_dmabuf ? osc_query_dmabuf_modifiers(OSC_DRM_FORMAT_XRGB8888, egl_mods, 128) : 0;
+    int64_t default_mod =
+        egl_mod_count > 0 ? (int64_t)egl_mods[0] : (int64_t)OSC_DRM_FORMAT_MOD_LINEAR;
+    spa_pod_builder_long(builder, default_mod);
+    for (int i = 0; i < egl_mod_count; i++) {
+        spa_pod_builder_long(builder, (int64_t)egl_mods[i]);
+    }
     spa_pod_builder_long(builder, (int64_t)OSC_DRM_FORMAT_MOD_LINEAR);
     spa_pod_builder_long(builder, (int64_t)OSC_DRM_FORMAT_MOD_INVALID);
     spa_pod_builder_pop(builder, &choice_frame);
@@ -526,7 +604,9 @@ int osc_pw_enum_format_accepts_dmabuf_producer(int with_modifier, int64_t produc
     const struct spa_pod *consumer;
     const struct spa_pod *producer;
 
-    consumer = with_modifier ? osc_build_enum_format_dmabuf(&ours) : osc_build_enum_format(&ours);
+    /* The unit test exercises the full tiled offer, so enumerate unconditionally. */
+    consumer =
+        with_modifier ? osc_build_enum_format_dmabuf(&ours, 1) : osc_build_enum_format(&ours);
     if (consumer == NULL) {
         return -1;
     }
@@ -775,6 +855,52 @@ static void osc_dmabuf_sync(int fd, int start)
     }
 }
 
+/* The live-buffer table is only touched on the PipeWire thread (add/remove_buffer)
+ * and, in osc_pw_requeue_buffer, under the thread-loop lock which pauses that
+ * thread — so these need no locking of their own. */
+
+/* Registers `pw_buf` and returns the unique generation stamped on it, which the
+ * frame carries so a later re-queue can prove it means THIS registration and not
+ * a newer buffer reusing the same slot. 0 is never a valid generation. */
+static uint64_t osc_track_live_buffer(struct osc_pw_session *session, struct pw_buffer *pw_buf)
+{
+    size_t i;
+    uint64_t generation = ++session->next_generation;
+    for (i = 0; i < OSC_MAX_LIVE_BUFFERS; i++) {
+        if (session->live_buffers[i] == NULL) {
+            session->live_buffers[i] = pw_buf;
+            session->live_generations[i] = generation;
+            return generation;
+        }
+    }
+    return generation;
+}
+
+static void osc_forget_live_buffer(struct osc_pw_session *session, struct pw_buffer *pw_buf)
+{
+    size_t i;
+    for (i = 0; i < OSC_MAX_LIVE_BUFFERS; i++) {
+        if (session->live_buffers[i] == pw_buf) {
+            session->live_buffers[i] = NULL;
+            session->live_generations[i] = 0;
+            return;
+        }
+    }
+}
+
+/* The generation currently registered for `pw_buf`, or 0 if it is not tracked. */
+static uint64_t osc_live_buffer_generation(struct osc_pw_session *session,
+                                           struct pw_buffer *pw_buf)
+{
+    size_t i;
+    for (i = 0; i < OSC_MAX_LIVE_BUFFERS; i++) {
+        if (session->live_buffers[i] == pw_buf) {
+            return session->live_generations[i];
+        }
+    }
+    return 0;
+}
+
 static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
 {
     struct osc_pw_session *session = userdata;
@@ -786,6 +912,9 @@ static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
     if (pw_buf == NULL || pw_buf->buffer == NULL || pw_buf->buffer->n_datas < 1) {
         return;
     }
+    /* Record the buffer as live before anything else, so a handle the consumer
+     * holds can be validated against destruction in osc_pw_requeue_buffer. */
+    osc_track_live_buffer(session, pw_buf);
     data = &pw_buf->buffer->datas[0];
     if (data->type != SPA_DATA_DmaBuf) {
         return;
@@ -805,23 +934,17 @@ static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
         maplen = data->maxsize;
         session->dmabuf_maps[i].ptr = osc_map_dmabuf((int)data->fd, &maplen, &why);
         if (session->dmabuf_maps[i].ptr == NULL) {
-            /* Reported once, through the buffer-info channel that already exists
-             * for describing what the compositor handed us — a mapping failure
-             * here means no frames at all, and silence would read as a hang.
-             *
-             * The reason is carried up rather than assumed: this used to say the
-             * driver refused CPU mapping no matter what actually went wrong, and
-             * that message sent the one real investigation of this path looking
-             * at the GPU for a size the compositor had simply left at 0. */
-            if (session->callbacks.on_buffer_info != NULL &&
-                session->buffer_info_reports < OSC_BUFFER_INFO_REPORTS) {
-                char detail[256];
-
-                snprintf(detail, sizeof(detail), "dmabuf import failed: %s; capture cannot proceed",
-                         why);
-                session->buffer_info_reports++;
-                session->callbacks.on_buffer_info(session->callbacks.user, data->type,
-                                                  pw_buf->buffer->n_datas, 0, 0, detail);
+            /*
+             * A mmap failure on a dmabuf is the tiled-buffer case (e.g. a whole
+             * monitor on AMD/mutter): the bytes are not in raster order and the
+             * driver refuses CPU access. That is no longer fatal — the frame
+             * instead travels as a raw dmabuf descriptor for a GPU import (see
+             * osc_read_frame and issue #507). Latch the mode; osc_read_frame will
+             * populate the descriptor from the same fd. No mapping is stored.
+             */
+            session->import_dmabuf = 1;
+            if (osc_debug_enabled()) {
+                fprintf(stderr, "[osc-dmabuf] mmap failed (%s) — using GPU import path\n", why);
             }
             return;
         }
@@ -840,6 +963,9 @@ static void osc_on_remove_buffer(void *userdata, struct pw_buffer *pw_buf)
     if (pw_buf == NULL || pw_buf->buffer == NULL || pw_buf->buffer->n_datas < 1) {
         return;
     }
+    /* The buffer is being destroyed: a consumer still holding it for a GPU import
+     * must not re-queue it. Forgetting it here makes osc_pw_requeue_buffer skip it. */
+    osc_forget_live_buffer(session, pw_buf);
     data = &pw_buf->buffer->datas[0];
     for (i = 0; i < OSC_MAX_DMABUF_MAPS; i++) {
         if (session->dmabuf_maps[i].ptr == NULL ||
@@ -985,6 +1111,7 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
     uint32_t size;
     int32_t stride;
     int32_t height;
+    int is_dmabuf_import = 0;
 
     const uint8_t *base;
 
@@ -1008,7 +1135,12 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
          */
         base = osc_find_dmabuf_map(session, (int)data->fd);
         if (base == NULL) {
-            return 0;
+            if (!session->import_dmabuf) {
+                return 0;
+            }
+            /* Tiled dmabuf: no CPU mapping exists. It travels up as a raw
+             * descriptor for a GPU import instead of being read here. */
+            is_dmabuf_import = 1;
         }
     } else if (data->data == NULL) {
         /*
@@ -1025,36 +1157,74 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
         return 0;
     }
 
-    offset = SPA_MIN(data->chunk->offset, data->maxsize);
-    size = SPA_MIN(data->chunk->size, data->maxsize - offset);
-
     height = (int32_t)session->format.size.height;
     stride = data->chunk->stride;
-    if (stride <= 0 || height <= 0) {
-        return 0;
-    }
-    /* One short row is one row of garbage in the recording; refuse the whole
-     * frame instead, and let the caller count it as dropped. */
-    if ((uint64_t)stride * (uint64_t)height > (uint64_t)size) {
+    if (height <= 0) {
         return 0;
     }
 
-    /*
-     * Open the CPU-access window on a dmabuf and leave it open: the pixels are
-     * read by the on_frame callback, not here, so the matching SYNC_END lives in
-     * osc_inspect_buffer once that callback has returned.
-     */
-    if (data->type == SPA_DATA_DmaBuf) {
-        session->dmabuf_sync_fd = (int)data->fd;
-        osc_dmabuf_sync(session->dmabuf_sync_fd, 1);
-    }
+    if (is_dmabuf_import) {
+        /*
+         * GPU import path. The buffer is not CPU-readable, so the raster bounds
+         * checks below do not apply — the modifier is what makes the producer's
+         * strides/offsets meaningful, and the importer validates the rest. We
+         * hand up the fd(s), modifier and fourcc; no SYNC bracket is opened
+         * because nothing here touches the pixels. n_datas is the plane count for
+         * a dmabuf (one per plane); our RGB formats are single-plane.
+         */
+        uint32_t fourcc = osc_spa_format_to_drm_fourcc(session->format.format);
+        int32_t import_stride =
+            stride > 0 ? stride : (int32_t)session->format.size.width * 4;
+        int32_t p;
+        if (fourcc == 0) {
+            return 0;
+        }
+        out->is_dmabuf = 1;
+        out->data = NULL;
+        out->size = 0;
+        out->stride = import_stride;
+        out->width = (int32_t)session->format.size.width;
+        out->height = height;
+        out->video_format = session->format.format;
+        out->modifier = session->format.modifier;
+        out->drm_fourcc = fourcc;
+        out->n_planes = (int32_t)buffer->n_datas > 4 ? 4 : (int32_t)buffer->n_datas;
+        for (p = 0; p < out->n_planes; p++) {
+            const struct spa_data *pd = &buffer->datas[p];
+            out->plane_fd[p] = (int)pd->fd;
+            out->plane_offset[p] = pd->chunk != NULL ? (int32_t)pd->chunk->offset : 0;
+            out->plane_stride[p] =
+                (pd->chunk != NULL && pd->chunk->stride > 0) ? pd->chunk->stride : import_stride;
+        }
+    } else {
+        offset = SPA_MIN(data->chunk->offset, data->maxsize);
+        size = SPA_MIN(data->chunk->size, data->maxsize - offset);
+        if (stride <= 0) {
+            return 0;
+        }
+        /* One short row is one row of garbage in the recording; refuse the whole
+         * frame instead, and let the caller count it as dropped. */
+        if ((uint64_t)stride * (uint64_t)height > (uint64_t)size) {
+            return 0;
+        }
 
-    out->data = SPA_PTROFF(base, offset, const uint8_t);
-    out->size = size;
-    out->stride = stride;
-    out->width = (int32_t)session->format.size.width;
-    out->height = height;
-    out->video_format = session->format.format;
+        /*
+         * Open the CPU-access window on a dmabuf and leave it open: the pixels
+         * are read by the on_frame callback, not here, so the matching SYNC_END
+         * lives in osc_inspect_buffer once that callback has returned.
+         */
+        if (data->type == SPA_DATA_DmaBuf) {
+            session->dmabuf_sync_fd = (int)data->fd;
+            osc_dmabuf_sync(session->dmabuf_sync_fd, 1);
+        }
+
+        out->data = SPA_PTROFF(base, offset, const uint8_t);
+        out->size = size;
+        out->stride = stride;
+        out->width = (int32_t)session->format.size.width;
+        out->height = height;
+        out->video_format = session->format.format;
+    }
 
     header = spa_buffer_find_meta_data(buffer, SPA_META_Header, sizeof(*header));
     if (header != NULL) {
@@ -1152,8 +1322,11 @@ static void osc_describe_metas(const struct spa_buffer *buffer, char *out, size_
     }
 }
 
-static void osc_inspect_buffer(struct osc_pw_session *session, const struct spa_buffer *buffer)
+/* Returns 1 when the on_frame callback took ownership of `pw_buf` (a dmabuf frame
+ * held for GPU import); the caller must then NOT re-queue it. 0 otherwise. */
+static int osc_inspect_buffer(struct osc_pw_session *session, struct pw_buffer *pw_buf)
 {
+    const struct spa_buffer *buffer = pw_buf->buffer;
     struct osc_pw_cursor cursor;
     uint32_t meta_size = 0;
 
@@ -1185,7 +1358,17 @@ static void osc_inspect_buffer(struct osc_pw_session *session, const struct spa_
 
         session->dmabuf_sync_fd = -1;
         if (osc_read_frame(session, buffer, &frame)) {
-            session->callbacks.on_frame(session->callbacks.user, &frame);
+            /* The callback needs the pw_buffer to hand back to osc_pw_requeue_buffer
+             * if it takes ownership of a dmabuf frame, plus its generation so the
+             * re-queue can reject a stale handle after a renegotiation. */
+            frame.buffer_handle = pw_buf;
+            frame.buffer_generation = osc_live_buffer_generation(session, pw_buf);
+            if (session->callbacks.on_frame(session->callbacks.user, &frame)) {
+                /* Taken: leave it un-queued; the consumer will re-queue it once the
+                 * import has copied the pixels. No SYNC bracket is open on this
+                 * path (the import path does not CPU-read), so nothing to close. */
+                return 1;
+            }
         }
         /* Closes the DMA_BUF_SYNC_START osc_read_frame opened, if any. Placed
          * here rather than inside it because the callback above is what actually
@@ -1195,6 +1378,7 @@ static void osc_inspect_buffer(struct osc_pw_session *session, const struct spa_
             session->dmabuf_sync_fd = -1;
         }
     }
+    return 0;
 }
 
 static void osc_on_process(void *userdata)
@@ -1224,9 +1408,34 @@ static void osc_on_process(void *userdata)
      * throw away the cursor metadata riding on the same buffers.
      */
     while ((b = api.stream_dequeue_buffer(session->stream)) != NULL) {
-        osc_inspect_buffer(session, b->buffer);
-        api.stream_queue_buffer(session->stream, b);
+        /* A dmabuf frame the consumer takes is held out of the queue until it has
+         * imported the pixels — see osc_pw_requeue_buffer. Everything else (shm,
+         * cursor-only buffers, declined frames) re-queues immediately. */
+        if (!osc_inspect_buffer(session, b)) {
+            api.stream_queue_buffer(session->stream, b);
+        }
     }
+}
+
+/* See the header. Locks the thread loop so a foreign thread can queue safely. */
+void osc_pw_requeue_buffer(struct osc_pw_session *session, void *buffer_handle,
+                           uint64_t buffer_generation)
+{
+    if (session == NULL || buffer_handle == NULL || session->stream == NULL) {
+        return;
+    }
+    api.thread_loop_lock(session->loop);
+    /* Under the lock the PipeWire thread is paused, so the live-buffer table is
+     * stable. Re-queue only when the SAME registration is still live: matching
+     * the generation as well as the pointer rejects both a destroyed buffer and a
+     * newer one PipeWire placed in the same slot after a renegotiation. A stale
+     * handle is simply dropped — PipeWire already owns or freed that buffer. */
+    if (buffer_generation != 0 &&
+        osc_live_buffer_generation(session, (struct pw_buffer *)buffer_handle) ==
+            buffer_generation) {
+        api.stream_queue_buffer(session->stream, (struct pw_buffer *)buffer_handle);
+    }
+    api.thread_loop_unlock(session->loop);
 }
 
 static const struct pw_stream_events osc_stream_events = {
@@ -1239,6 +1448,7 @@ static const struct pw_stream_events osc_stream_events = {
 };
 
 struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
+                                    int prefer_dmabuf,
                                     const struct osc_pw_callbacks *callbacks, char *err,
                                     size_t err_len)
 {
@@ -1264,6 +1474,7 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
     }
     session->callbacks = *callbacks;
     session->want_video = want_video;
+    session->prefer_dmabuf = prefer_dmabuf;
     /* calloc zeroes these, and 0 is a legitimate fd — so the "nothing pending"
      * sentinel has to be set explicitly. dmabuf_maps is keyed on ptr != NULL,
      * which calloc does get right. */
@@ -1319,21 +1530,23 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
      * previously failed the whole negotiation with "no more input formats".
      */
     params[0] = osc_build_enum_format(&builder);
-    params[1] = osc_build_enum_format_dmabuf(&builder);
+    params[1] = osc_build_enum_format_dmabuf(&builder, session->prefer_dmabuf);
 
     /*
-     * Test affordance. Every compositor available for local testing — mutter,
-     * sway via xdg-desktop-portal-wlr — offers shm, so params[0] always wins and
-     * the DMA-BUF branch below (osc_map_dmabuf, the DMA_BUF_IOCTL_SYNC bracket,
-     * the dmabuf arm of osc_read_frame) never executes outside niri. Dropping
-     * the shm object leaves the producer no choice, which is the only way to
-     * exercise that code without the compositor from issue #287.
+     * When the GPU import path is available (prefer_dmabuf), offer dmabuf FIRST
+     * and shm SECOND: mutter then hands us a tiled dmabuf we import on the GPU
+     * (issue #507) instead of the shm buffer it throttles for a whole monitor.
+     * shm stays as the fallback, so a compositor that cannot produce dmabuf still
+     * negotiates on the shm object. The env var forces the same swap for testing
+     * on a machine where the probe would say no.
      *
-     * Never set in production: it would break exactly the compatibility the
-     * ordering above exists to preserve.
+     * Without either, the ordering is unchanged — shm first — so nothing moves on
+     * a build or driver without the VAAPI import.
      */
-    if (getenv("OPENSCREEN_PIPEWIRE_FORCE_DMABUF") != NULL) {
+    if (session->prefer_dmabuf || getenv("OPENSCREEN_PIPEWIRE_FORCE_DMABUF") != NULL) {
+        const struct spa_pod *shm = params[0];
         params[0] = params[1];
+        params[1] = shm;
     }
 
     if (params[0] == NULL || params[1] == NULL) {

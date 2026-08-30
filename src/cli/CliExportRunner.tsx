@@ -263,11 +263,16 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 		aspectRatioValue,
 	});
 
-	const clips = buildNativeClipList(axcutDocument);
-	if (clips.length === 0) {
+	const builtClips = buildNativeClipList(axcutDocument);
+	if (builtClips.length === 0) {
 		throw new Error("The project's timeline has no visible clips to export");
 	}
-	const sceneJson = JSON.stringify(buildSceneDescription(axcutDocument));
+	const sceneDesc = buildSceneDescription(axcutDocument);
+
+	// The webcam background effect is applied by the compositor from the scene, so the clip
+	// list needs no pre-rendering pass.
+	const clips = builtClips;
+	const sceneJson = JSON.stringify(sceneDesc);
 
 	// Progress: native pushes raw encoded-frame counts; totals and pacing are
 	// computed here, mirroring the ExportDialog.

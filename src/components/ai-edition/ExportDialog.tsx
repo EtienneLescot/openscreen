@@ -309,14 +309,20 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				});
 			});
 			try {
-				const sceneJson = JSON.stringify(buildSceneDescription(document));
+				const sceneDesc = buildSceneDescription(document);
+
+				// The webcam background effect is applied by the compositor from the scene,
+				// so the clip list needs no pre-rendering pass.
+				const exportClips = clips;
+
+				const sceneJson = JSON.stringify(sceneDesc);
 				const outDims = tierOutputDims(quality);
-				if (clips.length === 0) {
+				if (exportClips.length === 0) {
 					throw new Error(t("exportDialog.nothingToExport"));
 				}
 				const stats =
 					format === "gif"
-						? await exportGifNative(clips, pickedPath, sceneJson, {
+						? await exportGifNative(exportClips, pickedPath, sceneJson, {
 								// GIF is 256-colour and grows fast; cap the long edge at the
 								// chosen preset rather than exporting at source size.
 								...gifOutputDims(gifSize, outDims),
@@ -324,7 +330,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 								// 0 = infinite, the historical GIF default; 1 = play once.
 								loopCount: gifLoop ? 0 : 1,
 							})
-						: await exportMultiNative(clips, pickedPath, sceneJson, {
+						: await exportMultiNative(exportClips, pickedPath, sceneJson, {
 								width: outDims?.width,
 								height: outDims?.height,
 								fps,
