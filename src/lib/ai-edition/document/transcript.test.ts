@@ -159,6 +159,22 @@ describe("setWordText", () => {
 		expect(result.segments[0].text).toBe("你们世界");
 	});
 
+	it("does not add a space after a non-BMP Han word (edge read by code point)", () => {
+		const result = setWordText(transcriptForTokens("zh", ["\u{20000}", "好"]), "word_2", "世界");
+
+		expect(result.segments[0].text).toBe("\u{20000}世界");
+	});
+
+	it("does not add a space before a token starting with a non-BMP Han character", () => {
+		const result = setWordText(
+			transcriptForTokens("zh", ["好", "\u{20000}"]),
+			"word_2",
+			"\u{20000}",
+		);
+
+		expect(result.segments[0].text).toBe("好\u{20000}");
+	});
+
 	it.each([
 		"ja",
 		"ja-JP",

@@ -17,8 +17,11 @@ function joinSegmentText(texts: string[]): string {
 		if (CLOSING_PUNCTUATION.test(token) || OPENING_PUNCTUATION.test(joined)) {
 			return joined + token;
 		}
-		const leftContentEdge = joined.replace(TRAILING_CLOSING_PUNCTUATION, "").at(-1) ?? "";
-		if (CJK_EDGE.test(leftContentEdge) && CJK_EDGE.test(token[0] ?? "")) {
+		const leftContentEdge = [...joined.replace(TRAILING_CLOSING_PUNCTUATION, "")].at(-1) ?? "";
+		// Spread reads the edges by CODE POINT: `.at(-1)` / `[0]` would return half a
+		// surrogate pair, so a non-BMP Han edge (e.g. U+20000) would miss CJK_EDGE
+		// and receive an ASCII space.
+		if (CJK_EDGE.test(leftContentEdge) && CJK_EDGE.test([...token][0] ?? "")) {
 			return joined + token;
 		}
 		return `${joined} ${token}`;
