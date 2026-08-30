@@ -68,20 +68,27 @@ const HELPER_SOURCE_PATHS = [
  * `mac.extraResources` ships this directory wholesale (`filter: ["darwin-*​/*"]`), so
  * "present here" is the same thing as "present in the installed app".
  */
+/**
+ * L'exigence ONNX Runtime de macOS, séparée parce qu'elle ne vaut QUE sur arm64.
+ *
+ * L'amont ne publie aucun binaire ONNX pour les Macs Intel : `fetch-onnxruntime.mjs` le constate
+ * et sort en 0 sans rien poser. Un paquet x64 sans la bibliothèque est donc CORRECT, et l'exiger
+ * là ferait échouer à l'empaquetage une build parfaitement saine — la garde se retournerait
+ * contre ce qu'elle protège.
+ *
+ * Sur arm64 en revanche son absence ne casse rien de visible : `Segmenter::load` refuse, le
+ * compositeur dessine la webcam telle quelle, et le contrôle disparaît de l'éditeur. Le paquet
+ * est silencieusement amputé, ce qui est exactement la panne que cette garde existe pour
+ * attraper et qu'aucun test ne peut voir puisque tout se dégrade proprement.
+ */
+const MAC_ONNX_REQUIRED = {
+	match: (name) => name === "libonnxruntime.dylib",
+	what: "the ONNX Runtime library the camera-background segmentation loads",
+	breaks: "the camera-background control vanishes from the editor and every effect is a no-op",
+	fix: "Stage it with:\n\n    npm run fetch:onnxruntime",
+};
+
 const MAC_REQUIRED = [
-	// Pas d'entrée sur x64 : l'amont ne publie aucun binaire ONNX pour les Macs Intel, donc un
-	// paquet Intel SANS la bibliothèque est correct. `fetch-onnxruntime.mjs` le dit et sort en 0.
-	// L'effet de fond de caméra est le seul dont la présence dépend d'un binaire optionnel, et
-	// son absence ne casse RIEN de visible : `Segmenter::load` refuse, le compositeur dessine la
-	// webcam telle quelle, et le contrôle disparaît de l'éditeur. Un paquet livré sans elle est
-	// donc silencieusement amputé — la panne exacte que cette garde existe pour attraper, et
-	// celle qu'aucun test ne peut voir puisque tout se dégrade proprement.
-	{
-		match: (name) => name === "libonnxruntime.dylib",
-		what: "the ONNX Runtime library the camera-background segmentation loads",
-		breaks: "the camera-background control vanishes from the editor and every effect is a no-op",
-		fix: "Stage it with:\n\n    npm run fetch:onnxruntime",
-	},
 	{
 		match: (name) => name === "compositor_view.node",
 		what: "the Metal compositor addon",
@@ -454,10 +461,13 @@ function checkWinNativePayload() {
 }
 
 function checkMacNativePayload(context) {
-	const dir = path.join(ROOT, "electron", "native", "bin", `darwin-${archTagFor(context)}`);
+	const arch = archTagFor(context);
+	const dir = path.join(ROOT, "electron", "native", "bin", `darwin-${arch}`);
 	checkNativePayload({
 		dir,
-		required: MAC_REQUIRED,
+		// Voir `MAC_ONNX_REQUIRED` : exiger la bibliothèque sur Intel ferait échouer une build
+		// que l'amont rend impossible à satisfaire.
+		required: arch === "arm64" ? [...MAC_REQUIRED, MAC_ONNX_REQUIRED] : MAC_REQUIRED,
 		osLabel: "macOS",
 		bundleNoun: "the .app",
 		emptyDirFix: `${FIX_MAC}\n\nThe STT helper and the capture helper are separate builds — see\ntechnical-documentation/engineering/build-and-packaging.md.`,

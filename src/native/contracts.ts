@@ -134,7 +134,8 @@ export interface CompositorBackendResult {
  *  `"no-runtime"` — no ONNX Runtime library. Upstream publishes none for Intel Macs, and a dev
  *  checkout or a `--dir` build has none staged either.
  *  `"no-model"` — the runtime is there but the `.onnx` does not resolve.
- *  `"none"` — no native addon at all; the pure-web/dev case, not a degraded machine.
+ *  `"none"` — no usable native addon: none loaded at all (the pure-web/dev case), or one
+ *  too old to answer the probe. Not a degraded machine, and not a verdict on the runtime.
  *
  *  Asked rather than guessed. Gating on `process.platform` was wrong in both directions: it hid
  *  the control on a Linux box that could segment, and showed it on an Intel Mac that never can. */
