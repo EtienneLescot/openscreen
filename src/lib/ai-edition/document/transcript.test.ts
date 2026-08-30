@@ -151,6 +151,8 @@ describe("setWordText", () => {
 		"zh-CN",
 		"zh-TW",
 		"ZH-cn",
+		"auto",
+		"yue",
 	])("does not add artificial spaces between adjacent Chinese content for %s", (language) => {
 		const result = setWordText(transcriptForTokens(language, ["你", "好", "世界"]), "word_2", "们");
 
@@ -249,6 +251,15 @@ describe("setWordText", () => {
 
 		expect(() => setWordText(transcript, "word_2", "replacement")).toThrowError(
 			/segment_1.*word_missing|word_missing.*segment_1/,
+		);
+	});
+
+	it("rejects an owning segment that references a word owned by another segment", () => {
+		const transcript = fixture();
+		transcript.segments[0].wordIds.push("word_4");
+
+		expect(() => setWordText(transcript, "word_2", "replacement")).toThrowError(
+			/segment_1.*word_4.*segment_2/,
 		);
 	});
 
