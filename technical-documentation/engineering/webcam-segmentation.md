@@ -28,11 +28,30 @@ so they are identical by construction rather than by two implementations kept in
 | stage | where |
 |---|---|
 | capture | `Compositor::capture_webcam_rgb` renders the webcam NV12 into a 256x144 RGBA target and reads it back |
-| inference | `segmentation.rs`, ONNX Runtime CPU EP, own thread, 30 Hz, `intra_op_num_threads = 2` |
+| inference | `segmentation.rs`, ONNX Runtime CPU EP, own thread, 30 Hz, `intra_op_num_threads = 2` — **except during export**, see below |
 | upload | `Compositor::set_webcam_mask`, from the render thread, into a DYNAMIC R8 texture (Windows) / a `Shared` R8 texture written by `replace_region` (Metal) / an R8 texture written by `Queue::write_texture` (wgpu) |
 | composite | `ps_main`, `t3` / `texture(3)` / `@binding(4)`, branch on `fx.z` |
 
 All three back-ends run all four stages.
+
+**Same code is not the same as same pixels.** Running one implementation makes preview and export
+agree on *what* is drawn; it does not by itself make them agree on *when* the mask is computed, and
+that is where the invariant was actually lost. The live path is cadenced on the wall clock
+(`should_run(Instant::now())`, 30 Hz) and infers on a worker thread — both right for a preview that
+must never block. `render_timeline` renders frames as fast as the machine decodes, with no relation
+to real time, and under that regime the same two choices are defects:
+
+- the number of output frames one mask covers follows machine speed and momentary load, so **two
+  exports of one project do not produce the same pixels**;
+- the opening frames are composed before the worker's first mask exists, and
+  `.filter(|_| mask.is_some())` turns the effect off entirely for them, so **the camera's real
+  background is baked into the file** — the one thing the transparent mode exists to prevent.
+
+`set_segmentation_deterministic(true)`, which `render_timeline` sets around its frame loop, swaps
+both: one inference **per frame**, run **synchronously** on the render thread, so frame N carries a
+mask computed from frame N's own camera image. It costs roughly 3 ms per frame, which an export can
+afford and a preview cannot. That is the entire difference between the two modes — shader, model
+and composite are identical.
 
 The model is `public/mediapipe/selfie_segmentation/selfie_segmentation_landscape.onnx`, derived
 from the vendored `.tflite` by `scripts/convert-selfie-segmentation-to-onnx.py`. Its path is
