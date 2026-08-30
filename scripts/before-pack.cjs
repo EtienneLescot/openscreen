@@ -983,7 +983,10 @@ function checkMacOsVersionFloor(dir) {
 			"#515: a helper built for 13 stranded every macOS 12 user, and the app reported it\n" +
 			"as a denied Accessibility permission.\n\n" +
 			"Pin the deployment target in whichever script built the file:\n\n" +
-			"    Swift    platforms: [.macOS(.v12)]      electron/native/screencapturekit/Package.swift\n" +
+			// Derived, not spelled out: this line said `.v12` for a while after the floor
+			// moved to 13, i.e. the guard's own remediation advice contradicted the floor
+			// it was enforcing.
+			`    Swift    platforms: [.macOS(.v${MAC_MIN_OS_FLOOR.split(".")[0]})]      electron/native/screencapturekit/Package.swift\n` +
 			"    CMake    -DCMAKE_OSX_DEPLOYMENT_TARGET  scripts/build-whisper-stt.sh\n" +
 			"    clang    -mmacosx-version-min           scripts/fetch-ffmpeg-macos.mjs\n" +
 			"    rustc    MACOSX_DEPLOYMENT_TARGET       scripts/build-macos-compositor-addon.mjs\n\n" +
