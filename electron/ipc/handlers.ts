@@ -502,6 +502,23 @@ let selectedSource: SelectedSource | null = null;
 let selectedDesktopSource: DesktopCapturerSource | null = null;
 /** Whether this launch has already raised macOS' Screen Recording prompt. */
 let screenPromptRaisedThisLaunch = false;
+
+/**
+ * Settles once the startup TCC ask (the microphone prompt in main.ts) has been
+ * answered. macOS will not stack a second permission alert: a Screen Recording
+ * prompt raised while the mic alert is still up is silently dropped, and
+ * `app.focus({ steal: true })` yanks activation from the alert the user is
+ * reading. First launch hits exactly this — mic prompt at startup, Record
+ * clicked moments later — and it is the one launch whose prompt the marker
+ * would then write off for good.
+ */
+let startupMediaPromptGate: Promise<unknown> = Promise.resolve();
+
+export function setStartupMediaPromptGate(gate: Promise<unknown>) {
+	startupMediaPromptGate = gate.catch(() => {
+		// A failed ask still settles the gate; the screen prompt proceeds.
+	});
+}
 /** Lazily opened so the userData path is only touched once the app needs it. */
 let screenPromptMarkerInstance: ScreenPromptMarker | null = null;
 
@@ -1886,6 +1903,14 @@ export function registerIpcHandlers(
 					raisedBefore: getScreenPromptMarker().hasRaisedBefore(),
 				})
 			) {
+				// Claim the launch's single raise before awaiting anything, so a
+				// concurrent request cannot start a second one while this waits.
+				screenPromptRaisedThisLaunch = true;
+				// Queue behind the startup mic alert (see startupMediaPromptGate).
+				// The marker is recorded inside the raise, on the other side of this
+				// await — recording it here would burn the machine's one prompt on
+				// an ask macOS never drew.
+				await startupMediaPromptGate;
 				raiseScreenRecordingPrompt();
 			}
 
