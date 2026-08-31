@@ -41,7 +41,7 @@ The agent is built with LangChain's `createAgent`, not `deepagents`' `createDeep
 
 ## Tool schema
 
-The model never free-writes the project document. It can only call the fixed set of 21 tools built by `deep-agent/service.ts#buildTools`, described by `TOOL_DESCRIPTIONS` in the same file and validated against the Zod argument schemas in `agent-tools.ts`; the executor parses JSON, validates arguments, and returns either a new schema-valid snapshot or an error. Those three surfaces (descriptions, built tools, executor cases) are pinned to one another by `deep-agent/service.test.ts` — an earlier fourth surface, `AGENT_TOOL_SPECS`, described the tools in JSON Schema for a provider it had stopped reaching, and drifted. The tools operate on the same [document model](document-model.md) as manual editing.
+The model never free-writes the project document. It can only call the fixed set of 23 tools built by `deep-agent/service.ts#buildTools`, described by `TOOL_DESCRIPTIONS` in the same file and validated against the Zod argument schemas in `agent-tools.ts`; the executor parses JSON, validates arguments, and returns either a new schema-valid snapshot or an error. Those three surfaces (descriptions, built tools, executor cases) are pinned to one another by `deep-agent/service.test.ts` — an earlier fourth surface, `AGENT_TOOL_SPECS`, described the tools in JSON Schema for a provider it had stopped reaching, and drifted. The tools operate on the same [document model](document-model.md) as manual editing.
 
 | Tool | What it does | What it mutates |
 |---|---|---|
@@ -63,11 +63,13 @@ The model never free-writes the project document. It can only call the fixed set
 | `setAnnotation` | Moves, resizes, or changes an annotation's text. | The corresponding clip-anchored `annotations` fragments. |
 | `addCameraFullscreen` | Adds a camera-fullscreen region over virtual timeline time; refused when no clip under the span comes from an asset with a linked `cameraTrack`, since such a region can only render nothing. | `legacyEditor.cameraFullscreenRegions`. |
 | `setCameraFullscreen` | Moves or resizes a camera-fullscreen pill, under the same camera requirement as `addCameraFullscreen`. | The corresponding `legacyEditor.cameraFullscreenRegions` fragments. |
+| `addAudio` | Lays an already-imported `kind: "audio"` asset over virtual timeline time, on the `voiceover` or `music` lane. Refused for an unknown or video asset, and the refusal lists the audio the project actually has — the agent has no way to import a file, so a guessed id is the failure mode to prevent. Omitting `endSec` plays the whole file from `offsetSec`. | `audioRanges`. |
+| `setAudio` | Moves, resizes, re-levels (`gainDb`), re-lanes (`kind`) or re-points (`offsetSec`) an audio pill. The payload patch hits every fragment under the pill, since all three are part of the region identity. | The corresponding clip-anchored `audioRanges` fragments. |
 | `removeTrim` | Deletes a trim so its source span plays and exports again. | `timeline.trimRanges`. |
-| `removeModifier` | Resolves and deletes a zoom, speed, annotation, or camera-fullscreen modifier by ID. | The matching modifier collection. |
+| `removeModifier` | Resolves and deletes a zoom, speed, annotation, camera-fullscreen or audio modifier by ID. | The matching modifier collection. |
 | `removeClip` | Deletes a placed clip, closes the gap, and drops effects anchored only to it. The result names the modifiers and trims it took with it. | Timeline clips and affected anchored modifiers. |
 
-Clips and trims use source time. Zoom, speed, annotation, and camera-fullscreen tools use virtual edited-timeline time; the executor converts these spans to the clip-anchored millisecond representation used by the document.
+Clips and trims use source time. Zoom, speed, annotation, camera-fullscreen and audio tools use virtual edited-timeline time; the executor converts these spans to the clip-anchored millisecond representation used by the document.
 
 ## Checkpoints and undo
 

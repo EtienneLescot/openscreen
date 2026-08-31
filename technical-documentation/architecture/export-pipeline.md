@@ -92,17 +92,26 @@ and **one** encoder + muxer pair:
   audio phase would fix the symptom rather than the cost, and is tracked
   separately.
 
-- **Imported audio tracks** (voiceover / BGM / SFX, issue #350) are mixed
-  on top of the assembled programme by `audio.rs::mix_external_tracks`,
-  between `assemble_concatenated_pcm` and `finish_audio`. Each track's
-  trim window is decoded through the same `decode_clip_audio` path a clip
-  uses, scaled by its per-track gain, and summed in at its `startSec`
-  offset; a track running past the video is truncated to it so the two
-  streams stay the same length. `startSec` is resolved renderer-side
-  (`buildSceneDescription`) from the track's raw timeline position — an
-  identity map without trims/speed, an accepted approximation otherwise,
-  matching how the preview approximates trims by re-seeking. The CLI's
-  `openscreen export --audio` remains a separate post-export remux
+- **Imported audio** (voiceover / music, issue #350) is mixed on top of the
+  assembled programme by `audio.rs::mix_external_tracks`, between
+  `assemble_concatenated_pcm` and `finish_audio`. Each entry's window is
+  decoded through the same `decode_clip_audio` path a clip uses, scaled by
+  its gain, and summed in at its offset; anything running past the video is
+  truncated to it so the two streams stay the same length.
+
+  The renderer resolves every field in `placeAudioRegions`
+  (`timeline/audio-placement.ts`) — the SAME function the preview reads, which
+  is what stops the editor and the file disagreeing. It emits **one entry per
+  fragment**: a region drawn across a cut is stored as one fragment per clip,
+  and each fragment starts the file where the previous one stopped, so a bed
+  spanning a junction does not restart at it. Positions are projected raw →
+  output through the trims AND the speed regions, so a cut or a stretch ahead
+  of a region pulls it earlier by exactly what the picture lost.
+
+  The media itself always plays at **1×**: a speed region stretches clip PCM,
+  never an imported file. Only the placement follows the speed change.
+
+  The CLI's `openscreen export --audio` remains a separate post-export remux
   (`voiceoverMix.ts`) for a single track and is unaffected.
 
 - **Output** honours the timeline's selected aspect ratio

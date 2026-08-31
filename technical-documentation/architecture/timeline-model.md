@@ -1,7 +1,8 @@
 # Timeline coordinate model — clip-anchored modifiers
 
-A modifier (zoom, speed, annotation, full-camera) in the project document is **anchored
-to a clip in that clip's own source time**, not to an absolute timeline position. The
+A modifier (zoom, speed, annotation, full-camera, audio) in the project document is
+**anchored to a clip in that clip's own source time**, not to an absolute timeline
+position. The
 single module that knows how the three coordinate frames relate —
 [`src/lib/ai-edition/timeline/timelineMap.ts`](../../src/lib/ai-edition/timeline/timelineMap.ts) —
 is the only place that translates between them. Every consumer — the timeline UI, the
@@ -33,7 +34,7 @@ existing.
 
 ## Clip-anchored modifiers
 
-Every region (zoom / speed / annotation / cameraFullscreen) is stored as one or more
+Every region (zoom / speed / annotation / cameraFullscreen / audio) is stored as one or more
 **clip-anchored fragments** — `{clipId, sourceStartSec, sourceEndSec, …payload}` — keyed
 to the clip it lives on, in that clip's source media time. A region the user drew
 across a clip boundary is stored as one fragment per covered clip; the fragments carry
@@ -185,6 +186,55 @@ The caret/selection helpers at the bottom of `RightPanes.tsx` never parse that i
 read it off `data-word-id` and scope every query to one block's editor element, so they
 stay correct whatever the id looks like.
 
+### Audio is a region over continuous media
+
+`audioRanges` (issue #350) is a region kind like the others — same anchor, same merge and
+repel rules, same pill, same Delete and copy/paste — and it is the one kind whose *payload
+is media rather than a value*. That difference costs exactly two departures, both of them
+load-bearing.
+
+**The file is named `audioAssetId`, not `assetId`.** `assetId` is in
+`NON_IDENTITY_FIELDS`, which is right for a trim: there it says *where* the cut lives. For
+an audio region the file IS what the region is, so two beds from different files that
+happen to touch must not merge into one pill. Naming the field outside that list is what
+makes `regionIdentityKey` read it. This is a wart, and an honest one: the general fix is
+per-kind identity rather than a field-name heuristic, which is a larger change than this
+feature should carry. If per-kind identity ever lands, rename the field back.
+
+**`offsetSec` belongs to the PILL, not to the fragment.** Ventilation copies the payload
+verbatim, which is exactly what keeps the fragments of one region merging into one pill —
+and exactly what would make a music bed restart from its in-point at every clip boundary
+if the stored value were handed to the mixer as-is. The per-fragment advance is *derived*
+at render time by `placeAudioRegions`
+([`audio-placement.ts`](../../src/lib/ai-edition/timeline/audio-placement.ts)), which walks
+a pill's fragments left to right and advances the cursor by the OUTPUT length of each.
+
+Output length, not raw length, because that is how much media the fragment gets to play:
+under a 2× stretch a 10 s raw span occupies 5 s of programme, so it consumes 5 s of the
+file. The media itself always plays at **1×** — a speed region stretches clip PCM, never an
+imported file — so what a speed region changes about an audio region is its *placement*,
+never its pitch. `projectRawTimelineSecToPlayback`
+([`document/timeline.ts`](../../src/lib/ai-edition/document/timeline.ts)) is the single
+raw→output projection, trims and speed integrated together, and both the preview and
+`buildSceneDescription` read it through `placeAudioRegions`. One function, so the editor
+and the file cannot disagree.
+
+The same walk answers what a cut does to a bed. A fragment a trim removes entirely
+projects to zero output length, contributes nothing, and does **not** advance the cursor —
+so the fragments after it carry on playing the file where the last audible one stopped. A
+cut under a bed shortens the bed; it never desynchronises what follows it.
+
+Two lanes, one region family: `kind` (`voiceover` / `music`) is part of the identity, so
+regions of different kinds never merge and — more importantly — never repel. A single lane
+would make rule 2 forbid a voiceover sitting over a music bed, which is the arrangement the
+feature exists for.
+
+One gesture audio has that no other kind does: dragging a pill's **left edge** trims its
+in-point (`offsetSec` advances by however far the edge actually moved, measured on the
+clamped result) while the body drag carries the media with the pill. For a value-per-span
+kind the edge you grabbed changes nothing about what it renders; for media it decides
+whether the sound at a given second stays put.
+
 ## Invariants
 
 A change that breaks one of these is wrong even if every test passes; treat them as
@@ -242,6 +292,14 @@ the contract a reviewer can grade against. Each is asserted in
   unanchored so the data is not lost. The two layers disagree on purpose — the
   low-level primitive is for explicit projection, the migration wrapper is for
   preserving user data.
+- **Every fragment of one audio pill plays the file contiguously.** Fragment 2 starts
+  where fragment 1 stopped, measured in OUTPUT seconds; a fragment a trim removed
+  entirely does not advance the cursor. Asserted in
+  [`audio-placement.test.ts`](../../src/lib/ai-edition/timeline/audio-placement.test.ts).
+- **Imported audio never changes pitch.** A speed region moves an audio region's
+  placement (through `projectRawTimelineSecToPlayback`) and shortens what it plays; the
+  element's `playbackRate` stays 1 in the preview and `mix_external_tracks` sums at 1× in
+  the export.
 - **A region authored on a clip that was later deleted disappears** (anchor resolves
   to null, the fragment is not shown). Its id is preserved in the document so undo
   restores it with its anchor.
@@ -260,10 +318,12 @@ in the same commit, or the project round-trips into an inconsistent state:
 | **Inspector selection pane** | `src/components/ai-edition/v4/FloatingInspector.tsx` (`SelectionPane`, `:444`) | Edits a selected region by pill id; routes through `useTimeline` and therefore through `replacePillSpan`. |
 | **Store / authoring (UI)** | `src/lib/ai-edition/store/useTimeline.ts` | Every `add*`, `update*Span`, `removeRegion` goes through `anchorRegionsWithDerivedMs` (`:134, :163, :278, :305, :329`) and `replacePillSpan` / `dropPillsByIds` / `resolvePillIds`. |
 | **Native preview scene** | `src/native/sceneDescription.ts` (`:489, :508, :517, :531`) | Calls `projectRegionsToSource` for every region kind before serialising to the native compositor. |
+| **Audio placement** | `src/lib/ai-edition/timeline/audio-placement.ts` | The one projection for `audioRanges`: pill fragments → output-programme entries with per-fragment in-points. Read by BOTH `buildSceneDescription` (the export's mix list) and `VirtualPreview` (which `<audio>` plays what, and where). A second implementation on either side is the preview/export desync this exists to prevent. |
 | **Native playback sync** | `src/native/useNativePlaybackSync.ts` (`:22, :39`) | Resolves the RAW playhead through `resolveNativePosition` to feed `setActiveClip` / `presentTime`. |
 | **Native compositor overlay** | `src/components/ai-edition/NativeCompositorOverlay.tsx` (`:3, :70`) | Same — `resolveNativePosition(currentTimeSec, nativeClips, document.timeline.clips)` — to keep preview in sync with the timeline ruler. |
 | **Multi-clip export** | `src/lib/ai-edition/exporter/documentExporter.ts` | Projects regions to source per-clip through `region-ventilation`'s `projectRegionsToSourceTime`; identity single-clip projects are unchanged. |
 | **Captions layer** | `src/lib/ai-edition/captions/cues.ts` (`:14-15` and `captionCuesToTextRegions`) | Caption cues are a derived view of the transcript; the projection to source at export goes through `projectRegionsToSourceTime` from `region-ventilation`, matching the multi-clip export path so preview and file agree. |
+| **Preview audio** | `src/components/ai-edition/VirtualPreview.tsx` | Mounts one `<audio>` per PILL (not per fragment) and drives it from `resolveAudioPlayback` against the projected playhead. |
 | **Agent LLM tools** | `electron/ai-edition/agent-tools.ts` (`:22-26, :80-95, :560-575, :772-820, :835-880, :952, :1025`) | Writes the same shape via `anchorRegionsWithDerivedMs` / `replacePillSpan` / `resolvePillIds`; reads it through `coalesceRegionsForRuler` (`coalesceForAgent`, `:77-86`) so the model reasons in virtual seconds over whole pills. |
 
 ## Known gaps
