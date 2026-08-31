@@ -434,6 +434,12 @@ impl SwDecoder {
                 // On envoie donc un packet NULL pour passer le décodeur en mode drain,
                 // puis on vide les frames restantes — exactement ce que fait
                 // `receive_into` du pompage séquentiel à l'EOF.
+                //
+                // NOTE : sur les captures de l'app (H.264 baseline, `has_b_frames=0`)
+                // ce drain ne rend rien — sans réordonnancement le pompage normal a déjà
+                // tout reçu. Il reste néanmoins nécessaire pour tout flux AVEC B-frames
+                // (vidéos importées, autres codecs) où la dernière frame est retenue dans
+                // le buffer de réordonnancement.
                 av_packet_free(&mut pkt);
                 avcodec_send_packet(self.dec, ptr::null_mut());
                 frame = av_frame_alloc();
