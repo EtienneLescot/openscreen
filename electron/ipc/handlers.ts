@@ -547,9 +547,11 @@ export interface ScreenAccessResult {
 	/** What the OS actually said. Never bent to steer the caller. */
 	status: string;
 	/**
-	 * Whether macOS' own prompt has been raised this launch and may still be unanswered.
+	 * Whether THIS call raised macOS' own prompt, which may still be unanswered.
 	 * This, and not `status`, is what tells a caller to keep polling: macOS keeps
 	 * reporting the permission as absent for the whole time its prompt is on screen.
+	 * Scoped to the raising call so every other request — the second click of a
+	 * launch included — reaches the Settings dialog without sitting out the wait.
 	 */
 	promptRaised: boolean;
 	/**
@@ -1896,13 +1898,12 @@ export function registerIpcHandlers(
 				};
 			}
 
-			if (
-				shouldRaiseScreenPrompt({
-					status,
-					raisedThisLaunch: screenPromptRaisedThisLaunch,
-					raisedBefore: getScreenPromptMarker().hasRaisedBefore(),
-				})
-			) {
+			const raiseNow = shouldRaiseScreenPrompt({
+				status,
+				raisedThisLaunch: screenPromptRaisedThisLaunch,
+				raisedBefore: getScreenPromptMarker().hasRaisedBefore(),
+			});
+			if (raiseNow) {
 				// Claim the launch's single raise before awaiting anything, so a
 				// concurrent request cannot start a second one while this waits.
 				screenPromptRaisedThisLaunch = true;
@@ -1917,12 +1918,14 @@ export function registerIpcHandlers(
 			// `status` is what the OS actually said, always. Whether the caller should keep
 			// polling rides on `promptRaised` instead -- a separate field for a separate
 			// question, so no branch here has to misreport the permission to keep the
-			// renderer's retry loop alive.
+			// renderer's retry loop alive. Scoped to the call that raised the prompt: a
+			// sticky per-launch value would arm the wait on every later click too, making
+			// each one sit out the full retry budget before the dialog it was owed at once.
 			return {
 				success: true,
 				granted: false,
 				status,
-				promptRaised: screenPromptRaisedThisLaunch,
+				promptRaised: raiseNow,
 			};
 		} catch (error) {
 			console.error("Failed to request screen access:", error);
@@ -1930,7 +1933,7 @@ export function registerIpcHandlers(
 				success: false,
 				granted: false,
 				status: "unknown",
-				promptRaised: screenPromptRaisedThisLaunch,
+				promptRaised: false,
 				error: String(error),
 			};
 		}

@@ -4,7 +4,7 @@ export type ScreenAccessResult = {
 	/** What the OS actually said. Never bent to steer this loop. */
 	status: string;
 	/**
-	 * macOS' own prompt was raised this launch and may still be unanswered.
+	 * macOS' own prompt was raised by this very call and may still be unanswered.
 	 *
 	 * This, and not `status`, is what arms the wait below. macOS reports the permission
 	 * as absent for the whole time its prompt is on screen -- it only flips once the user

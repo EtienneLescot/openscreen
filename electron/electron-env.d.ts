@@ -53,7 +53,7 @@ interface Window {
 				/** What the OS actually said. Never bent to steer the caller. */
 				status: string;
 				/**
-				 * macOS' own prompt was raised this launch and may still be unanswered. This, and
+				 * macOS' own prompt was raised by this very call and may still be unanswered. This, and
 				 * not `status`, is what tells the renderer to keep polling: macOS reports the
 				 * permission as absent for the whole time its prompt is on screen.
 				 */
@@ -94,7 +94,7 @@ interface Window {
 			/** What the OS actually said. Never bent to steer the caller. */
 			status: string;
 			/**
-			 * macOS' own prompt was raised this launch and may still be unanswered. This, and
+			 * macOS' own prompt was raised by this very call and may still be unanswered. This, and
 			 * not `status`, is what tells the renderer to keep polling: macOS reports the
 			 * permission as absent for the whole time its prompt is on screen.
 			 */
