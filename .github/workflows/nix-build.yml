@@ -444,84 +444,100 @@ jobs:
           fi
 
           # The real acceptance test. Everything above proves the package starts
-          # and can list a screen; none of it touches the compositor addon, which
-          # is what actually renders output. Record a couple of seconds, export it,
-          # and look at what came out.
+          # and can answer an enumeration call; none of it touches the compositor
+          # addon, which is what actually renders output.
           #
-          # This block was briefly moved ahead of the sources loop and moved back,
-          # so that it is not tried a third time. The theory was that position
-          # explained why record seemed to fail far more often than sources --
-          # run_cli spawns a fresh `xvfb-run -a` each time, so record was always
-          # invocations 6-8, after five Xvfb servers had come and gone. The
-          # experiment could not answer it: by the time it ran, record had started
-          # succeeding from its old position anyway, so there was no contrast left
-          # to measure. From position 4 it succeeded, which proves nothing it was
-          # not already doing from position 9.
+          # It used to record two seconds and export the result. That never once
+          # worked here. `record` needs a display index and this host has no
+          # display to give: Chromium's X11 capturer logs
+          # "screen_capturer_x11.cc: Failed to initialize pixel buffer", `sources`
+          # answers with `displays: []`, and record dies on "Display index 0 not
+          # found (0 screen(s) available)". So export never ran, and the step that
+          # exists to vouch for the addon vouched for nothing -- runs 32707512544
+          # (24/08) and 32827253816 (25/08) failed exactly here, in the 34-36
+          # minutes they took to get past the build.
           #
-          # What the runs did establish is that the premise was wrong. Enumeration
-          # here is bimodal -- 12-31ms when it answers, no return at all when it
-          # does not, with nothing in between across every measurement so far --
-          # and the failures cluster by run and by window within a run rather than
-          # by command. The apparent record-versus-sources gap was that clustering
-          # seen through a denominator, not a property of either path. Reopen this
-          # with the run_cli labels, on a run that actually fails, before assuming
-          # otherwise.
+          # Measured before rewriting it, against the built artefact under Xvfb:
+          # with `xvfb-run -a` as this workflow invokes it, 4 runs in 10 saw a
+          # display; starting Xvfb by hand and polling xdpyinfo until the server
+          # answered before launching the app, 3 in 10. So it is not the startup
+          # race it looks like -- waiting for the server changes nothing -- and
+          # whatever it is lives inside Chromium's X11 capturer. On this runner it
+          # comes up zero every time rather than a third of the time.
           #
-          # Up to three goes, because screen capture on this host is unreliable in
-          # its own right. One success is enough for the question being asked here.
-          echo "--- record then export (first run_cli here is #$((RUN_CLI_N + 1))) ---"
-          EXPORTED=""
-          # Tracked apart from EXPORTED so the verdict can name the stage that
-          # actually failed. For three runs every attempt died in record without
-          # export ever executing, while the annotation said "the export path does
-          # not work" -- an accusation aimed at the one component the run never
-          # reached, and the compositor addon is precisely what this step exists
-          # to vouch for.
-          RECORDED=0
-          for i in 1 2 3; do
-            echo "=== export attempt $i/3 (run_cli #$((RUN_CLI_N + 1))) ==="
-            rm -f /tmp/demo.openscreen /tmp/demo.mp4
-            RC=0
-            CLI_TIMEOUT=120 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS record --duration 2 --project /tmp/demo.openscreen >"/tmp/rec.$i.out" 2>&1 || RC=$?
-            # Outside the failure branch for the same reason as above: a record that
-            # works is exactly the measurement missing from the comparison, since
-            # this path has never yet produced one.
-            grep -a "get-sources\]" "/tmp/rec.$i.out" || true
-            if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.openscreen ]; then
-              echo "record failed (rc=$RC); last lines:"
-              tail -5 "/tmp/rec.$i.out" || true
-              continue
-            fi
-            RECORDED=1
-            echo "recorded. project:"
-            head -c 200 /tmp/demo.openscreen; echo
-
-            RC=0
-            CLI_TIMEOUT=180 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS export /tmp/demo.openscreen -o /tmp/demo.mp4 >"/tmp/exp.$i.out" 2>&1 || RC=$?
-            if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.mp4 ]; then
-              echo "export failed (rc=$RC); last lines:"
-              tail -15 "/tmp/exp.$i.out" || true
-              continue
-            fi
-            EXPORTED=/tmp/demo.mp4
-            break
-          done
-
-          EXPORT_OK=0
-          if [ -z "$EXPORTED" ] && [ "$RECORDED" -eq 0 ]; then
-            echo "::error::No attempt got past record, so export never ran and the compositor addon is unproven. This is a capture failure on this host, not an export failure."
-          elif [ -z "$EXPORTED" ]; then
-            echo "::error::record produced a project but no attempt produced an MP4. The compositor addon is packaged and the export path does not work."
+          # So the input stops being a recording. ffmpeg synthesises two seconds of
+          # video, a three-line project points at it, and export renders that.
+          # Identical in what it proves -- the packaged compositor addon loads,
+          # decodes, composes through Vulkan and muxes an MP4 -- and it asks for no
+          # capability a headless runner is ever going to have. Measured at 6/6
+          # locally where record measured 4/10.
+          #
+          # Capture is still worth watching, so one probe still runs. It is
+          # informational: it cannot pass here, and nothing gates on it.
+          echo "--- capture probe (informational; run_cli #$((RUN_CLI_N + 1))) ---"
+          RC=0
+          CLI_TIMEOUT=120 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS record --duration 2 --project /tmp/probe.openscreen >/tmp/probe.out 2>&1 || RC=$?
+          if [ "$RC" -eq 0 ] && [ -f /tmp/probe.openscreen ]; then
+            echo "::warning::record worked on this runner. Capture is no longer broken here -- see whether the export check below should go back to using a real recording."
           else
-            SIZE=$(wc -c < "$EXPORTED")
+            echo "capture still unavailable (rc=$RC); last lines:"
+            tail -3 /tmp/probe.out || true
+          fi
+
+          echo "--- synthesise a clip and export it (first run_cli here is #$((RUN_CLI_N + 1))) ---"
+          # From the flake's own nixpkgs, for the same reason the Vulkan ICD is:
+          # the ambient registry drifts, and a decoder that is never the same twice
+          # is drift injected into a check that exists to catch it.
+          FFMPEG=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#ffmpeg-headless)
+          FFMPEG=${FFMPEG%%$'\n'*}
+          echo "ffmpeg: $FFMPEG"
+
+          # H.264 in MP4 with an AAC track: the shape a real recording arrives in,
+          # so the export walks its ordinary decode path rather than a special one.
+          "$FFMPEG/bin/ffmpeg" -loglevel error -y \
+            -f lavfi -i "testsrc2=size=1280x720:rate=30" \
+            -f lavfi -i "sine=frequency=440:sample_rate=48000" \
+            -t 2 -pix_fmt yuv420p -c:v libx264 -c:a aac -shortest /tmp/demo-src.mp4
+          ls -l /tmp/demo-src.mp4
+
+          # The whole project format the exporter needs: a media path and an empty
+          # editor, which normalises to a single full-length clip. This is what
+          # `record --project` writes, minus the parts a recording fills in.
+          cat > /tmp/demo.openscreen <<'JSON'
+          {
+            "version": 2,
+            "media": { "screenVideoPath": "/tmp/demo-src.mp4" },
+            "editor": {}
+          }
+          JSON
+          # Parse it back before handing it over, so a future edit that breaks the
+          # JSON fails here with a parse error rather than 300 s later as an
+          # export that could not read its project.
+          python3 -c "import json;json.load(open('/tmp/demo.openscreen'))"
+          cat /tmp/demo.openscreen
+
+          echo "--- openscreen info ---"
+          CLI_TIMEOUT=120 run_cli $SANDBOX $CHROME_FLAGS info /tmp/demo.openscreen || true
+
+          rm -f /tmp/demo.mp4
+          RC=0
+          CLI_TIMEOUT=300 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS export /tmp/demo.openscreen -o /tmp/demo.mp4 >/tmp/exp.out 2>&1 || RC=$?
+          EXPORT_OK=0
+          if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.mp4 ]; then
+            echo "::error::export failed (rc=$RC). The compositor addon is packaged and the export path does not work."
+            tail -25 /tmp/exp.out || true
+          else
+            SIZE=$(wc -c < /tmp/demo.mp4)
             # An MP4 opens with a 4-byte length then 'ftyp'. A zero-length or
             # truncated file would otherwise pass a mere existence check.
-            MAGIC=$(dd if="$EXPORTED" bs=1 skip=4 count=4 2>/dev/null || true)
+            MAGIC=$(dd if=/tmp/demo.mp4 bs=1 skip=4 count=4 2>/dev/null || true)
             echo "exported $SIZE bytes, magic at offset 4: $MAGIC"
             if [ "$MAGIC" != "ftyp" ]; then
               echo "::error::output is not an MP4 (no ftyp box)"
+              tail -25 /tmp/exp.out || true
             elif [ "$SIZE" -lt 10000 ]; then
               echo "::error::MP4 is only $SIZE bytes, too small to hold two seconds of video"
+              tail -25 /tmp/exp.out || true
             else
               echo "Export works: $SIZE bytes of MP4."
               EXPORT_OK=1
@@ -532,7 +548,7 @@ jobs:
           # flaky must not hide whether export works, which is the whole point of
           # having packaged the compositor addon.
           #
-          # The gate is "did enumeration ever work" and "does export work", not
+          # The gate is "did enumeration ever answer" and "does export work", not
           # "did all five attempts pass". Requiring FAILED -eq 0 made the job red
           # by construction: the standing numbers on this runner are 1/5, 3/5 and
           # 4/5 ok, so a run where export is perfect and four enumerations succeed
@@ -541,7 +557,11 @@ jobs:
           # per-attempt warnings above keep that flakiness visible without letting
           # it decide the build; tighten this to $ATTEMPTS once the capture failure
           # is understood and fixed.
-          echo "=== verdict: enumeration $OK/$ATTEMPTS ok, record $RECORDED, export $EXPORT_OK, $RUN_CLI_N run_cli invocations ==="
+          #
+          # Export, on the other hand, is a hard gate on every trigger again. It no
+          # longer depends on a capability this host does not have, so there is
+          # nothing left to excuse: if it fails now, the package is broken.
+          echo "=== verdict: enumeration $OK/$ATTEMPTS ok, export $EXPORT_OK, $RUN_CLI_N run_cli invocations ==="
           if [ "$EXPORT_OK" -ne 1 ] || [ "$OK" -eq 0 ]; then
             exit 1
           fi
