@@ -834,22 +834,41 @@ fn stretch_pcm_to_length(pcm: &[Vec<f32>], target_samples: usize) -> PlanarPcm {
     exact
 }
 
+/// Plafond du nombre d'étages atempo chaînés.
+///
+/// `speed` vient de `source_samples / target_samples`, pas de l'éditeur : une scène corrompue
+/// où une poignée d'échantillons vise une cible d'une heure donne un ratio arbitrairement
+/// petit, et le chaînage par 0.5 empile alors une trentaine d'étages — plus d'un millier pour
+/// un subnormal — chacun avec sa fenêtre d'analyse et sa perte d'amorçage. Huit couvre
+/// jusqu'à 0.5⁸ ≈ 0,0039, soit vingt-cinq fois sous `MIN_PLAYBACK_SPEED` (0,1) ; au-delà on
+/// rend `None` et le WSOLA, qui n'a pas de bornes, prend le relais.
+const ATEMPO_MAX_STAGES: usize = 8;
+
 /// Découpe un facteur de vitesse en facteurs que `atempo` accepte individuellement : le
 /// filtre n'admet que [0.5, 100.0], on chaîne donc les dépassements (0.2 → [0.5, 0.5, 0.8],
 /// 250 → [100.0, 2.5]) — le produit des facteurs reconstitue la vitesse demandée.
-fn atempo_factors(speed: f64) -> Vec<f64> {
+///
+/// Rend `None` au-delà de `ATEMPO_MAX_STAGES` maillons. La borne haute est chaînée elle
+/// aussi : `MAX_PLAYBACK_SPEED` vaut 100 donc un seul étage suffit à tout ce que l'éditeur
+/// produit, mais `speed` est un rapport de longueurs quantifiées, pas la vitesse cliquée, et
+/// rien ne garantit qu'il reste sous la borne du filtre.
+fn atempo_factors(speed: f64) -> Option<Vec<f64>> {
     let mut factors = Vec::new();
     let mut remaining = speed;
-    while remaining > 100.0 {
-        factors.push(100.0);
-        remaining /= 100.0;
-    }
-    while remaining < 0.5 {
-        factors.push(0.5);
-        remaining /= 0.5;
+    while remaining > 100.0 || remaining < 0.5 {
+        if factors.len() >= ATEMPO_MAX_STAGES {
+            return None;
+        }
+        if remaining > 100.0 {
+            factors.push(100.0);
+            remaining /= 100.0;
+        } else {
+            factors.push(0.5);
+            remaining /= 0.5;
+        }
     }
     factors.push(remaining);
-    factors
+    Some(factors)
 }
 
 /// RAII : libère le graphe même en sortie précoce sur erreur.
@@ -1197,7 +1216,7 @@ unsafe fn avfilter_atempo_stretch(
             .collect()
     };
 
-    let factors = atempo_factors(speed);
+    let factors = atempo_factors(speed)?;
     let prime_tail = atempo_prime_tail(&factors, speed);
     let mut stretched = planes(target_samples);
     let produced = atempo_pass(pcm, &factors, prime_tail, target_samples, &mut stretched)?;
@@ -1211,7 +1230,7 @@ unsafe fn avfilter_atempo_stretch(
         // autant, et le contenu tombe cette fois pile sur `target_samples`.
         let corrected_target = target_samples + shortfall + ATEMPO_LENGTH_GUARD;
         let corrected_speed = source_samples as f64 / corrected_target as f64;
-        let corrected_factors = atempo_factors(corrected_speed);
+        let corrected_factors = atempo_factors(corrected_speed)?;
         let corrected_tail = atempo_prime_tail(&corrected_factors, corrected_speed);
         let mut corrected = planes(target_samples);
         atempo_pass(
@@ -1634,14 +1653,34 @@ mod tests {
     #[test]
     fn atempo_factors_split_out_of_range_speeds() {
         // Dans les bornes : un seul maillon.
-        assert_eq!(atempo_factors(1.25), vec![1.25]);
-        assert_eq!(atempo_factors(0.5), vec![0.5]);
+        assert_eq!(atempo_factors(1.25), Some(vec![1.25]));
+        assert_eq!(atempo_factors(0.5), Some(vec![0.5]));
         // Hors bornes : chaîne dont le produit reconstitue la vitesse.
-        assert_eq!(atempo_factors(0.2), vec![0.5, 0.5, 0.8]);
-        assert_eq!(atempo_factors(250.0), vec![100.0, 2.5]);
+        assert_eq!(atempo_factors(0.2), Some(vec![0.5, 0.5, 0.8]));
+        assert_eq!(atempo_factors(250.0), Some(vec![100.0, 2.5]));
         for speed in [0.07f64, 0.3, 1.0, 3.7, 4_000.0] {
-            let product: f64 = atempo_factors(speed).iter().product();
+            let product: f64 = atempo_factors(speed).expect("dans le plafond").iter().product();
             assert!((product - speed).abs() < 1e-9, "produit={product} attendu={speed}");
+        }
+        // MIN_PLAYBACK_SPEED tient largement dans le plafond.
+        assert_eq!(atempo_factors(0.1).map(|f| f.len()), Some(4));
+    }
+
+    #[test]
+    fn atempo_declines_a_chain_it_would_have_to_stack() {
+        // `speed` est `source_samples / target_samples`, pas la vitesse cliquée : une scène
+        // corrompue où une poignée d'échantillons vise une cible d'une heure produit un
+        // ratio arbitrairement petit. Sans plafond le chaînage empilait une trentaine
+        // d'étages — plus d'un millier pour un subnormal — chacun avec sa perte d'amorçage.
+        assert_eq!(atempo_factors(1.0 / 48_000.0 / 3_600.0), None);
+        assert_eq!(atempo_factors(f64::MIN_POSITIVE), None);
+        assert_eq!(atempo_factors(1e30), None);
+        // Et le repli tient le contrat de longueur : c'est le WSOLA qui prend la main.
+        let pcm = sine(0.05);
+        let target = pcm[0].len() * 5_000;
+        let stretched = stretch_pcm_to_length(&pcm, target);
+        for plane in &stretched {
+            assert_eq!(plane.len(), target);
         }
     }
 
