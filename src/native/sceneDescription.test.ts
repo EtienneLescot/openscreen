@@ -615,6 +615,74 @@ describe("buildSceneDescription.zoomRegions with an earlier trim", () => {
 			},
 		]);
 	});
+
+	it("keeps a zoom that a trim removes entirely, marked underTrim", () => {
+		// A trim cuts at render time, but it is marked by its pill and the user can still park
+		// the playhead on it — so what lies underneath has to reach the compositor (issue #216).
+		// Trim removes source [2,8]; the zoom at raw [3,5] falls entirely inside it. It is
+		// emitted on its own source span, addressed to the segment the cut interrupts (seg1,
+		// source [0,2] → clipIndex 0), and marked so native gates it on that span alone.
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a", originalPath: "/a.mp4" })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "a", startSec: 2, endSec: 8, reason: "", origin: "user" },
+				],
+			},
+			zoomRanges: [
+				makeZoom({ id: "z", startMs: 3000, endMs: 5000, depth: 3, focus: { cx: 0.5, cy: 0.5 } }),
+			],
+		});
+		expect(buildSceneDescription(doc).zoomRegions).toEqual([
+			{
+				id: "z",
+				startSec: 3,
+				endSec: 5,
+				scale: ZOOM_DEPTH_SCALES[3],
+				focusX: 0.5,
+				focusY: 0.5,
+				focusMode: null,
+				rotation: null,
+				clipIndex: 0,
+				underTrim: true,
+			},
+		]);
+	});
+
+	it("drops a speed region a trim removes entirely rather than shipping it inert", () => {
+		// Same geometry, speed instead of zoom. A still frame has no rate to show, and these
+		// spans are what the export's frame count is derived from — nothing to gain.
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a", originalPath: "/a.mp4" })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "a", startSec: 2, endSec: 8, reason: "", origin: "user" },
+				],
+			},
+			legacyEditor: { speedRegions: [{ id: "s", startMs: 3000, endMs: 5000, speed: 2 }] },
+		});
+		expect(buildSceneDescription(doc).speedRegions).toEqual([]);
+	});
 });
 
 // --- cameraFullscreenRegions -------------------------------------------------

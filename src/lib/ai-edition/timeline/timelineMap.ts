@@ -439,6 +439,84 @@ export function hasCompleteClipAnchor<T extends RegionClipAnchor>(
 }
 
 /**
+ * RAW-virtual extent of a raw clip: the whole stretch of ruler it occupies, trims
+ * included. Derived from its own source length rather than read off `timelineEndSec`
+ * so it agrees with `segmentRawSpanSec` by construction.
+ */
+function rawClipSpanSec(clip: AxcutClip): { startSec: number; endSec: number } {
+	const lenSec = (clip.sourceEndSec ?? clip.sourceStartSec) - clip.sourceStartSec;
+	return { startSec: clip.timelineStartSec, endSec: clip.timelineStartSec + lenSec };
+}
+
+/** The raw clip whose ruler stretch contains `rawSec` (last clip's end inclusive). */
+function rawClipAt(rawSec: number, rawClips: AxcutClip[]): AxcutClip | undefined {
+	return rawClips.find((clip, i) => {
+		const { startSec, endSec } = rawClipSpanSec(clip);
+		const isLast = i === rawClips.length - 1;
+		return rawSec >= startSec && (rawSec < endSec || (isLast && rawSec <= endSec));
+	});
+}
+
+/**
+ * Which KEPT segment ADDRESSES a source moment the trims removed.
+ *
+ * A cut stretch has, by construction, no segment of its own — that is what being cut
+ * means — yet everything the native side matches is keyed by `clipIndex` into the
+ * compressed stream. So a modifier lying under a trim, and the playhead parked on it,
+ * both have to borrow a neighbour's index. THE rule, in one place, because the two
+ * must pick the SAME one: `for_clip_window` (scene.rs) only keeps a region whose
+ * `clipIndex` equals the clip being composed, so a region addressing segment 0 while
+ * the playhead addresses segment 1 would silently draw nothing.
+ *
+ * The rule: the last kept segment of that clip starting at or before the moment —
+ * i.e. the content the cut interrupts — falling back to the clip's first segment when
+ * the cut precedes all of them (a trim on the clip's head). `-1` when the clip has no
+ * kept segment at all: nothing addresses it, and inventing an index would put the
+ * modifier on an unrelated clip, the exact leak `belongs()` exists to prevent.
+ */
+function cutAddressingSegmentIndex(
+	visibleSegments: AxcutClip[],
+	segmentRawClipIds: (string | undefined)[],
+	rawClipId: string,
+	sourceSec: number,
+): number {
+	let index = -1;
+	visibleSegments.forEach((seg, i) => {
+		if (segmentRawClipIds[i] !== rawClipId) return;
+		if (index < 0 || seg.sourceStartSec <= sourceSec) index = i;
+	});
+	return index;
+}
+
+/**
+ * The SOURCE span of a region that no kept segment covers, plus the raw clip it lives on.
+ * `null` when no raw clip carries it (nothing to address it with — see
+ * `cutAddressingSegmentIndex`).
+ */
+function cutRegionSourceSpan<T extends { startMs: number; endMs: number } & RegionClipAnchor>(
+	region: T,
+	rawClips: AxcutClip[],
+): { clipId: string; startSec: number; endSec: number } | null {
+	if (hasCompleteClipAnchor(region)) {
+		return {
+			clipId: region.clipId,
+			startSec: Math.min(region.sourceStartSec, region.sourceEndSec),
+			endSec: Math.max(region.sourceStartSec, region.sourceEndSec),
+		};
+	}
+	// Unanchored: only a RAW span to go on. Map it through the raw clip that carries its
+	// start — the same clip the anchor would have named had migration been able to write one.
+	const lo = Math.min(region.startMs, region.endMs) / 1000;
+	const hi = Math.max(region.startMs, region.endMs) / 1000;
+	const clip = rawClipAt(lo, rawClips);
+	if (!clip) return null;
+	const span = rawClipSpanSec(clip);
+	const toSource = (sec: number) =>
+		clip.sourceStartSec + (Math.min(Math.max(sec, span.startSec), span.endSec) - span.startSec);
+	return { clipId: clip.id, startSec: toSource(lo), endSec: toSource(hi) };
+}
+
+/**
  * Resolve regions (zoom / annotation / speed / camera-fullscreen) onto the SOURCE-ms
  * ranges the native compositor matches against, plus the `clipIndex` into the
  * trim-compressed stream.
@@ -452,9 +530,26 @@ export function hasCompleteClipAnchor<T extends RegionClipAnchor>(
  *    extent, kept because migration deliberately preserves un-anchorable regions.
  *
  * In both paths a region split across two kept segments by a trim yields one entry per
- * segment (fresh id for the extra copies, original id on the first), and a region
- * overlapping no visible segment passes through unchanged with no `clipIndex` (native
- * falls back to time-overlap) — the contract callers already relied on.
+ * segment (fresh id for the extra copies, original id on the first).
+ *
+ * A region overlapping no visible segment lies entirely under a trim: it is emitted ONCE,
+ * marked `underTrim`, on its own source span and borrowing the `clipIndex` of the kept
+ * segment the cut interrupts (`cutAddressingSegmentIndex`). It is deliberately NOT
+ * dropped: a trim is marked by its pill and skipped during playback, but a user who
+ * moves the playhead onto it themselves should see what is underneath rather than the
+ * next segment's first frame — the modifiers included (issue #216). What makes that safe
+ * is the borrowed `clipIndex`: the naive fix re-emitted the region with its RAW-virtual ms
+ * and NO clipIndex, and native's `belongs()` (scene.rs) accepts a clipIndex-less region on
+ * ANY clip whose source window numerically overlaps those raw numbers — so the effect
+ * fired later on an unrelated clip (the same wrong-clip class as the `speed_at` fix in
+ * regions.rs). An index pins it to one clip, and `underTrim` is what tells native to gate
+ * it hard on its own span so a zoom's ease-in cannot bleed into the kept frames next to
+ * the cut — the render still cuts, exactly as it did.
+ *
+ * A region whose clip has no kept segment at all still has nothing to address it with, and
+ * is dropped. With no segments AT ALL there is no layout to resolve against, so the
+ * historical clipIndex-less passthrough stays for that degenerate case (it reaches an empty
+ * native clip list and so can never be matched anyway).
  *
  * `visibleSegments` MUST be the same array (same order) serialized to `Scene.clips` so
  * the emitted `clipIndex` lines up with the native stream; `rawClips` is
@@ -467,22 +562,25 @@ export function projectRegionsToSource<
 	visibleSegments: AxcutClip[],
 	rawClips: AxcutClip[],
 	makeId: () => string,
-): (T & { clipIndex?: number })[] {
+): (T & { clipIndex?: number; underTrim?: boolean })[] {
 	// RAW extents + owning raw clip per visible segment. Both are only consulted by the
 	// path that needs them (raw fallback / anchor match), but resolving them once keeps
 	// the per-region loop free of repeated lookups.
 	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
 	const segmentRawClipIds = visibleSegments.map((seg) => findRawClipForSegment(seg, rawClips)?.id);
-	const out: (T & { clipIndex?: number })[] = [];
+	const out: (T & { clipIndex?: number; underTrim?: boolean })[] = [];
 	for (const region of regions) {
 		let emitted = 0;
-		const emit = (clipIndex: number, srcStartSec: number, srcEndSec: number) => {
+		const emit = (clipIndex: number, srcStartSec: number, srcEndSec: number, underTrim = false) => {
 			out.push({
 				...region,
 				id: emitted === 0 ? region.id : makeId(),
 				startMs: Math.round(srcStartSec * 1000),
 				endMs: Math.round(srcEndSec * 1000),
 				clipIndex,
+				// Omitted rather than sent as `false`: every payload without a trim under a
+				// modifier stays byte-for-byte what it was.
+				...(underTrim ? { underTrim: true } : {}),
 			});
 			emitted += 1;
 		};
@@ -520,17 +618,20 @@ export function projectRegionsToSource<
 				);
 			});
 		}
-		// A region that WAS resolved against real segments but overlapped none of them
-		// sits entirely under a trim (or off the visible timeline) — its content was
-		// removed, so it must NOT render. Re-emitting it here is exactly what let a
-		// fully-trimmed effect resurface elsewhere: it would carry its RAW-virtual
-		// startMs/endMs and NO clipIndex, and native's `belongs()` (scene.rs) accepts a
-		// clipIndex-less region on ANY clip whose SOURCE window numerically overlaps those
-		// raw numbers — so the effect fired *later* on an unrelated clip instead of being
-		// ignored (the same wrong-clip class as the `speed_at` fix in regions.rs). Only
-		// when there are no segments AT ALL is there no layout to resolve against; keep the
-		// passthrough for that degenerate case (it reaches an empty native clip list and so
-		// can never be matched anyway).
+		// Overlapped no kept segment → everything it covers sits under a trim. Emit it on
+		// its own source span, addressed by the segment the cut interrupts, and marked so
+		// native gates it on that span alone (see the contract note above).
+		if (emitted === 0 && visibleSegments.length > 0) {
+			const cut = cutRegionSourceSpan(region, rawClips);
+			const clipIndex = cut
+				? cutAddressingSegmentIndex(visibleSegments, segmentRawClipIds, cut.clipId, cut.startSec)
+				: -1;
+			if (cut && clipIndex >= 0 && cut.endSec > cut.startSec) {
+				emit(clipIndex, cut.startSec, cut.endSec, true);
+			}
+		}
+		// No segments AT ALL: no layout to resolve against, so the region passes through on
+		// its raw ms with no clipIndex, as it always has.
 		if (emitted === 0 && visibleSegments.length === 0) out.push(region);
 	}
 	return out;
@@ -558,11 +659,19 @@ const NATIVE_EOF_MARGIN_SEC = 0.033;
  * maps raw→source through each segment's OWN raw extent (via `rawClips`, the
  * un-compressed layout) so the source time is correct after a trim, and returns
  * the segment's `clipIndex` in the compressed stream so `setActiveClip`/`presentTime`
- * address the right decoder + the right paired camera. When the raw playhead sits
- * over a trimmed-out stretch, it snaps to the next kept segment (where content
- * resumes) rather than the removed frames. Returns null only when there are no
- * segments at all. Replaces `nativePlaybackPosition.resolveNativePlaybackPosition`,
+ * address the right decoder + the right paired camera. Returns null only when there are
+ * no segments at all. Replaces `nativePlaybackPosition.resolveNativePlaybackPosition`,
  * which conflated the raw and compressed layouts (correct only without trims).
+ *
+ * Over a trimmed-out stretch it presents THE FRAME THAT IS ACTUALLY THERE: the trim keeps
+ * its place on the raw ruler, so the playhead names a real source moment, and the decoder
+ * holds the whole recording — only the kept WINDOW was narrowed. It used to snap to the
+ * next kept segment's first frame instead, which meant the ruler said one thing and the
+ * preview showed another; a modifier under the cut would then have been incrusted on a
+ * frame that is not its own (issue #216). Playback is untouched: it never lets the playhead
+ * linger in a cut, and native free-runs past `source_end_sec` on its own. The segment it
+ * borrows for `clipIndex` is `cutAddressingSegmentIndex` — the SAME one the modifiers under
+ * that cut borrow, or `belongs()` would filter them out.
  */
 export function resolveNativePosition(
 	rawSec: number,
@@ -573,25 +682,70 @@ export function resolveNativePosition(
 	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
 
 	// Segment whose RAW extent contains the playhead (last segment's end inclusive).
-	let index = spans.findIndex((s, i) => {
+	const index = spans.findIndex((s, i) => {
 		const isLast = i === spans.length - 1;
 		return rawSec >= s.startSec && (rawSec < s.endSec || (isLast && rawSec <= s.endSec));
 	});
-	// Over a trimmed-out gap (or before the first kept frame): snap to the next kept
-	// segment; if the playhead is past all kept content, clamp into the last one.
-	let clampToSegmentStart = false;
-	if (index < 0) {
-		index = spans.findIndex((s) => s.startSec >= rawSec);
-		if (index < 0) index = visibleSegments.length - 1;
-		else clampToSegmentStart = true;
-	}
+	if (index < 0) return positionUnderCut(rawSec, visibleSegments, rawClips);
 
 	const seg = visibleSegments[index];
 	const segSourceEnd = seg.sourceEndSec ?? seg.sourceStartSec;
-	const unclamped = clampToSegmentStart
-		? seg.sourceStartSec
-		: seg.sourceStartSec + (rawSec - spans[index].startSec);
+	const unclamped = seg.sourceStartSec + (rawSec - spans[index].startSec);
 	const maxSource = Math.max(seg.sourceStartSec, segSourceEnd - NATIVE_EOF_MARGIN_SEC);
+	return {
+		clip: seg,
+		clipIndex: index,
+		sourceTimeSec: Math.max(seg.sourceStartSec, Math.min(maxSource, unclamped)),
+	};
+}
+
+/**
+ * The playhead is on a stretch no kept segment covers — a trim, or the head of a clip a
+ * trim opens on. Resolve it through the RAW clip that owns that stretch (raw↔source is a
+ * plain shift within one clip) and borrow the addressing segment's index, so the decoder
+ * presents the removed frames themselves. Clamped to the RAW clip's own source window,
+ * not the segment's: the whole point is to leave that window.
+ *
+ * Falls back to the historical snap — next kept segment, else the last one — when the
+ * playhead is off every raw clip (past the end of the ruler) or its clip has no kept
+ * segment left to address it with.
+ */
+function positionUnderCut(
+	rawSec: number,
+	visibleSegments: AxcutClip[],
+	rawClips: AxcutClip[],
+): NativePosition {
+	const rawClip = rawClipAt(rawSec, rawClips);
+	if (rawClip) {
+		const segmentRawClipIds = visibleSegments.map(
+			(seg) => findRawClipForSegment(seg, rawClips)?.id,
+		);
+		const sourceSec = rawClip.sourceStartSec + (rawSec - rawClipSpanSec(rawClip).startSec);
+		const index = cutAddressingSegmentIndex(
+			visibleSegments,
+			segmentRawClipIds,
+			rawClip.id,
+			sourceSec,
+		);
+		if (index >= 0) {
+			const rawSourceEnd = rawClip.sourceEndSec ?? rawClip.sourceStartSec;
+			const maxSource = Math.max(rawClip.sourceStartSec, rawSourceEnd - NATIVE_EOF_MARGIN_SEC);
+			return {
+				clip: visibleSegments[index],
+				clipIndex: index,
+				sourceTimeSec: Math.max(rawClip.sourceStartSec, Math.min(maxSource, sourceSec)),
+			};
+		}
+	}
+
+	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
+	const next = spans.findIndex((s) => s.startSec >= rawSec);
+	const index = next >= 0 ? next : visibleSegments.length - 1;
+	const seg = visibleSegments[index];
+	const segSourceEnd = seg.sourceEndSec ?? seg.sourceStartSec;
+	const maxSource = Math.max(seg.sourceStartSec, segSourceEnd - NATIVE_EOF_MARGIN_SEC);
+	const unclamped =
+		next >= 0 ? seg.sourceStartSec : seg.sourceStartSec + (rawSec - spans[index].startSec);
 	return {
 		clip: seg,
 		clipIndex: index,
