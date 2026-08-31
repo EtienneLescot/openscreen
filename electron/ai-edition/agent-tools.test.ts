@@ -172,6 +172,7 @@ describe("the mutating-tool table", () => {
 		expect([...MUTATING_TOOL_NAMES].sort()).toEqual(
 			[
 				"addAnnotation",
+				"addAudio",
 				"addCameraFullscreen",
 				"addSpeed",
 				"addTrim",
@@ -184,6 +185,7 @@ describe("the mutating-tool table", () => {
 				"removeTrim",
 				"replaceTimeline",
 				"setAnnotation",
+				"setAudio",
 				"setCameraFullscreen",
 				"setClipRange",
 				"setSpeed",

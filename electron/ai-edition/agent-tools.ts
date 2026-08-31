@@ -337,6 +337,11 @@ function droppedByEdit(before: AxcutDocument, after: AxcutDocument) {
 // private — callers only ever need the composed `*Args`.)
 const secondsSchema = z.number().finite().nonnegative();
 
+/** Span given to an agent-placed audio region when the asset has no probed duration yet.
+ *  Short on purpose: a wrong guess the user has to shorten beats one that silently covers
+ *  the whole programme. */
+const DEFAULT_AGENT_AUDIO_SEC = 10;
+
 export const addTrimArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
@@ -479,6 +484,24 @@ export const setAnnotationArgs = z.object({
 	text: z.string().optional(),
 });
 
+export const addAudioArgs = z.object({
+	audioAssetId: z.string().min(1),
+	startSec: secondsSchema,
+	endSec: secondsSchema.optional(),
+	kind: z.enum(["voiceover", "music"]).default("music"),
+	offsetSec: secondsSchema.default(0),
+	gainDb: z.number().min(-60).max(12).default(0),
+});
+
+export const setAudioArgs = z.object({
+	audioId: z.string().min(1),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	kind: z.enum(["voiceover", "music"]).optional(),
+	offsetSec: secondsSchema.optional(),
+	gainDb: z.number().min(-60).max(12).optional(),
+});
+
 export const addCameraFullscreenArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
@@ -541,6 +564,8 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"setAnnotation",
 	"addCameraFullscreen",
 	"setCameraFullscreen",
+	"addAudio",
+	"setAudio",
 	"removeTrim",
 	"removeModifier",
 	"removeClip",
@@ -607,6 +632,8 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"setAnnotation",
 	"addCameraFullscreen",
 	"setCameraFullscreen",
+	"addAudio",
+	"setAudio",
 	"removeTrim",
 	"removeModifier",
 	"removeClip",
@@ -665,7 +692,9 @@ export function documentSnapshotForModel(
 	const autoFocusAll = legacy?.autoFocusAll === true;
 	return {
 		timeBaseNote:
-			"clips and trims are in source-time seconds; zooms, speedRegions, annotations and cameraFullscreenRegions are in virtual (edited-timeline) seconds.",
+			"clips and trims are in source-time seconds; zooms, speedRegions, annotations, cameraFullscreenRegions and audioRanges are in virtual (edited-timeline) seconds.",
+		audioNote:
+			"audioRanges are imported voiceover / music files laid over the recording. They are regions like every other kind — anchored to the clip they cover, so they travel with it through reorder and trim — and they play at 1x whatever a speed region does to the picture under them. addAudio places an EXISTING asset of kind 'audio'; nothing here can import a file from disk, so if the project has no audio asset, say so rather than inventing an id.",
 		zoomNote:
 			`renderedScale is what the viewer sees (depth is an ordinal, not a factor: ${ZOOM_DEPTH_LEGEND}). ` +
 			"When a zoom carries customScale it wins over depth and depthIsOverridden is true — " +
@@ -683,6 +712,10 @@ export function documentSnapshotForModel(
 		assets: document.assets.map((a) => ({
 			id: a.id,
 			label: a.label,
+			// "audio" is an imported voiceover / music file: it is never a clip, it is played
+			// by an audio region. Without this the model sees an asset it cannot explain and
+			// tries to place it on the timeline as footage.
+			kind: a.kind,
 			durationSec: a.durationSec ?? null,
 			hasCameraTrack: a.cameraTrack != null,
 			cameraVisible: a.cameraTrack?.visible ?? false,
@@ -754,6 +787,21 @@ export function documentSnapshotForModel(
 			id: c.id,
 			startSec: roundSec(c.startMs),
 			endSec: roundSec(c.endMs),
+		})),
+		// Imported audio, coalesced to whole pills like every other kind so the model
+		// reasons about what the user sees on the ruler rather than about the fragments a
+		// clip boundary happens to have split it into.
+		audioRanges: coalesceForAgent(document.audioRanges).map((a) => ({
+			id: a.id,
+			startSec: roundSec(a.startMs),
+			endSec: roundSec(a.endMs),
+			audioAssetId: a.audioAssetId,
+			// Which lane it sits on, and part of its identity: changing it moves the region
+			// between lanes rather than creating a second one.
+			kind: a.kind,
+			// Where in the FILE the region starts playing, in that file's own seconds.
+			offsetSec: a.offsetSec,
+			gainDb: a.gainDb,
 		})),
 		hasTranscript: document.transcripts.length > 0 || document.transcript !== null,
 	};
@@ -1843,6 +1891,118 @@ export function executeAgentTool(
 			};
 		}
 
+		case "addAudio": {
+			const parsed = addAudioArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { audioAssetId, kind, offsetSec, gainDb } = parsed.data;
+			const asset = document.assets.find((a) => a.id === audioAssetId);
+			// Two distinct refusals, because they need two different corrections: an unknown
+			// id is a hallucinated asset, a video id is the model reaching for footage.
+			if (!asset) {
+				const available = document.assets.filter((a) => a.kind === "audio");
+				return failure(
+					`Unknown asset: ${audioAssetId}.` +
+						(available.length
+							? ` Imported audio in this project: ${available.map((a) => `${a.id} (${a.label})`).join(", ")}.`
+							: " This project has no imported audio; a file can only be imported from the editor, not from here."),
+				);
+			}
+			if (asset.kind !== "audio") {
+				return failure(
+					`Asset ${audioAssetId} is video, not audio. addAudio plays an imported audio file over the recording; to place footage use replaceTimeline.`,
+				);
+			}
+			// No endSec means "as long as the file is" — the natural span, and the one the
+			// editor's own add uses. Falling back to the asset duration here rather than
+			// making the model compute it keeps the two paths on one rule.
+			const startSec = parsed.data.startSec;
+			const endSec =
+				parsed.data.endSec ??
+				startSec + Math.max(0.1, (asset.durationSec ?? DEFAULT_AGENT_AUDIO_SEC) - offsetSec);
+			const startMs = toMs(Math.min(startSec, endSec));
+			const endMs = toMs(Math.max(startSec, endSec));
+			const region = {
+				id: createId("audio"),
+				startMs,
+				endMs,
+				audioAssetId,
+				kind,
+				offsetSec,
+				gainDb,
+				origin: "agent" as const,
+			};
+			const placed = anchorForAgent(region, document, "audio");
+			const landing = landingOf(placed, document);
+			if (!landing.anchored) {
+				return coversNoClip("audio", startMs / 1000, endMs / 1000, document);
+			}
+			const next: AxcutDocument = {
+				...document,
+				audioRanges: [...document.audioRanges, ...placed] as AxcutDocument["audioRanges"],
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					audioId: landing.ids[0],
+					...landingReport(landing, startMs / 1000, endMs / 1000),
+				}),
+				summary:
+					`added ${kind} "${asset.label}" ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
+			};
+		}
+
+		case "setAudio": {
+			const parsed = setAudioArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { audioId } = parsed.data;
+			const existing = document.audioRanges.find((a) => a.id === audioId);
+			if (!existing) return failure(`Unknown audio region: ${audioId}`);
+			const audioPill = new Set(resolvePillIds(document.audioRanges, audioId));
+			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
+			// The payload patch hits EVERY fragment under the pill before the span is
+			// replaced: kind, offset and gain are all part of the region identity, so
+			// patching one fragment of a ventilated region would split it into two pills.
+			const patched = document.audioRanges.map((a) =>
+				audioPill.has(a.id)
+					? {
+							...a,
+							...(parsed.data.kind !== undefined ? { kind: parsed.data.kind } : {}),
+							...(parsed.data.offsetSec !== undefined ? { offsetSec: parsed.data.offsetSec } : {}),
+							...(parsed.data.gainDb !== undefined ? { gainDb: parsed.data.gainDb } : {}),
+						}
+					: a,
+			);
+			const rebuilt = replacePillSpan(
+				patched,
+				audioId,
+				startMs,
+				endMs,
+				document.timeline.clips,
+				() => createId("audio"),
+			);
+			const landing = landingAfterPillEdit(document.audioRanges, rebuilt, audioPill, document);
+			if (!landing.anchored) {
+				return coversNoClip("audio", startMs / 1000, endMs / 1000, document);
+			}
+			const next: AxcutDocument = {
+				...document,
+				audioRanges: rebuilt as AxcutDocument["audioRanges"],
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					audioId: landing.ids[0],
+					...landingReport(landing, startMs / 1000, endMs / 1000),
+				}),
+				summary:
+					`updated audio ${audioId} ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
+			};
+		}
+
 		case "removeTrim": {
 			const parsed = removeTrimArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
@@ -1872,9 +2032,10 @@ export function executeAgentTool(
 			else if (document.annotations.some((a) => a.id === id)) kind = "annotation";
 			else if (speedRegions.some((s) => s.id === id)) kind = "speed";
 			else if (cameraFullscreenRegions.some((c) => c.id === id)) kind = "cameraFullscreen";
+			else if (document.audioRanges.some((a) => a.id === id)) kind = "audio";
 			if (!kind) {
 				return failure(
-					`No zoom / speed / annotation / full-camera modifier with id ${id}. ` +
+					`No zoom / speed / annotation / full-camera / audio modifier with id ${id}. ` +
 						`For a trim use removeTrim; for a clip use removeClip.`,
 				);
 			}

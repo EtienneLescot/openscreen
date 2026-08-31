@@ -73,6 +73,11 @@ const ARGS: Record<string, unknown> = {
 	setAnnotation: { annotationId: "ann_nope" },
 	addCameraFullscreen: { startSec: 1, endSec: 2 },
 	setCameraFullscreen: { cameraFullscreenId: "cam_nope" },
+	// The fixture has no `kind: "audio"` asset, so this exercises the refusal branch —
+	// which is the honest one to pin: the agent cannot import a file, only place one the
+	// project already has.
+	addAudio: { audioAssetId: "audio_nope", startSec: 1, endSec: 2 },
+	setAudio: { audioId: "audio_nope" },
 	removeTrim: { trimRangeId: "trim_1" },
 	removeModifier: { id: "nope" },
 	removeClip: { clipId: "clip_1" },
