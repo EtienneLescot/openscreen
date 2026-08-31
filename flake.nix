@@ -10,7 +10,8 @@
     # lockfile failed, so `nix build` died in `cargo-vendor-dir` before reaching a
     # single derivation of ours: `Nix build` was red on main from 2026-08-30, and
     # since `nix-check.yml` only compares npmDepsHash and `nix-build.yml` did not
-    # run on pull requests, nothing about nix/ was being verified at all.
+    # run on pull requests, the derivation itself was not being built anywhere --
+    # not before a merge, and not after one either while this was red.
     # d2f6794 carries the switch to `https://static.crates.io/crates`.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
