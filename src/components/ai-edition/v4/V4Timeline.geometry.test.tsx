@@ -194,6 +194,60 @@ describe("V4Timeline lane pills", () => {
 	});
 });
 
+describe("V4Timeline lane pill keyboard", () => {
+	// A pill carries `role="button"` and `tabIndex={0}`, so it is reachable by Tab and
+	// announced as activatable. Selection was pointer-only, which meant a keyboard user
+	// could focus a region and then reach nothing that acts on a selection — Delete,
+	// copy/paste and the inspector all key off `tl.selection`.
+	it("selects the focused pill on Enter", () => {
+		const { pill, tl } = renderTimeline();
+		fireEvent.keyDown(pill, { key: "Enter" });
+		expect(tl.selectRegion).toHaveBeenCalledWith("annotation", "ann1", { additive: false });
+	});
+
+	it("selects it on Space too, the other key a button answers to", () => {
+		const { pill, tl } = renderTimeline();
+		fireEvent.keyDown(pill, { key: " " });
+		expect(tl.selectRegion).toHaveBeenCalledWith("annotation", "ann1", { additive: false });
+	});
+
+	it("adds to the selection when Shift is held, matching shift-click", () => {
+		const { pill, tl } = renderTimeline();
+		fireEvent.keyDown(pill, { key: "Enter", shiftKey: true });
+		expect(tl.selectRegion).toHaveBeenCalledWith("annotation", "ann1", { additive: true });
+	});
+
+	it("leaves every other key to the shell's shortcut handler", () => {
+		// The editor binds single letters (Z adds a zoom, T a trim, D deletes). Swallowing
+		// them here would silently disable every shortcut while a pill has focus.
+		const { pill, tl } = renderTimeline();
+		for (const key of ["z", "t", "d", "Escape", "ArrowRight"]) {
+			fireEvent.keyDown(pill, { key });
+		}
+		expect(tl.selectRegion).not.toHaveBeenCalled();
+	});
+
+	it("stops Enter and Space reaching the window listener", () => {
+		// Space is bound to play/pause on WINDOW, above React's root container. Without
+		// stopping the NATIVE event the same keystroke would select the pill and toggle
+		// playback; the synthetic `stopPropagation` alone does not reach that far.
+		const onWindowKey = vi.fn();
+		window.addEventListener("keydown", onWindowKey);
+		try {
+			const { pill } = renderTimeline();
+			fireEvent.keyDown(pill, { key: " " });
+			fireEvent.keyDown(pill, { key: "Enter" });
+			expect(onWindowKey).not.toHaveBeenCalled();
+
+			// A key the pill ignores still gets there, or the shortcuts would be dead.
+			fireEvent.keyDown(pill, { key: "z" });
+			expect(onWindowKey).toHaveBeenCalledTimes(1);
+		} finally {
+			window.removeEventListener("keydown", onWindowKey);
+		}
+	});
+});
+
 describe("V4Timeline create-from-toolbar", () => {
 	// The button asks for a DURATION worth a fixed number of pixels at the current
 	// zoom, so the pill you get is always the same size on screen — which is what
