@@ -61,6 +61,13 @@ export function isSilenceWord(word: AxcutWord): boolean {
 	return word.id.startsWith("silence_");
 }
 
+/** True for a word the user typed in, which no one said and nothing in the media carries.
+ *  Keyed on `source`, never on the id: the id shape is only there to stop a transcription
+ *  run from reusing it. */
+export function isInsertedWord(word: AxcutWord): boolean {
+	return word.source === "synth";
+}
+
 /**
  * Insert a synthetic `[silence]` pseudo-word into every gap of at least
  * `SILENCE_THRESHOLD_SEC` between consecutive words (and at the clip's
@@ -74,7 +81,14 @@ function withSilenceGaps(
 	clipStartSec: number,
 	clipEndSec: number | undefined,
 ): AxcutWord[] {
-	const sorted = [...words].sort((a, b) => a.startSec - b.startSec);
+	// Sorted by time, ties broken by the order the transcript stores them in. The tie is
+	// not hypothetical: a word inserted between two contiguous words has no duration and
+	// therefore shares its start with the one it sits against, and only the array says
+	// which of the two the reader sees first.
+	const order = new Map(words.map((word, index) => [word.id, index]));
+	const sorted = [...words].sort(
+		(a, b) => a.startSec - b.startSec || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0),
+	);
 	const result: AxcutWord[] = [];
 	let cursor = clipStartSec;
 	let n = 0;
@@ -151,7 +165,15 @@ export interface ClipSection {
 }
 
 function wordsInRange(transcript: AxcutTranscript, startSec: number, endSec: number): AxcutWord[] {
-	return transcript.words.filter((w) => w.endSec > startSec && w.startSec < endSec);
+	return transcript.words.filter((w) =>
+		// An inserted word dropped between two words that run into each other has NO
+		// duration, and an overlap test excludes a point at either edge of the range —
+		// which silently lost every word inserted at the very start of a clip. A word with
+		// no span is in the clip when its moment is.
+		w.endSec > w.startSec
+			? w.endSec > startSec && w.startSec < endSec
+			: w.startSec >= startSec && w.startSec < endSec,
+	);
 }
 
 /** Find the trim range covering this word's center (returns the deepest match). */

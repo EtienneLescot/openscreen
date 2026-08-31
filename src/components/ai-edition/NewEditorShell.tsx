@@ -13,7 +13,12 @@ import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
-import { setDocumentWordText } from "@/lib/ai-edition/document/transcript";
+import {
+	type InsertSide,
+	insertDocumentWord,
+	removeDocumentWords,
+	setDocumentWordText,
+} from "@/lib/ai-edition/document/transcript";
 import { isModalOpen } from "@/lib/ai-edition/modalGuard";
 import { type AxcutAudioTrack, type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -643,6 +648,47 @@ export function NewEditorShell() {
 					// The word or its transcript vanished under the edit (a regeneration landed
 					// mid-typing). Nothing to retry — say so rather than dropping it silently.
 					toast.error(te("errors.wordEditFailed"), {
+						description: err instanceof Error ? err.message : String(err),
+					});
+				}
+			});
+		},
+		[enqueueTimelineWrite, saveDocument, te],
+	);
+
+	// transcript-pane → a word nobody said. It takes the silence it is dropped into and no
+	// audio at all, so unlike a cut it changes nothing about the film; today it reaches the
+	// captions and stops there.
+	const handleInsertWord = useCallback(
+		(assetId: string, anchorWordId: string, side: InsertSide, text: string) => {
+			void enqueueTimelineWrite(async () => {
+				const doc = useProjectStore.getState().document;
+				if (!doc) return;
+				try {
+					await saveDocument(insertDocumentWord(doc, assetId, anchorWordId, side, text), {
+						history: true,
+					});
+				} catch (err) {
+					toast.error(te("errors.wordInsertFailed"), {
+						description: err instanceof Error ? err.message : String(err),
+					});
+				}
+			});
+		},
+		[enqueueTimelineWrite, saveDocument, te],
+	);
+
+	// Deleting inserted words. One save for the whole set, so a Backspace over several of
+	// them is one Ctrl+Z, and the document layer refuses anything that was actually spoken.
+	const handleRemoveWords = useCallback(
+		(assetId: string, wordIds: string[]) => {
+			void enqueueTimelineWrite(async () => {
+				const doc = useProjectStore.getState().document;
+				if (!doc || wordIds.length === 0) return;
+				try {
+					await saveDocument(removeDocumentWords(doc, assetId, wordIds), { history: true });
+				} catch (err) {
+					toast.error(te("errors.wordRemoveFailed"), {
 						description: err instanceof Error ? err.message : String(err),
 					});
 				}
@@ -1327,6 +1373,8 @@ export function NewEditorShell() {
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,
 		onSetWordText: handleSetWordText,
+		onInsertWord: handleInsertWord,
+		onRemoveWords: handleRemoveWords,
 		onTranscribe: handleTranscribe,
 		canTranscribe: hasAsset,
 		isTranscribing: transcriptGate.state === "pending",

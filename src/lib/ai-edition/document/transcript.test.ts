@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { type AxcutTranscript, createEmptyDocument } from "../schema";
-import { carryOverWordEdits, setDocumentWordText, setWordText, withTranscript } from "./transcript";
+import {
+	carryOverWordEdits,
+	insertDocumentWord,
+	insertWord,
+	removeDocumentWords,
+	removeWord,
+	setDocumentWordText,
+	setWordText,
+	withTranscript,
+} from "./transcript";
 
 function fixture(language = "en"): AxcutTranscript {
 	return {
@@ -481,5 +490,180 @@ describe("carryOverWordEdits", () => {
 	it("handles a first-ever transcription (no previous transcript)", () => {
 		const next = retranscribed([["w1", "I", 1, 2]]);
 		expect(carryOverWordEdits(null, next).transcript).toBe(next);
+	});
+});
+
+// ─── Inserting a word nobody said ────────────────────────────────
+// The word carries no audio, so what it may occupy is the silence around it and nothing
+// else. These pin that boundary: never over a spoken word, never a duration invented out
+// of nothing when there is no pause to take.
+
+describe("insertWord", () => {
+	// "I"(1–2) "use"(2–3) "OpenScreen"(3–4), then a gap, then segment 2 at 5.
+	it("takes the silence after the word it follows, up to what its text needs", () => {
+		const result = insertWord(fixture(), "word_3", "after", "everywhere");
+		const inserted = result.words.find((w) => w.source === "synth");
+		expect(inserted?.startSec).toBe(4);
+		// 10 characters at 15/s = 0.67s, and the next word is a full second away.
+		expect(inserted?.endSec).toBeCloseTo(4 + 10 / 15, 5);
+	});
+
+	it("never runs over the word that comes next", () => {
+		// "use" ends at 3 and "OpenScreen" starts there: a long word gets no room at all.
+		const inserted = insertWord(fixture(), "word_2", "after", "a very long addition").words.find(
+			(w) => w.source === "synth",
+		);
+		expect(inserted).toMatchObject({ startSec: 3, endSec: 3 });
+	});
+
+	it("borrows backwards when it goes before the first word", () => {
+		const inserted = insertWord(fixture(), "word_1", "before", "Well").words.find(
+			(w) => w.source === "synth",
+		);
+		// "word_1" starts at 1, and nothing precedes it — the floor is the media's own start.
+		expect(inserted?.endSec).toBe(1);
+		expect(inserted?.startSec).toBeCloseTo(1 - 0.4, 5);
+	});
+
+	it("marks it synthesized, with an id no transcription run can reuse", () => {
+		const inserted = insertWord(fixture(), "word_3", "after", "indeed").words.find(
+			(w) => w.source === "synth",
+		);
+		expect(inserted).toMatchObject({ text: "indeed", source: "synth", segmentId: "segment_1" });
+		expect(inserted?.id).toMatch(/^synth_\d+$/);
+		expect(inserted).not.toHaveProperty("originalText");
+	});
+
+	it("numbers past the inserts already there", () => {
+		const once = insertWord(fixture(), "word_3", "after", "one");
+		const twice = insertWord(once, "word_3", "after", "two");
+		const ids = twice.words.filter((w) => w.source === "synth").map((w) => w.id);
+		expect(new Set(ids).size).toBe(2);
+		expect(ids).toContain("synth_2");
+	});
+
+	it("lands in the segment's reading order, and rebuilds its text", () => {
+		const transcript = fixture();
+		const result = insertWord(transcript, "word_2", "after", "really");
+		const segment = result.segments.find((seg) => seg.id === "segment_1");
+		expect(segment?.wordIds).toEqual(["word_1", "word_2", "synth_1", "word_3"]);
+		expect(segment?.text).toBe("I use really OpenScreen");
+		// The segment the insert did not land in is carried over untouched, not rebuilt.
+		expect(result.segments[1]).toBe(transcript.segments[1]);
+	});
+
+	it("sits beside its anchor in the words array, which is what orders a zero-length insert", () => {
+		const result = insertWord(fixture(), "word_2", "after", "really");
+		const ids = result.words.map((w) => w.id);
+		expect(ids.indexOf("synth_1")).toBe(ids.indexOf("word_2") + 1);
+	});
+
+	it("refuses empty text and unknown anchors", () => {
+		expect(() => insertWord(fixture(), "word_2", "after", "   ")).toThrow(/empty/);
+		expect(() => insertWord(fixture(), "nope", "after", "x")).toThrow(/missing/);
+	});
+
+	it("keeps the input transcript untouched", () => {
+		const transcript = fixture();
+		const before = JSON.stringify(transcript);
+		insertWord(transcript, "word_2", "after", "really");
+		expect(JSON.stringify(transcript)).toBe(before);
+	});
+});
+
+describe("removeWord", () => {
+	const withInsert = () => insertWord(fixture(), "word_2", "after", "really");
+
+	it("takes the word out of the array, the segment, and its text", () => {
+		const result = removeWord(withInsert(), "synth_1");
+		expect(result.words.some((w) => w.id === "synth_1")).toBe(false);
+		const segment = result.segments.find((seg) => seg.id === "segment_1");
+		expect(segment?.wordIds).toEqual(["word_1", "word_2", "word_3"]);
+		expect(segment?.text).toBe("I use OpenScreen");
+	});
+
+	// Deleting a transcribed word would leave the film saying something the transcript
+	// denies. The operation for making a spoken word go away is a trim.
+	it("refuses a word that was actually spoken", () => {
+		expect(() => removeWord(fixture(), "word_2")).toThrow(/Refusing to remove transcribed word/);
+	});
+
+	it("refuses a word that is not there", () => {
+		expect(() => removeWord(fixture(), "nope")).toThrow(/missing/);
+	});
+});
+
+describe("insertDocumentWord / removeDocumentWords", () => {
+	it("writes both the per-asset transcript and the legacy mirror", () => {
+		const result = insertDocumentWord(makeDoc(), "asset_1", "word_2", "after", "really");
+		expect(result.transcript?.words.some((w) => w.id === "synth_1")).toBe(true);
+		expect(result.transcript).toBe(result.transcripts.find((t) => t.assetId === "asset_1"));
+	});
+
+	// One save for the whole set: a Backspace over three inserted words must be one Ctrl+Z.
+	it("removes several inserted words in a single document", () => {
+		let doc = insertDocumentWord(makeDoc(), "asset_1", "word_2", "after", "one");
+		doc = insertDocumentWord(doc, "asset_1", "word_3", "after", "two");
+		const result = removeDocumentWords(doc, "asset_1", ["synth_1", "synth_2"]);
+		expect(result.transcripts[0].words.some((w) => w.source === "synth")).toBe(false);
+	});
+
+	it("rejects an asset with no transcript", () => {
+		expect(() => insertDocumentWord(makeDoc(), "nope", "word_2", "after", "x")).toThrow(
+			/no transcript/,
+		);
+	});
+});
+
+describe("carryOverWordEdits with inserted words", () => {
+	const withInsert = () => insertWord(fixture(), "word_2", "after", "really");
+
+	it("puts an insert back after whatever the new run now ends last before it", () => {
+		// The insert sits at 3s. The new transcript says "I"(1–2) "used"(2–3) "it"(3.5–4).
+		const next = retranscribed([
+			["n1", "I", 1, 2],
+			["n2", "used", 2, 3],
+			["n3", "it", 3.5, 4],
+		]);
+		const result = carryOverWordEdits(withInsert(), next);
+		expect(result).toMatchObject({ carried: 1, dropped: 0 });
+		const ids = result.transcript.words.map((w) => w.id);
+		expect(ids.indexOf("synth_1")).toBe(ids.indexOf("n2") + 1);
+		expect(result.transcript.words.find((w) => w.id === "synth_1")).toMatchObject({
+			text: "really",
+			source: "synth",
+		});
+	});
+
+	it("puts it at the head when the new run has nothing before it", () => {
+		const carried = carryOverWordEdits(
+			insertWord(fixture(), "word_1", "before", "Well"),
+			retranscribed([["n1", "I", 1, 2]]),
+		);
+		expect(carried.carried).toBe(1);
+		expect(carried.transcript.words[0].text).toBe("Well");
+	});
+
+	it("counts an insert it could not place, rather than losing it quietly", () => {
+		const empty: AxcutTranscript = { assetId: "asset_1", language: "en", segments: [], words: [] };
+		expect(carryOverWordEdits(withInsert(), empty)).toMatchObject({ carried: 0, dropped: 1 });
+	});
+
+	it("carries corrections and inserts together", () => {
+		const both = insertWord(
+			setWordText(fixture(), "word_3", "OpenScreenApp"),
+			"word_2",
+			"after",
+			"really",
+		);
+		const next = retranscribed([
+			["n1", "I", 1, 2],
+			["n2", "use", 2, 3],
+			["n3", "OpenScreen", 3, 4],
+		]);
+		const result = carryOverWordEdits(both, next);
+		expect(result).toMatchObject({ carried: 2, dropped: 0 });
+		expect(result.transcript.words.find((w) => w.id === "n3")?.text).toBe("OpenScreenApp");
+		expect(result.transcript.words.some((w) => w.text === "really")).toBe(true);
 	});
 });

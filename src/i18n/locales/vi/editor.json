@@ -21,7 +21,9 @@
 		"failedToSaveExportedVideo": "Không thể lưu video đã xuất",
 		"failedToRevealInFolder": "Lỗi khi hiển thị trong thư mục: {{error}}",
 		"previewCompositorUnavailable": "Không thể xem trước trên máy này",
-		"wordEditFailed": "Không thể thay đổi từ này"
+		"wordEditFailed": "Không thể thay đổi từ này",
+		"wordInsertFailed": "Không thể thêm từ này",
+		"wordRemoveFailed": "Không thể xoá từ này"
 	},
 	"export": {
 		"canceled": "Đã hủy xuất",

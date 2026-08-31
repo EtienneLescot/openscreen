@@ -21,7 +21,9 @@
 		"failedToSaveExportedVideo": "Impossibile salvare il video esportato",
 		"failedToRevealInFolder": "Errore durante la visualizzazione nella cartella: {{error}}",
 		"previewCompositorUnavailable": "Anteprima non disponibile su questo computer",
-		"wordEditFailed": "Impossibile modificare questa parola"
+		"wordEditFailed": "Impossibile modificare questa parola",
+		"wordInsertFailed": "Impossibile aggiungere questa parola",
+		"wordRemoveFailed": "Impossibile eliminare questa parola"
 	},
 	"export": {
 		"canceled": "Esportazione annullata",

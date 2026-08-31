@@ -147,12 +147,200 @@ export function setDocumentWordText(
 	return withTranscript(document, setWordText(transcript, wordId, text));
 }
 
+/** Where a new word goes relative to the word the caret was resting on. */
+export type InsertSide = "before" | "after";
+
+/**
+ * How long an inserted word needs to be readable on screen. Subtitle practice is roughly
+ * fifteen characters a second, with a floor so a one-letter word is not a single frame.
+ * It is only ever a REQUEST — `insertWord` gives the word whatever silence is actually
+ * free, and no more.
+ */
+function readingSeconds(text: string): number {
+	return Math.max(0.4, text.trim().length / 15);
+}
+
+/** `synth_N`, numbered past every id already in the transcript.
+ *
+ *  The prefix buys uniqueness, not meaning: a transcription run regenerates `word_N` from
+ *  1, so a synthesized word holding one of those ids would be overwritten by the next run.
+ *  What the word IS lives in `source`, which is what every reader checks. */
+function nextSynthWordId(transcript: AxcutTranscript): string {
+	let highest = 0;
+	for (const word of transcript.words) {
+		const match = /^synth_(\d+)$/.exec(word.id);
+		if (match) highest = Math.max(highest, Number(match[1]));
+	}
+	return `synth_${highest + 1}`;
+}
+
+/**
+ * Insert a word that no one said.
+ *
+ * It carries no audio, so it takes the SILENCE it is dropped into and nothing else: from
+ * the word it follows up to what its text needs to be read, and never past the word that
+ * comes next. Dropped between two words that run straight into each other it has no
+ * duration at all and simply rides their caption line — which is where it reads correctly
+ * anyway, since there is no pause on screen to fill.
+ *
+ * That is the whole of what an inserted word can do today: it reaches the captions and
+ * stops there. When a voice can be synthesized for it, `source: "synth"` is what marks the
+ * words that need speaking, and the span computed here is the slot that audio has to fit.
+ */
+export function insertWord(
+	transcript: AxcutTranscript,
+	anchorWordId: string,
+	side: InsertSide,
+	text: string,
+): AxcutTranscript {
+	const trimmed = text.trim();
+	if (trimmed.length === 0) {
+		throw new Error("Cannot insert an empty word");
+	}
+	const anchorIndex = transcript.words.findIndex((word) => word.id === anchorWordId);
+	if (anchorIndex < 0) {
+		throw new Error(`Cannot insert next to missing transcript word "${anchorWordId}"`);
+	}
+	const anchor = transcript.words[anchorIndex];
+	const segment = transcript.segments.find((seg) => seg.id === anchor.segmentId);
+	if (!segment) {
+		throw new Error(
+			`Transcript word "${anchorWordId}" references missing segment "${anchor.segmentId}"`,
+		);
+	}
+	const anchorSlot = segment.wordIds.indexOf(anchorWordId);
+	if (anchorSlot < 0) {
+		throw new Error(`Segment "${segment.id}" does not reference anchor word "${anchorWordId}"`);
+	}
+
+	const wanted = readingSeconds(trimmed);
+	let startSec: number;
+	let endSec: number;
+	if (side === "after") {
+		startSec = anchor.endSec;
+		// The next word IN TIME, which is not necessarily the next one in the array — the
+		// array is insertion order, and only time decides what the new word may overlap.
+		const nextStart = transcript.words
+			.filter((word) => word.startSec >= startSec && word.id !== anchorWordId)
+			.reduce<number | null>(
+				(soonest, word) => (soonest === null ? word.startSec : Math.min(soonest, word.startSec)),
+				null,
+			);
+		endSec = nextStart === null ? startSec + wanted : Math.min(startSec + wanted, nextStart);
+	} else {
+		endSec = anchor.startSec;
+		const previousEnd = transcript.words
+			.filter((word) => word.endSec <= endSec && word.id !== anchorWordId)
+			.reduce<number | null>(
+				(latest, word) => (latest === null ? word.endSec : Math.max(latest, word.endSec)),
+				null,
+			);
+		const floor = previousEnd === null ? 0 : previousEnd;
+		startSec = Math.max(floor, endSec - wanted);
+	}
+
+	const inserted: AxcutWord = {
+		id: nextSynthWordId(transcript),
+		segmentId: segment.id,
+		startSec,
+		endSec: Math.max(startSec, endSec),
+		text: trimmed,
+		source: "synth",
+	};
+
+	// Position in `words` matters as well as the timings: a zero-length insert shares its
+	// start with the word it sits against, and the reading order of that tie is the array
+	// order (see `withSilenceGaps`).
+	const at = side === "after" ? anchorIndex + 1 : anchorIndex;
+	const words = [...transcript.words.slice(0, at), inserted, ...transcript.words.slice(at)];
+	const slot = side === "after" ? anchorSlot + 1 : anchorSlot;
+	const wordIds = [...segment.wordIds.slice(0, slot), inserted.id, ...segment.wordIds.slice(slot)];
+	const byId = new Map(words.map((word) => [word.id, word]));
+	const segmentText = joinSegmentText(wordIds.map((id) => byId.get(id)?.text ?? ""));
+
+	return {
+		...transcript,
+		words,
+		segments: transcript.segments.map((seg) =>
+			seg.id === segment.id ? { ...seg, wordIds, text: segmentText } : seg,
+		),
+	};
+}
+
+/**
+ * Delete an inserted word.
+ *
+ * Only a synthesized one: a transcribed word is the label on a piece of audio, and the
+ * operation for making that go away is a trim, which removes the sound with it. Deleting
+ * the label alone would leave the film saying a word the transcript denies.
+ */
+export function removeWord(transcript: AxcutTranscript, wordId: string): AxcutTranscript {
+	const target = transcript.words.find((word) => word.id === wordId);
+	if (!target) {
+		throw new Error(`Cannot remove missing transcript word "${wordId}"`);
+	}
+	if (target.source !== "synth") {
+		throw new Error(
+			`Refusing to remove transcribed word "${wordId}": cut it with a trim, or blank its text`,
+		);
+	}
+	const words = transcript.words.filter((word) => word.id !== wordId);
+	const byId = new Map(words.map((word) => [word.id, word]));
+	return {
+		...transcript,
+		words,
+		segments: transcript.segments.map((segment) => {
+			if (!segment.wordIds.includes(wordId)) return segment;
+			const wordIds = segment.wordIds.filter((id) => id !== wordId);
+			return {
+				...segment,
+				wordIds,
+				text: joinSegmentText(wordIds.map((id) => byId.get(id)?.text ?? "")),
+			};
+		}),
+	};
+}
+
+/** {@link insertWord}, addressed by asset. Goes through `withTranscript` for the same
+ *  reason {@link setDocumentWordText} does. */
+export function insertDocumentWord(
+	document: AxcutDocument,
+	assetId: string,
+	anchorWordId: string,
+	side: InsertSide,
+	text: string,
+): AxcutDocument {
+	const transcript = document.transcripts.find((t) => t.assetId === assetId);
+	if (!transcript) {
+		throw new Error(`Cannot insert a word into asset "${assetId}": it has no transcript`);
+	}
+	return withTranscript(document, insertWord(transcript, anchorWordId, side, text));
+}
+
+/** {@link removeWord}, addressed by asset and taking the whole set at once: a Backspace
+ *  over several inserted words has to be ONE write, or undoing it takes as many presses as
+ *  there were words. */
+export function removeDocumentWords(
+	document: AxcutDocument,
+	assetId: string,
+	wordIds: readonly string[],
+): AxcutDocument {
+	const transcript = document.transcripts.find((t) => t.assetId === assetId);
+	if (!transcript) {
+		throw new Error(`Cannot remove a word from asset "${assetId}": it has no transcript`);
+	}
+	return withTranscript(
+		document,
+		wordIds.reduce((acc, wordId) => removeWord(acc, wordId), transcript),
+	);
+}
+
 /** What {@link carryOverWordEdits} managed to save from the previous transcript. */
 export interface WordEditCarryOver {
 	transcript: AxcutTranscript;
-	/** Corrections re-applied to the new transcript. */
+	/** Corrections and insertions re-applied to the new transcript. */
 	carried: number;
-	/** Corrections the new transcript left no place for. These are lost. */
+	/** Edits the new transcript left no place for. These are lost. */
 	dropped: number;
 }
 
@@ -176,7 +364,12 @@ export function carryOverWordEdits(
 	const edits = (previous?.words ?? []).filter(
 		(word) => word.source === "user" && word.originalText !== undefined,
 	);
-	if (edits.length === 0) return { transcript: next, carried: 0, dropped: 0 };
+	const inserts = (previous?.words ?? [])
+		.filter((word) => word.source === "synth")
+		.sort((a, b) => a.startSec - b.startSec);
+	if (edits.length === 0 && inserts.length === 0) {
+		return { transcript: next, carried: 0, dropped: 0 };
+	}
 
 	// Candidates are read from `next` throughout, never from the transcript being
 	// built up: a word already rewritten by an earlier correction no longer carries
@@ -198,5 +391,24 @@ export function carryOverWordEdits(
 		transcript = setWordText(transcript, match.id, edit.text);
 		carried += 1;
 	}
-	return { transcript, carried, dropped: edits.length - carried };
+
+	// An inserted word has no original text to recognise, so time is what places it: the
+	// audio did not change between runs, only how it was heard. Each one goes back after
+	// whatever the new transcript now ends last before it — including a word re-inserted a
+	// moment ago, which is what keeps two inserts at the same spot in their old order.
+	for (const insert of inserts) {
+		const before = transcript.words
+			.filter((word) => word.endSec <= insert.startSec)
+			.reduce<AxcutWord | null>(
+				(latest, word) => (latest === null || word.endSec >= latest.endSec ? word : latest),
+				null,
+			);
+		const head = transcript.words[0];
+		const target = before ?? head ?? null;
+		if (!target) continue;
+		transcript = insertWord(transcript, target.id, before ? "after" : "before", insert.text);
+		carried += 1;
+	}
+
+	return { transcript, carried, dropped: edits.length + inserts.length - carried };
 }
