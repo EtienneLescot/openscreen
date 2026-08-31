@@ -24,6 +24,22 @@ name: Nix build
 # front of every merge. Promote it once the schedule has reported a few times.
 on:
   workflow_dispatch:
+  # The job that actually builds the derivation now runs on the pull requests that
+  # can break it. It did not, and the gap was not academic: `nix-check.yml` only
+  # compares npmDepsHash, so a PR rewriting the addon's source filter, its RPATH
+  # handling or its symbols.map went green on ~18 checks without one of them
+  # building it, and the first real signal arrived on main half an hour after the
+  # merge. #371 shipped a change to `nix/compositor-view.nix` that way.
+  #
+  # Path-filtered rather than universal: this takes about half an hour, and a PR
+  # that touches none of these files cannot change what it produces.
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - nix/**
+      - crates/**
+      - package-lock.json
   push:
     branches: [main]
   schedule:
@@ -56,7 +72,11 @@ concurrency:
   # That is the affordable half. Verifying each merge would need a queue this
   # workflow does not have, and is not worth it for a half-hour job whose purpose
   # is catching drift rather than gating a commit.
-  cancel-in-progress: false
+  #
+  # On a pull request the opposite is right: a new push makes the previous run
+  # answer a question nobody is asking any more, and at half an hour each they
+  # would pile up. `github.ref` is the PR's merge ref, so the group is per-PR.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

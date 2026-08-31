@@ -2,6 +2,16 @@
   description = "OpenScreen — desktop screen recorder with built-in editor";
 
   inputs = {
+    # Do not roll flake.lock BACK past nixpkgs d2f6794 (2026-08-29). Before it,
+    # `importCargoLock` fetched every crate from
+    # `https://crates.io/api/v1/crates/<name>/<version>/download`, which crates.io
+    # now answers with 403 — it rate-limits that endpoint to 1 req/s and points
+    # clients at the CDN instead (rust-lang/crates.io#13482). Every crate in the
+    # lockfile failed, so `nix build` died in `cargo-vendor-dir` before reaching a
+    # single derivation of ours: `Nix build` was red on main from 2026-08-30, and
+    # since `nix-check.yml` only compares npmDepsHash and `nix-build.yml` did not
+    # run on pull requests, nothing about nix/ was being verified at all.
+    # d2f6794 carries the switch to `https://static.crates.io/crates`.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
