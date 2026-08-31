@@ -435,18 +435,25 @@ impl SwDecoder {
             }
             let send_r = avcodec_send_packet(self.dec, pkt);
             av_packet_free(&mut pkt);
-            if send_r == -0x2A2A2A2A {
-                // AVERROR_INVALIDDATA — packet mal aligné après un seek. On le
-                // saute et on continue ; le decodeur attendra un packet propre.
-                // Valeur ffmpeg = -1094995529 (0xBEEBBEEB), ici écrite comme
-                // un nombre négatif littéral pour éviter la dépendance `ffi::`.
+            if send_r == AVERROR_INVALIDDATA {
+                // Packet mal aligné après un seek. On le saute et on continue ; le
+                // decodeur attendra un packet propre.
+                //
+                // La garde comparait `send_r` à `-0x2A2A2A2A` — le tag `****`, qui
+                // ne désigne AUCUNE erreur ffmpeg. `AVERROR_INVALIDDATA` vaut
+                // -1094995529 (`-MKTAG('I','N','D','A')`), jamais -707406378 : la
+                // garde ne matchait donc jamais et un vrai packet invalide tombait
+                // dans le `bail!` ci-dessous, avortant tout le seek. C'est
+                // exactement le bug du scrub/time-travel — chaque BACKWARD seek peut
+                // rendre un premier NAL fragmenté — et c'est la même correction que
+                // `receive_into` a déjà reçue pour le pompage séquentiel.
                 invalid_skips += 1;
                 if invalid_skips > 8 {
                     bail!("plus de 8 packets invalides après seek — fichier ou codec cassé");
                 }
                 continue;
             }
-            if send_r < 0 && send_r != -11 {
+            if send_r < 0 && send_r != AVERROR_EAGAIN {
                 bail!("avcodec_send_packet: {send_r}");
             }
             frame = av_frame_alloc();
@@ -482,10 +489,9 @@ impl SwDecoder {
                     if (*found).best_effort_timestamp as f64 * self.stream_timebase >= target_ts_seconds {
                         break 'outer;
                     }
-                } else if recv_r == -11 {
+                } else if recv_r == AVERROR_EAGAIN {
                     break;
-                } else if recv_r == -541478725 {
-                    // AVERROR_EOF
+                } else if recv_r == AVERROR_EOF {
                     break 'outer;
                 } else if recv_r < 0 {
                     bail!("avcodec_receive_frame: {recv_r}");
