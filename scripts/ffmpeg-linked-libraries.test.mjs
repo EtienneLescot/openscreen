@@ -64,7 +64,10 @@ describe("the ffmpeg libraries the compositor links", () => {
 	it("is staged and symbol-renamed for the Linux addon", () => {
 		const source = read("scripts/build-linux-compositor-addon.mjs");
 		const table = source.match(/FFMPEG_SONAMES = \[([\s\S]*?)\]/);
-		expect(table, "build-linux-compositor-addon.mjs no longer declares FFMPEG_SONAMES").not.toBeNull();
+		expect(
+			table,
+			"build-linux-compositor-addon.mjs no longer declares FFMPEG_SONAMES",
+		).not.toBeNull();
 		const sonames = [...table[1].matchAll(/"lib([a-z]+)\.so\.\d+"/g)].map((match) => match[1]);
 		expect([...sonames].sort()).toEqual([...linked].sort());
 	});
