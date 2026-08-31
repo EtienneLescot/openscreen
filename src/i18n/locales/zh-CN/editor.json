@@ -21,7 +21,9 @@
 		"failedToSaveExportedVideo": "保存导出的视频失败",
 		"failedToRevealInFolder": "在文件夹中显示时出错：{{error}}",
 		"previewCompositorUnavailable": "此设备无法使用预览",
-		"wordEditFailed": "无法修改该词"
+		"wordEditFailed": "无法修改该词",
+		"wordInsertFailed": "无法添加该词",
+		"wordRemoveFailed": "无法删除该词"
 	},
 	"export": {
 		"canceled": "导出已取消",

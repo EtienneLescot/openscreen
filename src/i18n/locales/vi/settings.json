@@ -264,7 +264,7 @@
 	},
 	"transcript": {
 		"title": "Bản chép lời hiện tại",
-		"help": "Bản chép lời gộp của mọi clip trên dòng thời gian. Nhấn Backspace / Delete trên một từ hoặc vùng chọn để cắt nó khỏi video (màu đỏ). Nhấp đúp vào một từ để sửa văn bản: phụ đề đi theo, video không đổi. Di chuột lên từ được đánh dấu để khôi phục.",
+		"help": "Bản chép lời gộp của mọi clip trên dòng thời gian. Nhấn Backspace / Delete trên một từ hoặc vùng chọn để cắt nó khỏi video (màu đỏ). Nhấp đúp vào một từ để sửa văn bản. Gõ giữa hai từ để thêm một từ mới, màu hổ phách: nó vào phụ đề và không đụng tới video. Di chuột lên từ được đánh dấu để hoàn tác.",
 		"noClips": "Chưa có clip nào",
 		"noTranscript": "Chưa có bản chép lời",
 		"whisperHint": "Việc chép lời dùng Whisper cục bộ — chạy ngay trên máy của bạn, không dữ liệu nào rời khỏi thiết bị.",
@@ -281,6 +281,9 @@
 		"correctedWord": "Đã sửa — bản chép lời ghi \"{{original}}\"",
 		"revertWord": "Khôi phục \"{{original}}\"",
 		"blankedWord": "đã xoá",
+		"insertAria": "Từ mới",
+		"insertedWord": "Bạn thêm vào — không có âm thanh phía sau",
+		"removeInserted": "Xoá \"{{word}}\"",
 		"noAudio": "Media này không có bản âm thanh"
 	},
 	"captions": {

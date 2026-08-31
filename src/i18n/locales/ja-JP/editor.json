@@ -21,7 +21,9 @@
 		"failedToRevealInFolder": "フォルダの表示に失敗しました: {{error}}",
 		"exportBackgroundLoadFailed": "エクスポートに失敗しました: 背景画像を読み込めませんでした ({{url}})",
 		"previewCompositorUnavailable": "このマシンではプレビューを表示できません",
-		"wordEditFailed": "この単語を変更できませんでした"
+		"wordEditFailed": "この単語を変更できませんでした",
+		"wordInsertFailed": "この単語を追加できませんでした",
+		"wordRemoveFailed": "この単語を削除できませんでした"
 	},
 	"export": {
 		"canceled": "エクスポートがキャンセルされました",

@@ -264,7 +264,7 @@
 	},
 	"transcript": {
 		"title": "当前转录",
-		"help": "时间轴上所有片段的合并转录。对某个词或选区按退格 / Delete 会将其从画面中剪掉（红色）。双击某个词可修改文字：字幕随之更新，画面不变。将鼠标悬停在带标记的词上可还原。",
+		"help": "时间轴上所有片段的合并转录。对某个词或选区按退格 / Delete 会将其从画面中剪掉（红色）。双击某个词可修改文字。在两个词之间输入即可添加一个琥珀色的新词：它只进入字幕，不改动画面。将鼠标悬停在带标记的词上可撤销。",
 		"noClips": "暂无片段",
 		"noTranscript": "暂无转录",
 		"whisperHint": "转录使用本地 Whisper — 在您的电脑上运行，数据不会离开本设备。",
@@ -281,6 +281,9 @@
 		"correctedWord": "已更正 — 转录原文为“{{original}}”",
 		"revertWord": "还原为“{{original}}”",
 		"blankedWord": "已清空",
+		"insertAria": "新词",
+		"insertedWord": "你添加的词 — 背后没有声音",
+		"removeInserted": "删除“{{word}}”",
 		"noAudio": "此媒体没有音频轨道"
 	},
 	"captions": {

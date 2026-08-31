@@ -21,7 +21,9 @@
 		"failedToSaveExportedVideo": "فشل حفظ الفيديو المُصدَّر",
 		"failedToRevealInFolder": "خطأ في الكشف في المجلد: {{error}}",
 		"previewCompositorUnavailable": "المعاينة غير متوفرة على هذا الجهاز",
-		"wordEditFailed": "تعذّر تغيير هذه الكلمة"
+		"wordEditFailed": "تعذّر تغيير هذه الكلمة",
+		"wordInsertFailed": "تعذّرت إضافة هذه الكلمة",
+		"wordRemoveFailed": "تعذّر حذف هذه الكلمة"
 	},
 	"export": {
 		"canceled": "تم إلغاء التصدير",

@@ -21,7 +21,7 @@ import {
 import {
 	type ChangeEvent,
 	type CSSProperties,
-	type FormEvent,
+	Fragment,
 	memo,
 	type ClipboardEvent as ReactClipboardEvent,
 	type KeyboardEvent as ReactKeyboardEvent,
@@ -40,6 +40,7 @@ import GradientEditor, { type GradientEditorState } from "@/components/ui/gradie
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
+import type { InsertSide } from "@/lib/ai-edition/document/transcript";
 import type {
 	AxcutAsset,
 	AxcutClip,
@@ -58,6 +59,7 @@ import {
 	type ClipSection,
 	type ClipWord,
 	findCueWordId,
+	isInsertedWord,
 	isSilenceWord,
 	type TrimRun,
 } from "@/lib/ai-edition/timeline/aggregated-transcript";
@@ -706,6 +708,8 @@ export function TranscriptPane({
 	onAddTrimRange,
 	onRemoveTrimRange,
 	onSetWordText,
+	onInsertWord,
+	onRemoveWords,
 	onTranscribe,
 	canTranscribe,
 	isTranscribing,
@@ -728,6 +732,11 @@ export function TranscriptPane({
 	 *  `ClipWord.id`: the transcript belongs to the asset, so a correction lands on the
 	 *  media and shows on every clip that plays it — which is the point. */
 	onSetWordText: (assetId: string, wordId: string, text: string) => void;
+	/** Add a word nobody said, beside the word the caret was resting on. Bare id, as above. */
+	onInsertWord: (assetId: string, anchorWordId: string, side: InsertSide, text: string) => void;
+	/** Delete inserted words. Only ever called with `source: "synth"` ids — a transcribed
+	 *  word is cut with a trim, never deleted. */
+	onRemoveWords: (assetId: string, wordIds: string[]) => void;
 	onTranscribe: () => void;
 	canTranscribe: boolean;
 	isTranscribing: boolean;
@@ -839,6 +848,8 @@ export function TranscriptPane({
 						onAddTrimRange={onAddTrimRange}
 						onRemoveTrimRange={onRemoveTrimRange}
 						onSetWordText={onSetWordText}
+						onInsertWord={onInsertWord}
+						onRemoveWords={onRemoveWords}
 					/>
 				))}
 			</div>
@@ -867,6 +878,8 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	onAddTrimRange,
 	onRemoveTrimRange,
 	onSetWordText,
+	onInsertWord,
+	onRemoveWords,
 }: {
 	index: number;
 	section: ClipSection;
@@ -876,6 +889,8 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
 	onSetWordText: (assetId: string, wordId: string, text: string) => void;
+	onInsertWord: (assetId: string, anchorWordId: string, side: InsertSide, text: string) => void;
+	onRemoveWords: (assetId: string, wordIds: string[]) => void;
 }) {
 	const ts = useScopedT("settings");
 	const { clip, asset, words } = section;
@@ -948,6 +963,17 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			// Only skip words that are currently kept (don't double-skip).
 			const keptRange = rangeWords.filter((w) => w.kept);
 			if (keptRange.length === 0) return;
+			// An inserted word has no audio to cut, so Backspace deletes it outright. Only a
+			// range made entirely of inserts takes this path: mixed with spoken words the trim
+			// covers them anyway — they sit inside its span and read as cut, which is what the
+			// keystroke asked for.
+			if (keptRange.every((w) => isInsertedWord(w.word))) {
+				onRemoveWords(
+					clip.assetId,
+					keptRange.map((w) => w.word.id),
+				);
+				return;
+			}
 			pendingCaretWordIdRef.current = keptRange[0].id;
 			const startSec = Math.min(...keptRange.map((w) => w.word.startSec));
 			const endSec = Math.max(...keptRange.map((w) => w.word.endSec));
@@ -958,7 +984,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 				`Skip ${formatMs(startSec * 1000)}-${formatMs(endSec * 1000)} from ${clip.assetId}.`,
 			);
 		},
-		[busy, clip.assetId, trimTarget, onAddTrimRange],
+		[busy, clip.assetId, trimTarget, onAddTrimRange, onRemoveWords],
 	);
 
 	const removeTrimRun = useCallback(
@@ -1021,37 +1047,92 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 		[cutNativeSelection],
 	);
 
-	const handleBeforeInput = useCallback(
-		(event: FormEvent<HTMLDivElement>) => {
-			const inputEvent = event.nativeEvent as InputEvent;
-			if (inputEvent.inputType.startsWith("delete")) {
-				event.preventDefault();
-				cutNativeSelection(
-					inputEvent.inputType === "deleteContentForward" ? "forward" : "backward",
-				);
-				return;
-			}
-			// Inserts are blocked to keep the projection stable: every run of text
-			// here maps back to a `transcript.words` entry by id, and free text has
-			// no id to land on. Deletion is fine because it goes through
-			// `cutNativeSelection`, which resolves the selection to word ids first.
-			//
-			// This used to defer to `SourceTranscriptModal`, deleted with the v3
-			// media pane — it never got past read-only, so it was never the answer
-			// it was cited as. Editing a word's TEXT therefore has no in-app path
-			// today. Adding one means a word-level mutation alongside
-			// `skipWordRange`, reached from here; lifting this guard on its own
-			// would only desynchronise the DOM from `words`.
-			if (inputEvent.inputType === "insertText" || inputEvent.inputType === "insertFromPaste") {
-				event.preventDefault();
-			}
+	// The word an insert will sit beside, and what has been typed into it so far. Held on
+	// the block rather than the word, because the field belongs BETWEEN two words: the id is
+	// only how it finds its place in the stream.
+	const [insertion, setInsertion] = useState<{
+		clipWordId: string;
+		side: InsertSide;
+		draft: string;
+	} | null>(null);
+	const insertionAbandonedRef = useRef(false);
+
+	const openInsertion = useCallback(
+		(seed: string) => {
+			if (busy || !seed.trim()) return;
+			const editor = editorRef.current;
+			const selection = globalThis.getSelection();
+			if (!editor || !selection) return;
+			if (!editor.contains(selection.anchorNode)) return;
+			const caret = findInsertionAnchor(editor, selection.anchorNode, selection.anchorOffset);
+			if (!caret) return;
+			const anchor = resolveInsertionAnchor(words, caret.clipWordId, caret.side);
+			if (!anchor) return;
+			setInsertion({ ...anchor, draft: seed });
 		},
-		[cutNativeSelection],
+		[busy, words],
 	);
 
-	const handlePaste = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
-		event.preventDefault();
-	}, []);
+	const commitInsertion = useCallback(() => {
+		const pending = insertion;
+		setInsertion(null);
+		if (!pending) return;
+		const text = pending.draft.trim();
+		if (!text) return;
+		const anchor = words.find((w) => w.id === pending.clipWordId);
+		if (!anchor) return;
+		onInsertWord(clip.assetId, anchor.word.id, pending.side, text);
+	}, [insertion, words, onInsertWord, clip.assetId]);
+
+	// Attached to the DOM, not through React's `onBeforeInput`.
+	//
+	// React 18 does not build that synthetic event from the native `beforeinput`: it
+	// derives it from the legacy `textInput`, whose event object is a `TextEvent` and
+	// carries no `inputType` at all. So the guard that was supposed to keep typed text out
+	// of the projection threw `Cannot read properties of undefined (reading 'startsWith')`
+	// on every character, never reached its own `preventDefault`, and let the character
+	// land in the contentEditable — the exact desynchronisation between the DOM and `words`
+	// it was written to prevent. Verified in the browser before this was moved.
+	//
+	// The native event is a real `InputEvent`, its `inputType` is the thing both branches
+	// switch on, and preventing it actually stops the browser.
+	useEffect(() => {
+		const editor = editorRef.current;
+		if (!editor) return;
+		const onBeforeInput = (event: InputEvent) => {
+			// The word editor and the insertion field are `<input>`s INSIDE this element, so
+			// their own typing bubbles here natively — React's `stopPropagation` only ever
+			// stopped the synthetic tree. Their text is theirs.
+			if (event.target instanceof HTMLInputElement) return;
+			if (event.inputType.startsWith("delete")) {
+				event.preventDefault();
+				cutNativeSelection(event.inputType === "deleteContentForward" ? "forward" : "backward");
+				return;
+			}
+			// Free text never lands in the block itself: every run of text here maps back to a
+			// `transcript.words` entry by id, and typed characters have no id. What they open
+			// instead is a field beside the word the caret was on, whose commit creates a real
+			// word to hold them. So the gesture is the document one — put the caret somewhere
+			// and type — without the DOM ever getting ahead of `words`.
+			if (event.inputType.startsWith("insert")) {
+				event.preventDefault();
+				openInsertion(event.data ?? "");
+			}
+		};
+		editor.addEventListener("beforeinput", onBeforeInput);
+		return () => editor.removeEventListener("beforeinput", onBeforeInput);
+	}, [cutNativeSelection, openInsertion]);
+
+	const handlePaste = useCallback(
+		(event: ReactClipboardEvent<HTMLDivElement>) => {
+			// Handled here rather than through `insertFromPaste`: preventing the paste stops
+			// that beforeinput from ever firing, and this is the only place the clipboard text
+			// is still readable.
+			event.preventDefault();
+			openInsertion(event.clipboardData.getData("text/plain"));
+		},
+		[openInsertion],
+	);
 
 	const handlePointerUp = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1192,7 +1273,6 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 					spellCheck={false}
 					aria-label={ts("transcript.editorAria", { filename })}
 					aria-multiline="true"
-					onBeforeInput={handleBeforeInput}
 					onKeyDown={handleKeyDown}
 					onPaste={handlePaste}
 					onPointerUp={handlePointerUp}
@@ -1214,18 +1294,38 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						// scrollbar that breaks the cue auto-scroll UX.
 					}}
 				>
-					{words.map((cw) => (
-						<TranscriptWord
-							key={cw.id}
-							cw={cw}
-							isCue={cw.id === cueWordId}
-							editable={!busy}
-							target={trimTarget}
-							onRestore={removeTrimRun}
-							onAddTrimRange={onAddTrimRange}
-							onSetWordText={onSetWordText}
-						/>
-					))}
+					{words.map((cw) => {
+						const field =
+							insertion?.clipWordId === cw.id ? (
+								<InsertionField
+									value={insertion.draft}
+									label={ts("transcript.insertAria")}
+									onChange={(draft) => setInsertion({ ...insertion, draft })}
+									onCommit={commitInsertion}
+									onCancel={() => {
+										insertionAbandonedRef.current = true;
+										setInsertion(null);
+									}}
+									abandonedRef={insertionAbandonedRef}
+								/>
+							) : null;
+						return (
+							<Fragment key={cw.id}>
+								{insertion?.side === "before" ? field : null}
+								<TranscriptWord
+									cw={cw}
+									isCue={cw.id === cueWordId}
+									editable={!busy}
+									target={trimTarget}
+									onRestore={removeTrimRun}
+									onAddTrimRange={onAddTrimRange}
+									onSetWordText={onSetWordText}
+									onRemoveWords={onRemoveWords}
+								/>
+								{insertion?.side === "after" ? field : null}
+							</Fragment>
+						);
+					})}
 				</div>
 			)}
 		</span>
@@ -1259,6 +1359,7 @@ const TranscriptWord = memo(function TranscriptWord({
 	onRestore,
 	onAddTrimRange,
 	onSetWordText,
+	onRemoveWords,
 }: {
 	cw: ClipWord;
 	isCue: boolean;
@@ -1269,6 +1370,7 @@ const TranscriptWord = memo(function TranscriptWord({
 	onRestore: (run: TrimRun) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onSetWordText: (assetId: string, wordId: string, text: string) => void;
+	onRemoveWords: (assetId: string, wordIds: string[]) => void;
 }) {
 	const ts = useScopedT("settings");
 	const [hover, setHover] = useState(false);
@@ -1295,6 +1397,12 @@ const TranscriptWord = memo(function TranscriptWord({
 		if (next === cw.word.text) return;
 		onSetWordText(target.assetId, cw.word.id, next);
 	}, [draft, cw.word.text, cw.word.id, onSetWordText, target.assetId]);
+
+	const inserted = isInsertedWord(cw.word);
+
+	const removeInserted = useCallback(() => {
+		onRemoveWords(target.assetId, [cw.word.id]);
+	}, [onRemoveWords, target.assetId, cw.word.id]);
 
 	const revert = useCallback(() => {
 		if (original === undefined) return;
@@ -1414,7 +1522,6 @@ const TranscriptWord = memo(function TranscriptWord({
 						setDraft(null);
 					}
 				}}
-				onBeforeInput={(event) => event.stopPropagation()}
 				onPaste={(event) => event.stopPropagation()}
 				onPointerUp={(event) => event.stopPropagation()}
 				style={{
@@ -1433,6 +1540,58 @@ const TranscriptWord = memo(function TranscriptWord({
 					outline: "none",
 				}}
 			/>
+		);
+	}
+
+	// A word nobody said. Amber rather than the accent: this one is not a fix to what was
+	// heard, it is text with no sound underneath — the caveat is the point. Double-click
+	// rewrites it like any other word; the cross deletes it, because there is no audio for a
+	// trim to remove.
+	if (inserted) {
+		return (
+			<span
+				data-word-id={cw.id}
+				data-start-sec={cw.word.startSec}
+				data-end-sec={cw.word.endSec}
+				data-inserted="true"
+				data-skip-id={cw.trimId ?? undefined}
+				style={{ display: "inline", opacity: removed ? 0.6 : 1 }}
+				onMouseEnter={() => setHover(true)}
+				onMouseLeave={() => setHover(false)}
+				onDoubleClick={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					startEditing();
+				}}
+			>
+				<span
+					contentEditable={false}
+					title={ts("transcript.insertedWord")}
+					style={{
+						display: "inline-flex",
+						alignItems: "center",
+						margin: "0 3px 2px 0",
+						padding: "1px 7px",
+						borderRadius: 999,
+						border: "1px solid var(--warn)",
+						background: "var(--warn-soft)",
+						color: "var(--warn)",
+						font: "600 12px/1.5 var(--font-body)",
+						textDecoration: removed ? "line-through" : "none",
+					}}
+				>
+					{cw.word.text}
+				</span>
+				{hover ? (
+					<WordChipButton
+						label={ts("transcript.removeInserted", { word: cw.word.text })}
+						tone="var(--warn)"
+						onPress={removeInserted}
+					>
+						<Trash2 size={12} strokeWidth={1.9} aria-hidden="true" />
+					</WordChipButton>
+				) : null}{" "}
+			</span>
 		);
 	}
 
@@ -1569,6 +1728,27 @@ const TranscriptWord = memo(function TranscriptWord({
  *  since reverting a correction restores something instead of removing it. */
 function RevertWordButton({ label, onRevert }: { label: string; onRevert: () => void }) {
 	return (
+		<WordChipButton label={label} tone="var(--accent)" onPress={onRevert}>
+			<Undo2 size={12} strokeWidth={1.9} aria-hidden="true" />
+		</WordChipButton>
+	);
+}
+
+/** The one hover control shape the word stream uses, in whichever colour says what it does.
+ *  `contentEditable={false}` keeps it out of the enclosing editable block, and the click is
+ *  stopped so it never reaches the seek handler underneath. */
+function WordChipButton({
+	label,
+	tone,
+	onPress,
+	children,
+}: {
+	label: string;
+	tone: string;
+	onPress: () => void;
+	children: ReactNode;
+}) {
+	return (
 		<button
 			type="button"
 			contentEditable={false}
@@ -1576,7 +1756,7 @@ function RevertWordButton({ label, onRevert }: { label: string; onRevert: () => 
 			aria-label={label}
 			onClick={(e) => {
 				e.stopPropagation();
-				onRevert();
+				onPress();
 			}}
 			style={{
 				display: "inline-flex",
@@ -1588,14 +1768,81 @@ function RevertWordButton({ label, onRevert }: { label: string; onRevert: () => 
 				padding: 0,
 				border: 0,
 				borderRadius: 4,
-				background: "var(--accent)",
+				background: tone,
 				color: "white",
 				cursor: "pointer",
 				verticalAlign: "middle",
 			}}
 		>
-			<Undo2 size={12} strokeWidth={1.9} aria-hidden="true" />
+			{children}
 		</button>
+	);
+}
+
+/**
+ * The field a typed character opens between two words. It is not a word yet — nothing is
+ * written until it commits — so it carries no `data-word-id` and no place in `words`.
+ *
+ * Every event it raises is stopped at the field, for the same reason the word editor stops
+ * its own: the block around it reads Backspace as a cut and a click as a seek.
+ */
+function InsertionField({
+	value,
+	label,
+	onChange,
+	onCommit,
+	onCancel,
+	abandonedRef,
+}: {
+	value: string;
+	label: string;
+	onChange: (value: string) => void;
+	onCommit: () => void;
+	onCancel: () => void;
+	abandonedRef: { current: boolean };
+}) {
+	return (
+		<input
+			contentEditable={false}
+			data-word-inserter="true"
+			value={value}
+			// Same reason as the word editor: the field exists because the user just typed.
+			autoFocus
+			aria-label={label}
+			onChange={(event) => onChange(event.target.value)}
+			onBlur={() => {
+				if (abandonedRef.current) {
+					abandonedRef.current = false;
+					return;
+				}
+				onCommit();
+			}}
+			onKeyDown={(event) => {
+				event.stopPropagation();
+				if (event.key === "Enter") {
+					event.preventDefault();
+					onCommit();
+				} else if (event.key === "Escape") {
+					event.preventDefault();
+					onCancel();
+				}
+			}}
+			onBeforeInput={(event) => event.stopPropagation()}
+			onPaste={(event) => event.stopPropagation()}
+			onPointerUp={(event) => event.stopPropagation()}
+			style={{
+				display: "inline",
+				width: `${Math.max(value.length, 3) + 2}ch`,
+				margin: "0 3px 2px 0",
+				padding: "0 5px",
+				border: "1px solid var(--warn)",
+				borderRadius: 999,
+				background: "var(--warn-soft)",
+				color: "var(--fg)",
+				font: "inherit",
+				outline: "none",
+			}}
+		/>
 	);
 }
 
@@ -1691,6 +1938,79 @@ function findCollapsedDeletionWordId(
 	}
 	const pool = direction === "backward" ? [...before].reverse() : after;
 	return pool.find((wordNode) => isKept(wordNode.dataset.wordId ?? null))?.dataset.wordId ?? null;
+}
+
+/**
+ * Where a typed character goes: beside the word the caret was resting on, never inside it.
+ *
+ * A caret in the middle of a word anchors AFTER that word rather than splitting it in two —
+ * a split would need two words where the transcript has one, and neither half would own the
+ * audio any more. At the very start of the block there is nothing to sit after, so the
+ * anchor is the first word and the new one lands before it.
+ */
+function findInsertionAnchor(
+	editor: HTMLElement,
+	node: Node | null,
+	offset: number,
+): { clipWordId: string; side: InsertSide } | null {
+	const wordNodes = Array.from(editor.querySelectorAll<HTMLElement>("[data-word-id]"));
+	if (wordNodes.length === 0 || !node) return null;
+
+	const direct = closestWordElement(node);
+	if (direct?.dataset.wordId) {
+		const atStart = node.nodeType === Node.TEXT_NODE && offset <= 0;
+		return { clipWordId: direct.dataset.wordId, side: atStart ? "before" : "after" };
+	}
+
+	// The caret is between the block's own children, and `offset` is a child index — the
+	// same shape `findCollapsedDeletionWordId` reads when it resolves a cut. Walk back for
+	// the word to sit after; if there is none, the caret is at the head of the stream and
+	// the new word goes before the first word ahead of it.
+	const childNodes = Array.from(node.childNodes);
+	for (const candidate of childNodes.slice(0, clampRangeOffset(node, offset)).reverse()) {
+		const wordId = findWordId(candidate) ?? findDescendantWordId(candidate);
+		if (wordId) return { clipWordId: wordId, side: "after" };
+	}
+	for (const candidate of childNodes.slice(clampRangeOffset(node, offset))) {
+		const wordId = findWordId(candidate) ?? findDescendantWordId(candidate);
+		if (wordId) return { clipWordId: wordId, side: "before" };
+	}
+	const first = wordNodes[0];
+	return first?.dataset.wordId ? { clipWordId: first.dataset.wordId, side: "before" } : null;
+}
+
+/**
+ * Pull the DOM's answer back onto a word the TRANSCRIPT has.
+ *
+ * `[silence]` pills carry a `data-word-id` like everything else in the stream, but they are
+ * pseudo-words `withSilenceGaps` invents per clip — there is nothing in `transcript.words`
+ * for a new word to be inserted next to. So the anchor walks off a silence to the nearest
+ * real word in the direction the caret was already facing, and only crosses to the other
+ * side when that direction runs out of stream.
+ */
+function resolveInsertionAnchor(
+	words: ClipWord[],
+	clipWordId: string,
+	side: InsertSide,
+): { clipWordId: string; side: InsertSide } | null {
+	const from = words.findIndex((w) => w.id === clipWordId);
+	if (from < 0) return null;
+	const real = (index: number) =>
+		index >= 0 && index < words.length && !isSilenceWord(words[index].word);
+	if (side === "after") {
+		for (let i = from; i >= 0; i--) if (real(i)) return { clipWordId: words[i].id, side: "after" };
+		for (let i = 0; i < words.length; i++) {
+			if (real(i)) return { clipWordId: words[i].id, side: "before" };
+		}
+		return null;
+	}
+	for (let i = from; i < words.length; i++) {
+		if (real(i)) return { clipWordId: words[i].id, side: "before" };
+	}
+	for (let i = words.length - 1; i >= 0; i--) {
+		if (real(i)) return { clipWordId: words[i].id, side: "after" };
+	}
+	return null;
 }
 
 function findDescendantWordId(node: Node): string | null {
