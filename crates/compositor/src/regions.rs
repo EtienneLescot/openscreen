@@ -175,9 +175,17 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 /// `startSec` (le zoom anticipe légèrement), plein régime pendant la région, ease-out après
 /// `endSec`. Les temps reçus sont les temps source échantillonnés par le pipeline, donc ces
 /// enveloppes restent alignées quand une speed region répète ou saute des frames.
+///
+/// `under_trim` coupe les enveloppes : la région vit sous une coupe, donc pleine force sur son
+/// span et rien en dehors. Sans ça son ease-in (1,5 s AVANT `start_sec`) et son ease-out
+/// déborderaient sur les frames GARDÉES de part et d'autre du trim — un zoom que l'export ne
+/// rendra jamais, visible dans la preview juste à côté de la coupe. Cf. `SceneZoomRegion`.
 fn zoom_region_strength(region: &SceneZoomRegion, t: f32) -> f32 {
     let start = region.start_sec as f32;
     let end = region.end_sec as f32;
+    if region.under_trim {
+        return if t >= start && t < end { 1.0 } else { 0.0 };
+    }
     let zoom_in_end = start + ZOOM_IN_OVERLAP_S;
     let lead_in_start = zoom_in_end - ZOOM_IN_TRANSITION_WINDOW_S;
     let lead_out_end = end + TRANSITION_WINDOW_S;
@@ -311,8 +319,13 @@ fn resolve_focus(region: &SceneZoomRegion, t: f32, cursor: Option<&CursorTrack>)
 /// transition), en secondes. Indices dans `regions` (pas d'id nécessaire — contrairement au
 /// web qui matche par `region.id` car il travaille sur des objets isolés, ici tout vient du
 /// même slice donc les positions suffisent).
+///
+/// Les régions `under_trim` sont exclues du chaînage, des DEUX côtés : leur contenu est coupé au
+/// rendu, donc un pan lissé vers (ou depuis) l'une d'elles ferait bouger des frames gardées au
+/// nom d'une région que l'export ne joue pas. Elles restent des régions dominantes indépendantes,
+/// sèches sur leur propre span (cf. `zoom_region_strength`).
 fn connected_pairs(regions: &[SceneZoomRegion]) -> Vec<(usize, usize, f32, f32)> {
-    let mut order: Vec<usize> = (0..regions.len()).collect();
+    let mut order: Vec<usize> = (0..regions.len()).filter(|&i| !regions[i].under_trim).collect();
     order.sort_by(|&a, &b| regions[a].start_sec.partial_cmp(&regions[b].start_sec).unwrap());
     let mut pairs = Vec::new();
     for w in order.windows(2) {
@@ -628,6 +641,7 @@ mod zoom_focus_tests {
             focus_y: 0.5,
             focus_mode: Some("manual".into()),
             rotation: None,
+            under_trim: false,
         }
     }
 
@@ -677,6 +691,33 @@ mod zoom_focus_tests {
         let state = zoom_state_at(&regions, 0.0, None);
         assert_eq!(state.scale, 1.0);
         assert_eq!(state.focus, [0.5, 0.5]);
+    }
+
+    /// Une région sous un trim est jouée SÈCHE : pleine échelle sur son span, identité juste
+    /// avant et juste après. `region()` couvre [2,8] et son ease-in normal démarre 1,5 s avant
+    /// `start_sec` — c'est exactement ce débordement qui atteindrait les frames GARDÉES autour
+    /// de la coupe et ferait diverger la preview de l'export. Cf. issue #216.
+    #[test]
+    fn a_region_under_a_trim_has_no_transition_window() {
+        let mut r = region(2.5, 0.5);
+        r.under_trim = true;
+        let regions = [r];
+        assert_eq!(zoom_state_at(&regions, 1.5, None).scale, 1.0);
+        assert_eq!(zoom_state_at(&regions, 2.0, None).scale, 2.5);
+        assert_eq!(zoom_state_at(&regions, 7.9, None).scale, 2.5);
+        assert_eq!(zoom_state_at(&regions, 8.0, None).scale, 1.0);
+    }
+
+    /// Et elle ne se chaîne pas avec sa voisine gardée : un pan lissé vers une région que
+    /// l'export ne joue pas ferait bouger des frames qui, elles, sont rendues.
+    #[test]
+    fn a_region_under_a_trim_is_not_chained_with_its_neighbour() {
+        let mut cut = region(3.0, 0.5);
+        cut.under_trim = true;
+        cut.start_sec = 9.0;
+        cut.end_sec = 10.0;
+        // Sans le filtre, l'écart de 1 s < CHAINED_ZOOM_PAN_GAP_S apparierait [2,8] et [9,10].
+        assert!(connected_pairs(&[region(2.0, 0.5), cut]).is_empty());
     }
 }
 
