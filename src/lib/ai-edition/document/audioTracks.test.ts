@@ -5,6 +5,7 @@ import {
 	collapseTracksToPills,
 	patchAudioTrack,
 	removeAudioTrack,
+	resolveFadeSecs,
 	trackGroupId,
 } from "./audioTracks";
 
@@ -71,6 +72,29 @@ describe("anchorAudioTrackFragments", () => {
 		expect(frags[1].offsetMs).toBe(7000);
 	});
 
+	it("keeps the fades on the outer edges only", () => {
+		const frags = anchorAudioTrackFragments(
+			track({ startMs: 5000, endMs: 15_000, fadeInMs: 500, fadeOutMs: 800 }),
+			twoClips,
+			makeId,
+		);
+		expect(frags.map((f) => [f.fadeInMs, f.fadeOutMs])).toEqual([
+			[500, 0],
+			[0, 800],
+		]);
+	});
+
+	it("does not advance the offset of a looping track", () => {
+		// Looping folds within `duration - offset`, which every fragment shares;
+		// an advanced offset would shorten the window and drift out of phase.
+		const frags = anchorAudioTrackFragments(
+			track({ startMs: 5000, endMs: 15_000, offsetMs: 1000, loop: true }),
+			twoClips,
+			makeId,
+		);
+		expect(frags.map((f) => f.offsetMs)).toEqual([1000, 1000]);
+	});
+
 	it("ties every fragment to one group id", () => {
 		const frags = anchorAudioTrackFragments(
 			track({ startMs: 5000, endMs: 15_000 }),
@@ -91,7 +115,7 @@ describe("anchorAudioTrackFragments", () => {
 describe("collapseTracksToPills", () => {
 	it("folds a ventilated track back into one span with its real offset", () => {
 		const frags = anchorAudioTrackFragments(
-			track({ startMs: 5000, endMs: 15_000, offsetMs: 2000 }),
+			track({ startMs: 5000, endMs: 15_000, offsetMs: 2000, fadeInMs: 400, fadeOutMs: 600 }),
 			twoClips,
 			makeId,
 		);
@@ -101,6 +125,7 @@ describe("collapseTracksToPills", () => {
 		// The FIRST fragment's offset is the track's own; the later ones hold
 		// advanced copies that must not leak back into the pill.
 		expect(pill.offsetMs).toBe(2000);
+		expect([pill.fadeInMs, pill.fadeOutMs]).toEqual([400, 600]);
 		expect(pill.clipId).toBeUndefined();
 	});
 
@@ -150,8 +175,23 @@ describe("patchAudioTrack", () => {
 			makeId,
 		);
 		const doc = { ...emptyDoc(), audioTracks: frags };
-		const next = patchAudioTrack(doc, trackGroupId(frags[0]), { gainDb: -6 });
+		const next = patchAudioTrack(doc, trackGroupId(frags[0]), { gainDb: -6, muted: true });
 		expect(next.audioTracks.map((t) => t.gainDb)).toEqual([-6, -6]);
+		expect(next.audioTracks.every((t) => t.muted)).toBe(true);
+	});
+
+	it("keeps fades on the outer edges when they are edited", () => {
+		const frags = anchorAudioTrackFragments(
+			track({ startMs: 5000, endMs: 15_000 }),
+			twoClips,
+			makeId,
+		);
+		const doc = { ...emptyDoc(), audioTracks: frags };
+		const next = patchAudioTrack(doc, trackGroupId(frags[0]), { fadeInMs: 300, fadeOutMs: 400 });
+		expect(next.audioTracks.map((t) => [t.fadeInMs, t.fadeOutMs])).toEqual([
+			[300, 0],
+			[0, 400],
+		]);
 	});
 
 	it("shifts the whole track by the offset delta, preserving each advance", () => {
@@ -173,5 +213,22 @@ describe("patchAudioTrack", () => {
 		const next = patchAudioTrack(doc, "audio_b", { gainDb: -6 });
 		expect(next.audioTracks[0]).toEqual(a);
 		expect(next.audioTracks[1]?.gainDb).toBe(-6);
+	});
+});
+
+describe("resolveFadeSecs", () => {
+	it("passes fades that fit through untouched", () => {
+		expect(resolveFadeSecs(1000, 2000, 10)).toEqual({ fadeInSec: 1, fadeOutSec: 2 });
+	});
+
+	it("shrinks a fade-in longer than the span to the span", () => {
+		// Unreduced this holds the gain at zero for the whole track.
+		expect(resolveFadeSecs(5000, 0, 2)).toEqual({ fadeInSec: 2, fadeOutSec: 0 });
+	});
+
+	it("shares the span in proportion when both fades overflow", () => {
+		const { fadeInSec, fadeOutSec } = resolveFadeSecs(6000, 4000, 2);
+		expect(fadeInSec).toBeCloseTo(1.2);
+		expect(fadeOutSec).toBeCloseTo(0.8);
 	});
 });

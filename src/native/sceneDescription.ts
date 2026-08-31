@@ -397,8 +397,8 @@ export interface SceneDescription {
 	/**
 	 * Timeline audio tracks (issue #350), mixed over the assembled programme by
 	 * `audio::mix_external_tracks`. One entry per contiguous stretch: a track split by a
-	 * clip boundary contributes one entry per fragment, each picking the source up where
-	 * the last left off.
+	 * clip boundary contributes one entry per fragment (each picking the source up where
+	 * the last left off), and a looping track one entry per repeat.
 	 *
 	 * `startSec` is the head on the trim-COMPRESSED output programme: the track's raw
 	 * timeline head projected through the trims via `projectRawTimelineSecToPlayback`, so
@@ -413,6 +413,11 @@ export interface SceneDescription {
 		gainDb: number;
 		trimStartSec: number;
 		trimEndSec: number;
+		/** Ramp lengths at the entry's own edges, in seconds. A split or looping
+		 *  track carries them only on the pieces that touch the track's real
+		 *  start and end, so it fades once rather than at every cut or repeat. */
+		fadeInSec: number;
+		fadeOutSec: number;
 	}>;
 	/**
 	 * Per-clip screen crop (fractions of the frame), or null for the identity
@@ -502,36 +507,58 @@ export function buildSceneDescription(
 		clipAssetIsResolvable(clip, assetById),
 	);
 	const audioTracks = document.audioTracks.flatMap((track) => {
+		if (track.muted) return [];
 		const asset = assetById.get(track.assetId);
 		if (!asset?.originalPath) return [];
 		const sourceDurationSec = asset.durationSec ?? track.durationSec;
 		const offsetSec = track.offsetMs / 1000;
 		const spanSec = (track.endMs - track.startMs) / 1000;
 		if (spanSec <= 0) return [];
+		const startSec = projectRawTimelineSecToPlayback(
+			projectedClips,
+			document.timeline.trimRanges,
+			track.startMs / 1000,
+		);
+		const base = {
+			path: asset.originalPath,
+			gainDb: track.gainDb,
+			fadeInSec: track.fadeInMs / 1000,
+			fadeOutSec: track.fadeOutMs / 1000,
+		};
 		// The window the file has left after the offset. Without a probed duration
-		// there is nothing to cap the tail with, so the span itself is the window —
-		// the mixer stops at the real end of the file.
+		// there is nothing to loop over and nothing to cap the tail with, so the
+		// span itself is the window — the mixer stops at the real end of the file.
 		const windowSec = sourceDurationSec > 0 ? Math.max(0, sourceDurationSec - offsetSec) : spanSec;
 		if (windowSec <= 0) return [];
-		return [
-			{
-				path: asset.originalPath,
-				// The head is stored in RAW timeline seconds, but the programme this
-				// mixes onto is trim-compressed — so project raw→output. Passing the
-				// raw head verbatim delayed the track by the total trim duration
-				// ahead of it (issue #350).
-				startSec: projectRawTimelineSecToPlayback(
-					projectedClips,
-					document.timeline.trimRanges,
-					track.startMs / 1000,
-				),
-				gainDb: track.gainDb,
+		if (!track.loop) {
+			return [
+				{
+					...base,
+					startSec,
+					trimStartSec: offsetSec,
+					// Always concrete: the compositor preallocates its decode window
+					// from it. Whichever runs out first — the span or the file.
+					trimEndSec: offsetSec + Math.min(windowSec, spanSec),
+				},
+			];
+		}
+		// A looping track is one mix entry per repeat: the mixer overlays entries
+		// independently, so the repeats are just more of them. The last one is cut
+		// short wherever the span ends.
+		const entries = [];
+		for (let played = 0; played < spanSec && entries.length < 1000; played += windowSec) {
+			const thisSec = Math.min(windowSec, spanSec - played);
+			entries.push({
+				...base,
+				startSec: startSec + played,
 				trimStartSec: offsetSec,
-				// Always concrete: the compositor preallocates its decode window
-				// from it. Whichever runs out first — the span or the file.
-				trimEndSec: offsetSec + Math.min(windowSec, spanSec),
-			},
-		];
+				trimEndSec: offsetSec + thisSec,
+				// The fades belong to the track's edges, not to every repeat.
+				fadeInSec: played === 0 ? base.fadeInSec : 0,
+				fadeOutSec: played + thisSec >= spanSec ? base.fadeOutSec : 0,
+			});
+		}
+		return entries;
 	});
 	const visibleClips = resolveVisibleClips(document);
 	const clips: CompositorClipInput[] = visibleClips.flatMap((clip) => {

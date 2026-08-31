@@ -1802,11 +1802,16 @@ describe("buildSceneDescription.audioTracks", () => {
 	const track = {
 		id: "trk1",
 		assetId: "aud",
+		kind: "music" as const,
 		startMs: 5000,
 		endMs: 15_000,
 		durationSec: 30,
 		offsetMs: 2000,
 		gainDb: -3,
+		loop: false,
+		fadeInMs: 0,
+		fadeOutMs: 0,
+		muted: false,
 		label: "",
 		origin: "user" as const,
 	};
@@ -1822,6 +1827,8 @@ describe("buildSceneDescription.audioTracks", () => {
 				// The span is 10s and the file has 28s left after the offset, so the
 				// span is what runs out first.
 				trimEndSec: 12,
+				fadeInSec: 0,
+				fadeOutSec: 0,
 			},
 		]);
 	});
@@ -1833,6 +1840,31 @@ describe("buildSceneDescription.audioTracks", () => {
 			audioTracks: [{ ...track, endMs: 45_000 }],
 		});
 		expect(buildSceneDescription(doc).audioTracks[0]?.trimEndSec).toBe(30);
+	});
+
+	it("drops a muted track from the mix list", () => {
+		const doc = makeDoc({ assets: [audioAsset], audioTracks: [{ ...track, muted: true }] });
+		expect(buildSceneDescription(doc).audioTracks).toEqual([]);
+	});
+
+	it("emits one entry per repeat for a looping track", () => {
+		const doc = makeDoc({
+			assets: [audioAsset],
+			// 4s of source (offset 26 into a 30s file) under a 10s span → 3 repeats.
+			audioTracks: [{ ...track, offsetMs: 26_000, loop: true, fadeInMs: 500, fadeOutMs: 500 }],
+		});
+		const entries = buildSceneDescription(doc).audioTracks;
+		expect(entries.map((e) => [e.startSec, e.trimStartSec, e.trimEndSec])).toEqual([
+			[5, 26, 30],
+			[9, 26, 30],
+			[13, 26, 28],
+		]);
+		// The fades belong to the track's edges, not to every repeat.
+		expect(entries.map((e) => [e.fadeInSec, e.fadeOutSec])).toEqual([
+			[0.5, 0],
+			[0, 0],
+			[0, 0.5],
+		]);
 	});
 
 	it("projects the head onto the trim-compressed programme (issue #350)", () => {

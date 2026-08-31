@@ -101,7 +101,9 @@ export interface ProjectState {
 		assetId: string,
 		timelineStartSec?: number,
 		options?: {
-			/** Real source duration, when the caller measured it. */
+			kind?: "voiceover" | "music";
+			/** Real source duration, when the caller measured it (a fresh recording
+			 *  knows its own length before the asset is probed). */
 			durationSec?: number;
 			/** Timeline span, when it should differ from the source duration. */
 			spanSec?: number;
@@ -420,10 +422,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		const track = createAudioTrack({
 			assetId,
 			durationSec: options?.durationSec ?? asset.durationSec ?? 0,
+			kind: options?.kind,
 			spanSec: options?.spanSec,
 			// Default to the playhead (RAW/document timeline seconds — the clock the
 			// ruler and playhead use, NOT the trim-compressed output programme),
-			// matching the timeline hook's placement.
+			// matching the timeline hook's placement. A voiceover passes the playhead
+			// captured when RECORDING STARTED — by the time the take ends the live
+			// playhead has run on by the take's own length.
 			timelineStartSec: timelineStartSec ?? get().currentTimeSec,
 			label: asset.label,
 		});

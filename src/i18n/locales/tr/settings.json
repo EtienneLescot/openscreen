@@ -324,7 +324,11 @@
 		"add": "Ses parçası ekle",
 		"importFailed": "Ses eklenemedi",
 		"defaultLabel": "Ses parçası",
-		"help": "Bu içe aktarılmış ses parçasının ses düzeyi. Önizlemede ve dışa aktarmada kaydın üzerine miksleniyor. Taşımak veya kırpmak için parçayı zaman çizelgesinde sürükleyin.",
+		"help": "Bu ses parçasının seviyesi, geçişleri ve döngüsü. Önizlemede ve dışa aktarmada kaydın üzerine miksleniyor. Parçayı zaman çizelgesinde sürükleyerek taşıyın veya yeniden boyutlandırın.",
+		"fadeIn": "Açılma",
+		"fadeOut": "Kararma",
+		"mute": "Sessiz",
+		"loop": "Döngü",
 		"remove": "Parçayı sil"
 	}
 }

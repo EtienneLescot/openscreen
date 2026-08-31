@@ -353,11 +353,16 @@ describe("V4Timeline audio lane drag", () => {
 	const makeTrack = () => ({
 		id: "trk1",
 		assetId: "aud",
+		kind: "music" as const,
 		startMs: 100_000,
 		endMs: 160_000,
 		durationSec: 60,
 		offsetMs: 0,
 		gainDb: 0,
+		loop: false,
+		fadeInMs: 0,
+		fadeOutMs: 0,
+		muted: false,
 		label: "vo",
 		origin: "user" as const,
 	});

@@ -964,8 +964,17 @@ pub fn mix_external_tracks(mut programme: PlanarPcm, tracks: &[SceneAudioTrack])
             Ok(Some(pcm)) => pcm,
             _ => continue,
         };
-        let gain = 10.0f32.powf(track.gain_db.clamp(-12.0, 12.0) / 20.0);
-        overlay_track_pcm(&mut programme, &decoded, offset, gain);
+        // The app's own range is -60..+12 dB (the inspector slider); clamping at
+        // -12 here floored every quiet bed at a tenth of the attenuation asked for.
+        let gain = 10.0f32.powf(track.gain_db.clamp(-60.0, 12.0) / 20.0);
+        overlay_track_pcm(
+            &mut programme,
+            &decoded,
+            offset,
+            gain,
+            track.fade_in_sec.max(0.0),
+            track.fade_out_sec.max(0.0),
+        );
     }
     programme
 }
@@ -974,12 +983,24 @@ pub fn mix_external_tracks(mut programme: PlanarPcm, tracks: &[SceneAudioTrack])
 /// truncated at the programme's end. Split out of `mix_external_tracks` so the
 /// placement/gain/clamp math is testable without ffmpeg, exactly like
 /// `mix_aligned_tracks` is split from the decode above.
-fn overlay_track_pcm(programme: &mut PlanarPcm, decoded: &PlanarPcm, offset: usize, gain: f32) {
+fn overlay_track_pcm(
+    programme: &mut PlanarPcm,
+    decoded: &PlanarPcm,
+    offset: usize,
+    gain: f32,
+    fade_in_sec: f64,
+    fade_out_sec: f64,
+) {
     let programme_len = programme.first().map(Vec::len).unwrap_or(0);
     if offset >= programme_len {
         return;
     }
     let room = programme_len - offset;
+    // The ramps are measured against the DECODED length, not the room left in the
+    // programme: a track running past the end is cut off there, and a fade-out
+    // timed to the cut would ramp down over audio the export never reaches.
+    let decoded_len = decoded.iter().map(Vec::len).max().unwrap_or(0);
+    let (fade_in, fade_out) = resolve_fade_samples(decoded_len, fade_in_sec, fade_out_sec);
     for channel in 0..AUDIO_OUTPUT_CHANNELS {
         let Some(source) = decoded.get(channel) else {
             continue;
@@ -987,9 +1008,46 @@ fn overlay_track_pcm(programme: &mut PlanarPcm, decoded: &PlanarPcm, offset: usi
         let count = source.len().min(room);
         let dst = &mut programme[channel];
         for k in 0..count {
-            dst[offset + k] += source[k] * gain;
+            dst[offset + k] += source[k] * gain * fade_envelope(k, decoded_len, fade_in, fade_out);
         }
     }
+}
+
+/// Fade lengths in samples, reduced to fit inside `len`.
+///
+/// Fades that do not fit share the window in proportion rather than being clamped
+/// independently: clamping each to the length first would turn an asymmetric pair
+/// into a symmetric one, losing the shape asked for. Kept identical to the app's
+/// `resolveFadeSecs` so the preview and the render agree.
+fn resolve_fade_samples(len: usize, fade_in_sec: f64, fade_out_sec: f64) -> (usize, usize) {
+    if len == 0 {
+        return (0, 0);
+    }
+    let rate = AUDIO_OUTPUT_SAMPLE_RATE as f64;
+    let mut fade_in = fade_in_sec.max(0.0) * rate;
+    let mut fade_out = fade_out_sec.max(0.0) * rate;
+    let total = fade_in + fade_out;
+    if total > len as f64 && total > 0.0 {
+        let scale = len as f64 / total;
+        fade_in *= scale;
+        fade_out *= scale;
+    }
+    (fade_in.round() as usize, fade_out.round() as usize)
+}
+
+/// Linear ramp factor at sample `k` of a `len`-sample track.
+fn fade_envelope(k: usize, len: usize, fade_in: usize, fade_out: usize) -> f32 {
+    let mut v = 1.0f32;
+    if fade_in > 0 && k < fade_in {
+        v = v.min(k as f32 / fade_in as f32);
+    }
+    if fade_out > 0 && len > k {
+        let remaining = len - k;
+        if remaining <= fade_out {
+            v = v.min(remaining as f32 / fade_out as f32);
+        }
+    }
+    v
 }
 
 /// Encodeur AAC attaché au muxer avant son header. Les paquets utilisent le même interleaver
@@ -1127,7 +1185,7 @@ mod tests {
     fn overlay_sums_at_offset_with_gain() {
         let mut programme = planar(&[0.1, 0.1, 0.1, 0.1]);
         // ×2 gain, placed at sample offset 1.
-        overlay_track_pcm(&mut programme, &planar(&[0.2, 0.2]), 1, 2.0);
+        overlay_track_pcm(&mut programme, &planar(&[0.2, 0.2]), 1, 2.0, 0.0, 0.0);
         assert_eq!(programme[0], vec![0.1, 0.5, 0.5, 0.1]);
         assert_eq!(programme[1], vec![0.1, 0.5, 0.5, 0.1]);
     }
@@ -1136,14 +1194,14 @@ mod tests {
     fn overlay_truncates_a_track_that_runs_past_the_programme() {
         let mut programme = planar(&[0.0, 0.0, 0.0]);
         // A 4-sample track placed at offset 2 has room for only 1 sample.
-        overlay_track_pcm(&mut programme, &planar(&[1.0, 1.0, 1.0, 1.0]), 2, 1.0);
+        overlay_track_pcm(&mut programme, &planar(&[1.0, 1.0, 1.0, 1.0]), 2, 1.0, 0.0, 0.0);
         assert_eq!(programme[0], vec![0.0, 0.0, 1.0]);
     }
 
     #[test]
     fn overlay_past_the_end_is_a_no_op() {
         let mut programme = planar(&[0.3, 0.3]);
-        overlay_track_pcm(&mut programme, &planar(&[1.0]), 5, 1.0);
+        overlay_track_pcm(&mut programme, &planar(&[1.0]), 5, 1.0, 0.0, 0.0);
         assert_eq!(programme[0], vec![0.3, 0.3]);
     }
 
@@ -1156,6 +1214,8 @@ mod tests {
             gain_db: 0.0,
             trim_start_sec: 2.0,
             trim_end_sec: Some(1.0), // end <= start: empty window, never decoded
+            fade_in_sec: 0.0,
+            fade_out_sec: 0.0,
         }];
         // The empty window is skipped before any decode, so the programme is
         // untouched even though the path does not exist.
@@ -1175,6 +1235,8 @@ mod tests {
             gain_db: 0.0,
             trim_start_sec: 0.0,
             trim_end_sec: Some(3600.0),
+            fade_in_sec: 0.0,
+            fade_out_sec: 0.0,
         }];
         let out = mix_external_tracks(programme, &tracks);
         assert_eq!(out[0], vec![0.4, 0.4]);
@@ -1270,6 +1332,73 @@ mod tests {
         let loud = finish_audio(planar(&[0.1]), SceneAudio { gain_db: 99.0 });
         let ceiling = 0.1 * 10.0f32.powf(12.0 / 20.0);
         assert!((loud[0][0] - ceiling).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fades_that_fit_are_left_alone() {
+        let rate = AUDIO_OUTPUT_SAMPLE_RATE as f64;
+        let (fin, fout) = resolve_fade_samples(rate as usize, 0.1, 0.2);
+        assert_eq!(fin, (0.1 * rate).round() as usize);
+        assert_eq!(fout, (0.2 * rate).round() as usize);
+    }
+
+    #[test]
+    fn fades_too_long_for_the_track_share_it_in_proportion() {
+        // 6 s + 4 s of fade on a 2 s track → 1.2 s / 0.8 s, not a clamped 1 s / 1 s.
+        // Mirrors `resolveFadeSecs` on the app side; the two must agree or the
+        // preview and the render shape the same track differently.
+        let rate = AUDIO_OUTPUT_SAMPLE_RATE as f64;
+        let len = (2.0 * rate) as usize;
+        let (fin, fout) = resolve_fade_samples(len, 6.0, 4.0);
+        assert_eq!(fin, (1.2 * rate).round() as usize);
+        assert_eq!(fout, (0.8 * rate).round() as usize);
+        assert!(fin + fout <= len + 1);
+    }
+
+    #[test]
+    fn a_fade_in_longer_than_the_track_still_reaches_full_volume() {
+        // Left unreduced this holds the gain near zero for the whole track — the
+        // layer exports silent.
+        let (fin, fout) = resolve_fade_samples(100, 10.0, 0.0);
+        assert_eq!((fin, fout), (100, 0));
+        assert!((fade_envelope(99, 100, fin, fout) - 0.99).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_envelope_ramps_at_both_edges_and_holds_between() {
+        assert_eq!(fade_envelope(0, 100, 10, 10), 0.0);
+        assert!((fade_envelope(5, 100, 10, 10) - 0.5).abs() < 1e-6);
+        assert_eq!(fade_envelope(50, 100, 10, 10), 1.0);
+        assert!((fade_envelope(95, 100, 10, 10) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn overlay_applies_the_fade_over_the_decoded_length() {
+        // The ramps are measured against the DECODED length, not the room left in
+        // the programme: a fade-out timed to the programme's end would ramp down
+        // over audio the export never reaches.
+        let mut programme = planar(&[0.0, 0.0, 0.0, 0.0]);
+        let decoded = planar(&[1.0, 1.0, 1.0, 1.0]);
+        // A 4-sample fade-in at 48 kHz is far below one sample of real time, so
+        // ask for the whole decoded length in seconds.
+        let four = 4.0 / AUDIO_OUTPUT_SAMPLE_RATE as f64;
+        overlay_track_pcm(&mut programme, &decoded, 0, 1.0, four, 0.0);
+        assert_eq!(programme[0][0], 0.0);
+        assert!(programme[0][1] > 0.0 && programme[0][1] < 1.0);
+        assert!(programme[0][3] > programme[0][1]);
+    }
+
+    #[test]
+    fn a_track_gain_below_the_output_bound_is_honoured() {
+        // The per-track gain range is the inspector's -60..+12, NOT the project
+        // output trim's ±12: clamping here at -12 floored every quiet bed at a
+        // tenth of the attenuation asked for.
+        let mut programme = planar(&[0.0]);
+        let decoded = planar(&[1.0]);
+        let gain = 10.0f32.powf(-40.0 / 20.0);
+        overlay_track_pcm(&mut programme, &decoded, 0, gain, 0.0, 0.0);
+        assert!((programme[0][0] - gain).abs() < 1e-9);
+        assert!(programme[0][0] < 10.0f32.powf(-12.0 / 20.0));
     }
 
     #[test]

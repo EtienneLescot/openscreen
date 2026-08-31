@@ -11,10 +11,11 @@
 // into every fragment, which is right for value-per-span effects (both halves
 // of a split zoom are still "depth 3") and wrong for continuous media: two
 // fragments each carrying `offsetMs: 2000` would both restart the file two
-// seconds in, so a bed spanning a cut audibly restarts at the boundary.
-// `anchorAudioTrackFragments` fixes the payload up afterwards: every
-// fragment's `offsetMs` is advanced by the source time its predecessors
-// consumed.
+// seconds in, so a bed spanning a cut audibly restarts at the boundary, and
+// each fragment would re-run the layer's fades. `anchorAudioTrackFragments`
+// fixes the payload up afterwards: every fragment's `offsetMs` is advanced by
+// the source time its predecessors consumed, and the fades are kept on the
+// outer edges only.
 
 import type { AxcutAudioTrack, AxcutClip, AxcutDocument } from "../schema";
 import { anchorRegionsWithDerivedMs, coalesceRegionsForRuler } from "../timeline/timelineMap";
@@ -30,6 +31,8 @@ export function trackGroupId(track: AxcutAudioTrack): string {
  *
  *  - `offsetMs` advances by the elapsed source time, so fragment 2 picks up the
  *    file where fragment 1 left off instead of restarting at the track offset.
+ *  - `fadeInMs` stays on the first fragment and `fadeOutMs` on the last, so a
+ *    split track fades once at each real edge rather than at every cut.
  *  - `trackId` ties the fragments together for the lane, the inspector and
  *    delete.
  *
@@ -46,12 +49,18 @@ export function anchorAudioTrackFragments(
 	if (anchored.length === 0) return [];
 	// Fragments come back in clip order, which is the order they play.
 	let elapsedMs = 0;
-	return anchored.map((fragment) => {
+	const last = anchored.length - 1;
+	return anchored.map((fragment, index) => {
 		const spanMs = Math.max(0, fragment.endMs - fragment.startMs);
 		const next: AxcutAudioTrack = {
 			...fragment,
 			trackId: groupId,
-			offsetMs: track.offsetMs + elapsedMs,
+			// Looping restarts the window on its own, so an advanced offset would
+			// double-count the fold; the mixer and the preview both wrap within
+			// `durationSec - offsetMs`, which every fragment shares.
+			offsetMs: track.loop ? track.offsetMs : track.offsetMs + elapsedMs,
+			fadeInMs: index === 0 ? track.fadeInMs : 0,
+			fadeOutMs: index === last ? track.fadeOutMs : 0,
 		};
 		elapsedMs += spanMs;
 		return next;
@@ -74,8 +83,8 @@ export function reanchorAudioTracks(
 
 /**
  * The user-visible tracks: fragments folded back into one span per `trackId`,
- * carrying the FIRST fragment's payload — its `offsetMs` is the track's real
- * offset, since later fragments hold advanced copies.
+ * carrying the FIRST fragment's payload (its `offsetMs` is the track's real
+ * offset — later fragments hold advanced copies) and the outer fades.
  */
 export function collapseTracksToPills(tracks: AxcutAudioTrack[]): AxcutAudioTrack[] {
 	const groups = new Map<string, AxcutAudioTrack[]>();
@@ -98,6 +107,8 @@ export function collapseTracksToPills(tracks: AxcutAudioTrack[]): AxcutAudioTrac
 			sourceEndSec: undefined,
 			startMs: head.startMs,
 			endMs: tail.endMs,
+			fadeInMs: head.fadeInMs,
+			fadeOutMs: tail.fadeOutMs,
 		};
 	});
 }
@@ -125,25 +136,35 @@ export function removeAudioTrack(doc: AxcutDocument, trackId: string): AxcutDocu
 	return { ...doc, audioTracks, assets };
 }
 
-/** Patch the shared payload of every fragment of one track. A payload edit must
- *  hit ALL fragments or the halves of a split track disagree; `offsetMs` keeps
- *  its per-fragment advance. */
+/** Patch the shared payload of every fragment of one track. Payload edits (gain,
+ *  mute, loop, offset) must hit ALL fragments or the halves of a split track
+ *  disagree; `offsetMs` keeps its per-fragment advance. */
 export function patchAudioTrack(
 	doc: AxcutDocument,
 	trackId: string,
-	patch: Partial<Pick<AxcutAudioTrack, "gainDb">> & { offsetMs?: number },
+	patch: Partial<Pick<AxcutAudioTrack, "gainDb" | "muted" | "loop" | "fadeInMs" | "fadeOutMs">> & {
+		offsetMs?: number;
+	},
 ): AxcutDocument {
 	const fragments = doc.audioTracks.filter((t) => trackGroupId(t) === trackId);
 	if (fragments.length === 0) return doc;
 	const ordered = [...fragments].sort((a, b) => a.startMs - b.startMs);
 	const baseOffset = ordered[0].offsetMs;
+	const last = ordered[ordered.length - 1].id;
 	return {
 		...doc,
 		audioTracks: doc.audioTracks.map((t) => {
 			if (trackGroupId(t) !== trackId) return t;
+			const isFirst = t.id === ordered[0].id;
+			const isLast = t.id === last;
 			return {
 				...t,
 				...(patch.gainDb === undefined ? {} : { gainDb: patch.gainDb }),
+				...(patch.muted === undefined ? {} : { muted: patch.muted }),
+				...(patch.loop === undefined ? {} : { loop: patch.loop }),
+				// Fades live on the outer edges; an interior fragment keeps none.
+				...(patch.fadeInMs === undefined ? {} : { fadeInMs: isFirst ? patch.fadeInMs : 0 }),
+				...(patch.fadeOutMs === undefined ? {} : { fadeOutMs: isLast ? patch.fadeOutMs : 0 }),
 				// Shift the whole track by the delta so each fragment keeps the
 				// advance that makes it continuous with its predecessor.
 				...(patch.offsetMs === undefined
@@ -152,4 +173,29 @@ export function patchAudioTrack(
 			};
 		}),
 	};
+}
+
+/**
+ * Fade lengths in seconds, reduced to fit inside `spanSec`.
+ *
+ * Fades that do not fit share the span in proportion rather than being clamped
+ * independently: clamping each to the span first would turn an asymmetric pair
+ * into a symmetric one, losing the shape the user asked for. An unreduced
+ * fade-in longer than the span is worse than cosmetic — it holds the gain at
+ * zero for the whole track.
+ *
+ * Mirrored by `resolve_fade_samples` in `crates/compositor/src/audio.rs`; the
+ * preview reads this one, the render reads that one, and they must agree.
+ */
+export function resolveFadeSecs(
+	fadeInMs: number,
+	fadeOutMs: number,
+	spanSec: number,
+): { fadeInSec: number; fadeOutSec: number } {
+	const fadeInSec = Math.max(0, fadeInMs / 1000);
+	const fadeOutSec = Math.max(0, fadeOutMs / 1000);
+	const total = fadeInSec + fadeOutSec;
+	if (total <= spanSec) return { fadeInSec, fadeOutSec };
+	const scale = Math.max(0, spanSec) / total;
+	return { fadeInSec: fadeInSec * scale, fadeOutSec: fadeOutSec * scale };
 }

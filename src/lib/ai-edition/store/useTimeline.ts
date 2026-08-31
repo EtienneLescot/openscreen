@@ -1288,7 +1288,7 @@ export function useTimeline() {
 		async (
 			assetId: string,
 			timelineStartSec?: number,
-			options?: { durationSec?: number; spanSec?: number },
+			options?: { kind?: "voiceover" | "music"; durationSec?: number; spanSec?: number },
 		): Promise<string | null> => {
 			const id = await storeAddAudioTrack(assetId, timelineStartSec ?? playheadSec(), options);
 			if (id) {
@@ -1372,9 +1372,14 @@ export function useTimeline() {
 	);
 
 	// Payload edits hit every fragment of the track — the halves of a split take
-	// must not disagree about their own level.
+	// must not disagree about gain, mute or loop.
 	const updateAudioTrack = useCallback(
-		async (trackId: string, patch: Partial<Pick<AxcutAudioTrack, "gainDb" | "offsetMs">>) => {
+		async (
+			trackId: string,
+			patch: Partial<
+				Pick<AxcutAudioTrack, "gainDb" | "muted" | "loop" | "fadeInMs" | "fadeOutMs" | "offsetMs">
+			>,
+		) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			await saveDocument(patchAudioTrack(doc, trackId, patch), { history: true });

@@ -6,6 +6,7 @@ import {
 	type PreviewAudioGraph,
 	resolveAudioTrackPlayback,
 	resolveTimelineAudioPlayback,
+	timelineAudioFadeAt,
 } from "./VirtualPreview";
 
 /** Minimal stand-in: the function only ever touches `gain.gain.value`. */
@@ -89,11 +90,16 @@ describe("resolveTimelineAudioPlayback", () => {
 	const track: AxcutAudioTrack = {
 		id: "t1",
 		assetId: "a1",
+		kind: "music",
 		startMs: 10_000,
 		endMs: 16_000,
 		durationSec: 20,
 		offsetMs: 2000,
 		gainDb: 0,
+		loop: false,
+		fadeInMs: 0,
+		fadeOutMs: 0,
+		muted: false,
 		label: "",
 		origin: "user",
 	};
@@ -133,6 +139,18 @@ describe("resolveTimelineAudioPlayback", () => {
 			shouldPlay: true,
 		});
 		expect(resolveTimelineAudioPlayback(16, 10, short, spanSec(short)).shouldPlay).toBe(false);
+	});
+
+	it("folds a looping track back into its window, in phase with the export", () => {
+		// 4s of source (offset 0, 4s file) under a 10s span.
+		const looped = { ...track, endMs: 20_000, offsetMs: 0, durationSec: 4, loop: true };
+		const span = spanSec(looped);
+		expect(resolveTimelineAudioPlayback(13, 10, looped, span).targetTimeSec).toBeCloseTo(3, 6);
+		// 5s in is 1s into the second repeat — the export's second mix entry agrees.
+		expect(resolveTimelineAudioPlayback(15, 10, looped, span).targetTimeSec).toBeCloseTo(1, 6);
+		expect(resolveTimelineAudioPlayback(15, 10, looped, span).shouldPlay).toBe(true);
+		// Past the span it stops, however much file is left.
+		expect(resolveTimelineAudioPlayback(21, 10, looped, span).shouldPlay).toBe(false);
 	});
 
 	// The regression: an interior trim must NOT skip the track's own content, so the
@@ -182,5 +200,42 @@ describe("resolveTimelineAudioPlayback", () => {
 		expect(
 			resolveTimelineAudioPlayback(project(1), outputStart, bgm, spanSec(bgm)).targetTimeSec,
 		).toBeCloseTo(1, 6);
+	});
+});
+
+describe("timelineAudioFadeAt", () => {
+	const track: AxcutAudioTrack = {
+		id: "t1",
+		assetId: "a1",
+		kind: "music",
+		startMs: 0,
+		endMs: 10_000,
+		durationSec: 20,
+		offsetMs: 0,
+		gainDb: 0,
+		loop: false,
+		fadeInMs: 1000,
+		fadeOutMs: 2000,
+		muted: false,
+		label: "",
+		origin: "user",
+	};
+
+	it("ramps in and out over the track's own edges", () => {
+		expect(timelineAudioFadeAt(track, 0, 10)).toBe(0);
+		expect(timelineAudioFadeAt(track, 0.5, 10)).toBeCloseTo(0.5, 6);
+		expect(timelineAudioFadeAt(track, 5, 10)).toBe(1);
+		expect(timelineAudioFadeAt(track, 9, 10)).toBeCloseTo(0.5, 6);
+		expect(timelineAudioFadeAt(track, 10, 10)).toBe(0);
+	});
+
+	it("is silent when muted", () => {
+		expect(timelineAudioFadeAt({ ...track, muted: true }, 5, 10)).toBe(0);
+	});
+
+	it("still reaches full volume when a fade is longer than the span", () => {
+		// Unreduced, the ramp never completes and the track plays near-silent.
+		const long = { ...track, fadeInMs: 20_000, fadeOutMs: 0 };
+		expect(timelineAudioFadeAt(long, 2, 2)).toBe(1);
 	});
 });

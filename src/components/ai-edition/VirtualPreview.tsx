@@ -4,6 +4,7 @@ import {
 	DEFAULT_CROP_REGION,
 	MAX_NATIVE_PLAYBACK_RATE,
 } from "@/components/video-editor/types";
+import { resolveFadeSecs } from "@/lib/ai-edition/document/audioTracks";
 import {
 	projectRawTimelineSecToPlayback,
 	resolvePlaybackSegments,
@@ -109,12 +110,39 @@ export function resolveTimelineAudioPlayback(
 	const windowLen = Math.max(0, sourceEnd - offset);
 	const local = outputTimeSec - outputStartSec;
 	const active = local >= 0 && local < spanSec;
+	if (track.loop && windowLen > 0) {
+		// Fold into the repeating window, exactly as the export's per-repeat mix
+		// entries do, so preview and render stay in phase.
+		return {
+			targetTimeSec: offset + (local > 0 ? local % windowLen : 0),
+			shouldPlay: active,
+		};
+	}
 	return {
 		targetTimeSec: Math.min(Math.max(offset, offset + local), sourceEnd),
 		// A file shorter than its span goes silent at the end rather than
 		// restarting: seeking a finished element back would stutter it every frame.
 		shouldPlay: active && local < windowLen,
 	};
+}
+
+/** Fraction 0..1 of a track's volume `localSec` into its span, applying the
+ *  ramps. Shares `resolveFadeSecs` with the export so a fade too long for its
+ *  span is reduced the same way on both sides. */
+export function timelineAudioFadeAt(
+	track: AxcutAudioTrack,
+	localSec: number,
+	spanSec: number,
+): number {
+	if (track.muted) return 0;
+	const { fadeInSec, fadeOutSec } = resolveFadeSecs(track.fadeInMs, track.fadeOutMs, spanSec);
+	let v = 1;
+	if (fadeInSec > 0 && localSec < fadeInSec) v = Math.min(v, Math.max(0, localSec / fadeInSec));
+	if (fadeOutSec > 0) {
+		const remaining = spanSec - localSec;
+		if (remaining < fadeOutSec) v = Math.min(v, Math.max(0, remaining / fadeOutSec));
+	}
+	return v;
 }
 
 export interface PreviewAudioGraph {
@@ -627,6 +655,7 @@ export function VirtualPreview({
 					track,
 					spanSec,
 				);
+				const fade = timelineAudioFadeAt(track, outputTimeSec - outputStartSec, spanSec);
 				// Imported audio plays at its natural 1× rate, NOT the video's. The export
 				// sums it into the programme at 1× — speed regions stretch clip PCM only,
 				// never the imported track — so following `v.playbackRate` would pitch a
@@ -634,10 +663,10 @@ export function VirtualPreview({
 				if (el.playbackRate !== 1) el.playbackRate = 1;
 				const trackGainNode = audioTrackGainNodesRef.current.get(track.id);
 				if (trackGainNode) {
-					trackGainNode.gain.value = audioGainScalar(track.gainDb);
+					trackGainNode.gain.value = audioGainScalar(track.gainDb) * fade;
 					if (el.volume !== 1) el.volume = 1;
 				} else {
-					el.volume = Math.min(1, audioGainScalar(track.gainDb) * globalGain);
+					el.volume = Math.min(1, audioGainScalar(track.gainDb) * globalGain * fade);
 				}
 				// Only re-seek on a real discontinuity (a scrub, a trim jump, a first
 				// play), NOT on the sub-frame drift of normal playback. The primary audio
