@@ -1344,7 +1344,8 @@ describe("useTimeline audio tracks", () => {
 		expect(tracks[0]).toMatchObject({
 			assetId: "audio_1",
 			durationSec: 30,
-			timelineStartSec: 4,
+			// Head at the playhead (4s), span the source's own length.
+			startMs: 4000,
 			label: "voiceover.mp3",
 		});
 	});
@@ -1368,13 +1369,9 @@ describe("useTimeline audio tracks", () => {
 		await act(async () => {
 			id = (await result.current.addAudioTrack("audio_1", 2)) ?? "";
 		});
-		// A lane drag commits position and trim together (see placeAudioTrack).
+		// A lane drag commits the whole span in one write and re-ventilates it.
 		await act(async () => {
-			await result.current.placeAudioTrack(id, {
-				timelineStartSec: 9,
-				trimStartSec: 1,
-				trimEndSec: 8,
-			});
+			await result.current.placeAudioTrack(id, { startMs: 3000, endMs: 8000 });
 		});
 		await act(async () => {
 			await result.current.setAudioTrackGain(id, -6);
@@ -1382,9 +1379,8 @@ describe("useTimeline audio tracks", () => {
 
 		const track = useProjectStore.getState().document?.audioTracks[0];
 		expect(track).toMatchObject({
-			timelineStartSec: 9,
-			trimStartSec: 1,
-			trimEndSec: 8,
+			startMs: 3000,
+			endMs: 8000,
 			gainDb: -6,
 		});
 
@@ -1393,6 +1389,23 @@ describe("useTimeline audio tracks", () => {
 			expect(undo()).toBe(true);
 		});
 		expect(useProjectStore.getState().document?.audioTracks[0]?.gainDb).toBe(0);
+	});
+
+	it("clamps a track to the content under it, like every other anchored region", async () => {
+		// The sample timeline is one 0..10s clip. A track dragged past the end has
+		// nothing to anchor to out there — and the exported programme stops at the
+		// last clip regardless — so the span is cut at the content, not stored
+		// hanging off the end where it could never play.
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioTrack("audio_1", 2)) ?? "";
+		});
+		await act(async () => {
+			await result.current.placeAudioTrack(id, { startMs: 9000, endMs: 16_000 });
+		});
+		const track = useProjectStore.getState().document?.audioTracks[0];
+		expect(track).toMatchObject({ startMs: 9000, endMs: 10_000 });
 	});
 
 	it("removeAudioTrack deletes the track", async () => {
@@ -1506,11 +1519,13 @@ describe("useTimeline audio tracks", () => {
 					{
 						id: "trk_2",
 						assetId: "audio_2",
-						timelineStartSec: 0,
+						startMs: 0,
+						endMs: 1,
 						durationSec: 0,
-						trimStartSec: 0,
+						offsetMs: 0,
 						gainDb: 0,
 						label: "bgm.mp3",
+						origin: "user" as const,
 					},
 				],
 			},

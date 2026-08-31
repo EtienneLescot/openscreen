@@ -71,6 +71,7 @@
 		"pasted": "{{region}}の属性を貼り付けました",
 		"nothingToCopy": "属性をコピーする領域を選択してください",
 		"nothingToPaste": "コピーされた属性がありません",
+		"pasteAssetMissing": "このオーディオトラックのファイルはこのプロジェクトにありません",
 		"kinds": {
 			"zoom": "ズーム",
 			"speed": "速度",

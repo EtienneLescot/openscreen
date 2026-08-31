@@ -395,14 +395,17 @@ export interface SceneDescription {
 		gainDb: number;
 	};
 	/**
-	 * Imported audio tracks (issue #350), mixed over the assembled programme by
-	 * `audio::mix_external_tracks`. `startSec` is the head on the trim-COMPRESSED output
-	 * programme: the track's raw timeline head projected through the trims via
-	 * `projectRawTimelineSecToPlayback`, so a cut ahead of the track pulls it earlier by the
-	 * removed duration (exactly as the preview already plays it). Exact for trims; speed
-	 * regions stay an approximation. `trimEndSec` is always concrete — the compositor
-	 * preallocates the decode window from it — so it is resolved to the source
-	 * duration when the track's tail isn't trimmed.
+	 * Timeline audio tracks (issue #350), mixed over the assembled programme by
+	 * `audio::mix_external_tracks`. One entry per contiguous stretch: a track split by a
+	 * clip boundary contributes one entry per fragment, each picking the source up where
+	 * the last left off.
+	 *
+	 * `startSec` is the head on the trim-COMPRESSED output programme: the track's raw
+	 * timeline head projected through the trims via `projectRawTimelineSecToPlayback`, so
+	 * a cut ahead of the track pulls it earlier by the removed duration (exactly as the
+	 * preview already plays it). Exact for trims; speed regions stay an approximation.
+	 * `trimEndSec` is always concrete — the compositor preallocates the decode window
+	 * from it — so it is resolved from the span and the source duration.
 	 */
 	audioTracks: Array<{
 		path: string;
@@ -454,11 +457,22 @@ function parseWallpaper(wallpaper: string) {
  * `NativeCompositorOverlay.tsx`'s `nativeClips` (live preview) — previously these three each
  * hand-rolled their own sort+filter, acknowledged as needing to be "kept in lock-step".
  */
+/** Whether a clip's media can actually be read — the one rule that decides
+ *  which clips make it into the programme. Shared with the audio-track
+ *  projection, which must count exactly the clips the programme is built from
+ *  or every track after a relinked-away clip lands late. */
+function clipAssetIsResolvable(
+	clip: { assetId: string },
+	assetById: Map<string, { originalPath?: string }>,
+): boolean {
+	return Boolean(assetById.get(clip.assetId)?.originalPath);
+}
+
 export function resolveVisibleClips(document: AxcutDocument): AxcutClip[] {
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
 	return resolvePlaybackSegments(document.timeline.clips, document.timeline.trimRanges)
 		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
-		.filter((clip) => assetById.get(clip.assetId)?.originalPath);
+		.filter((clip) => clipAssetIsResolvable(clip, assetById));
 }
 
 /** Serialize a document into a {@link SceneDescription}. Pure — no per-frame math. */
@@ -469,35 +483,53 @@ export function buildSceneDescription(
 	const settings = getEditorSettings(document);
 
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
-	// Imported audio tracks (issue #350) → the compositor's mix list. Resolve the
-	// asset's file path and a concrete trim-out (the source duration when the tail
-	// isn't trimmed — the compositor preallocates its decode window from it). A
-	// track whose asset or path is missing is dropped rather than sent path-less.
-	// Project onto the SAME clips the programme is assembled from. `resolveVisibleClips`
-	// (below) drops clips whose asset has no resolvable `originalPath`; if the projection
-	// walked the full `document.timeline.clips` it would count a relinked-away clip the
-	// programme does not, landing every following track past the real programme end.
-	const projectedClips = document.timeline.clips.filter(
-		(clip) => assetById.get(clip.assetId)?.originalPath,
+	// Timeline audio tracks (issue #350) → the compositor's mix list.
+	//
+	// Each STORED track is one clip-anchored fragment, already carrying its own
+	// advanced `offsetMs`, so a fragment maps to one contiguous decode window and
+	// the pieces of a split take play as one continuous take. Project each head
+	// onto the trim-compressed programme the mixer overlays on: the head is
+	// stored in RAW ruler seconds, and passing it verbatim delayed every track by
+	// the total trim duration ahead of it (issue #350).
+	//
+	// Projected onto the same clips the programme is assembled from —
+	// `resolveVisibleClips` drops clips whose asset has no resolvable
+	// `originalPath`, and a projection that counted a relinked-away clip the
+	// programme does not would land every following track past the real end.
+	// `projectRawTimelineSecToPlayback` subtracts the trims itself, so it needs
+	// the RAW clips behind that filter, not the already-compressed segments.
+	const projectedClips = document.timeline.clips.filter((clip) =>
+		clipAssetIsResolvable(clip, assetById),
 	);
 	const audioTracks = document.audioTracks.flatMap((track) => {
 		const asset = assetById.get(track.assetId);
 		if (!asset?.originalPath) return [];
-		const trimEndSec = track.trimEndSec ?? asset.durationSec ?? track.durationSec;
+		const sourceDurationSec = asset.durationSec ?? track.durationSec;
+		const offsetSec = track.offsetMs / 1000;
+		const spanSec = (track.endMs - track.startMs) / 1000;
+		if (spanSec <= 0) return [];
+		// The window the file has left after the offset. Without a probed duration
+		// there is nothing to cap the tail with, so the span itself is the window —
+		// the mixer stops at the real end of the file.
+		const windowSec = sourceDurationSec > 0 ? Math.max(0, sourceDurationSec - offsetSec) : spanSec;
+		if (windowSec <= 0) return [];
 		return [
 			{
 				path: asset.originalPath,
-				// The track's head is stored in RAW timeline seconds, but the programme this
-				// mixes onto is trim-compressed — so project raw→output. Passing the raw head
-				// verbatim delayed the track by the total trim duration ahead of it (issue #350).
+				// The head is stored in RAW timeline seconds, but the programme this
+				// mixes onto is trim-compressed — so project raw→output. Passing the
+				// raw head verbatim delayed the track by the total trim duration
+				// ahead of it (issue #350).
 				startSec: projectRawTimelineSecToPlayback(
 					projectedClips,
 					document.timeline.trimRanges,
-					track.timelineStartSec,
+					track.startMs / 1000,
 				),
 				gainDb: track.gainDb,
-				trimStartSec: track.trimStartSec,
-				trimEndSec,
+				trimStartSec: offsetSec,
+				// Always concrete: the compositor preallocates its decode window
+				// from it. Whichever runs out first — the span or the file.
+				trimEndSec: offsetSec + Math.min(windowSec, spanSec),
 			},
 		];
 	});

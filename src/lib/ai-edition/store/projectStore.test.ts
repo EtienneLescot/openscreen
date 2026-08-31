@@ -400,7 +400,8 @@ describe("useProjectStore", () => {
 
 		const tracks = useProjectStore.getState().document?.audioTracks ?? [];
 		expect(tracks).toHaveLength(1);
-		expect(tracks[0]).toMatchObject({ assetId: "audio_1", timelineStartSec: 5, durationSec: 12 });
+		// Head at the playhead (5s), in raw ruler ms.
+		expect(tracks[0]).toMatchObject({ assetId: "audio_1", startMs: 5000, durationSec: 12 });
 		expect(id).toBe(tracks[0]?.id);
 		// Placing a track selects it so the inspector opens on its controls.
 		expect(useProjectStore.getState().selectedAudioTrackId).toBe(id);

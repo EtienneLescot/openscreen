@@ -1798,15 +1798,17 @@ describe("buildSceneDescription.audioTracks", () => {
 		originalPath: "/music.mp3",
 		durationSec: 30,
 	});
+	// A 10s span starting at raw 5s, playing the source from 2s in.
 	const track = {
 		id: "trk1",
 		assetId: "aud",
-		timelineStartSec: 5,
+		startMs: 5000,
+		endMs: 15_000,
 		durationSec: 30,
-		trimStartSec: 2,
-		trimEndSec: 12 as number | undefined,
+		offsetMs: 2000,
 		gainDb: -3,
 		label: "",
+		origin: "user" as const,
 	};
 
 	it("maps a track to the mix list with its resolved path and window", () => {
@@ -1817,17 +1819,19 @@ describe("buildSceneDescription.audioTracks", () => {
 				startSec: 5,
 				gainDb: -3,
 				trimStartSec: 2,
+				// The span is 10s and the file has 28s left after the offset, so the
+				// span is what runs out first.
 				trimEndSec: 12,
 			},
 		]);
 	});
 
-	it("resolves the trim-out to the source duration when the tail isn't trimmed", () => {
+	it("caps the trim-out at the end of the file when the span outlasts it", () => {
 		const doc = makeDoc({
 			assets: [audioAsset],
-			audioTracks: [{ ...track, trimEndSec: undefined }],
+			// A 40s span over a 30s file, offset 2s: only 28s of source exist.
+			audioTracks: [{ ...track, endMs: 45_000 }],
 		});
-		// trimEndSec must be concrete for the compositor; falls back to durationSec.
 		expect(buildSceneDescription(doc).audioTracks[0]?.trimEndSec).toBe(30);
 	});
 

@@ -975,38 +975,42 @@ describe("v6 -> v7 trim clip-anchor migration", () => {
 });
 
 describe("audio tracks (issue #350)", () => {
-	it("applies defaults for gain, trim, position, and label", () => {
+	it("applies defaults for gain, offset and label", () => {
 		const track = audioTrackSchema.parse({
 			id: "audio_1",
 			assetId: "asset_1",
 			durationSec: 42,
+			startMs: 0,
+			endMs: 42_000,
 		});
-		expect(track.timelineStartSec).toBe(0);
-		expect(track.trimStartSec).toBe(0);
-		expect(track.trimEndSec).toBeUndefined();
+		expect(track.offsetMs).toBe(0);
 		expect(track.gainDb).toBe(0);
 		expect(track.label).toBe("");
+		// Unanchored until a caller places it — same contract as every other
+		// clip-anchored region kind.
+		expect(track.clipId).toBeUndefined();
 	});
 
-	it("rejects a trim window whose end precedes its start", () => {
+	it("rejects a span whose end precedes its start", () => {
 		expect(() =>
 			audioTrackSchema.parse({
 				id: "audio_1",
 				assetId: "asset_1",
 				durationSec: 10,
-				trimStartSec: 5,
-				trimEndSec: 2,
+				startMs: 5000,
+				endMs: 2000,
 			}),
 		).toThrow();
 	});
 
-	it("rejects a negative timelineStartSec", () => {
+	it("rejects a negative head", () => {
 		expect(() =>
 			audioTrackSchema.parse({
 				id: "audio_1",
 				assetId: "asset_1",
 				durationSec: 10,
-				timelineStartSec: -1,
+				startMs: -1,
+				endMs: 1000,
 			}),
 		).toThrow();
 	});
@@ -1021,10 +1025,28 @@ describe("audio tracks (issue #350)", () => {
 		expect(track.id).toMatch(/^audio_/);
 		expect(track.assetId).toBe("asset_1");
 		expect(track.durationSec).toBe(12.5);
-		expect(track.timelineStartSec).toBe(3);
+		// The span runs from the head for the source duration by default.
+		expect(track.startMs).toBe(3000);
+		expect(track.endMs).toBe(15_500);
 		expect(track.label).toBe("voiceover.mp3");
 		// The factory output must itself round-trip through the schema.
 		expect(() => audioTrackSchema.parse(track)).not.toThrow();
+	});
+
+	it("createAudioTrack takes a shorter span than the source when asked", () => {
+		const track = createAudioTrack({
+			assetId: "asset_1",
+			durationSec: 30,
+			timelineStartSec: 2,
+			spanSec: 4,
+		});
+		expect(track.startMs).toBe(2000);
+		expect(track.endMs).toBe(6000);
+	});
+
+	it("createAudioTrack still gives a grabbable span to a zero-duration source", () => {
+		const track = createAudioTrack({ assetId: "asset_1", durationSec: 0 });
+		expect(track.endMs).toBeGreaterThan(track.startMs);
 	});
 
 	it("defaults audioTracks to [] when a stored document omits the key", () => {

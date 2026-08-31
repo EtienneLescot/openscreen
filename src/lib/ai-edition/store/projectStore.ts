@@ -3,7 +3,8 @@ import { create } from "zustand";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { toastText } from "@/i18n/toastText";
 import { nativeBridgeClient } from "@/native/client";
-import { appendAudioTrack } from "../document/audioTracks";
+import { anchorAudioTrackFragments } from "../document/audioTracks";
+import { createId } from "../document/ids";
 import { type Interval, replaceTimeline as replaceTimelineOp } from "../document/timeline";
 import { type AxcutAsset, type AxcutDocument, createAudioTrack, documentSchema } from "../schema";
 import { probeAudioDuration, probeVideoDimensions } from "../timeline/duration";
@@ -96,7 +97,16 @@ export interface ProjectState {
 	importAudioAsset: (path: string, label?: string) => Promise<AxcutAsset | null>;
 	/** Place a track for an already-imported audio asset at `timelineStartSec`
 	 *  (default: the playhead) and select it. Returns the new track id, or null. */
-	addAudioTrack: (assetId: string, timelineStartSec?: number) => Promise<string | null>;
+	addAudioTrack: (
+		assetId: string,
+		timelineStartSec?: number,
+		options?: {
+			/** Real source duration, when the caller measured it. */
+			durationSec?: number;
+			/** Timeline span, when it should differ from the source duration. */
+			spanSec?: number;
+		},
+	) => Promise<string | null>;
 	setSelectedAudioTrackId: (id: string | null) => void;
 	removeAsset: (assetId: string) => Promise<void>;
 	/**
@@ -402,23 +412,29 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		set({ selectedAudioTrackId: id });
 	},
 
-	async addAudioTrack(assetId, timelineStartSec) {
+	async addAudioTrack(assetId, timelineStartSec, options) {
 		const document = get().document;
 		if (!document) return null;
 		const asset = document.assets.find((a) => a.id === assetId);
 		if (!asset || asset.kind !== "audio") return null;
 		const track = createAudioTrack({
 			assetId,
-			durationSec: asset.durationSec ?? 0,
+			durationSec: options?.durationSec ?? asset.durationSec ?? 0,
+			spanSec: options?.spanSec,
 			// Default to the playhead (RAW/document timeline seconds — the clock the
 			// ruler and playhead use, NOT the trim-compressed output programme),
 			// matching the timeline hook's placement.
 			timelineStartSec: timelineStartSec ?? get().currentTimeSec,
 			label: asset.label,
 		});
-		if (!(await get().saveDocument(appendAudioTrack(document, track), { history: true }))) {
-			return null;
-		}
+		// Anchor before saving: the track becomes one fragment per clip it covers,
+		// each picking the source up where the previous one left off.
+		const fragments = anchorAudioTrackFragments(track, document.timeline.clips, () =>
+			createId("audio"),
+		);
+		if (fragments.length === 0) return null;
+		const next = { ...document, audioTracks: [...document.audioTracks, ...fragments] };
+		if (!(await get().saveDocument(next, { history: true }))) return null;
 		set({ selectedAudioTrackId: track.id });
 		return track.id;
 	},

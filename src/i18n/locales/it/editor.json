@@ -71,6 +71,7 @@
 		"pasted": "Attributi di {{region}} incollati",
 		"nothingToCopy": "Seleziona una regione per copiarne gli attributi",
 		"nothingToPaste": "Nessun attributo copiato",
+		"pasteAssetMissing": "Il file di questa traccia audio non è in questo progetto",
 		"kinds": {
 			"zoom": "Zoom",
 			"speed": "Velocità",

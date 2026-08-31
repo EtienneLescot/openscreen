@@ -71,6 +71,7 @@
 		"pasted": "تم لصق سمات {{region}}",
 		"nothingToCopy": "حدد منطقة لنسخ سماتها",
 		"nothingToPaste": "لم يتم نسخ أي سمات بعد",
+		"pasteAssetMissing": "ملف هذا المسار الصوتي غير موجود في هذا المشروع",
 		"kinds": {
 			"zoom": "تكبير",
 			"speed": "سرعة",

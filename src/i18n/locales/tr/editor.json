@@ -71,6 +71,7 @@
 		"pasted": "{{region}} öznitelikleri yapıştırıldı",
 		"nothingToCopy": "Özniteliklerini kopyalamak için bir bölge seçin",
 		"nothingToPaste": "Henüz öznitelik kopyalanmadı",
+		"pasteAssetMissing": "Bu ses parçasının dosyası bu projede yok",
 		"kinds": {
 			"zoom": "Yakınlaştırma",
 			"speed": "Hız",
