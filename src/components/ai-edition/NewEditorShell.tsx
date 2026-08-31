@@ -327,7 +327,12 @@ export function NewEditorShell() {
 		};
 	}, [promptUnsaved, saveDocument]);
 
-	const videoSources = useMemo(() => {
+	// Every asset with a resolvable URL, split below. It is deliberately NOT handed to
+	// anything as-is: `videoSources` reaching a consumer that treats its entries as
+	// footage is how an imported mp3 became a timeline clip (an audio-only project has no
+	// `primaryAssetId`, and both `handleLoadedMetadata` and `replaceTimeline` fall back to
+	// `assets[0]`, which the preview had already mounted as a <video>).
+	const mediaSources = useMemo(() => {
 		if (!document) return [];
 		return document.assets.map((asset) => ({
 			id: asset.id,
@@ -340,8 +345,20 @@ export function NewEditorShell() {
 				? asset.originalPath
 				: toFileUrl(asset.originalPath),
 			label: asset.label,
+			kind: asset.kind,
 		}));
 	}, [document]);
+
+	/** Footage only — what the preview decodes and what a clip can be made of. */
+	const videoSources = useMemo(
+		() => mediaSources.filter((source) => source.kind !== "audio").map(({ kind: _k, ...s }) => s),
+		[mediaSources],
+	);
+	/** Imported audio only — resolved per region by `audioAssetId` in VirtualPreview. */
+	const audioSources = useMemo(
+		() => mediaSources.filter((source) => source.kind === "audio").map(({ kind: _k, ...s }) => s),
+		[mediaSources],
+	);
 
 	const handleLoadedMetadata = useCallback(
 		(durationSec: number, assetId: string) => {
@@ -1266,11 +1283,12 @@ export function NewEditorShell() {
 									hasProject={hasProject}
 									hasAsset={hasAsset}
 									videoSources={videoSources}
-									// Imported audio (issue #350). `videoSources` already resolves a URL
-									// for every asset (audio included), so it doubles as the audio source
-									// list; VirtualPreview looks each region's asset up by id.
+									// Imported audio (issue #350), resolved per region by `audioAssetId`.
+									// A separate list from `videoSources`, not the same one: an audio asset
+									// among the footage is one the preview mounts as a <video> and the
+									// timeline turns into a clip.
 									audioRegions={tl.audioRegions}
-									audioSources={videoSources}
+									audioSources={audioSources}
 									clips={clips}
 									zoomRegions={tl.zoomRegions}
 									speedRegions={tl.speedRegions}

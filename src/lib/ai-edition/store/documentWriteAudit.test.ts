@@ -172,8 +172,6 @@ const DECLARED: WritePath[] = [
 	// Folding an imported audio file's probed duration onto its asset (issue #350).
 	// Part of the import, like the camera link above — not an edit of its own.
 	w("src/lib/ai-edition/store/projectStore.ts", "addAudioAsset", "save", "automatic"),
-	// Placing an imported audio track on the timeline. The user asked for it, via the
-	// media panel's "Import audio" or the timeline.
 	// THE round-3 fix. This is the shape that defeated round 2: a store action that
 	// writes on someone else's behalf. It forwards now, so its callers decide.
 	w("src/lib/ai-edition/store/projectStore.ts", "replaceTimeline", "save", "forwarded"),

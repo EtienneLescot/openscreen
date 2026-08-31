@@ -373,6 +373,46 @@ describe("useProjectStore", () => {
 		expect(useProjectStore.getState().document?.assets[0]?.durationSec).toBe(8.25);
 	});
 
+	it("keeps an edit made while the duration probe was in flight", async () => {
+		// The probe is a real await, and `superseded()` does not cover an ordinary edit:
+		// the write epoch is bumped only by undo / redo / project switch. Building the
+		// duration patch from the pre-await snapshot therefore overwrote whatever the user
+		// did meanwhile — silently, and only on a slow probe.
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		const audioDoc = {
+			...sampleDoc,
+			assets: [
+				{ id: "audio_asset", kind: "audio", label: "bgm.wav", originalPath: "/tmp/bgm.wav" },
+			],
+		};
+		bridgeMocks.addAsset.mockResolvedValue({ assetId: "audio_asset", document: audioDoc });
+		bridgeMocks.save.mockImplementation((document: unknown) =>
+			Promise.resolve({ success: true, document }),
+		);
+		// The user retitles the project while the probe is pending.
+		durationMocks.probeAudioDuration.mockImplementation(async () => {
+			const current = useProjectStore.getState().document;
+			if (current) {
+				useProjectStore.setState({
+					document: { ...current, project: { ...current.project, title: "Renamed" } },
+				});
+			}
+			return 8.25;
+		});
+
+		await useProjectStore.getState().addAudioAsset("/tmp/bgm.wav");
+
+		const after = useProjectStore.getState().document;
+		expect(after?.project.title).toBe("Renamed");
+		expect(after?.assets.find((a) => a.id === "audio_asset")?.durationSec).toBe(8.25);
+	});
+
 	// Placement + selection for imported audio tracks (issue #350).
 	// Placing the region is `useTimeline.addAudioRegion`'s job now, not the store's: the
 	// region model and the pill selection both live there, so the store's audio surface is

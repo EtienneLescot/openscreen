@@ -351,31 +351,43 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			null;
 		if (!addedAsset) return null;
 
-		// Probe the real length so the timeline can size the track pill immediately
-		// on add. Non-fatal: an unreadable file just leaves durationSec unset and the
-		// track store falls back to a placeholder. No camera lookup — audio has none.
-		const durationSec = await probeAudioDuration(toFileUrl(addedAsset.originalPath)).catch(
-			() => null,
-		);
-		if (superseded()) return null;
-		if (durationSec != null) {
-			const next: AxcutDocument = {
-				...document,
-				assets: document.assets.map((a) => (a.id === addedAsset.id ? { ...a, durationSec } : a)),
-			};
-			// history: false — probing a duration is part of the import, not an edit
-			// of its own, so it must not become the thing the next Ctrl+Z reverses.
-			if (await get().saveDocument(next, { history: false })) document = parseDocument(next);
-		}
-
-		if (superseded()) return null;
+		// Install the import BEFORE probing. The probe is a real await, and `superseded()`
+		// does not cover an ordinary edit landing during it: the write epoch is bumped only
+		// by undo / redo / project switch (see undoStack), so a user edit made while the
+		// probe was in flight was silently overwritten by this pre-await snapshot.
 		set({
 			document,
 			revision: get().revision + 1,
 			dirty: false,
 			lastSavedAt: new Date(),
 		});
-		return document.assets.find((a) => a.id === addedAsset.id) ?? addedAsset;
+
+		// Probe the real length so the timeline can size the region immediately on add.
+		// Non-fatal: an unreadable file just leaves durationSec unset and `useTimeline`
+		// re-probes it on the next load. No camera lookup — audio has none.
+		const durationSec = await probeAudioDuration(toFileUrl(addedAsset.originalPath)).catch(
+			() => null,
+		);
+		if (superseded()) return null;
+		if (durationSec != null) {
+			// Re-read rather than reusing the snapshot above, and patch ONLY this asset's
+			// duration, so whatever the user did meanwhile survives.
+			const current = get().document;
+			if (current) {
+				const next: AxcutDocument = {
+					...current,
+					assets: current.assets.map((a) => (a.id === addedAsset.id ? { ...a, durationSec } : a)),
+				};
+				// history: false — probing a duration is part of the import, not an edit
+				// of its own, so it must not become the thing the next Ctrl+Z reverses.
+				if (await get().saveDocument(next, { history: false })) document = parseDocument(next);
+			}
+		}
+
+		// No final install: the document went in before the probe and `saveDocument` seated
+		// the patched one. Re-seating the snapshot here would put the clobber straight back.
+		// The asset is read off the LIVE document so the caller gets its probed duration.
+		return get().document?.assets.find((a) => a.id === addedAsset.id) ?? addedAsset;
 	},
 
 	async removeAsset(assetId) {

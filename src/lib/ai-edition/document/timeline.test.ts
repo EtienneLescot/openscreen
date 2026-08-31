@@ -982,6 +982,96 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 	});
 });
 
+describe("removeClip and orphaned audio assets", () => {
+	it("collects an audio asset whose last region went with the deleted clip", () => {
+		// Deleting a clip drops the regions anchored to it without going through
+		// `removeRegion`, so the collection has to run here too or the asset is left
+		// behind: invisible in every list, and re-serialised on every save.
+		const clip = makeClip({
+			id: "clip_a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const doc = makeDoc({
+			assets: [
+				{
+					id: "audio_1",
+					kind: "audio",
+					label: "bed.mp3",
+					originalPath: "/bed.mp3",
+					cameraTrack: null,
+				},
+			],
+			timeline: { ...makeDoc().timeline, clips: [clip] },
+			audioRanges: [
+				{
+					id: "audio_r1",
+					startMs: 0,
+					endMs: 5000,
+					clipId: "clip_a",
+					sourceStartSec: 0,
+					sourceEndSec: 5,
+					audioAssetId: "audio_1",
+					kind: "music",
+					offsetSec: 0,
+					gainDb: 0,
+					origin: "user",
+				},
+			],
+		});
+		const after = removeClip(doc, "clip_a");
+		expect(after.audioRanges).toEqual([]);
+		expect(after.assets.some((a) => a.id === "audio_1")).toBe(false);
+	});
+
+	it("keeps the asset while another region still plays it", () => {
+		const clipA = makeClip({
+			id: "clip_a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const clipB = makeClip({
+			id: "clip_b",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 10,
+			timelineEndSec: 20,
+		});
+		const audioRegion = (id: string, clipId: string) => ({
+			id,
+			startMs: 0,
+			endMs: 5000,
+			clipId,
+			sourceStartSec: 0,
+			sourceEndSec: 5,
+			audioAssetId: "audio_1",
+			kind: "music" as const,
+			offsetSec: 0,
+			gainDb: 0,
+			origin: "user" as const,
+		});
+		const doc = makeDoc({
+			assets: [
+				{
+					id: "audio_1",
+					kind: "audio",
+					label: "bed.mp3",
+					originalPath: "/bed.mp3",
+					cameraTrack: null,
+				},
+			],
+			timeline: { ...makeDoc().timeline, clips: [clipA, clipB] },
+			audioRanges: [audioRegion("a1", "clip_a"), audioRegion("a2", "clip_b")],
+		});
+		const after = removeClip(doc, "clip_a");
+		expect(after.assets.some((a) => a.id === "audio_1")).toBe(true);
+	});
+});
+
 describe("duplicateClip / moveClip", () => {
 	it("duplicateClip gives the copy a fresh, collision-free id even when called repeatedly", () => {
 		// Regression test: this used to id the copy as `clip_${clips.length + 1}_copy`,

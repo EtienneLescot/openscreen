@@ -342,6 +342,27 @@ const secondsSchema = z.number().finite().nonnegative();
  *  the whole programme. */
 const DEFAULT_AGENT_AUDIO_SEC = 10;
 
+/**
+ * "Start the file at `offsetSec`" is only answerable when there IS file left at that
+ * point. Past the end it yields a region that plays silence, which the model then reports
+ * as having placed audio — the failure worth a refusal rather than a shrug.
+ *
+ * A non-positive `durationSec` is UNKNOWN, not zero: an import whose probe failed carries
+ * 0 until the renderer re-probes it, and refusing on that would block a legitimate call.
+ */
+function audioOffsetRefusal(
+	asset: { id: string; durationSec?: number | null } | undefined,
+	offsetSec: number,
+): string | null {
+	const duration = asset?.durationSec;
+	if (duration == null || !(duration > 0)) return null;
+	if (offsetSec < duration) return null;
+	return (
+		`offsetSec ${offsetSec}s is at or past the end of ${asset?.id} (${duration}s), ` +
+		"so the region would play nothing. Pick an offset inside the file."
+	);
+}
+
 export const addTrimArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
@@ -1912,6 +1933,8 @@ export function executeAgentTool(
 					`Asset ${audioAssetId} is video, not audio. addAudio plays an imported audio file over the recording; to place footage use replaceTimeline.`,
 				);
 			}
+			const offsetRefusal = audioOffsetRefusal(asset, offsetSec);
+			if (offsetRefusal) return failure(offsetRefusal);
 			// No endSec means "as long as the file is" — the natural span, and the one the
 			// editor's own add uses. Falling back to the asset duration here rather than
 			// making the model compute it keeps the two paths on one rule.
@@ -1959,6 +1982,13 @@ export function executeAgentTool(
 			const { audioId } = parsed.data;
 			const existing = document.audioRanges.find((a) => a.id === audioId);
 			if (!existing) return failure(`Unknown audio region: ${audioId}`);
+			if (parsed.data.offsetSec !== undefined) {
+				const refusal = audioOffsetRefusal(
+					document.assets.find((a) => a.id === existing.audioAssetId),
+					parsed.data.offsetSec,
+				);
+				if (refusal) return failure(refusal);
+			}
 			const audioPill = new Set(resolvePillIds(document.audioRanges, audioId));
 			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
 			// The payload patch hits EVERY fragment under the pill before the span is

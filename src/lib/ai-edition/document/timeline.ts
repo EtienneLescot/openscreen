@@ -1143,6 +1143,11 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 	const oldClips = document.timeline.clips;
 	const arr = oldClips.filter((c) => c.id !== clipId);
 	if (arr.length === oldClips.length) return document;
+	// Deleting a clip drops the regions anchored to it (`rederiveRegionMs` resolves their
+	// anchor to null), so the last audio region playing an imported file can disappear
+	// here rather than through `removeRegion` — and its asset would be left behind,
+	// invisible in every list and re-serialised on every save. Same collection, run at
+	// the other door.
 	const newClips = resequenceClips(arr);
 	const next: AxcutDocument = {
 		...document,
@@ -1178,11 +1183,13 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 	// a transient wipe deleting everything), which is why the empty case is handled
 	// here rather than left to it.
 	if (newClips.length === 0) {
-		return mapAllRegionCollections(next, (regions) =>
-			regions.filter((region) => !(hasCompleteClipAnchor(region) && region.clipId === clipId)),
+		return dropOrphanedAudioAssets(
+			mapAllRegionCollections(next, (regions) =>
+				regions.filter((region) => !(hasCompleteClipAnchor(region) && region.clipId === clipId)),
+			),
 		);
 	}
-	return rederiveRegionMs(next, newClips);
+	return dropOrphanedAudioAssets(rederiveRegionMs(next, newClips));
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {

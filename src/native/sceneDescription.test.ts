@@ -1981,6 +1981,26 @@ describe("buildSceneDescription.audioTracks", () => {
 		expect(tracks[1]).toMatchObject({ startSec: 20, trimStartSec: 7, trimEndSec: 13 });
 	});
 
+	it("keeps a region whose asset duration was never probed", () => {
+		// A failed probe leaves `durationSec` at 0, which is UNKNOWN, not "zero seconds".
+		// `??` only catches null, so clamping the window to 0 collapsed it and dropped the
+		// region from the export entirely — on the one file whose length we could not read.
+		const unprobed = makeAsset({
+			id: "aud",
+			kind: "audio",
+			originalPath: "/music.mp3",
+			durationSec: 0,
+		});
+		const doc = makeDoc({
+			assets: [screen, unprobed],
+			clips: [screenClip],
+			audioRanges: [region()],
+		});
+		expect(buildSceneDescription(doc).audioTracks).toEqual([
+			{ path: "/music.mp3", startSec: 5, gainDb: -3, trimStartSec: 2, trimEndSec: 12 },
+		]);
+	});
+
 	it("drops a region whose asset has no resolvable path", () => {
 		const doc = makeDoc({ assets: [screen], clips: [screenClip], audioRanges: [region()] });
 		expect(buildSceneDescription(doc).audioTracks).toEqual([]);

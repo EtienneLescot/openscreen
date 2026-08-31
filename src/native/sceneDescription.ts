@@ -529,7 +529,14 @@ export function buildSceneDescription(
 		// The compositor preallocates its decode window from `trimEndSec`, so it must be
 		// concrete — and it must not run past the file, or the decode window is a promise
 		// the mixer cannot keep.
-		const fileEnd = asset.durationSec ?? placement.sourceOutSec;
+		//
+		// Non-positive is UNKNOWN, not "zero seconds long". A failed probe leaves
+		// `durationSec` at 0 (which is why `useTimeline` re-probes on load), and `??` only
+		// catches null: clamping to 0 collapsed the window and dropped the region from the
+		// export entirely — silently, on the one file whose length we could not read.
+		const knownDuration =
+			asset.durationSec != null && asset.durationSec > 0 ? asset.durationSec : null;
+		const fileEnd = knownDuration ?? placement.sourceOutSec;
 		const trimStartSec = Math.min(placement.sourceInSec, fileEnd);
 		const trimEndSec = Math.min(placement.sourceOutSec, fileEnd);
 		if (!(trimEndSec > trimStartSec)) return [];
