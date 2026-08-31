@@ -387,8 +387,45 @@ impl SwDecoder {
             }
             let r = av_read_frame(self.fmt, pkt);
             if r < 0 {
-                // EOF ou erreur : on a épuisé le fichier sans atteindre la cible.
+                // EOF : le fichier est épuisé, mais le décodeur peut encore garder des
+                // frames en interne (latence de décodage / réordonnancement B-frames).
+                // Sans drain, une cible proche de la fin — le seek BACKWARD se cale sur
+                // la dernière keyframe et il reste alors trop peu de packets après elle
+                // pour vaincre la latence du décodeur — ne recevait JAMAIS de frame :
+                // `found` restait null et `decode_at` échouait avec « aucune frame
+                // reçue ». Symptôme signalé : le preview casse par intermittence quand on
+                // scrube jusqu'au bout. On envoie donc un packet NULL pour passer le
+                // décodeur en mode drain, puis on vide les frames restantes — exactement
+                // ce que fait `receive_into` du pompage séquentiel à l'EOF.
                 av_packet_free(&mut pkt);
+                avcodec_send_packet(self.dec, ptr::null_mut());
+                frame = av_frame_alloc();
+                if frame.is_null() {
+                    bail!("av_frame_alloc en drain");
+                }
+                loop {
+                    let recv_r = avcodec_receive_frame(self.dec, frame);
+                    if recv_r != 0 {
+                        // Après un packet NULL il n'y a plus d'EAGAIN : soit une frame,
+                        // soit EOF/erreur qui termine le drain.
+                        break;
+                    }
+                    if found.is_null() {
+                        found = av_frame_alloc();
+                        if found.is_null() {
+                            bail!("av_frame_alloc pour resultat");
+                        }
+                    }
+                    av_frame_unref(found);
+                    av_frame_move_ref(found, frame);
+                    av_frame_unref(frame);
+                    if (*found).best_effort_timestamp as f64 * self.stream_timebase
+                        >= target_ts_seconds
+                    {
+                        break;
+                    }
+                }
+                av_frame_free(&mut frame);
                 break 'outer;
             }
             if (*pkt).stream_index != self.stream_idx {
