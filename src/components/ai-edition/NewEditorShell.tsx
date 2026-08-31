@@ -45,6 +45,7 @@ import {
 import { Preview } from "./Preview";
 import type { TrimTarget } from "./RightPanes";
 import { importPendingRecording } from "./recordingImport";
+import { AddAudioLayerDialog } from "./v4/AddAudioLayerDialog";
 import v4 from "./v4/EditorShellV4.module.css";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 import { type Facet, FloatingInspector } from "./v4/FloatingInspector";
@@ -786,6 +787,50 @@ export function NewEditorShell() {
 		});
 	}, []);
 
+	// Voiceover recording (the one audio gesture that is not a file import). The
+	// dialog owns the mic; the shell owns the transport and the placement.
+	const [voiceoverFlow, setVoiceoverFlow] = useState<{ maxDurationSec: number } | null>(null);
+	// The playhead as it was when RECORDING STARTED. Recording plays the video so
+	// the user can narrate what they see, which means the live playhead has moved
+	// on by the take's own length by the time the take ends — reading it then
+	// placed every voiceover one full take-length to the right of where it was
+	// spoken. Captured on the way in, used on the way out.
+	const voiceoverStartSecRef = useRef(0);
+
+	const openVoiceoverFlow = useCallback(() => {
+		const doc = useProjectStore.getState().document;
+		if (!doc) return;
+		const total = doc.timeline.clips.reduce((max, c) => Math.max(max, c.timelineEndSec), 0);
+		const playhead = useProjectStore.getState().currentTimeSec;
+		voiceoverStartSecRef.current = playhead;
+		// Recording stops itself at the end of the timeline: a take can never
+		// outlive the video it was recorded over.
+		setVoiceoverFlow({ maxDurationSec: Math.max(0.5, total - playhead) });
+	}, []);
+
+	const handleVoiceoverRecordingStart = useCallback(() => {
+		// Re-capture: the user may have scrubbed between opening the dialog and
+		// hitting Record, and playback starts from wherever the playhead is now.
+		voiceoverStartSecRef.current = useProjectStore.getState().currentTimeSec;
+		if (videoElement?.paused) void videoElement.play().catch(() => undefined);
+	}, [videoElement]);
+
+	const handleVoiceoverRecordingStop = useCallback(() => {
+		videoElement?.pause();
+	}, [videoElement]);
+
+	const handleVoiceoverReady = useCallback(
+		async (assetId: string, durationSec: number) => {
+			setVoiceoverFlow(null);
+			await tl.addAudioTrack(assetId, voiceoverStartSecRef.current, {
+				kind: "voiceover",
+				durationSec,
+				spanSec: durationSec,
+			});
+		},
+		[tl],
+	);
+
 	const pasteRegion = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
@@ -1108,6 +1153,11 @@ export function NewEditorShell() {
 			if (matchesShortcut(e, shortcuts.addAudio, isMac)) {
 				e.preventDefault();
 				void tl.addAudio();
+				return;
+			}
+			if (matchesShortcut(e, shortcuts.addVoiceover, isMac)) {
+				e.preventDefault();
+				openVoiceoverFlow();
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addSpeed, isMac)) {
@@ -1468,6 +1518,16 @@ export function NewEditorShell() {
 				onChoose={handleConfirmUnsaved}
 			/>
 			<ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} document={document} />
+			<AddAudioLayerDialog
+				open={voiceoverFlow !== null}
+				maxDurationSec={voiceoverFlow?.maxDurationSec ?? 0}
+				onClose={() => setVoiceoverFlow(null)}
+				onComplete={(assetId, durationSec) => {
+					void handleVoiceoverReady(assetId, durationSec);
+				}}
+				onRecordingStart={handleVoiceoverRecordingStart}
+				onRecordingStop={handleVoiceoverRecordingStop}
+			/>
 		</div>
 	);
 }

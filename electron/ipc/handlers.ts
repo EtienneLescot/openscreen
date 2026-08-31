@@ -107,6 +107,9 @@ const ALLOWED_IMPORT_VIDEO_EXTENSIONS = new Set([
 	".ts",
 ]);
 const PREVIEW_AUDIO_DIR = path.join(app.getPath("userData"), "preview-audio");
+// See the save-recorded-voiceover handler: an upper bound on renderer-supplied
+// bytes written to disk, well past any plausible take.
+const MAX_RECORDED_VOICEOVER_BYTES = 512 * 1024 * 1024;
 const nativeMacCaptureEvents = new EventEmitter();
 
 // Enumeration walks every display and window and grabs a thumbnail of each, so it
@@ -3736,6 +3739,35 @@ export function registerIpcHandlers(
 			return {
 				success: false,
 				message: "Failed to open audio file picker",
+				error: String(error),
+			};
+		}
+	});
+
+	// In-editor voiceover recording: the renderer hands over the raw MediaRecorder
+	// blob (webm/opus) and gets back the path it landed at, under the recordings
+	// dir so it lives with the project's other media and survives relaunches.
+	ipcMain.handle("save-recorded-voiceover", async (_event, data: ArrayBuffer) => {
+		try {
+			if (!(data instanceof ArrayBuffer) || data.byteLength === 0) {
+				return { success: false, message: "Empty recording" };
+			}
+			// A cap, because this writes renderer-supplied bytes straight to disk. An
+			// hour of Opus is a few tens of MB, so 512 MB is far past any real take
+			// and still refuses a runaway or malformed payload before it is buffered.
+			if (data.byteLength > MAX_RECORDED_VOICEOVER_BYTES) {
+				return { success: false, message: "Recording too large" };
+			}
+			await fs.mkdir(RECORDINGS_DIR, { recursive: true });
+			const fileName = `voiceover-${new Date().toISOString().replace(/[:.]/g, "-")}.webm`;
+			const target = path.join(RECORDINGS_DIR, fileName);
+			await fs.writeFile(target, Buffer.from(data));
+			return { success: true, path: target };
+		} catch (error) {
+			console.error("Failed to save recorded voiceover:", error);
+			return {
+				success: false,
+				message: "Failed to save recorded voiceover",
 				error: String(error),
 			};
 		}

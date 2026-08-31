@@ -87,5 +87,17 @@
 		"smartCutsNoAudio": "Media này không có âm thanh",
 		"smartCutsNoSpeech": "Không phát hiện giọng nói",
 		"smartCutsFailed": "Phiên âm thất bại — thử lại trong Media"
+	},
+	"audio": {
+		"addVoiceover": "Thêm thuyết minh",
+		"subtitle": "Đặt lớp thuyết minh hoặc nhạc nền lên dòng thời gian",
+		"record": "Ghi âm thuyết minh",
+		"importFile": "Nhập tệp âm thanh",
+		"recording": "Đang ghi",
+		"stop": "Dừng",
+		"micDenied": "Quyền truy cập micrô bị từ chối",
+		"recordingUnavailable": "Không thể ghi âm ở đây",
+		"saveFailed": "Không thể lưu bản ghi",
+		"importFailed": "Không thể nhập tệp âm thanh"
 	}
 }

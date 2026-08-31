@@ -87,5 +87,17 @@
 		"smartCutsNoAudio": "このメディアには音声がありません",
 		"smartCutsNoSpeech": "音声が検出されませんでした",
 		"smartCutsFailed": "文字起こしに失敗しました — メディアから再試行してください"
+	},
+	"audio": {
+		"addVoiceover": "ナレーションを追加",
+		"subtitle": "タイムラインにナレーションまたは BGM のレイヤーを配置します",
+		"record": "ナレーションを録音",
+		"importFile": "音声ファイルを読み込む",
+		"recording": "録音中",
+		"stop": "停止",
+		"micDenied": "マイクへのアクセスが拒否されました",
+		"recordingUnavailable": "ここでは録音できません",
+		"saveFailed": "録音を保存できませんでした",
+		"importFailed": "音声ファイルを読み込めませんでした"
 	}
 }

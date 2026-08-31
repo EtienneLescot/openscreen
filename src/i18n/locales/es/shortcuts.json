@@ -21,6 +21,7 @@
 		"addSpeed": "Agregar velocidad",
 		"addAnnotation": "Agregar anotación",
 		"addAudio": "Añadir audio",
+		"addVoiceover": "Grabar voz en off",
 		"addKeyframe": "Agregar fotograma clave",
 		"addCameraFullscreen": "Agregar cámara a pantalla completa",
 		"deleteSelected": "Eliminar seleccionado",

@@ -87,5 +87,17 @@
 		"smartCutsNoAudio": "Bu medyada ses yok",
 		"smartCutsNoSpeech": "Konuşma algılanmadı",
 		"smartCutsFailed": "Metne dökme başarısız — Medya bölümünden yeniden deneyin"
+	},
+	"audio": {
+		"addVoiceover": "Seslendirme ekle",
+		"subtitle": "Zaman çizelgesine seslendirme veya fon müziği katmanı yerleştirin",
+		"record": "Seslendirme kaydet",
+		"importFile": "Ses dosyası içe aktar",
+		"recording": "Kaydediliyor",
+		"stop": "Durdur",
+		"micDenied": "Mikrofon erişimi reddedildi",
+		"recordingUnavailable": "Burada kayıt kullanılamıyor",
+		"saveFailed": "Kayıt kaydedilemedi",
+		"importFailed": "Ses dosyası içe aktarılamadı"
 	}
 }
