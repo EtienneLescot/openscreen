@@ -1,96 +1,176 @@
 import { describe, expect, it } from "vitest";
-import { type AxcutAsset, createAudioTrack, createEmptyDocument } from "../schema";
+import { type AxcutAsset, type AxcutClip, createAudioTrack, createEmptyDocument } from "../schema";
 import {
-	appendAudioTrack,
+	anchorAudioTrackFragments,
+	collapseTracksToPills,
+	patchAudioTrack,
 	removeAudioTrack,
-	setAudioTrackGain,
-	setAudioTrackPlacement,
+	trackGroupId,
 } from "./audioTracks";
 
 const emptyDoc = () => createEmptyDocument({ projectId: "p", title: "t" });
 
-const docWithTrack = () => {
-	const track = createAudioTrack({ assetId: "asset_1", durationSec: 30, timelineStartSec: 5 });
-	return { doc: appendAudioTrack(emptyDoc(), track), track };
+function clip(id: string, timelineStartSec: number, lengthSec: number): AxcutClip {
+	return {
+		id,
+		assetId: "video_1",
+		sourceStartSec: 0,
+		sourceEndSec: lengthSec,
+		timelineStartSec,
+		timelineEndSec: timelineStartSec + lengthSec,
+		wordRefs: [],
+		origin: "user",
+		reason: "",
+	};
+}
+
+// Two 10s clips back to back: a track crossing second 10 is ventilated in two.
+const twoClips = [clip("c1", 0, 10), clip("c2", 10, 10)];
+
+let seq = 0;
+const makeId = () => `frag_${++seq}`;
+
+const track = (over: Partial<ReturnType<typeof createAudioTrack>> = {}) => ({
+	...createAudioTrack({ assetId: "asset_1", durationSec: 30, timelineStartSec: 5, spanSec: 10 }),
+	...over,
+});
+
+const audioAsset: AxcutAsset = {
+	id: "asset_1",
+	kind: "audio",
+	label: "BGM",
+	originalPath: "/bgm.mp3",
+	cameraTrack: null,
 };
 
-describe("audioTracks document ops (issue #350)", () => {
-	it("appendAudioTrack adds the track without mutating the input", () => {
-		const doc = emptyDoc();
-		const track = createAudioTrack({ assetId: "asset_1", durationSec: 12 });
-		const next = appendAudioTrack(doc, track);
-		expect(next.audioTracks).toEqual([track]);
-		expect(doc.audioTracks).toEqual([]);
+describe("anchorAudioTrackFragments", () => {
+	it("leaves a track that fits inside one clip as a single fragment", () => {
+		const frags = anchorAudioTrackFragments(
+			track({ startMs: 1000, endMs: 6000 }),
+			twoClips,
+			makeId,
+		);
+		expect(frags).toHaveLength(1);
+		expect(frags[0].clipId).toBe("c1");
+		expect(frags[0].offsetMs).toBe(0);
 	});
 
-	it("removeAudioTrack drops the matching track and is a no-op for unknown ids", () => {
-		const { doc, track } = docWithTrack();
-		expect(removeAudioTrack(doc, track.id).audioTracks).toEqual([]);
-		expect(removeAudioTrack(doc, "nope").audioTracks).toEqual([track]);
+	it("advances each fragment's source offset by the time its predecessors played", () => {
+		// 5s..15s spans the c1/c2 boundary at 10s: 5s of source, then the next 5s.
+		const frags = anchorAudioTrackFragments(
+			track({ startMs: 5000, endMs: 15_000, offsetMs: 2000 }),
+			twoClips,
+			makeId,
+		);
+		expect(frags).toHaveLength(2);
+		expect(frags.map((f) => f.clipId)).toEqual(["c1", "c2"]);
+		// Fragment 1 starts the file at the track's own offset...
+		expect(frags[0].offsetMs).toBe(2000);
+		// ...and fragment 2 picks up where it left off, rather than restarting
+		// there — that restart is what made a bed audibly repeat at every cut.
+		expect(frags[1].offsetMs).toBe(7000);
 	});
 
-	const audioAsset: AxcutAsset = {
-		id: "asset_1",
-		kind: "audio",
-		label: "BGM",
-		originalPath: "/bgm.mp3",
-		cameraTrack: null,
-	};
+	it("ties every fragment to one group id", () => {
+		const frags = anchorAudioTrackFragments(
+			track({ startMs: 5000, endMs: 15_000 }),
+			twoClips,
+			makeId,
+		);
+		const groups = new Set(frags.map(trackGroupId));
+		expect(groups.size).toBe(1);
+	});
 
-	it("removeAudioTrack also drops the track's asset when nothing else references it", () => {
-		const track = createAudioTrack({ assetId: "asset_1", durationSec: 30 });
-		const doc = { ...appendAudioTrack(emptyDoc(), track), assets: [audioAsset] };
-		const next = removeAudioTrack(doc, track.id);
+	it("returns the track unanchored when no clip is under it", () => {
+		const frags = anchorAudioTrackFragments(track({ startMs: 5000, endMs: 15_000 }), [], makeId);
+		expect(frags).toHaveLength(1);
+		expect(frags[0].clipId).toBeUndefined();
+	});
+});
+
+describe("collapseTracksToPills", () => {
+	it("folds a ventilated track back into one span with its real offset", () => {
+		const frags = anchorAudioTrackFragments(
+			track({ startMs: 5000, endMs: 15_000, offsetMs: 2000 }),
+			twoClips,
+			makeId,
+		);
+		const [pill] = collapseTracksToPills(frags);
+		expect(pill.startMs).toBe(5000);
+		expect(pill.endMs).toBe(15_000);
+		// The FIRST fragment's offset is the track's own; the later ones hold
+		// advanced copies that must not leak back into the pill.
+		expect(pill.offsetMs).toBe(2000);
+		expect(pill.clipId).toBeUndefined();
+	});
+
+	it("round-trips through anchoring unchanged", () => {
+		const original = track({ startMs: 5000, endMs: 15_000, offsetMs: 2000 });
+		const once = anchorAudioTrackFragments(original, twoClips, makeId);
+		const twice = anchorAudioTrackFragments(collapseTracksToPills(once)[0], twoClips, makeId);
+		expect(twice.map((f) => [f.startMs, f.endMs, f.offsetMs])).toEqual(
+			once.map((f) => [f.startMs, f.endMs, f.offsetMs]),
+		);
+	});
+});
+
+describe("removeAudioTrack", () => {
+	it("drops every fragment of the track and is a no-op for unknown ids", () => {
+		const frags = anchorAudioTrackFragments(
+			track({ startMs: 5000, endMs: 15_000 }),
+			twoClips,
+			makeId,
+		);
+		const doc = { ...emptyDoc(), audioTracks: frags };
+		expect(removeAudioTrack(doc, trackGroupId(frags[0])).audioTracks).toEqual([]);
+		expect(removeAudioTrack(doc, "nope").audioTracks).toEqual(frags);
+	});
+
+	it("also drops the track's asset when nothing else references it", () => {
+		const t = track();
+		const doc = { ...emptyDoc(), audioTracks: [t], assets: [audioAsset] };
+		const next = removeAudioTrack(doc, t.id);
 		expect(next.audioTracks).toEqual([]);
 		expect(next.assets).toEqual([]);
 	});
 
-	it("removeAudioTrack keeps the asset when another track still references it", () => {
-		const t1 = createAudioTrack({ assetId: "asset_1", durationSec: 30 });
-		const t2 = createAudioTrack({ assetId: "asset_1", durationSec: 30 });
-		const doc = {
-			...appendAudioTrack(appendAudioTrack(emptyDoc(), t1), t2),
-			assets: [audioAsset],
-		};
+	it("keeps the asset when another track still references it", () => {
+		const t1 = track();
+		const t2 = track({ id: "audio_other" });
+		const doc = { ...emptyDoc(), audioTracks: [t1, t2], assets: [audioAsset] };
 		expect(removeAudioTrack(doc, t1.id).assets).toEqual([audioAsset]);
 	});
+});
 
-	it("setAudioTrackGain stores a finite dB and defaults NaN to 0", () => {
-		const { doc, track } = docWithTrack();
-		expect(setAudioTrackGain(doc, track.id, -6).audioTracks[0]?.gainDb).toBe(-6);
-		expect(setAudioTrackGain(doc, track.id, Number.NaN).audioTracks[0]?.gainDb).toBe(0);
+describe("patchAudioTrack", () => {
+	it("applies a payload edit to every fragment", () => {
+		const frags = anchorAudioTrackFragments(
+			track({ startMs: 5000, endMs: 15_000 }),
+			twoClips,
+			makeId,
+		);
+		const doc = { ...emptyDoc(), audioTracks: frags };
+		const next = patchAudioTrack(doc, trackGroupId(frags[0]), { gainDb: -6 });
+		expect(next.audioTracks.map((t) => t.gainDb)).toEqual([-6, -6]);
 	});
 
-	it("setAudioTrackPlacement writes position and trim together, staying schema-valid", () => {
-		const { doc, track } = docWithTrack();
-		const placed = setAudioTrackPlacement(doc, track.id, {
-			timelineStartSec: 8,
-			trimStartSec: 3,
-			trimEndSec: 12,
-		});
-		expect(placed.audioTracks[0]).toMatchObject({
-			timelineStartSec: 8,
-			trimStartSec: 3,
-			trimEndSec: 12,
-		});
-		// Same guards as the single-field ops: negatives floor, trimEnd >= trimStart.
-		const guarded = setAudioTrackPlacement(doc, track.id, {
-			timelineStartSec: -2,
-			trimStartSec: 5,
-			trimEndSec: 1,
-		});
-		expect(guarded.audioTracks[0]).toMatchObject({
-			timelineStartSec: 0,
-			trimStartSec: 5,
-			trimEndSec: 5,
-		});
+	it("shifts the whole track by the offset delta, preserving each advance", () => {
+		const frags = anchorAudioTrackFragments(
+			track({ startMs: 5000, endMs: 15_000, offsetMs: 2000 }),
+			twoClips,
+			makeId,
+		);
+		const doc = { ...emptyDoc(), audioTracks: frags };
+		// 2000 → 3000 is +1000 everywhere; fragment 2 keeps its 5000ms advance.
+		const next = patchAudioTrack(doc, trackGroupId(frags[0]), { offsetMs: 3000 });
+		expect(next.audioTracks.map((t) => t.offsetMs)).toEqual([3000, 8000]);
 	});
 
-	it("update ops leave other tracks untouched", () => {
-		const a = createAudioTrack({ assetId: "asset_1", durationSec: 10 });
-		const b = createAudioTrack({ assetId: "asset_2", durationSec: 20 });
-		const doc = appendAudioTrack(appendAudioTrack(emptyDoc(), a), b);
-		const next = setAudioTrackGain(doc, b.id, -6);
+	it("leaves other tracks untouched", () => {
+		const a = track({ id: "audio_a" });
+		const b = track({ id: "audio_b" });
+		const doc = { ...emptyDoc(), audioTracks: [a, b] };
+		const next = patchAudioTrack(doc, "audio_b", { gainDb: -6 });
 		expect(next.audioTracks[0]).toEqual(a);
 		expect(next.audioTracks[1]?.gainDb).toBe(-6);
 	});

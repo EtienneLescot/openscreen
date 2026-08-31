@@ -349,23 +349,22 @@ describe("V4Timeline clip row", () => {
 // covered by document/audioTracks.test.ts.
 describe("V4Timeline audio lane drag", () => {
 	const AUDIO_ASSET = { id: "aud", label: "voiceover", originalPath: "/vo.mp3", durationSec: 60 };
+	// A 60s track whose head sits at raw 100s.
 	const makeTrack = () => ({
 		id: "trk1",
 		assetId: "aud",
-		timelineStartSec: 100,
+		startMs: 100_000,
+		endMs: 160_000,
 		durationSec: 60,
-		trimStartSec: 0,
-		trimEndSec: undefined as number | undefined,
+		offsetMs: 0,
 		gainDb: 0,
 		label: "vo",
+		origin: "user" as const,
 	});
 
 	function renderAudio() {
 		const placeAudioTrack = vi.fn(
-			async (
-				_id: string,
-				_placement: { timelineStartSec: number; trimStartSec: number; trimEndSec?: number },
-			) => {
+			async (_id: string, _span: { startMs: number; endMs: number }) => {
 				/* the drag only awaits it */
 			},
 		);
@@ -423,9 +422,9 @@ describe("V4Timeline audio lane drag", () => {
 		expect(placeAudioTrack).toHaveBeenCalledTimes(1);
 		const [id, placement] = placeAudioTrack.mock.calls[0];
 		expect(id).toBe("trk1");
-		expect(placement.timelineStartSec).toBeCloseTo(100 + secForPx(90), 3);
-		expect(placement.trimStartSec).toBe(0);
-		expect(placement.trimEndSec).toBeCloseTo(60, 3);
+		// The span slides whole: head moves, length is unchanged.
+		expect(placement.startMs / 1000).toBeCloseTo(100 + secForPx(90), 3);
+		expect((placement.endMs - placement.startMs) / 1000).toBeCloseTo(60, 3);
 	});
 
 	it("right-handle drag pulls the out-point in, head fixed", () => {
@@ -437,10 +436,8 @@ describe("V4Timeline audio lane drag", () => {
 		window.dispatchEvent(new MouseEvent("pointerup", { clientX: -30 }));
 		expect(placeAudioTrack).toHaveBeenCalledTimes(1);
 		const [, placement] = placeAudioTrack.mock.calls[0];
-		expect(placement.timelineStartSec).toBe(100);
-		expect(placement.trimStartSec).toBe(0);
-		// 60s window − 60px worth of seconds (−30px = −60s) → out-point at 0? No:
-		// −30px = −60s, so trimEnd 60 → 0 clamps to trimStart + MIN. Use a smaller drag.
-		expect(placement.trimEndSec).toBeLessThan(60);
+		// The head is pinned; only the tail comes in, so the span gets shorter.
+		expect(placement.startMs).toBe(100_000);
+		expect(placement.endMs - placement.startMs).toBeLessThan(60_000);
 	});
 });

@@ -29,6 +29,7 @@ import { fromFileUrl, toFileUrl } from "@/components/video-editor/projectPersist
 import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
+import { collapseTracksToPills } from "@/lib/ai-edition/document/audioTracks";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutAudioTrack, AxcutClip } from "@/lib/ai-edition/schema";
@@ -351,6 +352,8 @@ const AudioLanePill = memo(function AudioLanePill({
 	assetDurationSec,
 	leftPct,
 	widthPct,
+	sourceStartSec,
+	sourceEndSec,
 	selected,
 	onStartDrag,
 	onSelect,
@@ -362,6 +365,10 @@ const AudioLanePill = memo(function AudioLanePill({
 	assetDurationSec: number | undefined;
 	leftPct: number;
 	widthPct: number;
+	/** The slice of the source the pill is showing — the track's offset and its
+	 *  span, or the live window while an edge is being dragged. */
+	sourceStartSec: number;
+	sourceEndSec: number;
 	selected: boolean;
 	onStartDrag: (e: ReactPointerEvent, track: AxcutAudioTrack, mode: "move" | "l" | "r") => void;
 	onSelect: (id: string) => void;
@@ -397,8 +404,8 @@ const AudioLanePill = memo(function AudioLanePill({
 			<ClipWaveform
 				videoUrl={url}
 				assetDurationSec={duration}
-				sourceStartSec={track.trimStartSec}
-				sourceEndSec={track.trimEndSec ?? duration}
+				sourceStartSec={sourceStartSec}
+				sourceEndSec={sourceEndSec}
 				// Track gain AND the project output gain — `finish_audio` applies both and
 				// clamps, so scaling by the track gain alone under-read a boosted output.
 				gain={audioGainScalar(track.gainDb) * outputGain}
@@ -893,10 +900,11 @@ export function V4Timeline({
 			const asset = tl.assets.find((a) => a.id === track.assetId);
 			// The source length caps the out-point; fall back to the current window when
 			// the file hasn't been probed (durationSec 0), so a drag can't extend past it.
-			const sourceLen = asset?.durationSec || track.durationSec || track.trimEndSec || 0;
-			const origStart = track.timelineStartSec;
-			const origTrimStart = track.trimStartSec;
-			const origTrimEnd = track.trimEndSec ?? sourceLen;
+			const spanSec = Math.max(0, (track.endMs - track.startMs) / 1000);
+			const sourceLen = asset?.durationSec || track.durationSec || spanSec;
+			const origStart = track.startMs / 1000;
+			const origTrimStart = track.offsetMs / 1000;
+			const origTrimEnd = origTrimStart + spanSec;
 			const maxEnd = sourceLen > 0 ? sourceLen : origTrimEnd;
 			// Snap the moving edge to clip boundaries and the timeline ends, same PILL_SNAP_PX
 			// magnet the region pills use.
@@ -965,9 +973,8 @@ export function V4Timeline({
 				if (fin) {
 					void tl
 						.placeAudioTrack(fin.id, {
-							timelineStartSec: fin.start,
-							trimStartSec: fin.trimStart,
-							trimEndSec: fin.trimEnd,
+							startMs: Math.round(fin.start * 1000),
+							endMs: Math.round((fin.start + Math.max(0, fin.trimEnd - fin.trimStart)) * 1000),
 						})
 						.finally(() => {
 							if (audioDragRef.current === fin) {
@@ -1715,16 +1722,23 @@ export function V4Timeline({
 											{t("hints.pressAudio")}
 										</span>
 									) : (
-										tl.audioTracks.map((track) => {
+										// One pill per user-visible track: the document stores one
+										// clip-anchored fragment per clip the track covers, and the
+										// lane must not show a split take as two pills.
+										collapseTracksToPills(tl.audioTracks).map((track) => {
 											const asset = tl.assets.find((a) => a.id === track.assetId);
 											const duration = asset?.durationSec ?? track.durationSec;
 											// While this track is being dragged, lay it out from the live
 											// preview geometry instead of the not-yet-written document.
 											const drag = audioDrag?.id === track.id ? audioDrag : null;
-											const start = drag ? drag.start : track.timelineStartSec;
-											const trimStart = drag ? drag.trimStart : track.trimStartSec;
-											const trimEnd = drag ? drag.trimEnd : (track.trimEndSec ?? duration);
-											const widthSec = Math.max(0, trimEnd - trimStart);
+											const start = drag ? drag.start : track.startMs / 1000;
+											// A drag carries its span as the trim window it is dragging
+											// the edges of; the pill's width is that window.
+											const widthSec = drag
+												? Math.max(0, drag.trimEnd - drag.trimStart)
+												: Math.max(0, (track.endMs - track.startMs) / 1000);
+											const trimStart = drag ? drag.trimStart : track.offsetMs / 1000;
+											const trimEnd = trimStart + widthSec;
 											return (
 												<AudioLanePill
 													key={track.id}
@@ -1733,6 +1747,8 @@ export function V4Timeline({
 													assetDurationSec={duration}
 													leftPct={pctOf(start)}
 													widthPct={pctOf(widthSec)}
+													sourceStartSec={trimStart}
+													sourceEndSec={trimEnd}
 													selected={tl.selectedAudioTrackId === track.id}
 													onStartDrag={startAudioDrag}
 													onSelect={tl.selectAudioTrack}

@@ -14,7 +14,7 @@ import {
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
 import { isModalOpen } from "@/lib/ai-edition/modalGuard";
-import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
+import { type AxcutAudioTrack, type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
@@ -802,6 +802,21 @@ export function NewEditorShell() {
 			return;
 		}
 
+		// Validate before building anything. The clipboard outlives the project, so
+		// a track copied in one project and pasted in another would reference an
+		// asset that only exists back where it came from — a pill that plays
+		// nothing and exports nothing. Audio is the only kind carrying a reference
+		// out of the document today; the next one belongs here too, rather than in
+		// its own branch below.
+		const referencedAssetId = (snapshot.region as { assetId?: unknown }).assetId;
+		if (
+			typeof referencedAssetId === "string" &&
+			!doc.assets.some((a) => a.id === referencedAssetId)
+		) {
+			toast.error(te("regionClipboard.pasteAssetMissing"));
+			return;
+		}
+
 		const { anchorRegionsWithDerivedMs } = await import("@/lib/ai-edition/timeline/timelineMap");
 		const { createId } = await import("@/lib/ai-edition/document/ids");
 
@@ -809,6 +824,30 @@ export function NewEditorShell() {
 		const timeMs = Math.round(useProjectStore.getState().currentTimeSec * 1000);
 		const src = snapshot.region as { startMs: number; endMs: number };
 		const prefix = snapshot.kind === "annotation" ? "ann" : snapshot.kind;
+
+		// Audio re-ventilates through its own anchorer, which advances each
+		// fragment's source offset — the generic one would copy the offset into
+		// every fragment and restart the file at each cut.
+		if (snapshot.kind === "audio") {
+			const { anchorAudioTrackFragments } = await import("@/lib/ai-edition/document/audioTracks");
+			const track = {
+				...(snapshot.region as unknown as AxcutAudioTrack),
+				id: createId("audio"),
+				trackId: undefined,
+				startMs: timeMs,
+				endMs: timeMs + (Number(src.endMs) - Number(src.startMs)),
+			};
+			const fragments = anchorAudioTrackFragments(track, doc.timeline.clips, () =>
+				createId("audio"),
+			);
+			if (fragments.length === 0) return;
+			await saveDocument(
+				{ ...doc, audioTracks: [...doc.audioTracks, ...fragments] },
+				{ history: true },
+			);
+			toast.success("Region pasted");
+			return;
+		}
 		const pasted = {
 			...snapshot.region,
 			id: createId(prefix),
@@ -858,7 +897,7 @@ export function NewEditorShell() {
 		// `tl` belongs here now that the trim branch calls tl.addTrim: useTimeline
 		// returns a fresh object each render, so memoizing on saveDocument alone
 		// would paste through a callback holding a stale document.
-	}, [saveDocument, tl]);
+	}, [saveDocument, tl, te]);
 
 	// Copy the SELECTED pill. Reads the same arrays the lanes render, so what gets
 	// copied is what the user is looking at — the old version dug into the raw
@@ -881,6 +920,22 @@ export function NewEditorShell() {
 			);
 			if (!group) return;
 			copyRegion({ kind: "trim", region: { durationSec: group.end - group.start } });
+			setCopiedClipId(null);
+			toast.success("Region copied");
+			return;
+		}
+
+		// An audio track is stored as one fragment per clip it covers; the user
+		// copied the PILL, so collapse it back before it goes on the clipboard.
+		if (sel.kind === "audio") {
+			const { collapseTracksToPills, trackGroupId } = await import(
+				"@/lib/ai-edition/document/audioTracks"
+			);
+			const [pill] = collapseTracksToPills(
+				tl.audioTracks.filter((t) => trackGroupId(t) === sel.id),
+			);
+			if (!pill) return;
+			copyRegion({ kind: "audio", region: pill as unknown as Record<string, unknown> });
 			setCopiedClipId(null);
 			toast.success("Region copied");
 			return;

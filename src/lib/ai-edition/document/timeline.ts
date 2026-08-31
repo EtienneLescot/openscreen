@@ -11,13 +11,14 @@ import {
 	hasCompleteClipAnchor,
 } from "../timeline/timelineMap";
 import { dropTrimPillsByIds, trimAppliesToClip } from "../timeline/trim-mapping";
+import { removeAudioTrack } from "./audioTracks";
 import { createId } from "./ids";
 
 /** The region families a delete can target by id. Shared with the store so "which kinds
  *  exist" has exactly one definition. `trim` is a source-time cut; the rest are pill-merged
  *  effects (zoom / speed / annotation / camera-fullscreen). Clips are removed via
  *  {@link removeClip}, not here — deleting a clip reflows the whole timeline. */
-export type RegionKind = "zoom" | "trim" | "annotation" | "speed" | "cameraFullscreen";
+export type RegionKind = "zoom" | "trim" | "annotation" | "speed" | "cameraFullscreen" | "audio";
 
 /** Length a clip is given before its media has been probed. Lives here, in the pure
  *  document layer, because that layer decides which clips are still waiting for a real
@@ -333,6 +334,10 @@ function mapAllRegionCollections(
 			document.annotations as unknown as StoredRegion[],
 			"ann",
 		) as unknown as AxcutDocument["annotations"],
+		audioTracks: fn(
+			document.audioTracks as unknown as StoredRegion[],
+			"audio",
+		) as unknown as AxcutDocument["audioTracks"],
 		legacyEditor:
 			legacy && (speedRegions || cameraFullscreenRegions)
 				? {
@@ -953,6 +958,11 @@ export function removeRegion(document: AxcutDocument, kind: RegionKind, id: stri
 			};
 		case "annotation":
 			return { ...document, annotations: dropPillById(document.annotations, id) };
+		case "audio":
+			// Not `dropPillById`: an audio track's fragments are grouped by
+			// `trackId`, and deleting the pill has to take the asset with it when
+			// nothing else references it.
+			return removeAudioTrack(document, id);
 		case "trim":
 			return {
 				...document,

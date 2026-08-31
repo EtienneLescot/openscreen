@@ -134,7 +134,8 @@ const DECLARED: WritePath[] = [
 	// "Save" chosen on the way out of Ctrl+N and Ctrl+O.
 	w("src/components/ai-edition/NewEditorShell.tsx", "onKey", "save", "gesture"),
 	w("src/components/ai-edition/NewEditorShell.tsx", "onKey", "save", "gesture"),
-	// Ctrl+V of a copied region: zoom, annotation, or a legacy span.
+	// Ctrl+V of a copied region: an audio track, zoom, annotation, or a legacy span.
+	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
 	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
 	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
 	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
@@ -240,11 +241,12 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "duplicateClip", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "insertClipAt", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "moveClip", "save", "gesture"),
-	// Imported audio tracks (issue #350). Each is a direct user edit — drag/trim the
-	// track (placeAudioTrack), change its level, or delete it — one undo step apiece.
+	// Timeline audio tracks (issue #350). Each is a direct user edit — drag or resize
+	// the track (placeAudioTrack), change its payload (updateAudioTrack, which
+	// setAudioTrackGain routes through), or delete it — one undo step apiece.
 	w("src/lib/ai-edition/store/useTimeline.ts", "placeAudioTrack", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "removeAudioTrack", "save", "gesture"),
-	w("src/lib/ai-edition/store/useTimeline.ts", "setAudioTrackGain", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "updateAudioTrack", "save", "gesture"),
 	// The round-2 defect: a background duration probe every freshly imported asset
 	// fires, because `addAsset` never populates `durationSec`.
 	w("src/lib/ai-edition/store/useTimeline.ts", "probeAndCorrectClip", "save", "automatic"),

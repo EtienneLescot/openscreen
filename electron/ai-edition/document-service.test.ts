@@ -435,11 +435,13 @@ describe("DocumentService", () => {
 					{
 						id: "trk_1",
 						assetId: audioId,
-						timelineStartSec: 0,
+						startMs: 0,
+						endMs: 10_000,
 						durationSec: 10,
-						trimStartSec: 0,
+						offsetMs: 0,
 						gainDb: 0,
 						label: "music",
+						origin: "user",
 					},
 				],
 			});

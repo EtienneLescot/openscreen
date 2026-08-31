@@ -492,25 +492,51 @@ export const zoomRegionSchema = endGteStart(
 // `assetId` points at an asset with `kind: "audio"`. `timelineStartSec` places
 // the track's head; `trimStartSec`/`trimEndSec` window the source file (both in
 // source seconds); `gainDb` sets its level.
-export const audioTrackSchema = z
-	.object({
+// An imported or recorded audio track (voiceover / BGM / SFX) placed on the
+// timeline (issue #350).
+//
+// CLIP-ANCHORED, on the same v5 contract as zoom/annotation: `{clipId,
+// sourceStartSec, sourceEndSec}` is the source of truth and `startMs`/`endMs`
+// is a derived ruler cache, so a track travels with the content it was placed
+// over instead of sitting still while a reorder or trim slides the programme
+// underneath it. Positions are RAW ruler ms; the export projects them onto the
+// trim-compressed programme (`projectRawTimelineSecToPlayback`).
+//
+// `offsetMs` skips INTO the source file — start the music at its chorus. It
+// replaces #502's `trimStartSec`/`trimEndSec` pair: the track's own span
+// (`startMs`..`endMs`) is where it plays, so the tail trim is implied by the
+// span and does not need storing twice. A file longer than its span is cut off
+// at the span unless `loop` is set, in which case it repeats.
+//
+// The anchor ventilates one user-visible track into one fragment PER CLIP it
+// covers. Fragments of the same track share `trackId`, and each carries its own
+// `offsetMs` advanced by the source time its predecessors consumed — see
+// `anchorAudioTrackFragments`. Without that every fragment would restart the
+// file at the same offset, so a bed spanning a cut would audibly restart at
+// the boundary.
+export const audioTrackSchema = endGteStart(
+	z.object({
 		id: z.string().min(1),
+		// Shared by every fragment of one user-visible track: what the lane draws
+		// as a single pill, what the inspector edits, and what delete removes.
+		// Absent on tracks written before ventilation existed — they are their own
+		// single fragment, so `trackId ?? id` is always the group key.
+		trackId: z.string().min(1).optional(),
+		startMs: z.number().nonnegative(),
+		endMs: z.number().nonnegative(),
+		...clipAnchorShape,
 		assetId: z.string().min(1),
-		timelineStartSec: z.number().nonnegative().default(0),
 		// Full source duration of the underlying file, cached here so the timeline
 		// can lay out the pill before the asset is re-probed on load.
 		durationSec: z.number().nonnegative().default(0),
-		trimStartSec: z.number().nonnegative().default(0),
-		// Absent means "play to the end of the file". Explicit when the user trims
-		// the tail so the pill and the export agree on where the track stops.
-		trimEndSec: z.number().nonnegative().optional(),
-		gainDb: z.number().default(0),
+		offsetMs: z.number().int().nonnegative().default(0),
+		gainDb: z.number().min(-60).max(12).default(0),
 		label: z.string().default(""),
-	})
-	.refine((data) => data.trimEndSec === undefined || data.trimEndSec >= data.trimStartSec, {
-		message: "trimEndSec must be greater than or equal to trimStartSec",
-		path: ["trimEndSec"],
-	});
+		origin: z.enum(["system", "agent", "user"]).default("user"),
+	}),
+	"endMs",
+	"startMs",
+);
 
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time
@@ -1036,25 +1062,36 @@ export function ensureDocument(value: unknown): AxcutDocument {
 }
 
 /**
- * Build a timeline audio track for an imported audio asset (issue #350). The
- * head is placed at `timelineStartSec` (RAW/document timeline seconds — the same
- * clock the ruler, playhead and clip `timelineStartSec` use, NOT the
- * trim-compressed output programme; the export projects it with
+ * Build a timeline audio track for an imported or recorded audio asset
+ * (issue #350). The head is placed at `timelineStartSec` (RAW/document timeline
+ * seconds — the same clock the ruler, playhead and clip `timelineStartSec` use,
+ * NOT the trim-compressed output programme; the export projects it with
  * `projectRawTimelineSecToPlayback`) and the track spans the whole source file
- * until the user trims it. Parsed through the schema so every default (gain,
- * trim) is applied in one place.
+ * unless the caller asks for a shorter `spanSec`. Parsed through the schema so
+ * every default (gain, fades, loop) is applied in one place.
+ *
+ * The result is UNANCHORED — `clipId` is absent. Callers place it through
+ * `anchorAudioTrackFragments`, which ventilates it across the clips it covers.
  */
 export function createAudioTrack(input: {
 	assetId: string;
 	durationSec: number;
+	/** Raw ruler head. The span runs from here for `durationSec`, or for
+	 *  `spanSec` when the caller wants a shorter placement than the file. */
 	timelineStartSec?: number;
+	spanSec?: number;
 	label?: string;
 }): AxcutAudioTrack {
+	const startMs = Math.round(Math.max(0, input.timelineStartSec ?? 0) * 1000);
+	// A track with no measurable source still needs a visible span, or the pill
+	// is zero-width and cannot be grabbed to fix.
+	const spanMs = Math.max(1, Math.round((input.spanSec ?? input.durationSec) * 1000));
 	return audioTrackSchema.parse({
 		id: createId("audio"),
 		assetId: input.assetId,
 		durationSec: input.durationSec,
-		timelineStartSec: input.timelineStartSec ?? 0,
+		startMs,
+		endMs: startMs + spanMs,
 		label: input.label ?? "",
 	});
 }

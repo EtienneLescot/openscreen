@@ -39,6 +39,7 @@ import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import GradientEditor, { type GradientEditorState } from "@/components/ui/gradient-editor";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
+import { collapseTracksToPills, trackGroupId } from "@/lib/ai-edition/document/audioTracks";
 import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import type {
 	AxcutAsset,
@@ -2345,7 +2346,12 @@ type TimelineApi = ReturnType<typeof useTimeline>;
 export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 	const ts = useScopedT("settings");
 	const trackId = tl.selectedAudioTrackId;
-	const track = tl.audioTracks.find((t) => t.id === trackId);
+	// The document stores one clip-anchored fragment per clip the track covers;
+	// the inspector edits the user-visible TRACK, so collapse first. Editing a
+	// single fragment would let the halves of a split take disagree.
+	const track = trackId
+		? collapseTracksToPills(tl.audioTracks.filter((t) => trackGroupId(t) === trackId))[0]
+		: undefined;
 	const asset = track ? tl.assets.find((a) => a.id === track.assetId) : undefined;
 	// Live-drag value for the volume slider; null means "show the committed gain".
 	const [liveGain, setLiveGain] = useState<number | null>(null);

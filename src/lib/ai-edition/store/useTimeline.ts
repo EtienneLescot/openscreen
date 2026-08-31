@@ -9,9 +9,11 @@ import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import {
+	anchorAudioTrackFragments,
+	collapseTracksToPills,
+	patchAudioTrack,
 	removeAudioTrack as removeAudioTrackInDocument,
-	setAudioTrackGain as setAudioTrackGainInDocument,
-	setAudioTrackPlacement as setAudioTrackPlacementInDocument,
+	trackGroupId,
 } from "../document/audioTracks";
 import { createId } from "../document/ids";
 import {
@@ -25,7 +27,7 @@ import {
 	resequenceClips,
 	setClipSourceRange,
 } from "../document/timeline";
-import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
+import type { AxcutAudioTrack, AxcutClipCropRegion, AxcutDocument } from "../schema";
 import { hasAnyClipWithCamera } from "../timeline/camera";
 import { probeAudioDuration, probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
@@ -150,7 +152,7 @@ export function useTimeline() {
 	// inspector stays open on an empty AudioTrackPane, recoverable only by clicking a facet.
 	useEffect(() => {
 		if (selectedAudioTrackId === null) return;
-		if (!document?.audioTracks.some((t) => t.id === selectedAudioTrackId)) {
+		if (!document?.audioTracks.some((t) => trackGroupId(t) === selectedAudioTrackId)) {
 			setSelectedAudioTrackId(null);
 		}
 	}, [document, selectedAudioTrackId, setSelectedAudioTrackId]);
@@ -1270,9 +1272,10 @@ export function useTimeline() {
 			}>) ?? [])
 		: [];
 
-	// --- Imported audio tracks (issue #350) -------------------------------------
-	// Timeline-global overlays, so unlike the region ops above these need no clip
-	// anchoring — each just writes `document.audioTracks` through the pure ops.
+	// --- Timeline audio tracks (issue #350) -------------------------------------
+	// CLIP-ANCHORED like every region above: one user-visible track is one pill
+	// over one-or-more stored fragments, so these ops go through the shared pill
+	// helpers and address a track by its group id, never a fragment id.
 
 	// Place a new track for an imported audio asset, its head at the playhead (in
 	// RAW/document timeline seconds — the clock the ruler and playhead use, NOT the
@@ -1282,8 +1285,12 @@ export function useTimeline() {
 	// selection so the new audio-track selection isn't held CONCURRENTLY with a
 	// stale region/clip one.
 	const addAudioTrack = useCallback(
-		async (assetId: string, timelineStartSec?: number): Promise<string | null> => {
-			const id = await storeAddAudioTrack(assetId, timelineStartSec ?? playheadSec());
+		async (
+			assetId: string,
+			timelineStartSec?: number,
+			options?: { durationSec?: number; spanSec?: number },
+		): Promise<string | null> => {
+			const id = await storeAddAudioTrack(assetId, timelineStartSec ?? playheadSec(), options);
 			if (id) {
 				setSelection(null);
 				setMultiSelection([]);
@@ -1336,28 +1343,50 @@ export function useTimeline() {
 		[document, saveDocument, selectedAudioTrackId, setSelectedAudioTrackId],
 	);
 
-	// The commit for a lane drag: position and trim in one write (one undo step).
-	// A left-edge drag moves both timelineStartSec and trimStartSec, which two
-	// separate ops could not do atomically. See setAudioTrackPlacement.
+	// The commit for a lane drag or edge-resize: move the pill's whole span and
+	// re-ventilate it, so a track dragged across a cut becomes the right set of
+	// fragments in one write (one undo step). `offsetMs` is preserved as the
+	// track's own — `anchorAudioTrackFragments` re-derives each fragment's
+	// advance from the new geometry.
 	const placeAudioTrack = useCallback(
-		async (
-			trackId: string,
-			placement: { timelineStartSec: number; trimStartSec: number; trimEndSec?: number },
-		) => {
-			if (!document) return;
-			await saveDocument(setAudioTrackPlacementInDocument(document, trackId, placement), {
-				history: true,
-			});
+		async (trackId: string, span: { startMs: number; endMs: number }) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const others = doc.audioTracks.filter((t) => trackGroupId(t) !== trackId);
+			const [pill] = collapseTracksToPills(
+				doc.audioTracks.filter((t) => trackGroupId(t) === trackId),
+			);
+			if (!pill) return;
+			const moved = {
+				...pill,
+				startMs: Math.max(0, Math.round(span.startMs)),
+				endMs: Math.max(Math.round(span.startMs) + 1, Math.round(span.endMs)),
+			};
+			const fragments = anchorAudioTrackFragments(moved, doc.timeline.clips, () =>
+				createId("audio"),
+			);
+			if (fragments.length === 0) return;
+			await saveDocument({ ...doc, audioTracks: [...others, ...fragments] }, { history: true });
 		},
-		[document, saveDocument],
+		[saveDocument],
+	);
+
+	// Payload edits hit every fragment of the track — the halves of a split take
+	// must not disagree about their own level.
+	const updateAudioTrack = useCallback(
+		async (trackId: string, patch: Partial<Pick<AxcutAudioTrack, "gainDb" | "offsetMs">>) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			await saveDocument(patchAudioTrack(doc, trackId, patch), { history: true });
+		},
+		[saveDocument],
 	);
 
 	const setAudioTrackGain = useCallback(
 		async (trackId: string, gainDb: number) => {
-			if (!document) return;
-			await saveDocument(setAudioTrackGainInDocument(document, trackId, gainDb), { history: true });
+			await updateAudioTrack(trackId, { gainDb });
 		},
-		[document, saveDocument],
+		[updateAudioTrack],
 	);
 
 	return {
@@ -1384,6 +1413,7 @@ export function useTimeline() {
 		addAudioTrack,
 		addAudio,
 		removeAudioTrack,
+		updateAudioTrack,
 		placeAudioTrack,
 		setAudioTrackGain,
 		selectedAudioTrackId,

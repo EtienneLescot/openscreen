@@ -98,14 +98,22 @@ export function resolveTimelineAudioPlayback(
 	outputTimeSec: number,
 	outputStartSec: number,
 	track: AxcutAudioTrack,
+	/** The fragment's own span in seconds — how long it plays on the timeline,
+	 *  which is independent of how much file is left after the offset. */
+	spanSec: number,
 ) {
-	const trimStart = Math.max(0, track.trimStartSec);
-	const trimEnd = track.trimEndSec ?? track.durationSec;
-	const windowLen = Math.max(0, trimEnd - trimStart);
+	const offset = Math.max(0, track.offsetMs / 1000);
+	const sourceEnd = track.durationSec > 0 ? track.durationSec : offset + spanSec;
+	// The window the file has left after the offset; the fragment stops at
+	// whichever runs out first, its span or the file.
+	const windowLen = Math.max(0, sourceEnd - offset);
 	const local = outputTimeSec - outputStartSec;
+	const active = local >= 0 && local < spanSec;
 	return {
-		targetTimeSec: Math.min(Math.max(trimStart, trimStart + local), trimEnd),
-		shouldPlay: local >= 0 && local < windowLen,
+		targetTimeSec: Math.min(Math.max(offset, offset + local), sourceEnd),
+		// A file shorter than its span goes silent at the end rather than
+		// restarting: seeking a finished element back would stutter it every frame.
+		shouldPlay: active && local < windowLen,
 	};
 }
 
@@ -610,9 +618,15 @@ export function VirtualPreview({
 				const outputStartSec = projectRawTimelineSecToPlayback(
 					clipsRef.current,
 					trimRangesRef.current,
-					track.timelineStartSec,
+					track.startMs / 1000,
 				);
-				const trackTarget = resolveTimelineAudioPlayback(outputTimeSec, outputStartSec, track);
+				const spanSec = Math.max(0, (track.endMs - track.startMs) / 1000);
+				const trackTarget = resolveTimelineAudioPlayback(
+					outputTimeSec,
+					outputStartSec,
+					track,
+					spanSec,
+				);
 				// Imported audio plays at its natural 1× rate, NOT the video's. The export
 				// sums it into the programme at 1× — speed regions stretch clip PCM only,
 				// never the imported track — so following `v.playbackRate` would pitch a

@@ -238,16 +238,17 @@ function driveAudioEl(el: HTMLAudioElement) {
 }
 
 describe("VirtualPreview imported audio tracks", () => {
-	// Windowed to source 1..3 (2s) and placed at timeline 2 → occupies 2..4.
+	// A 2s span at raw 2..4, playing the source from 1s in → source 1..3.
 	const track = {
 		id: "trk",
 		assetId: "aud",
-		timelineStartSec: 2,
+		startMs: 2000,
+		endMs: 4000,
 		durationSec: 10,
-		trimStartSec: 1,
-		trimEndSec: 3,
+		offsetMs: 1000,
 		gainDb: 0,
 		label: "",
+		origin: "user" as const,
 	};
 
 	function mountWithAudio() {
@@ -332,12 +333,13 @@ describe("VirtualPreview imported audio track boost", () => {
 	const boosted = {
 		id: "trk",
 		assetId: "aud",
-		timelineStartSec: 2,
+		startMs: 2000,
+		endMs: 4000,
 		durationSec: 10,
-		trimStartSec: 1,
-		trimEndSec: 3,
+		offsetMs: 1000,
 		gainDb: 6.0206,
 		label: "",
+		origin: "user" as const,
 	};
 
 	it("drives a per-track gain node past unity instead of capping element.volume", () => {

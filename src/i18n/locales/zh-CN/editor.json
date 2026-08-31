@@ -71,6 +71,7 @@
 		"pasted": "已粘贴{{region}}属性",
 		"nothingToCopy": "选择一个区域以复制其属性",
 		"nothingToPaste": "尚未复制任何属性",
+		"pasteAssetMissing": "该音频轨道的文件不在此项目中",
 		"kinds": {
 			"zoom": "缩放",
 			"speed": "速度",

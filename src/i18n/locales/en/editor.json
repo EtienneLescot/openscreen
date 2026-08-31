@@ -71,6 +71,7 @@
 		"pasted": "{{region}} attributes pasted",
 		"nothingToCopy": "Select a region to copy its attributes",
 		"nothingToPaste": "No attributes copied yet",
+		"pasteAssetMissing": "That audio track's file isn't in this project",
 		"kinds": {
 			"zoom": "Zoom",
 			"speed": "Speed",

@@ -71,6 +71,7 @@
 		"pasted": "Đã dán thuộc tính {{region}}",
 		"nothingToCopy": "Chọn một vùng để sao chép thuộc tính của nó",
 		"nothingToPaste": "Chưa sao chép thuộc tính nào",
+		"pasteAssetMissing": "Tệp của bản âm thanh này không có trong dự án",
 		"kinds": {
 			"zoom": "Thu phóng",
 			"speed": "Tốc độ",

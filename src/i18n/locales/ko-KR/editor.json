@@ -71,6 +71,7 @@
 		"pasted": "{{region}} 속성을 붙여넣었습니다",
 		"nothingToCopy": "속성을 복사할 영역을 선택하세요",
 		"nothingToPaste": "복사된 속성이 없습니다",
+		"pasteAssetMissing": "이 오디오 트랙의 파일이 이 프로젝트에 없습니다",
 		"kinds": {
 			"zoom": "줌",
 			"speed": "속도",

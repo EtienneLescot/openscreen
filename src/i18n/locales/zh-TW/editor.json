@@ -71,6 +71,7 @@
 		"pasted": "已貼上{{region}}屬性",
 		"nothingToCopy": "選擇一個區域以複製其屬性",
 		"nothingToPaste": "尚未複製任何屬性",
+		"pasteAssetMissing": "該音訊軌道的檔案不在此專案中",
 		"kinds": {
 			"zoom": "縮放",
 			"speed": "速度",
