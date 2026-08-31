@@ -40,6 +40,9 @@ on:
       - nix/**
       - crates/**
       - package-lock.json
+      # Including itself, or a PR that only edits this file gets no validation of
+      # the change it is making -- the same rule nix-check.yml already follows.
+      - .github/workflows/nix-build.yml
   push:
     branches: [main]
   schedule:
