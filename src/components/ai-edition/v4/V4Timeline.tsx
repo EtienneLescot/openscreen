@@ -41,7 +41,7 @@ import {
 } from "@/lib/ai-edition/document/audioTracks";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
-import type { AxcutAudioTrack, AxcutClip } from "@/lib/ai-edition/schema";
+import type { AxcutAudioTrack, AxcutClip, AxcutWord } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionStore";
@@ -701,6 +701,32 @@ export function V4Timeline({
 		label: `${(p.member.customScale ?? ZOOM_DEPTH_SCALES[p.member.depth]).toFixed(2)}×`,
 		sourceIds: p.ids,
 	}));
+	// Where the user has ADDED words. Derived from the transcript on every render and
+	// stored nowhere: the word carries `source: "synth"` and its own source time, so a mark
+	// built from it cannot drift from the amber word the transcript pane shows. Grouped by
+	// clip because each mark is positioned inside its clip's own box — it then travels with
+	// the clip through a reorder for free, with no ruler arithmetic of its own.
+	const insertedWordsByClip = useMemo(() => {
+		const byAsset = new Map<string, AxcutWord[]>();
+		for (const transcript of tl.transcripts) {
+			const added = transcript.words.filter((word) => word.source === "synth");
+			if (added.length > 0) byAsset.set(transcript.assetId, added);
+		}
+		if (byAsset.size === 0) return new Map<string, Array<{ word: AxcutWord; atPct: number }>>();
+		const out = new Map<string, Array<{ word: AxcutWord; atPct: number }>>();
+		for (const clip of clips) {
+			const words = byAsset.get(clip.assetId);
+			const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+			const span = sourceEnd - clip.sourceStartSec;
+			if (!words || span <= 0) continue;
+			const marks = words
+				.filter((word) => word.startSec >= clip.sourceStartSec && word.startSec <= sourceEnd)
+				.map((word) => ({ word, atPct: ((word.startSec - clip.sourceStartSec) / span) * 100 }));
+			if (marks.length > 0) out.set(clip.id, marks);
+		}
+		return out;
+	}, [tl.transcripts, clips]);
+
 	// trims: content-free (no per-instance text/settings), so touching rows —
 	// inevitable once a trim is ventilated across a clip boundary — are
 	// coalesced into one pill. This is what makes growing a trim across a
@@ -2202,6 +2228,25 @@ export function V4Timeline({
 												{tl.assets.find((a) => a.id === c.assetId)?.label ?? c.assetId}
 											</span>
 										</div>
+										{(insertedWordsByClip.get(c.id) ?? []).map(({ word, atPct }) => (
+											<button
+												key={word.id}
+												type="button"
+												data-no-clip-drag
+												data-inserted-word={word.id}
+												className={styles.tlClipInsert}
+												style={{ left: `${atPct}%` }}
+												title={t("toolbar.addedWord", { word: word.text })}
+												aria-label={t("toolbar.addedWord", { word: word.text })}
+												onPointerDown={(e) => e.stopPropagation()}
+												onClick={(e) => {
+													// Jump to the moment the added text sits on. The clip box
+													// underneath would otherwise take this as a selection.
+													e.stopPropagation();
+													setCurrentTime(c.timelineStartSec + (word.startSec - c.sourceStartSec));
+												}}
+											/>
+										))}
 										{selected ? (
 											<button
 												type="button"

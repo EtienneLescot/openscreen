@@ -79,6 +79,9 @@ function renderTimeline(
 ) {
 	const tl = {
 		clips,
+		// Marks for added words are read straight off the transcript (see the pane's
+		// amber words) — no project here has any.
+		transcripts: [],
 		assets,
 		annotationRegions: [annotation],
 		speedRegions: [],
