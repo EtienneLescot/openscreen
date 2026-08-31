@@ -85,8 +85,11 @@ and **one** encoder + muxer pair:
   clip, it now hands the work to `ClipAudioJobs`
   ([`audio_jobs.rs`](../../crates/compositor/src/audio_jobs.rs), at most
   four in flight) and the walk carries straight on to the next clip. The
-  results are collected after the walk, indexed by clip, so what is left
-  to wait for at the end is at most the last clip.
+  results are collected after the walk, indexed by clip. `spawn` admits
+  four before it collects one, so what is left to wait for at the end is up
+  to four jobs — bounded by the slowest of them, not by their sum. Dropping
+  the collection joins them rather than detaching, so an export that fails
+  between the walk and the collection does not leave decoders running.
 
   This matters for reporting as much as for wall time. `progress()`
   counts composed frames as they are handed to the encoder and nothing

@@ -1133,8 +1133,9 @@ pub fn run_composited_multi(
         // Le plan part des frames RÉELLEMENT produites par clip, pas des durées demandées :
         // un clip raccourci (source plus courte que sa borne) doit voir son audio raccourci
         // d'autant, sinon la piste dérive pour tous les suivants.
-        // Récupération des jobs audio lancés pendant le parcours. Ce qui reste à attendre
-        // ici, c'est au plus le dernier clip : les précédents se sont recouverts avec
+        // Récupération des jobs audio lancés pendant le parcours. `spawn` en admet quatre
+        // avant d'en collecter un, donc il en reste au plus quatre à attendre ici — bornés
+        // par le plus lent, pas par leur somme ; les autres se sont recouverts avec
         // l'encodage vidéo.
         let clip_pcm: Vec<Option<PlanarPcm>> = audio_jobs
             .into_results()

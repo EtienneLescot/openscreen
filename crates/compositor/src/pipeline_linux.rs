@@ -539,8 +539,9 @@ pub fn run_composited_multi(
         drain_encoder(ectx, octx, ostream, opkt)?;
         // Audio : le plan part des frames REELLEMENT produites par clip (un clip
         // raccourci voit son audio raccourci d'autant), puis un seul encode AAC.
-        // Récupération des jobs audio lancés pendant le parcours. Ce qui reste à attendre
-        // ici, c'est au plus le dernier clip : les précédents se sont recouverts avec
+        // Récupération des jobs audio lancés pendant le parcours. `spawn` en admet quatre
+        // avant d'en collecter un, donc il en reste au plus quatre à attendre ici — bornés
+        // par le plus lent, pas par leur somme ; les autres se sont recouverts avec
         // l'encodage vidéo.
         let clip_pcm: Vec<Option<PlanarPcm>> = audio_jobs
             .into_results()

@@ -98,7 +98,9 @@ impl<T: Send + 'static> ClipAudioJobs<T> {
         while !self.inflight.is_empty() {
             self.collect_oldest();
         }
-        self.results
+        // `mem::take` et pas un move : le `Drop` ci-dessous interdit de sortir un champ de
+        // `self`. Il ne trouvera plus rien à joindre, la file étant vide.
+        std::mem::take(&mut self.results)
     }
 
     fn collect_oldest(&mut self) {
@@ -116,6 +118,29 @@ impl<T: Send + 'static> ClipAudioJobs<T> {
             Err(_) => eprintln!(
                 "[pipeline] warning: le job audio du clip #{clip_index} a paniqué; silence conservé"
             ),
+        }
+    }
+}
+
+/// Un `JoinHandle` droppé **détache** son thread. Entre le premier `spawn` et
+/// `into_results` il y a des `?` — le parcours lui-même, le flush de l'encodeur — et sur
+/// l'un d'eux la collection partait en fumée en laissant jusqu'à quatre décodages en vol
+/// dans un addon natif que l'hôte peut décharger. On joint donc à la destruction : rien ne
+/// survit à la portée, chemin d'erreur compris.
+///
+/// Ce n'est pas une annulation : `decode_clip_audio` est un appel opaque et long, et
+/// l'interrompre demanderait de lui passer un `AVIOInterruptCB` — un autre changement, dans
+/// un autre fichier. L'attente est bornée par le plus lent des quatre, soit quelques
+/// secondes depuis que le stretch passe par atempo, et elle ne coûte que sur un export qui
+/// a déjà échoué.
+impl<T> Drop for ClipAudioJobs<T> {
+    fn drop(&mut self) {
+        for (clip_index, handle) in std::mem::take(&mut self.inflight) {
+            if handle.join().is_err() {
+                eprintln!(
+                    "[pipeline] warning: le job audio du clip #{clip_index} a paniqué pendant l'abandon de l'export"
+                );
+            }
         }
     }
 }
@@ -178,6 +203,30 @@ mod tests {
             peak.load(Ordering::SeqCst) <= MAX_INFLIGHT_AUDIO_JOBS,
             "jusqu'à {} jobs simultanés pour un plafond de {MAX_INFLIGHT_AUDIO_JOBS}",
             peak.load(Ordering::SeqCst)
+        );
+    }
+
+    #[test]
+    fn dropping_the_collection_joins_its_jobs_instead_of_detaching_them() {
+        // Le chemin d'erreur : entre le premier `spawn` et `into_results` il y a des `?`.
+        // Sans le `Drop`, jusqu'à quatre décodages continuaient dans le vide après l'abandon
+        // de l'export, dans un addon que l'hôte peut décharger.
+        let finished = Arc::new(AtomicUsize::new(0));
+        {
+            let mut jobs = ClipAudioJobs::new(4);
+            for index in 0..4 {
+                let finished = Arc::clone(&finished);
+                jobs.spawn(index, move || {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    finished.fetch_add(1, Ordering::SeqCst);
+                });
+            }
+            // Pas d'`into_results` : on abandonne, comme le ferait un `?`.
+        }
+        assert_eq!(
+            finished.load(Ordering::SeqCst),
+            4,
+            "des jobs tournaient encore après la destruction de la collection"
         );
     }
 
