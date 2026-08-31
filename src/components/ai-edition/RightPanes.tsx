@@ -68,7 +68,6 @@ import {
 	findCueWordId,
 	isInsertedWord,
 	isSilenceWord,
-	placementRawExtent,
 	type TranscriptLane,
 	type TrimRun,
 	voiceoverPlacements,
@@ -1001,8 +1000,6 @@ export function TranscriptPane({
 					key={section.clip.id}
 					index={idx}
 					section={section}
-					continuation={continuesPreviousSection(sections[idx - 1], section)}
-					runLabel={runLabelFor(sections, idx)}
 					busy={busyAssetIds.includes(section.clip.assetId)}
 					busyLabel={
 						transcriptionBusyLabel(transcriptions?.[section.clip.assetId], transcriptionLabel) ??
@@ -1021,50 +1018,6 @@ export function TranscriptPane({
 	);
 }
 
-/**
- * Whether this section merely continues the previous one: same media, and the previous
- * clip ends exactly where this one starts, on the source clock and on the ruler alike.
- *
- * Inserting a word SPLITS the clip it lands in — [before · freeze · after] — so one word
- * turned one recording into three headed blocks, each announcing the same filename and a
- * sliver of timecode. They are one continuous read and now render as one: the header
- * appears on the first section of the run, the rest flow straight on from it. Two clips
- * over the same media that are NOT contiguous still get a header each, which is the case
- * the header exists for.
- */
-function continuesPreviousSection(
-	previous: ClipSection | undefined,
-	section: ClipSection,
-): boolean {
-	if (!previous || previous.clip.assetId !== section.clip.assetId) return false;
-	const EPSILON_SEC = 0.001;
-	const sourceMeets =
-		Math.abs((previous.clip.sourceEndSec ?? Number.NaN) - section.clip.sourceStartSec) <
-		EPSILON_SEC;
-	// A placement's ruler end is derived, not stored: the voiceover lane has no clip behind
-	// it to read a `timelineEndSec` from.
-	const previousEnd = placementRawExtent(previous.clip)?.endSec;
-	const rulerMeets =
-		previousEnd !== undefined &&
-		Math.abs(previousEnd - section.clip.timelineStartSec) < EPSILON_SEC;
-	return sourceMeets && rulerMeets;
-}
-
-/** The source range the whole run covers, for the one header that fronts it. */
-function runLabelFor(sections: ClipSection[], index: number): { start: number; end: number } {
-	let last = index;
-	while (
-		last + 1 < sections.length &&
-		continuesPreviousSection(sections[last], sections[last + 1])
-	) {
-		last += 1;
-	}
-	return {
-		start: sections[index].clip.sourceStartSec,
-		end: sections[last].clip.sourceEndSec ?? sections[last].clip.sourceStartSec,
-	};
-}
-
 // One contentEditable block per clip — header (vignette + filename +
 // range) and a flowing word stream. The stream contains every transcript
 // word inside the clip's source range, color-coded by whether the word
@@ -1080,8 +1033,6 @@ function runLabelFor(sections: ClipSection[], index: number): { start: number; e
 const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	index,
 	section,
-	continuation,
-	runLabel,
 	busy,
 	busyLabel,
 	cueWordId,
@@ -1094,10 +1045,6 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 }: {
 	index: number;
 	section: ClipSection;
-	/** This section reads straight on from the one above — no header, no gap. */
-	continuation: boolean;
-	/** Source range of the whole contiguous run this section fronts. */
-	runLabel: { start: number; end: number };
 	busy: boolean;
 	busyLabel?: string;
 	cueWordId: string | null;
@@ -1117,9 +1064,10 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 		[clip.assetId, clip.id],
 	);
 	const filename = asset?.label ?? clip.assetId;
-	// The run's range, not this clip's: a split clip's own sliver would read as a
-	// 0:02.5—0:02.5 recording.
-	const sourceRangeLabel = `${formatMs(runLabel.start * 1000)}—${formatMs(runLabel.end * 1000)}`;
+	const sourceRangeLabel =
+		clip.sourceEndSec !== undefined
+			? `${formatMs(clip.sourceStartSec * 1000)}—${formatMs(clip.sourceEndSec * 1000)}`
+			: `${formatMs(clip.sourceStartSec * 1000)}—`;
 
 	const editorRef = useRef<HTMLDivElement | null>(null);
 	const pendingCaretWordIdRef = useRef<string | null>(null);
@@ -1396,85 +1344,79 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 
 	return (
 		<span
-			// Inline, so the pieces of a split clip flow into one sentence instead of each
-			// taking a line of its own — an inserted word splits the clip it lands in, and a
-			// block box per piece is what turned one recording into three. The header inside
-			// is block-level and still breaks the line before itself, which is where the gap
-			// between two real recordings comes from.
-			style={{ display: "inline" }}
+			style={{
+				display: "block",
+				marginBottom: 16,
+			}}
 		>
-			{continuation ? null : (
+			<span
+				style={{
+					display: "flex",
+					alignItems: "center",
+					gap: 10,
+					padding: "0 4px 4px",
+					borderBottom: "1px solid var(--border-soft)",
+					marginBottom: 6,
+				}}
+			>
 				<span
-					data-clip-header="true"
 					style={{
-						display: "flex",
+						width: 22,
+						height: 22,
+						display: "inline-flex",
 						alignItems: "center",
-						gap: 10,
-						padding: "0 4px 4px",
-						borderBottom: "1px solid var(--border-soft)",
-						marginTop: index > 0 ? 16 : 0,
-						marginBottom: 6,
+						justifyContent: "center",
+						background: "var(--accent-soft)",
+						color: "var(--accent)",
+						borderRadius: "var(--r-sm)",
+						font: "700 12px/1 var(--font-mono)",
+						flexShrink: 0,
 					}}
 				>
+					{index + 1}
+				</span>
+				<span style={{ minWidth: 0, flex: 1 }}>
 					<span
 						style={{
-							width: 22,
-							height: 22,
-							display: "inline-flex",
-							alignItems: "center",
-							justifyContent: "center",
-							background: "var(--accent-soft)",
-							color: "var(--accent)",
-							borderRadius: "var(--r-sm)",
-							font: "700 12px/1 var(--font-mono)",
-							flexShrink: 0,
+							display: "block",
+							font: "600 13px/1.2 var(--font-body)",
+							color: "var(--fg)",
+							overflow: "hidden",
+							textOverflow: "ellipsis",
+							whiteSpace: "nowrap",
 						}}
 					>
-						{index + 1}
+						{filename}
 					</span>
-					<span style={{ minWidth: 0, flex: 1 }}>
-						<span
-							style={{
-								display: "block",
-								font: "600 13px/1.2 var(--font-body)",
-								color: "var(--fg)",
-								overflow: "hidden",
-								textOverflow: "ellipsis",
-								whiteSpace: "nowrap",
-							}}
-						>
-							{filename}
-						</span>
-						<span
-							style={{
-								display: "block",
-								font: "400 11px/1.3 var(--font-mono)",
-								color: "var(--muted)",
-								marginTop: 2,
-							}}
-						>
-							{ts("transcript.clipLabel", { index: index + 1 })} · {sourceRangeLabel}
-						</span>
+					<span
+						style={{
+							display: "block",
+							font: "400 11px/1.3 var(--font-mono)",
+							color: "var(--muted)",
+							marginTop: 2,
+						}}
+					>
+						{ts("transcript.clipLabel", { index: index + 1 })} · {sourceRangeLabel}
 					</span>
-					{/* A block whose transcript is being regenerated is read-only — say it,
-				    rather than letting the word stream look live and drop the edits. */}
-					{busy ? (
-						<span
-							style={{
-								display: "inline-flex",
-								alignItems: "center",
-								gap: 5,
-								flexShrink: 0,
-								font: "500 11px/1 var(--font-body)",
-								color: "var(--accent)",
-							}}
-						>
-							<Loader2 size={12} className="animate-spin" />
-							{ts("transcript.transcribing")}
-						</span>
-					) : null}
 				</span>
-			)}
+				{/* A block whose transcript is being regenerated is read-only — say it,
+				    rather than letting the word stream look live and drop the edits. */}
+				{busy ? (
+					<span
+						style={{
+							display: "inline-flex",
+							alignItems: "center",
+							gap: 5,
+							flexShrink: 0,
+							font: "500 11px/1 var(--font-body)",
+							color: "var(--accent)",
+						}}
+					>
+						<Loader2 size={12} className="animate-spin" />
+						{ts("transcript.transcribing")}
+					</span>
+				) : null}
+			</span>
 			{words.length === 0 ? (
 				<p
 					style={{

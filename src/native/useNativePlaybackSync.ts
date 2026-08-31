@@ -41,13 +41,6 @@ export function useNativePlaybackSync(
 	);
 	const activeClipId = activePosition?.clip.id ?? null;
 	const sourceTimeSec = activePosition?.sourceTimeSec ?? null;
-	// A freeze clip holds ONE frame for `frozenSec` of app-clock time. Free-running the
-	// decoder through it would play the frames after the pause instead; the app clock
-	// (which does traverse the freeze) then re-seeks on drift and stutters. Pausing the
-	// decoder for the duration of the freeze is what makes the pause a pause — the
-	// webcam track freezes with the screen track because both derive from the same
-	// asset source clock the freeze stops advancing.
-	const frozen = activePosition?.clip.frozenSec !== undefined;
 
 	// Reactive "is a native view active?" so activation mid-session re-pushes the
 	// current transport/playhead (time & playing aren't memoised in the store).
@@ -56,15 +49,13 @@ export function useNativePlaybackSync(
 		() => getCurrentNativeViewId() !== null,
 	);
 
-	// Play/pause → native free-run. Inside a freeze the native side is PAUSED however
-	// the transport is set — the app clock advances through the created time while the
-	// decoder holds the frame.
+	// Play/pause → native free-run.
 	useEffect(() => {
 		if (!active) {
 			return;
 		}
-		setNativePlaying(playing && !frozen);
-	}, [active, playing, frozen]);
+		setNativePlaying(playing);
+	}, [active, playing]);
 
 	// Scrub/step while paused OR periodic resync during playback when drift > 100ms
 	const lastSyncedSourceTimeRef = useRef<number | null>(null);
@@ -76,17 +67,6 @@ export function useNativePlaybackSync(
 			return;
 		}
 		const now = performance.now();
-
-		// Inside a freeze while playing: the decoder is paused (see the transport
-		// effect) and parked on the held frame. Refresh the drift refs every run so the
-		// drift check never sees the (correctly) frozen source clock as divergence and
-		// fights itself with repeated seeks.
-		if (playing && frozen) {
-			setNativeTime(sourceTimeSec);
-			lastSyncedSourceTimeRef.current = sourceTimeSec;
-			lastSyncedWallTimeRef.current = now;
-			return;
-		}
 
 		// When clip changes, let setActiveClip handle the atomic clip-switch-and-seek.
 		if (lastActiveClipIdRef.current !== activeClipId) {
@@ -115,5 +95,5 @@ export function useNativePlaybackSync(
 			lastSyncedSourceTimeRef.current = sourceTimeSec;
 			lastSyncedWallTimeRef.current = now;
 		}
-	}, [active, playing, frozen, activeClipId, sourceTimeSec]);
+	}, [active, playing, activeClipId, sourceTimeSec]);
 }
