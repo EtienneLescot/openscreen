@@ -26,7 +26,8 @@ import { useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { create } from "zustand";
 import { toastText as translateToast } from "@/i18n/toastText";
-import { transcribeAsset, withTranscript } from "../document/transcribe";
+import { transcribeAsset } from "../document/transcribe";
+import { carryOverWordEdits, withTranscript } from "../document/transcript";
 import type { AxcutDocument } from "../schema";
 import {
 	type AssetTranscriptionView,
@@ -399,6 +400,20 @@ async function runJob(assetId: string, job: TranscriptionJob): Promise<void> {
 			dropJob(assetId, runId);
 			return;
 		}
+		// A run REPLACES the asset's transcript, so any word the user had corrected by
+		// hand would go with it. Carry those corrections onto the new words first —
+		// strictly, so nothing is invented (see `carryOverWordEdits`). What could not be
+		// carried is lost; telling the user so is the UI's job, and there is no surface
+		// for it yet.
+		const merged = carryOverWordEdits(
+			current.transcripts.find((t) => t.assetId === assetId),
+			transcript,
+		);
+		if (merged.dropped > 0) {
+			console.warn(
+				`[transcription] ${merged.dropped} word correction(s) on asset ${assetId} could not be carried over to the new transcript.`,
+			);
+		}
 		// One save: the transcript, and (on a successful retry) the removal of
 		// the verdict remembered on the asset.
 		// `history: false`: a transcript landing from a background job is not an edit
@@ -412,7 +427,7 @@ async function runJob(assetId: string, job: TranscriptionJob): Promise<void> {
 						a.id === assetId && a.transcriptionFailure ? { ...a, transcriptionFailure: null } : a,
 					),
 				},
-				transcript,
+				merged.transcript,
 			),
 			{ history: false },
 		);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AxcutTranscript } from "../schema";
-import { setWordText } from "./transcript";
+import { type AxcutTranscript, createEmptyDocument } from "../schema";
+import { carryOverWordEdits, setDocumentWordText, setWordText, withTranscript } from "./transcript";
 
 function fixture(language = "en"): AxcutTranscript {
 	return {
@@ -94,9 +94,13 @@ describe("setWordText", () => {
 		expect(result.segments.map((segment) => segment.id)).toEqual(
 			transcript.segments.map((segment) => segment.id),
 		);
+		// The provenance pair rides along with the new text — see "setWordText
+		// provenance" below for the rules it follows.
 		expect(result.words.find((word) => word.id === "word_2")).toEqual({
 			...originalTarget,
 			text: "prefer",
+			originalText: "use",
+			source: "user",
 		});
 		expect(result.segments[0]).toEqual({
 			...transcript.segments[0],
@@ -286,5 +290,196 @@ describe("setWordText", () => {
 		expect(() => setWordText(transcript, "word_2", "replacement")).toThrowError(
 			/segment_1.*word_2|word_2.*segment_1/,
 		);
+	});
+});
+
+// ─── Provenance ──────────────────────────────────────────────────
+// Every field below is what makes a correction survivable: revertible by the
+// user, and carryable across a re-transcription. Without them a corrected word
+// is indistinguishable from a transcribed one the moment it is written.
+
+describe("setWordText provenance", () => {
+	it("records the transcriber's text the first time a word is rewritten", () => {
+		const word = setWordText(fixture(), "word_3", "OpenScreenApp").words.find(
+			(w) => w.id === "word_3",
+		);
+		expect(word).toMatchObject({
+			text: "OpenScreenApp",
+			originalText: "OpenScreen",
+			source: "user",
+		});
+	});
+
+	it("keeps the FIRST original across later edits, so revert reaches the transcriber's text", () => {
+		const once = setWordText(fixture(), "word_3", "OpenScreenApp");
+		const twice = setWordText(once, "word_3", "OpenScreen Studio");
+		expect(twice.words.find((w) => w.id === "word_3")).toMatchObject({
+			text: "OpenScreen Studio",
+			originalText: "OpenScreen",
+		});
+	});
+
+	it("clears the markers when the original is typed back — that round trip IS the revert", () => {
+		const edited = setWordText(fixture(), "word_3", "OpenScreenApp");
+		const reverted = setWordText(edited, "word_3", "OpenScreen");
+		const word = reverted.words.find((w) => w.id === "word_3");
+		expect(word?.text).toBe("OpenScreen");
+		expect(word).not.toHaveProperty("originalText");
+		expect(word).not.toHaveProperty("source");
+	});
+
+	it("leaves a synthesized word synthesized — it has no transcribed text to revert to", () => {
+		const base = fixture();
+		const synth: AxcutTranscript = {
+			...base,
+			words: base.words.map((w) =>
+				w.id === "word_3" ? { ...w, source: "synth" as const, text: "spoken" } : w,
+			),
+		};
+		const word = setWordText(synth, "word_3", "rewritten").words.find((w) => w.id === "word_3");
+		expect(word).toMatchObject({ text: "rewritten", source: "synth" });
+		expect(word).not.toHaveProperty("originalText");
+	});
+
+	it("does not mark the untouched words", () => {
+		const result = setWordText(fixture(), "word_3", "OpenScreenApp");
+		for (const word of result.words.filter((w) => w.id !== "word_3")) {
+			expect(word).not.toHaveProperty("source");
+		}
+	});
+});
+
+// ─── Document-level write ────────────────────────────────────────
+// The document carries the transcript twice. A word edit that writes only one
+// copy leaves the legacy mirror serving pre-edit text forever — the failure that
+// closed the standalone Python editor (#469).
+
+function makeDoc(primaryAssetId = "asset_1") {
+	const base = createEmptyDocument({ title: "Test", projectId: "proj_transcript" });
+	return withTranscript({ ...base, project: { ...base.project, primaryAssetId } }, fixture());
+}
+
+describe("setDocumentWordText", () => {
+	it("writes BOTH the per-asset transcript and the legacy mirror", () => {
+		const result = setDocumentWordText(makeDoc(), "asset_1", "word_3", "OpenScreenApp");
+		const stored = result.transcripts.find((t) => t.assetId === "asset_1");
+		expect(stored?.words.find((w) => w.id === "word_3")?.text).toBe("OpenScreenApp");
+		expect(result.transcript?.words.find((w) => w.id === "word_3")?.text).toBe("OpenScreenApp");
+		expect(result.transcript).toBe(stored);
+	});
+
+	it("leaves the mirror alone when the edited asset is not the primary one", () => {
+		const doc = makeDoc("asset_other");
+		const result = setDocumentWordText(doc, "asset_1", "word_3", "OpenScreenApp");
+		expect(result.transcript).toBe(doc.transcript);
+		expect(result.transcripts.find((t) => t.assetId === "asset_1")?.words).not.toBe(
+			doc.transcripts.find((t) => t.assetId === "asset_1")?.words,
+		);
+	});
+
+	it("rejects an asset with no transcript rather than writing a second one", () => {
+		expect(() => setDocumentWordText(makeDoc(), "asset_missing", "word_3", "x")).toThrow(
+			/no transcript/,
+		);
+	});
+
+	it("keeps the input document untouched", () => {
+		const doc = makeDoc();
+		const before = JSON.stringify(doc);
+		setDocumentWordText(doc, "asset_1", "word_3", "OpenScreenApp");
+		expect(JSON.stringify(doc)).toBe(before);
+	});
+});
+
+// ─── Carry-over across a re-transcription ────────────────────────
+
+function retranscribed(words: Array<[string, string, number, number]>): AxcutTranscript {
+	return {
+		assetId: "asset_1",
+		language: "en",
+		segments: [
+			{
+				id: "segment_1",
+				kind: "speech",
+				startSec: words[0][2],
+				endSec: words[words.length - 1][3],
+				text: words.map(([, text]) => text).join(" "),
+				wordIds: words.map(([id]) => id),
+			},
+		],
+		words: words.map(([id, text, startSec, endSec]) => ({
+			id,
+			segmentId: "segment_1",
+			startSec,
+			endSec,
+			text,
+		})),
+	};
+}
+
+describe("carryOverWordEdits", () => {
+	const corrected = () => setWordText(fixture(), "word_3", "OpenScreenApp");
+
+	it("re-applies a correction when the run repeats the same mistake at the same moment", () => {
+		const next = retranscribed([
+			["w1", "I", 1, 2],
+			["w2", "use", 2, 3],
+			["w3", "OpenScreen", 3.1, 3.9],
+		]);
+		const result = carryOverWordEdits(corrected(), next);
+		expect(result.carried).toBe(1);
+		expect(result.dropped).toBe(0);
+		expect(result.transcript.words.find((w) => w.id === "w3")).toMatchObject({
+			text: "OpenScreenApp",
+			originalText: "OpenScreen",
+			source: "user",
+		});
+		// The segment text is rebuilt too, so the captions follow.
+		expect(result.transcript.segments[0].text).toBe("I use OpenScreenApp");
+	});
+
+	it("drops the correction when the run heard something else there", () => {
+		const next = retranscribed([["w3", "Open Screen", 3, 4]]);
+		const result = carryOverWordEdits(corrected(), next);
+		expect(result).toMatchObject({ carried: 0, dropped: 1 });
+		expect(result.transcript).toBe(next);
+	});
+
+	it("drops the correction when the same word lands somewhere else entirely", () => {
+		const next = retranscribed([["w3", "OpenScreen", 40, 41]]);
+		expect(carryOverWordEdits(corrected(), next)).toMatchObject({ carried: 0, dropped: 1 });
+	});
+
+	it("never lands two corrections on the same new word", () => {
+		// Both corrections have the SAME original text and both spans overlap the one
+		// word the new run produced. Without the claim, the second would overwrite the
+		// first and the count would claim two were saved.
+		const previous = setWordText(
+			setWordText(
+				retranscribed([
+					["p1", "the", 1, 2],
+					["p2", "the", 2, 3],
+				]),
+				"p1",
+				"a",
+			),
+			"p2",
+			"an",
+		);
+		const result = carryOverWordEdits(previous, retranscribed([["w1", "the", 1, 3]]));
+		expect(result).toMatchObject({ carried: 1, dropped: 1 });
+		expect(result.transcript.words[0].text).toBe("a");
+	});
+
+	it("returns the new transcript untouched when nothing was ever corrected", () => {
+		const next = retranscribed([["w1", "I", 1, 2]]);
+		const result = carryOverWordEdits(fixture(), next);
+		expect(result.transcript).toBe(next);
+		expect(result).toMatchObject({ carried: 0, dropped: 0 });
+	});
+
+	it("handles a first-ever transcription (no previous transcript)", () => {
+		const next = retranscribed([["w1", "I", 1, 2]]);
+		expect(carryOverWordEdits(null, next).transcript).toBe(next);
 	});
 });
