@@ -79,6 +79,7 @@ function renderPane(onSeek: (sec: number) => void = vi.fn()) {
 				onSeek={onSeek}
 				onAddTrimRange={vi.fn()}
 				onRemoveTrimRange={vi.fn()}
+				onSetWordText={vi.fn()}
 				onTranscribe={vi.fn()}
 				canTranscribe
 				isTranscribing={false}

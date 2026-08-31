@@ -20,7 +20,8 @@
 		"failedToSaveExport": "Не удалось сохранить экспорт",
 		"failedToSaveExportedVideo": "Не удалось сохранить экспортированное видео",
 		"failedToRevealInFolder": "Ошибка при показе в папке: {{error}}",
-		"previewCompositorUnavailable": "Предпросмотр недоступен на этом компьютере"
+		"previewCompositorUnavailable": "Предпросмотр недоступен на этом компьютере",
+		"wordEditFailed": "Не удалось изменить это слово"
 	},
 	"export": {
 		"canceled": "Экспорт отменён",
