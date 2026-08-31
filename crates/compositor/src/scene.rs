@@ -453,6 +453,16 @@ pub struct SceneAudioTrack {
     pub trim_start_sec: f64,
     #[serde(default)]
     pub trim_end_sec: Option<f64>,
+    /// Ramp lengths at this entry's own edges, in seconds. The app puts them only
+    /// on the pieces that touch the track's real start and end, so a split or
+    /// looping track fades once instead of at every cut or repeat.
+    ///
+    /// `#[serde(default)]` for the usual reason: a payload from a build that
+    /// predates the field must degrade to "no fade", not fail the whole scene.
+    #[serde(default)]
+    pub fade_in_sec: f64,
+    #[serde(default)]
+    pub fade_out_sec: f64,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

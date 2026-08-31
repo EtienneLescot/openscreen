@@ -331,7 +331,11 @@
 		"add": "Adicionar faixa de áudio",
 		"importFailed": "Não foi possível adicionar o áudio",
 		"defaultLabel": "Faixa de áudio",
-		"help": "Volume desta faixa de áudio importada. Ela é mixada sobre a gravação na prévia e na exportação. Arraste a faixa na linha do tempo para movê-la ou cortá-la.",
+		"help": "Volume, fades e repetição desta faixa de áudio. Ela é mixada sobre a gravação na prévia e na exportação. Arraste a faixa na linha do tempo para movê-la ou redimensioná-la.",
+		"fadeIn": "Fade in",
+		"fadeOut": "Fade out",
+		"mute": "Silenciar",
+		"loop": "Repetir",
 		"remove": "Excluir faixa"
 	}
 }

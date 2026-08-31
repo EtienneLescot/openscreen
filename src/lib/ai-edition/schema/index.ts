@@ -512,8 +512,8 @@ export const zoomRegionSchema = endGteStart(
 // covers. Fragments of the same track share `trackId`, and each carries its own
 // `offsetMs` advanced by the source time its predecessors consumed — see
 // `anchorAudioTrackFragments`. Without that every fragment would restart the
-// file at the same offset, so a bed spanning a cut would audibly restart at
-// the boundary.
+// file at the same offset and re-run the fades, so a bed spanning a cut would
+// audibly restart at the boundary.
 export const audioTrackSchema = endGteStart(
 	z.object({
 		id: z.string().min(1),
@@ -526,11 +526,16 @@ export const audioTrackSchema = endGteStart(
 		endMs: z.number().nonnegative(),
 		...clipAnchorShape,
 		assetId: z.string().min(1),
+		kind: z.enum(["voiceover", "music"]).default("music"),
 		// Full source duration of the underlying file, cached here so the timeline
 		// can lay out the pill before the asset is re-probed on load.
 		durationSec: z.number().nonnegative().default(0),
 		offsetMs: z.number().int().nonnegative().default(0),
 		gainDb: z.number().min(-60).max(12).default(0),
+		loop: z.boolean().default(false),
+		fadeInMs: z.number().int().nonnegative().default(0),
+		fadeOutMs: z.number().int().nonnegative().default(0),
+		muted: z.boolean().default(false),
 		label: z.string().default(""),
 		origin: z.enum(["system", "agent", "user"]).default("user"),
 	}),
@@ -1076,6 +1081,7 @@ export function ensureDocument(value: unknown): AxcutDocument {
 export function createAudioTrack(input: {
 	assetId: string;
 	durationSec: number;
+	kind?: "voiceover" | "music";
 	/** Raw ruler head. The span runs from here for `durationSec`, or for
 	 *  `spanSec` when the caller wants a shorter placement than the file. */
 	timelineStartSec?: number;
@@ -1089,6 +1095,7 @@ export function createAudioTrack(input: {
 	return audioTrackSchema.parse({
 		id: createId("audio"),
 		assetId: input.assetId,
+		kind: input.kind ?? "music",
 		durationSec: input.durationSec,
 		startMs,
 		endMs: startMs + spanMs,

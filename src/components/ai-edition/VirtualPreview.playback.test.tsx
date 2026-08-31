@@ -242,11 +242,16 @@ describe("VirtualPreview imported audio tracks", () => {
 	const track = {
 		id: "trk",
 		assetId: "aud",
+		kind: "music" as const,
 		startMs: 2000,
 		endMs: 4000,
 		durationSec: 10,
 		offsetMs: 1000,
 		gainDb: 0,
+		loop: false,
+		fadeInMs: 0,
+		fadeOutMs: 0,
+		muted: false,
 		label: "",
 		origin: "user" as const,
 	};
@@ -333,11 +338,16 @@ describe("VirtualPreview imported audio track boost", () => {
 	const boosted = {
 		id: "trk",
 		assetId: "aud",
+		kind: "music" as const,
 		startMs: 2000,
 		endMs: 4000,
 		durationSec: 10,
 		offsetMs: 1000,
 		gainDb: 6.0206,
+		loop: false,
+		fadeInMs: 0,
+		fadeOutMs: 0,
+		muted: false,
 		label: "",
 		origin: "user" as const,
 	};

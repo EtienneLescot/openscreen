@@ -2343,6 +2343,11 @@ type TimelineApi = ReturnType<typeof useTimeline>;
 // with the file name, then the volume (a local live value during the drag,
 // committed as one undo step on release), then a delete button styled like the
 // region panes' (position and mute are edited on the lane itself).
+// Longest fade the inspector offers. Past a few seconds a fade stops reading as
+// a fade and starts reading as a level change, and the track's own span caps it
+// anyway (`resolveFadeSecs` reduces one that does not fit).
+const FADE_MAX_MS = 5000;
+
 export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 	const ts = useScopedT("settings");
 	const trackId = tl.selectedAudioTrackId;
@@ -2353,14 +2358,18 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 		? collapseTracksToPills(tl.audioTracks.filter((t) => trackGroupId(t) === trackId))[0]
 		: undefined;
 	const asset = track ? tl.assets.find((a) => a.id === track.assetId) : undefined;
-	// Live-drag value for the volume slider; null means "show the committed gain".
+	// Live-drag values; null means "show the committed value".
 	const [liveGain, setLiveGain] = useState<number | null>(null);
+	const [liveFadeIn, setLiveFadeIn] = useState<number | null>(null);
+	const [liveFadeOut, setLiveFadeOut] = useState<number | null>(null);
 	// Drop the live value when the selected track changes: a drag released outside
 	// the input never fires onCommit, so without this an uncommitted -10 dB from
 	// track A would show as track B's gain the moment B is selected.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: trackId is the trigger, not a read — the body only resets the live value.
 	useEffect(() => {
 		setLiveGain(null);
+		setLiveFadeIn(null);
+		setLiveFadeOut(null);
 	}, [trackId]);
 	if (!track) return null;
 	const fileName = track.label || asset?.label || asset?.originalPath?.split(/[\\/]/).pop() || "";
@@ -2415,6 +2424,51 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 						if (liveGain !== null) void tl.setAudioTrackGain(track.id, liveGain);
 						setLiveGain(null);
 					}}
+				/>
+				<SliderCell
+					label={ts("audioTrack.fadeIn")}
+					value={liveFadeIn ?? track.fadeInMs}
+					min={0}
+					max={FADE_MAX_MS}
+					step={50}
+					decimals={0}
+					suffix=" ms"
+					onChange={setLiveFadeIn}
+					onCommit={() => {
+						if (liveFadeIn !== null) void tl.updateAudioTrack(track.id, { fadeInMs: liveFadeIn });
+						setLiveFadeIn(null);
+					}}
+				/>
+				<SliderCell
+					label={ts("audioTrack.fadeOut")}
+					value={liveFadeOut ?? track.fadeOutMs}
+					min={0}
+					max={FADE_MAX_MS}
+					step={50}
+					decimals={0}
+					suffix=" ms"
+					onChange={setLiveFadeOut}
+					onCommit={() => {
+						if (liveFadeOut !== null)
+							void tl.updateAudioTrack(track.id, { fadeOutMs: liveFadeOut });
+						setLiveFadeOut(null);
+					}}
+				/>
+			</div>
+			<div className={styles.paneRow}>
+				<span className={styles.label}>{ts("audioTrack.mute")}</span>
+				<Toggle
+					checked={track.muted}
+					ariaLabel={ts("audioTrack.mute")}
+					onChange={(v) => void tl.updateAudioTrack(track.id, { muted: v })}
+				/>
+			</div>
+			<div className={styles.paneRow}>
+				<span className={styles.label}>{ts("audioTrack.loop")}</span>
+				<Toggle
+					checked={track.loop}
+					ariaLabel={ts("audioTrack.loop")}
+					onChange={(v) => void tl.updateAudioTrack(track.id, { loop: v })}
 				/>
 			</div>
 			<button

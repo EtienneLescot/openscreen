@@ -83,7 +83,11 @@
 		"add": "Add audio track",
 		"importFailed": "Could not add audio",
 		"defaultLabel": "Audio track",
-		"help": "Volume for this imported audio track. It mixes over the recording in the preview and the export. Drag the track on the timeline to move or trim it.",
+		"help": "Volume, fades and looping for this audio track. It mixes over the recording in the preview and the export. Drag the track on the timeline to move or resize it.",
+		"fadeIn": "Fade in",
+		"fadeOut": "Fade out",
+		"mute": "Mute",
+		"loop": "Loop",
 		"remove": "Delete track"
 	},
 	"effects": {

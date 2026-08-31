@@ -975,7 +975,7 @@ describe("v6 -> v7 trim clip-anchor migration", () => {
 });
 
 describe("audio tracks (issue #350)", () => {
-	it("applies defaults for gain, offset and label", () => {
+	it("applies defaults for kind, gain, offset, fades and label", () => {
 		const track = audioTrackSchema.parse({
 			id: "audio_1",
 			assetId: "asset_1",
@@ -983,8 +983,13 @@ describe("audio tracks (issue #350)", () => {
 			startMs: 0,
 			endMs: 42_000,
 		});
+		expect(track.kind).toBe("music");
 		expect(track.offsetMs).toBe(0);
 		expect(track.gainDb).toBe(0);
+		expect(track.loop).toBe(false);
+		expect(track.fadeInMs).toBe(0);
+		expect(track.fadeOutMs).toBe(0);
+		expect(track.muted).toBe(false);
 		expect(track.label).toBe("");
 		// Unanchored until a caller places it — same contract as every other
 		// clip-anchored region kind.
@@ -1034,12 +1039,16 @@ describe("audio tracks (issue #350)", () => {
 	});
 
 	it("createAudioTrack takes a shorter span than the source when asked", () => {
+		// A voiceover recorded over a 4s tail of the timeline should not lay a
+		// 30s pill down just because its file is 30s long.
 		const track = createAudioTrack({
 			assetId: "asset_1",
 			durationSec: 30,
+			kind: "voiceover",
 			timelineStartSec: 2,
 			spanSec: 4,
 		});
+		expect(track.kind).toBe("voiceover");
 		expect(track.startMs).toBe(2000);
 		expect(track.endMs).toBe(6000);
 	});

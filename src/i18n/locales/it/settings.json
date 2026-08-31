@@ -331,7 +331,11 @@
 		"add": "Aggiungi traccia audio",
 		"importFailed": "Impossibile aggiungere l’audio",
 		"defaultLabel": "Traccia audio",
-		"help": "Volume di questa traccia audio importata. Viene mixata sopra la registrazione nell’anteprima e nell’esportazione. Trascina la traccia sulla timeline per spostarla o ritagliarla.",
+		"help": "Volume, dissolvenze e ripetizione di questa traccia audio. Si mixa sopra la registrazione nell'anteprima e nell'esportazione. Trascina la traccia sulla timeline per spostarla o ridimensionarla.",
+		"fadeIn": "Dissolvenza in entrata",
+		"fadeOut": "Dissolvenza in uscita",
+		"mute": "Muto",
+		"loop": "Ripeti",
 		"remove": "Elimina traccia"
 	}
 }
