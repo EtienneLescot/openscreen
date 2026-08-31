@@ -30,6 +30,7 @@ import { buildAutoZoomSuggestions } from "@/lib/ai-edition/timeline/zoom-suggest
 import type { CliDoneResult, CliExportRequest } from "@/lib/cliContracts";
 import { GIF_SIZE_PRESETS, type GifSizePreset } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
+import { outputFrameCount } from "@/lib/exporter/outputFrameCount";
 import { mixVoiceoverIntoVideo } from "@/lib/exporter/voiceoverMix";
 import { exportGifNative, exportMultiNative, nativeBridgeClient } from "@/native";
 import type { CompositorClipInput } from "@/native/contracts";
@@ -277,13 +278,9 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	// Progress: native pushes raw encoded-frame counts; totals and pacing are
 	// computed here, mirroring the ExportDialog.
 	const outFps = format === "gif" ? gifFrameRate : MP4_EXPORT_FPS;
-	const totalFrames = Math.max(
-		1,
-		Math.round(
-			clips.reduce((sum, clip) => sum + Math.max(0, clip.sourceEndSec - clip.sourceStartSec), 0) *
-				outFps,
-		),
-	);
+	// Speed-adjusted, not source seconds — see `outputFrameCount`. Counting raw duration
+	// is what made a 1.25x timeline stop the bar at 80% (OpenScreen#371).
+	const totalFrames = outputFrameCount(clips, sceneDesc.speedRegions, outFps);
 	const exportStartedAt = Date.now();
 	const unsubscribeProgress = window.electronAPI.onNativeExportProgress?.((frames: number) => {
 		const elapsedSec = (Date.now() - exportStartedAt) / 1000;

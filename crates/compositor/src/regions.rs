@@ -1021,3 +1021,63 @@ mod tilt_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod exporter_frame_totals {
+    use super::*;
+    use crate::scene::SceneSpeedRegion;
+
+    fn region(start_sec: f64, end_sec: f64, speed: f64) -> SceneSpeedRegion {
+        SceneSpeedRegion { clip_index: None, start_sec, end_sec, speed }
+    }
+
+    fn frames(start_sec: f64, end_sec: f64, regions: &[SceneSpeedRegion], fps: f64) -> u64 {
+        speed_segments_for_window(regions, start_sec, end_sec, fps)
+            .iter()
+            .map(|segment| segment.frame_count)
+            .sum()
+    }
+
+    /// Le total que la barre d'export doit viser, mesuré sur ce que `walk_composited_timeline`
+    /// itère réellement.
+    ///
+    /// Le jumeau de ce test est `src/lib/exporter/outputFrameCount.test.ts`, avec la MÊME
+    /// table de chiffres. Le natif n'envoie qu'un compteur de frames brut ; le total et donc
+    /// le pourcentage sont calculés côté TS, et rien ne reliait les deux calculs. Résultat
+    /// livré : le total TS ignorait les speed regions, donc un clip entièrement en 1,25×
+    /// rendait 80 % des frames annoncées et la barre s'arrêtait à 80 % — le « figé à ~80 % »
+    /// d'OpenScreen#371, au chiffre près. Toucher un côté doit faire rougir l'autre.
+    #[test]
+    fn speed_segments_match_the_exporter_frame_totals() {
+        const FPS: f64 = 30.0;
+        assert_eq!(frames(0.0, 10.0, &[], FPS), 300, "sans région");
+        assert_eq!(
+            frames(0.0, 10.0, &[region(0.0, 10.0, 1.25)], FPS),
+            240,
+            "1,25× : 80 % de 300, exactement le symptôme"
+        );
+        assert_eq!(frames(0.0, 10.0, &[region(0.0, 10.0, 0.5)], FPS), 600, "0,5×");
+        assert_eq!(
+            frames(0.0, 10.0, &[region(2.0, 4.0, 2.0)], FPS),
+            60 + 30 + 180,
+            "couverture partielle"
+        );
+        assert_eq!(
+            frames(1.0, 5.0, &[region(0.0, 100.0, 2.0)], FPS),
+            60,
+            "région débordant la fenêtre gardée"
+        );
+        assert_eq!(
+            frames(0.0, 10.0, &[region(2.0, 6.0, 2.0), region(4.0, 8.0, 4.0)], FPS),
+            60 + 60 + 15 + 60,
+            "recouvrement : la première région garde la portion déjà couverte"
+        );
+        assert_eq!(
+            frames(0.0, 10.0, &[region(0.0, 10.0, 0.0)], FPS),
+            300,
+            "vitesse non positive traitée comme 1×"
+        );
+        assert_eq!(frames(4.0, 4.0, &[], FPS), 0, "fenêtre vide");
+        assert_eq!(frames(0.0, 10.0, &[], 0.0), 0, "fps non positif");
+    }
+}
