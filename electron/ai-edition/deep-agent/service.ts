@@ -37,6 +37,7 @@ import {
 	executeAgentTool,
 	getCursorTrackArgs,
 	getTranscriptArgs,
+	getTranscriptWordsArgs,
 	isMutatingTool,
 	moveClipArgs,
 	removeClipArgs,
@@ -49,6 +50,7 @@ import {
 	setClipRangeArgs,
 	setSpeedArgs,
 	setTrimArgs,
+	setWordTextArgs,
 	setZoomArgs,
 } from "../agent-tools";
 import {
@@ -143,6 +145,10 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Read the transcript segments (speech and silence, with start/end seconds and text) for an asset. Omit assetId to read the primary asset's transcript.",
 	getCursorTrack:
 		"Read the recorded pointer track for an asset: where the cursor was over time, downsampled to a readable rate. Each point carries atSec (the asset's own source clock), virtualSec (the same instant on the edited timeline — the coordinate addZoom takes, null when no clip carries it), cx/cy as 0–1 fractions of the frame, and `shape`, an index into the pointer bitmaps the recording used (equal values are the same pointer; a change means the pointer changed, e.g. arrow to text caret). Points that are not plain moves carry `kind`; points a trim cuts out of playback carry `trimmed`. These are real samples, not a summary — reading what the pointer was doing is yours. Omit assetId for the primary asset. It answers `available:false` in two DIFFERENT ways you must not confuse: reason 'no-sidecar' means this asset was checked and genuinely has no telemetry, while reason 'unavailable' means it could not be read from here.",
+	getTranscriptWords:
+		'Read the transcript one WORD at a time for an asset: each word\'s id, text, start/end seconds, and — only when it is not plain transcription — `source` ("user" for a word the user corrected, "synth" for one they typed in) and `originalText` (what the transcriber had heard before the correction). This is the ONLY read that gives you the ids setWordText takes; getTranscript answers in segments, whose ids belong to a different namespace and are not accepted there. A whole transcript is large, so pass startSec/endSec to read just the passage you mean to fix. Omit assetId for the primary asset.',
+	setWordText:
+		"Correct ONE word's text, by the id getTranscriptWords returns. This changes the TRANSCRIPT and nothing else: the captions follow it, the film is untouched and no audio is cut. Use it when the transcriber misheard something — a name, a technical term — and the user asks for it to read correctly. Passing an empty string BLANKS the word: it keeps its place in the media but leaves the captions, which is how a junk token like \"(inaudible)\" is removed without cutting the speech around it. Writing the transcriber's own text back clears the correction. This is NOT how you make a spoken word go away — that removes only the label and leaves the film saying it; use addTrim, which cuts the audio with it.",
 	addTrim:
 		"Add ONE trim range: a cut of a span inside a clip (this source-time span will not be played or exported) that does NOT split the clip. Times are in seconds of the asset's source time. This is the preferred (and for 'remove silences' requests, the only) way to handle silences; it preserves the user's placed clips and only adds a cut. When you have several cuts to make, use addTrims and send them together — this one is for a single cut or a later correction. A cut belongs to ONE clip: `clipId` is inferred when a single clip covers the range, but when several clips draw on the same asset over it the call FAILS and lists them — pass the `clipId` you mean (ids come from getCurrentDocument).",
 	addTrims:
@@ -323,7 +329,9 @@ export function buildTools(
 	return [
 		build("getCurrentDocument", z.object({})),
 		build("getTranscript", getTranscriptArgs),
+		build("getTranscriptWords", getTranscriptWordsArgs),
 		build("getCursorTrack", getCursorTrackArgs),
+		build("setWordText", setWordTextArgs),
 		build("addTrim", addTrimArgs),
 		build("addTrims", addTrimsArgs),
 		build("setTrim", setTrimArgs),

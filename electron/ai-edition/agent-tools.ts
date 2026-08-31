@@ -26,6 +26,7 @@ import {
 	replaceTimeline,
 	setClipSourceRange,
 } from "../../src/lib/ai-edition/document/timeline";
+import { setDocumentWordText } from "../../src/lib/ai-edition/document/transcript";
 import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import { hasAnyClipWithCamera } from "../../src/lib/ai-edition/timeline/camera";
 import {
@@ -490,6 +491,18 @@ export const setCameraFullscreenArgs = z.object({
 	endSec: secondsSchema.optional(),
 });
 
+export const getTranscriptWordsArgs = z.object({
+	assetId: z.string().min(1).optional(),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+});
+
+export const setWordTextArgs = z.object({
+	wordId: z.string().min(1),
+	text: z.string(),
+	assetId: z.string().min(1).optional(),
+});
+
 export const removeTrimArgs = z.object({
 	trimRangeId: z.string().min(1),
 });
@@ -525,7 +538,9 @@ export const removeClipArgs = z.object({
 export const OPENSCREEN_TOOL_NAMES = [
 	"getCurrentDocument",
 	"getTranscript",
+	"getTranscriptWords",
 	"getCursorTrack",
+	"setWordText",
 	"addTrim",
 	"addTrims",
 	"setTrim",
@@ -592,6 +607,9 @@ export const PHANTOM_TOOL_NAMES = [
  * remaining surfaces (descriptions, built tools, executor cases) to each other.
  */
 export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
+	// Writes the transcript, not the timeline — but it writes the document, so it is a
+	// consented edit like any other.
+	"setWordText",
 	"addTrim",
 	"addTrims",
 	"addZooms",
@@ -1200,6 +1218,96 @@ export function executeAgentTool(
 			return {
 				ok: true,
 				resultJson: JSON.stringify({ assetId, language: transcript.language, segments }),
+			};
+		}
+
+		// The word-level read. `getTranscript` answers in SEGMENTS, whose ids belong to a
+		// different namespace than the words — so on its own it cannot address anything
+		// `setWordText` takes. This is the one that can. It is separate rather than folded
+		// in because a whole transcript is already ~70k tokens and most turns never touch a
+		// word; the span filter is there so fixing one name costs one phrase, not the film.
+		case "getTranscriptWords": {
+			const parsed = getTranscriptWordsArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const assetId =
+				parsed.data.assetId ?? document.project.primaryAssetId ?? document.assets[0]?.id;
+			const transcript =
+				document.transcripts.find((t) => t.assetId === assetId) ??
+				(document.transcript?.assetId === assetId ? document.transcript : null);
+			if (!transcript) {
+				return failure(`No transcript for asset ${assetId ?? "(none)"}.`);
+			}
+			const from = parsed.data.startSec ?? Number.NEGATIVE_INFINITY;
+			const to = parsed.data.endSec ?? Number.POSITIVE_INFINITY;
+			const words = transcript.words
+				.filter((word) => word.endSec >= from && word.startSec <= to)
+				.map((word) => ({
+					id: word.id,
+					text: word.text,
+					startSec: word.startSec,
+					endSec: word.endSec,
+					// Only the words that are NOT plain transcription say so, so the common
+					// case costs nothing to read.
+					...(word.source ? { source: word.source } : {}),
+					...(word.originalText !== undefined ? { originalText: word.originalText } : {}),
+				}));
+			return {
+				ok: true,
+				resultJson: JSON.stringify({
+					assetId,
+					language: transcript.language,
+					total: transcript.words.length,
+					returned: words.length,
+					words,
+				}),
+			};
+		}
+
+		// Correcting what the transcriber HEARD. This writes text and nothing else: the
+		// captions follow it, the film does not move. The tool for making a spoken word go
+		// away is addTrim, which removes its audio with it.
+		case "setWordText": {
+			const parsed = setWordTextArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const assetId =
+				parsed.data.assetId ?? document.project.primaryAssetId ?? document.assets[0]?.id;
+			if (!assetId) return failure("Project has no assets — nothing to correct.");
+			const { wordId, text } = parsed.data;
+			const transcript = document.transcripts.find((t) => t.assetId === assetId);
+			const before = transcript?.words.find((word) => word.id === wordId);
+			if (!before) {
+				return failure(
+					`No word ${wordId} in the transcript for asset ${assetId}. ` +
+						`Call getTranscriptWords to read the ids.`,
+				);
+			}
+			if (before.text === text) {
+				return failure(`Word ${wordId} already reads "${text}" — nothing to change.`);
+			}
+			let next: AxcutDocument;
+			try {
+				next = setDocumentWordText(document, assetId, wordId, text);
+			} catch (error) {
+				return failure(error instanceof Error ? error.message : String(error));
+			}
+			const after = next.transcripts
+				.find((t) => t.assetId === assetId)
+				?.words.find((word) => word.id === wordId);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					wordId,
+					assetId,
+					text: after?.text ?? text,
+					was: before.text,
+					// Absent once the word is back to what the transcriber said — the pair is
+					// cleared on that round trip, and the model should be able to see it.
+					originalText: after?.originalText,
+					blanked: text.trim().length === 0,
+				}),
+				summary:
+					text.trim().length === 0 ? `blanked "${before.text}"` : `"${before.text}" → "${text}"`,
 			};
 		}
 
