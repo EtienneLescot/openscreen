@@ -112,7 +112,7 @@ const sampleDoc: AxcutDocument = {
 	},
 	annotations: [],
 	zoomRanges: [],
-	audioTracks: [],
+	audioRanges: [],
 	legacyEditor: null,
 };
 
@@ -1289,10 +1289,10 @@ describe("useTimeline drag snapshots", () => {
 	});
 });
 
-// Issue #350 — imported audio tracks. The hook wraps the pure ops in
-// document/audioTracks.ts (unit-tested separately); these cover the wiring:
-// asset lookup, playhead placement, the save, and undo.
-describe("useTimeline audio tracks", () => {
+// Issue #350 — audio regions. The hook routes them through the same anchor/pill helpers
+// as every other kind (unit-tested in timelineMap / audio-placement); these cover the
+// wiring: asset lookup, playhead placement, the pill-wide payload patch, and undo.
+describe("useTimeline audio regions", () => {
 	const audioDoc: AxcutDocument = {
 		...sampleDoc,
 		assets: [
@@ -1332,87 +1332,138 @@ describe("useTimeline audio tracks", () => {
 		vi.clearAllMocks();
 	});
 
-	it("addAudioTrack places a track for the asset at the playhead and returns its id", async () => {
+	it("addAudioRegion places an anchored region at the playhead and selects it", async () => {
 		const { result } = renderTimeline();
 		let id: string | null = null;
 		await act(async () => {
-			id = await result.current.addAudioTrack("audio_1");
+			id = await result.current.addAudioRegion("audio_1", { kind: "voiceover" });
 		});
-		const tracks = useProjectStore.getState().document?.audioTracks ?? [];
-		expect(tracks).toHaveLength(1);
-		expect(id).toBe(tracks[0]?.id);
-		expect(tracks[0]).toMatchObject({
-			assetId: "audio_1",
-			durationSec: 30,
-			timelineStartSec: 4,
-			label: "voiceover.mp3",
+		const regions = useProjectStore.getState().document?.audioRanges ?? [];
+		expect(regions).toHaveLength(1);
+		expect(id).toBe(regions[0]?.id);
+		expect(regions[0]).toMatchObject({
+			audioAssetId: "audio_1",
+			kind: "voiceover",
+			startMs: 4000,
+			offsetSec: 0,
 		});
+		// Anchored on the way in, like every other add — this is what makes it survive a
+		// reorder instead of sitting still while the content slides underneath it.
+		expect(regions[0]?.clipId).toBeTruthy();
+		// And selected through the ORDINARY region selection, which is what gives it
+		// Delete, copy/paste and shift-click multi-select for free.
+		expect(result.current.selection).toEqual({ kind: "audio", id });
 	});
 
-	it("addAudioTrack refuses a non-audio (or unknown) asset", async () => {
+	it("addAudioRegion refuses a non-audio (or unknown) asset", async () => {
 		const { result } = renderTimeline();
 		let videoId: string | null = "x";
 		let missingId: string | null = "x";
 		await act(async () => {
-			videoId = await result.current.addAudioTrack("asset_1"); // a video asset
-			missingId = await result.current.addAudioTrack("nope");
+			videoId = await result.current.addAudioRegion("asset_1"); // a video asset
+			missingId = await result.current.addAudioRegion("nope");
 		});
 		expect(videoId).toBeNull();
 		expect(missingId).toBeNull();
-		expect(useProjectStore.getState().document?.audioTracks).toEqual([]);
+		expect(useProjectStore.getState().document?.audioRanges).toEqual([]);
 	});
 
-	it("place / gain update the track and each is one undo step", async () => {
+	it("updateAudioRegion patches the payload and is one undo step", async () => {
 		const { result } = renderTimeline();
 		let id = "";
 		await act(async () => {
-			id = (await result.current.addAudioTrack("audio_1", 2)) ?? "";
-		});
-		// A lane drag commits position and trim together (see placeAudioTrack).
-		await act(async () => {
-			await result.current.placeAudioTrack(id, {
-				timelineStartSec: 9,
-				trimStartSec: 1,
-				trimEndSec: 8,
-			});
+			id = (await result.current.addAudioRegion("audio_1")) ?? "";
 		});
 		await act(async () => {
-			await result.current.setAudioTrackGain(id, -6);
+			await result.current.updateAudioRegion(id, { gainDb: -6 });
 		});
-
-		const track = useProjectStore.getState().document?.audioTracks[0];
-		expect(track).toMatchObject({
-			timelineStartSec: 9,
-			trimStartSec: 1,
-			trimEndSec: 8,
-			gainDb: -6,
-		});
-
-		// Three writes (add + place + gain) → the gain edit undoes first.
+		expect(useProjectStore.getState().document?.audioRanges[0]?.gainDb).toBe(-6);
 		act(() => {
 			expect(undo()).toBe(true);
 		});
-		expect(useProjectStore.getState().document?.audioTracks[0]?.gainDb).toBe(0);
+		expect(useProjectStore.getState().document?.audioRanges[0]?.gainDb).toBe(0);
 	});
 
-	it("removeAudioTrack deletes the track", async () => {
+	it("a left-edge resize trims the in-point instead of moving what plays there", async () => {
+		// The one gesture an audio pill has that a zoom pill does not. Dragging the head
+		// right by 1s must skip 1s of file, so the sound at a given second is unchanged.
 		const { result } = renderTimeline();
 		let id = "";
 		await act(async () => {
-			id = (await result.current.addAudioTrack("audio_1")) ?? "";
+			id = (await result.current.addAudioRegion("audio_1", { startSec: 2 })) ?? "";
 		});
+		const endMs = useProjectStore.getState().document?.audioRanges[0]?.endMs ?? 0;
 		await act(async () => {
-			await result.current.removeAudioTrack(id);
+			await result.current.updateAudioSpan(id, 3000, endMs, "l");
 		});
-		expect(useProjectStore.getState().document?.audioTracks).toEqual([]);
+		expect(useProjectStore.getState().document?.audioRanges[0]?.offsetSec).toBeCloseTo(1, 3);
 	});
 
-	// #350: the toolbar button and the `M` shortcut both call `tl.addAudio`, which opens
-	// the OS file picker and hands the result to `importAudioAsset`. Spy on the store's
-	// import so these assert the wiring (picker → import), not the import itself.
+	it("a left-edge resize moves the in-point of the pill it grabbed, not the first one", async () => {
+		// The offset shift is measured on the CLAMPED result, which has to be found by the
+		// pill's own leading id: matching by position picks the first pill on the lane, so a
+		// second bed's resize silently re-pointed the first one.
+		const { result } = renderTimeline();
+		let first = "";
+		let second = "";
+		await act(async () => {
+			first = (await result.current.addAudioRegion("audio_1", { startSec: 0 })) ?? "";
+		});
+		// Shrink it out of the way — two pills of different identities may not overlap
+		// (rule 2), so the second one needs somewhere to land.
+		await act(async () => {
+			await result.current.updateAudioSpan(first, 0, 2000, "move");
+		});
+		await act(async () => {
+			second = (await result.current.addAudioRegion("audio_1", { startSec: 5 })) ?? "";
+		});
+		const endMs =
+			useProjectStore.getState().document?.audioRanges.find((r) => r.id === second)?.endMs ?? 0;
+		await act(async () => {
+			await result.current.updateAudioSpan(second, 6000, endMs, "l");
+		});
+		const doc = useProjectStore.getState().document;
+		expect(doc?.audioRanges.find((r) => r.id === first)?.offsetSec).toBe(0);
+		expect(doc?.audioRanges.find((r) => r.id === second)?.offsetSec).toBeCloseTo(1, 3);
+	});
+
+	it("a body move leaves the in-point alone", async () => {
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioRegion("audio_1", { startSec: 2 })) ?? "";
+		});
+		const before = useProjectStore.getState().document?.audioRanges[0];
+		const span = (before?.endMs ?? 0) - (before?.startMs ?? 0);
+		await act(async () => {
+			await result.current.updateAudioSpan(id, 3000, 3000 + span, "move");
+		});
+		expect(useProjectStore.getState().document?.audioRanges[0]?.offsetSec).toBe(0);
+	});
+
+	it("removeRegion deletes the region and collects its orphaned asset", async () => {
+		// There is no audio-specific delete path any more: this is the generic one every
+		// pill uses, which is the point. The asset is only reachable through its regions,
+		// so the last delete must take it with it.
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioRegion("audio_1")) ?? "";
+		});
+		await act(async () => {
+			await result.current.removeRegion("audio", id);
+		});
+		const doc = useProjectStore.getState().document;
+		expect(doc?.audioRanges).toEqual([]);
+		expect(doc?.assets.some((a) => a.id === "audio_1")).toBe(false);
+	});
+
+	// #350: the toolbar buttons and the M / V shortcuts all call `tl.addAudio`, which opens
+	// the OS file picker and hands the result to the store's import. Spy on that import so
+	// these assert the wiring (picker → import), not the import itself.
 	it("addAudio imports the picked file, and is a no-op when the picker is cancelled", async () => {
 		const importSpy = vi.fn().mockResolvedValue(null);
-		useProjectStore.setState({ importAudioAsset: importSpy });
+		useProjectStore.setState({ addAudioAsset: importSpy });
 		const pickerMock = vi.fn();
 		Object.defineProperty(window, "electronAPI", {
 			configurable: true,
@@ -1420,14 +1471,14 @@ describe("useTimeline audio tracks", () => {
 		});
 		const { result } = renderTimeline();
 
-		// Cancelled picker → nothing imported.
+		// Cancelled picker -> nothing imported.
 		pickerMock.mockResolvedValueOnce({ success: false });
 		await act(async () => {
 			await result.current.addAudio();
 		});
 		expect(importSpy).not.toHaveBeenCalled();
 
-		// Picked a file → imported with its path and display name.
+		// Picked a file -> imported with its path and display name.
 		pickerMock.mockResolvedValueOnce({ success: true, path: "/tmp/bgm.mp3", name: "bgm.mp3" });
 		await act(async () => {
 			await result.current.addAudio();
@@ -1435,37 +1486,33 @@ describe("useTimeline audio tracks", () => {
 		expect(importSpy).toHaveBeenCalledWith("/tmp/bgm.mp3", "bgm.mp3");
 	});
 
-	it("addAudio clears region/clip selections after a successful import", async () => {
-		// importAudioAsset must resolve an asset for the success path to run.
-		useProjectStore.setState({ importAudioAsset: vi.fn().mockResolvedValue({ id: "audio_1" }) });
+	it("addAudio places the imported asset on the lane it was asked for", async () => {
+		useProjectStore.setState({
+			addAudioAsset: vi.fn().mockImplementation(async () => {
+				// The real import commits the asset before the region is placed.
+				useProjectStore.setState({ document: audioDoc });
+				return audioDoc.assets.find((a) => a.id === "audio_1");
+			}),
+		});
 		Object.defineProperty(window, "electronAPI", {
 			configurable: true,
 			value: {
 				openAudioFilePicker: vi
 					.fn()
-					.mockResolvedValue({ success: true, path: "/tmp/bgm.mp3", name: "bgm.mp3" }),
+					.mockResolvedValue({ success: true, path: "/tmp/vo.mp3", name: "vo.mp3" }),
 			},
 		});
 		const { result } = renderTimeline();
-
-		// A clip selected before the import (selectClip and selectRegion are mutually
-		// exclusive, so a clip is enough to prove the import wipes the local selection)…
-		act(() => result.current.selectClip("clip_1"));
-		expect(result.current.clipSelection).toBe("clip_1");
-
 		await act(async () => {
-			await result.current.addAudio();
+			await result.current.addAudio("voiceover");
 		});
-		// …is gone after it (the imported track becomes the sole selection).
-		expect(result.current.selection).toBeNull();
-		expect(result.current.multiSelection).toEqual([]);
-		expect(result.current.clipSelection).toBeNull();
+		expect(useProjectStore.getState().document?.audioRanges[0]?.kind).toBe("voiceover");
 	});
 
 	it("addAudio toasts when the file picker itself rejects", async () => {
 		toastErrorMock.mockClear();
 		const importSpy = vi.fn();
-		useProjectStore.setState({ importAudioAsset: importSpy });
+		useProjectStore.setState({ addAudioAsset: importSpy });
 		Object.defineProperty(window, "electronAPI", {
 			configurable: true,
 			value: { openAudioFilePicker: vi.fn().mockRejectedValueOnce(new Error("ipc down")) },
@@ -1481,13 +1528,11 @@ describe("useTimeline audio tracks", () => {
 		expect(toastErrorMock).toHaveBeenCalledTimes(1);
 	});
 
-	// #350 regression: a failed import-time probe leaves durationSec at 0, which
-	// makes the playback window zero-length. The on-load backfill re-probes and
-	// stamps the real duration onto the asset AND the track, so it can play again.
+	// #350 regression: a failed import-time probe leaves durationSec at 0, which makes the
+	// waveform and the "how long is this file?" answer wrong. The on-load backfill
+	// re-probes and stamps the real duration onto the asset.
 	it("backfills a missing audio duration on load", async () => {
 		probeAudioDurationMock.mockResolvedValue(12.5);
-		// Asset imported with an unknown duration (probe failed), and a track that
-		// cached the resulting 0.
 		useProjectStore.setState({
 			projectId: "proj_test",
 			document: {
@@ -1502,15 +1547,16 @@ describe("useTimeline audio tracks", () => {
 						cameraTrack: null,
 					},
 				],
-				audioTracks: [
+				audioRanges: [
 					{
-						id: "trk_2",
-						assetId: "audio_2",
-						timelineStartSec: 0,
-						durationSec: 0,
-						trimStartSec: 0,
+						id: "audio_r2",
+						startMs: 0,
+						endMs: 5000,
+						audioAssetId: "audio_2",
+						kind: "music",
+						offsetSec: 0,
 						gainDb: 0,
-						label: "bgm.mp3",
+						origin: "user",
 					},
 				],
 			},
@@ -1522,7 +1568,6 @@ describe("useTimeline audio tracks", () => {
 		await waitFor(() => {
 			const doc = useProjectStore.getState().document;
 			expect(doc?.assets.find((a) => a.id === "audio_2")?.durationSec).toBe(12.5);
-			expect(doc?.audioTracks[0]?.durationSec).toBe(12.5);
 		});
 		expect(probeAudioDurationMock).toHaveBeenCalledTimes(1);
 	});

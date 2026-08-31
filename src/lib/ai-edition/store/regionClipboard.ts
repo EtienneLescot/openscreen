@@ -11,6 +11,10 @@ export type RegionSnapshot =
 	| { kind: "annotation"; region: Record<string, unknown> }
 	| { kind: "speed"; region: Record<string, unknown> }
 	| { kind: "cameraFullscreen"; region: Record<string, unknown> }
+	// An audio region copies like any other: the payload (file, kind, in-point, gain)
+	// travels, the position comes from the playhead on paste. Duplicating a bed is
+	// therefore Ctrl+C / Ctrl+V, the same gesture as duplicating a zoom.
+	| { kind: "audio"; region: Record<string, unknown> }
 	// A trim carries no user-visible properties, so all there is to copy is how
 	// LONG it was — `{ durationSec }`. That is not a special case so much as the
 	// general one made obvious: every paste keeps the copied properties and takes

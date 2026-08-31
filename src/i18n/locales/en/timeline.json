@@ -15,9 +15,10 @@
 		"pressZoom": "Press Z to add zoom",
 		"pressTrim": "Press T to add trim",
 		"pressAnnotation": "Press A to add annotation",
-		"pressAudio": "Press M to add audio",
+		"pressAudio": "Press M to add music",
 		"pressSpeed": "Press S to add speed",
-		"pressCameraFullscreen": "Press C to add a Full Camera segment"
+		"pressCameraFullscreen": "Press C to add a Full Camera segment",
+		"pressVoiceover": "Press V to add voiceover"
 	},
 	"labels": {
 		"pan": "Pan",

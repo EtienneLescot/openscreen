@@ -238,16 +238,20 @@ function driveAudioEl(el: HTMLAudioElement) {
 }
 
 describe("VirtualPreview imported audio tracks", () => {
-	// Windowed to source 1..3 (2s) and placed at timeline 2 → occupies 2..4.
+	// Playing the file from 1s, over ruler 2..4 → occupies output 2..4 on source 1..3.
+	// The element is keyed by the PILL id, which for a single-fragment region is its own id.
 	const track = {
 		id: "trk",
-		assetId: "aud",
-		timelineStartSec: 2,
-		durationSec: 10,
-		trimStartSec: 1,
-		trimEndSec: 3,
+		startMs: 2000,
+		endMs: 4000,
+		clipId: "c1",
+		sourceStartSec: 2,
+		sourceEndSec: 4,
+		audioAssetId: "aud",
+		kind: "music" as const,
+		offsetSec: 1,
 		gainDb: 0,
-		label: "",
+		origin: "user" as const,
 	};
 
 	function mountWithAudio() {
@@ -256,7 +260,7 @@ describe("VirtualPreview imported audio tracks", () => {
 		const { container } = render(
 			<VirtualPreview
 				videoSources={sources}
-				audioTracks={[track]}
+				audioRegions={[track]}
 				audioSources={audioSources}
 				clips={[clip("c1", "a1", 0, 10, 0)]}
 				onTimeChange={vi.fn()}
@@ -331,13 +335,16 @@ describe("VirtualPreview imported audio track boost", () => {
 	// node is the last one created.
 	const boosted = {
 		id: "trk",
-		assetId: "aud",
-		timelineStartSec: 2,
-		durationSec: 10,
-		trimStartSec: 1,
-		trimEndSec: 3,
+		startMs: 2000,
+		endMs: 4000,
+		clipId: "c1",
+		sourceStartSec: 2,
+		sourceEndSec: 4,
+		audioAssetId: "aud",
+		kind: "music" as const,
+		offsetSec: 1,
 		gainDb: 6.0206,
-		label: "",
+		origin: "user" as const,
 	};
 
 	it("drives a per-track gain node past unity instead of capping element.volume", () => {
@@ -346,7 +353,7 @@ describe("VirtualPreview imported audio track boost", () => {
 		const { container } = render(
 			<VirtualPreview
 				videoSources={sources}
-				audioTracks={[boosted]}
+				audioRegions={[boosted]}
 				audioSources={audioSources}
 				clips={[clip("c1", "a1", 0, 10, 0)]}
 				onTimeChange={vi.fn()}

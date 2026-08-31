@@ -31,11 +31,12 @@ import {
 import { createId } from "@/lib/ai-edition/document/ids";
 import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
 import {
-	projectRawTimelineSecToPlayback,
+	type AnchoredSpeedRegion,
 	resolvePlaybackSegments,
 } from "@/lib/ai-edition/document/timeline";
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
+import { placeAudioRegions } from "@/lib/ai-edition/timeline/audio-placement";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
@@ -399,14 +400,22 @@ export interface SceneDescription {
 		gainDb: number;
 	};
 	/**
-	 * Imported audio tracks (issue #350), mixed over the assembled programme by
-	 * `audio::mix_external_tracks`. `startSec` is the head on the trim-COMPRESSED output
-	 * programme: the track's raw timeline head projected through the trims via
-	 * `projectRawTimelineSecToPlayback`, so a cut ahead of the track pulls it earlier by the
-	 * removed duration (exactly as the preview already plays it). Exact for trims; speed
-	 * regions stay an approximation. `trimEndSec` is always concrete — the compositor
-	 * preallocates the decode window from it — so it is resolved to the source
-	 * duration when the track's tail isn't trimmed.
+	 * Imported audio (issue #350), mixed over the assembled programme by
+	 * `audio::mix_external_tracks`. ONE ENTRY PER FRAGMENT, not per pill: a region the
+	 * user drew across a cut is stored as one fragment per clip, and each gets its own
+	 * mixer entry with its own window into the file.
+	 *
+	 * Every field is resolved by `placeAudioRegions` (timeline/audio-placement.ts), which
+	 * the preview reads too — the two cannot drift. `startSec` is the head on the OUTPUT
+	 * programme: the fragment's raw ruler position projected through the trims AND the
+	 * speed regions, so a cut or a 2× stretch ahead of it pulls it earlier by exactly what
+	 * the picture lost. `trimStartSec`/`trimEndSec` window the file; they are always
+	 * concrete (the compositor preallocates its decode window from them) and clamped to
+	 * the asset's real duration.
+	 *
+	 * The media itself always plays at 1×: a speed region stretches CLIP pcm, never an
+	 * imported file — a voiceover pitched up under a 2× stretch is not what anyone means
+	 * by speeding up a screen recording.
 	 */
 	audioTracks: Array<{
 		path: string;
@@ -491,34 +500,45 @@ export function buildSceneDescription(
 	const settings = getEditorSettings(document);
 
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
-	// Imported audio tracks (issue #350) → the compositor's mix list. Resolve the
-	// asset's file path and a concrete trim-out (the source duration when the tail
-	// isn't trimmed — the compositor preallocates its decode window from it). A
-	// track whose asset or path is missing is dropped rather than sent path-less.
+	// Audio regions (issue #350) → the compositor's mix list, one entry per FRAGMENT.
+	// `placeAudioRegions` is the single projection the preview reads too, so what the
+	// editor plays and what `mix_external_tracks` writes cannot drift: it walks each
+	// pill's fragments left to right on the OUTPUT clock, advancing the in-point by the
+	// output length of each, which is what stops a bed restarting at every cut.
+	//
 	// Project onto the SAME clips the programme is assembled from. `resolveVisibleClips`
-	// (below) drops clips whose asset has no resolvable `originalPath`; if the projection
-	// walked the full `document.timeline.clips` it would count a relinked-away clip the
-	// programme does not, landing every following track past the real programme end.
+	// (below) drops clips whose asset has no resolvable `originalPath`; walking the full
+	// `document.timeline.clips` would count a relinked-away clip the programme does not,
+	// landing every following region past the real programme end.
 	const projectedClips = document.timeline.clips.filter(
 		(clip) => assetById.get(clip.assetId)?.originalPath,
 	);
-	const audioTracks = document.audioTracks.flatMap((track) => {
-		const asset = assetById.get(track.assetId);
+	const audioSpeedRegions =
+		((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as
+			| AnchoredSpeedRegion[]
+			| undefined) ?? [];
+	const audioTracks = placeAudioRegions(
+		document.audioRanges,
+		projectedClips,
+		document.timeline.trimRanges,
+		audioSpeedRegions,
+	).flatMap((placement) => {
+		const asset = assetById.get(placement.audioAssetId);
+		// A region whose asset or path is missing is dropped rather than sent path-less.
 		if (!asset?.originalPath) return [];
-		const trimEndSec = track.trimEndSec ?? asset.durationSec ?? track.durationSec;
+		// The compositor preallocates its decode window from `trimEndSec`, so it must be
+		// concrete — and it must not run past the file, or the decode window is a promise
+		// the mixer cannot keep.
+		const fileEnd = asset.durationSec ?? placement.sourceOutSec;
+		const trimStartSec = Math.min(placement.sourceInSec, fileEnd);
+		const trimEndSec = Math.min(placement.sourceOutSec, fileEnd);
+		if (!(trimEndSec > trimStartSec)) return [];
 		return [
 			{
 				path: asset.originalPath,
-				// The track's head is stored in RAW timeline seconds, but the programme this
-				// mixes onto is trim-compressed — so project raw→output. Passing the raw head
-				// verbatim delayed the track by the total trim duration ahead of it (issue #350).
-				startSec: projectRawTimelineSecToPlayback(
-					projectedClips,
-					document.timeline.trimRanges,
-					track.timelineStartSec,
-				),
-				gainDb: track.gainDb,
-				trimStartSec: track.trimStartSec,
+				startSec: placement.outputStartSec,
+				gainDb: placement.gainDb,
+				trimStartSec,
 				trimEndSec,
 			},
 		];

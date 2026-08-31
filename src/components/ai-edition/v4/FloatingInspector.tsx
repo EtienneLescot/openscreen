@@ -5,7 +5,9 @@ import {
 	FileText,
 	Layout as LayoutIcon,
 	Maximize2,
+	Mic,
 	MousePointer2,
+	Music,
 	Pencil,
 	Scissors,
 	SlidersHorizontal,
@@ -34,6 +36,7 @@ import {
 	TEXT_ANIMATION_VALUES,
 } from "@/lib/ai-edition/annotations/textAnimation";
 import type { AxcutAnnotationRegion, AxcutClip } from "@/lib/ai-edition/schema";
+import { AUDIO_GAIN_DB_LIMIT } from "@/lib/ai-edition/store/editorSettings";
 import { rafCoalesce } from "@/lib/ai-edition/store/rafCoalesce";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
@@ -43,7 +46,6 @@ import { CaptionsPane } from "../CaptionsPane";
 import { ColorField } from "../ColorField";
 import {
 	AudioPane,
-	AudioTrackPane,
 	CursorPane,
 	LayoutPane,
 	SliderCell,
@@ -114,18 +116,16 @@ export function FloatingInspector({
 		return () => document.removeEventListener("mousedown", onDocMouseDown);
 	}, [clipPickerOpen]);
 	const selection = tl.selection;
-	// An imported audio track is selected (issue #350) — like a region selection it
-	// takes over the inspector body with its own pane (see AudioTrackPane).
-	const audioTrackSelected = tl.selectedAudioTrackId !== null;
-	const effectiveOpen = open || selection !== null || audioTrackSelected;
+	// Audio has no branch of its own here (issue #350): an audio region IS a region, so
+	// it arrives as an ordinary `tl.selection` and `SelectionPane` renders it beside zoom,
+	// speed and annotation. The pane it used to need disappeared with the parallel model.
+	const effectiveOpen = open || selection !== null;
 	return (
 		<div className={styles.inspectorWrap}>
 			{effectiveOpen ? (
 				<div className={styles.inspector}>
 					{selection ? (
 						<SelectionPane tl={tl} onClose={() => tl.clearSelection()} />
-					) : audioTrackSelected ? (
-						<AudioTrackPane tl={tl} />
 					) : (
 						<FacetBody facet={facet} onCollapse={onToggleOpen} transcriptProps={transcriptProps} />
 					)}
@@ -138,11 +138,11 @@ export function FloatingInspector({
 						type="button"
 						title={ts(labelKey)}
 						aria-label={ts(labelKey)}
-						aria-pressed={!selection && !audioTrackSelected && open && facet === id}
+						aria-pressed={!selection && open && facet === id}
 						onClick={() => {
 							// Switching facets while an element is selected should show
 							// the facet, not leave the selection pane on top of it.
-							if (selection || audioTrackSelected) tl.clearSelection();
+							if (selection) tl.clearSelection();
 							if (facet === id && open) {
 								onToggleOpen();
 							} else {
@@ -377,6 +377,80 @@ const SPEED_PRESETS = [1, ...SPEED_OPTIONS.map((option) => option.speed)].sort((
  * `MAX_PLAYBACK_SPEED` (100×). Only the control was missing, so this rewires it rather than
  * adding anything new.
  */
+/**
+ * Level for one audio pill, in dB. The slider is a LIVE local value while dragging and one
+ * write on release, so a drag across the whole range is a single undo step rather than
+ * fifty — the same live/commit split the annotation colour picker uses.
+ *
+ * Committing goes through `updateAudioRegion`, which patches every fragment under the pill:
+ * `gainDb` is part of the region identity, so patching one fragment of a ventilated bed
+ * would split it into two pills at different levels.
+ */
+function AudioGainControl({
+	region,
+	tl,
+}: {
+	region: { id: string; gainDb: number };
+	tl: Pick<TimelineApi, "updateAudioRegion">;
+}) {
+	const ts = useScopedT("settings");
+	const [liveGain, setLiveGain] = useState<number | null>(null);
+	// Drop the live value when the selection changes: a drag released outside the input
+	// never fires the commit, and an uncommitted −10 dB would otherwise show as the next
+	// region's level the moment it is selected.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: region.id is the trigger, not a read — the body only resets the live value.
+	useEffect(() => {
+		setLiveGain(null);
+	}, [region.id]);
+	const value = liveGain ?? region.gainDb;
+	return (
+		<>
+			{paneRow(
+				ts("audio.outputGain"),
+				<span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+					<input
+						type="range"
+						min={-AUDIO_GAIN_DB_LIMIT}
+						max={AUDIO_GAIN_DB_LIMIT}
+						step={0.5}
+						value={value}
+						onChange={(e) => setLiveGain(Number(e.target.value))}
+						onPointerUp={() => {
+							if (liveGain !== null) void tl.updateAudioRegion(region.id, { gainDb: liveGain });
+							setLiveGain(null);
+						}}
+						onBlur={() => {
+							if (liveGain !== null) void tl.updateAudioRegion(region.id, { gainDb: liveGain });
+							setLiveGain(null);
+						}}
+						style={{ width: 120 }}
+					/>
+					<span
+						style={{
+							font: "500 12px var(--font-mono, monospace)",
+							color: "var(--fg-2)",
+							minWidth: 52,
+							textAlign: "right",
+						}}
+					>
+						{value.toFixed(1)} dB
+					</span>
+				</span>,
+			)}
+			<button
+				type="button"
+				onClick={() => {
+					setLiveGain(null);
+					void tl.updateAudioRegion(region.id, { gainDb: 0 });
+				}}
+				style={secondaryBtnStyle}
+			>
+				{ts("audio.reset")}
+			</button>
+		</>
+	);
+}
+
 export function SpeedControl({
 	region,
 	tl,
@@ -610,6 +684,63 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
 						{ts("zoom.deleteZoom")}
+					</button>
+				</div>
+			</div>
+		);
+	}
+
+	if (selection.kind === "audio") {
+		const region = tl.audioRegions.find((a) => a.id === selection.id);
+		if (!region) return null;
+		const asset = tl.audioAssets.find((a) => a.id === region.audioAssetId);
+		const fileName =
+			asset?.label || asset?.originalPath?.split(/[\\/]/).pop() || ts("audioTrack.defaultLabel");
+		return (
+			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+				{paneHeader(
+					region.kind === "voiceover" ? <Mic size={15} /> : <Music size={15} />,
+					ts(region.kind === "voiceover" ? "audioTrack.voiceover" : "audioTrack.music"),
+					onClose,
+					tc("actions.close"),
+				)}
+				<div style={bodyStyle}>
+					<div
+						title={fileName}
+						style={{
+							fontSize: 13,
+							fontWeight: 600,
+							color: "var(--fg)",
+							overflow: "hidden",
+							textOverflow: "ellipsis",
+							whiteSpace: "nowrap",
+						}}
+					>
+						{fileName}
+					</div>
+					{/* Moving a region between lanes is a payload edit like any other, so it goes
+					    through the same pill-wide patch — and because `kind` is part of the region
+					    identity, the pill lands on the other lane and stops repelling its old
+					    neighbours in one write. */}
+					{paneRow(
+						ts("audioTrack.lane"),
+						<select
+							value={region.kind}
+							onChange={(e) =>
+								void tl.updateAudioRegion(region.id, {
+									kind: e.target.value as "voiceover" | "music",
+								})
+							}
+							style={selectStyle}
+						>
+							<option value="voiceover">{ts("audioTrack.voiceover")}</option>
+							<option value="music">{ts("audioTrack.music")}</option>
+						</select>,
+					)}
+					<AudioGainControl region={region} tl={tl} />
+					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
+						<Trash2 size={14} />
+						{ts("audioTrack.remove")}
 					</button>
 				</div>
 			</div>

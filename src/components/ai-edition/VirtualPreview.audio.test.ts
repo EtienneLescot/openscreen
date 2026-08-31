@@ -1,11 +1,12 @@
+// Where an imported region actually plays now lives in
+// `timeline/audio-placement.ts` — the one projection the preview and the export share —
+// and is covered by `audio-placement.test.ts`. What remains here is the preview's own
+// audio graph.
 import { describe, expect, it } from "vitest";
-import { projectRawTimelineSecToPlayback } from "@/lib/ai-edition/document/timeline";
-import type { AxcutAudioTrack, AxcutClip, AxcutTrimRange } from "@/lib/ai-edition/schema";
 import {
 	applyPreviewAudioSettings,
 	type PreviewAudioGraph,
 	resolveAudioTrackPlayback,
-	resolveTimelineAudioPlayback,
 } from "./VirtualPreview";
 
 /** Minimal stand-in: the function only ever touches `gain.gain.value`. */
@@ -81,107 +82,5 @@ describe("applyPreviewAudioSettings", () => {
 		applyPreviewAudioSettings(graph, [element], -6.0206);
 		expect(element.volume).toBe(0.25);
 		expect(graph.gain.gain.value).toBeCloseTo(0.5, 4);
-	});
-});
-
-describe("resolveTimelineAudioPlayback", () => {
-	// A track placed 10s into the RAW timeline, source windowed to 2..8 (6s long).
-	const track: AxcutAudioTrack = {
-		id: "t1",
-		assetId: "a1",
-		timelineStartSec: 10,
-		durationSec: 20,
-		trimStartSec: 2,
-		trimEndSec: 8,
-		gainDb: 0,
-		label: "",
-	};
-
-	// Second arg is the track head projected to output seconds; with no trims it is
-	// just `timelineStartSec` (10), so these read the same as before the output-space
-	// change — the projection is exercised separately below.
-	it("maps the playhead to a source position offset by the trim in-point", () => {
-		// 3s into the track's span → 2 (trimStart) + 3 = 5s of source.
-		expect(resolveTimelineAudioPlayback(13, 10, track)).toEqual({
-			targetTimeSec: 5,
-			shouldPlay: true,
-		});
-	});
-
-	it("does not play before the track starts, parked at the in-point", () => {
-		expect(resolveTimelineAudioPlayback(9, 10, track)).toEqual({
-			targetTimeSec: 2,
-			shouldPlay: false,
-		});
-	});
-
-	it("does not play past the window end, parked at the out-point", () => {
-		// Window is 6s (2..8), so output 10..16. At 16 it has just ended.
-		expect(resolveTimelineAudioPlayback(16, 10, track)).toEqual({
-			targetTimeSec: 8,
-			shouldPlay: false,
-		});
-	});
-
-	it("uses the asset duration as the out-point when the tail isn't trimmed", () => {
-		const untrimmed = { ...track, trimStartSec: 0, trimEndSec: undefined, durationSec: 5 };
-		// Span is 10..15. At 14 → 4s of source, still playing.
-		expect(resolveTimelineAudioPlayback(14, 10, untrimmed)).toEqual({
-			targetTimeSec: 4,
-			shouldPlay: true,
-		});
-		// At 15 the 5s file is over.
-		expect(resolveTimelineAudioPlayback(15, 10, untrimmed).shouldPlay).toBe(false);
-	});
-
-	// The regression: an interior trim must NOT skip the track's own content, so the
-	// preview stays byte-for-byte with `audio::mix_external_tracks`, which overlays the
-	// decoded window contiguously. Same scenario as Etienne's review and the projection's
-	// own test: a 10s clip with raw 2..4 cut, background track at raw head 0 spanning 0..10.
-	it("plays contiguously across an interior trim, matching the export", () => {
-		const clip: AxcutClip = {
-			id: "clip_1",
-			assetId: "asset_1",
-			sourceStartSec: 0,
-			sourceEndSec: 10,
-			timelineStartSec: 0,
-			timelineEndSec: 10,
-			wordRefs: [],
-			origin: "user",
-			reason: "",
-		};
-		const trim: AxcutTrimRange = {
-			id: "trim_1",
-			assetId: "asset_1",
-			startSec: 2,
-			endSec: 4,
-			origin: "user",
-			reason: "",
-		};
-		const bgm: AxcutAudioTrack = {
-			id: "bgm",
-			assetId: "a2",
-			timelineStartSec: 0,
-			durationSec: 10,
-			trimStartSec: 0,
-			trimEndSec: 10,
-			gainDb: 0,
-			label: "",
-		};
-		const project = (rawSec: number) => projectRawTimelineSecToPlayback([clip], [trim], rawSec);
-		const outputStart = project(bgm.timelineStartSec); // 0
-
-		// Raw playhead 5 sits 1s past the 2s cut → output 3. The track is a contiguous
-		// block, so it must be at source 3 — NOT source 5, which the old raw-space
-		// `local` produced (the 2s desync).
-		expect(resolveTimelineAudioPlayback(project(5), outputStart, bgm)).toEqual({
-			targetTimeSec: 3,
-			shouldPlay: true,
-		});
-		// Just before the cut is unaffected: raw 1 → output 1 → source 1.
-		expect(resolveTimelineAudioPlayback(project(1), outputStart, bgm).targetTimeSec).toBeCloseTo(
-			1,
-			6,
-		);
 	});
 });

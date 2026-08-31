@@ -15,9 +15,10 @@
 		"pressZoom": "Pressione Z para adicionar zoom",
 		"pressTrim": "Pressione T para adicionar recorte",
 		"pressAnnotation": "Pressione A para adicionar anotação",
-		"pressAudio": "Pressione M para adicionar áudio",
+		"pressAudio": "Pressione M para adicionar música",
 		"pressSpeed": "Pressione S para adicionar velocidade",
-		"pressCameraFullscreen": "Pressione C para adicionar um segmento de Câmera em Tela Cheia"
+		"pressCameraFullscreen": "Pressione C para adicionar um segmento de Câmera em Tela Cheia",
+		"pressVoiceover": "Pressione V para adicionar narração"
 	},
 	"labels": {
 		"pan": "Mover",

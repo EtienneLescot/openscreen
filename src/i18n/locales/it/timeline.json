@@ -15,9 +15,10 @@
 		"pressZoom": "Premi Z per aggiungere zoom",
 		"pressTrim": "Premi T per aggiungere taglio",
 		"pressAnnotation": "Premi A per aggiungere annotazione",
-		"pressAudio": "Premi M per aggiungere audio",
+		"pressAudio": "Premi M per aggiungere musica",
 		"pressSpeed": "Premi S per aggiungere velocità",
-		"pressCameraFullscreen": "Premi C per aggiungere un segmento Camera a schermo intero"
+		"pressCameraFullscreen": "Premi C per aggiungere un segmento Camera a schermo intero",
+		"pressVoiceover": "Premi V per aggiungere una voce fuori campo"
 	},
 	"labels": {
 		"pan": "Panoramica",

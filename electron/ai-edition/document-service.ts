@@ -373,9 +373,9 @@ export class DocumentService {
 		const next: AxcutDocument = {
 			...withoutAssetClips,
 			assets,
-			// Drop imported audio tracks that referenced the removed asset — they
-			// would otherwise dangle, pointing at an asset the document no longer has.
-			audioTracks: withoutAssetClips.audioTracks.filter((t) => t.assetId !== assetId),
+			// Drop audio regions that played the removed asset — they would otherwise
+			// dangle, pointing at an asset the document no longer has.
+			audioRanges: withoutAssetClips.audioRanges.filter((r) => r.audioAssetId !== assetId),
 			timeline: {
 				...withoutAssetClips.timeline,
 				trimRanges: withoutAssetClips.timeline.trimRanges.filter((r) => r.assetId !== assetId),

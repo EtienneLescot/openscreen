@@ -243,7 +243,7 @@ describe("transcriptRelevantAssetIds", () => {
 		transcripts: [],
 		annotations: [],
 		zoomRanges: [],
-		audioTracks: [],
+		audioRanges: [],
 		legacyEditor: null,
 	};
 

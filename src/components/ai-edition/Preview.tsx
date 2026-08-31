@@ -3,7 +3,7 @@ import type { CameraFullscreenRegion, ZoomFocus } from "@/components/video-edito
 import { useScopedT } from "@/contexts/I18nContext";
 import type {
 	AxcutAnnotationRegion,
-	AxcutAudioTrack,
+	AxcutAudioRegion,
 	AxcutClip,
 	AxcutTrimRange,
 	AxcutZoomRegion,
@@ -26,7 +26,7 @@ interface PreviewProps {
 	 *  (issue #350). Passed straight through to VirtualPreview — unlike the video
 	 *  `previewSources` below, these are NOT narrowed to clip-referenced assets,
 	 *  since an audio track has no clip. */
-	audioTracks?: AxcutAudioTrack[];
+	audioRegions?: AxcutAudioRegion[];
 	audioSources?: VideoSource[];
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
@@ -59,7 +59,7 @@ export function Preview({
 	hasProject,
 	hasAsset,
 	videoSources,
-	audioTracks = [],
+	audioRegions = [],
 	audioSources = [],
 	clips,
 	zoomRegions,
@@ -187,7 +187,7 @@ export function Preview({
 				<>
 					<PreviewCanvas
 						videoSources={previewSources}
-						audioTracks={audioTracks}
+						audioRegions={audioRegions}
 						audioSources={audioSources}
 						clips={clips}
 						zoomRegions={zoomRegions}

@@ -329,10 +329,13 @@
 		"help": "Điều chỉnh mức đầu ra của âm thanh. Nó được áp dụng giống hệt nhau trong bản xem trước và khi xuất."
 	},
 	"audioTrack": {
-		"add": "Thêm bản âm thanh",
+		"add": "Thêm nhạc",
+		"addVoiceover": "Thêm lời thuyết minh",
+		"defaultLabel": "Âm thanh",
 		"importFailed": "Không thể thêm âm thanh",
-		"defaultLabel": "Bản âm thanh",
-		"help": "Âm lượng của bản âm thanh đã nhập này. Nó được trộn lên trên bản ghi trong bản xem trước và khi xuất. Kéo bản nhạc trên dòng thời gian để di chuyển hoặc cắt.",
-		"remove": "Xóa bản nhạc"
+		"lane": "Rãnh",
+		"music": "Nhạc",
+		"remove": "Xóa âm thanh",
+		"voiceover": "Lời thuyết minh"
 	}
 }

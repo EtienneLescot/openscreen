@@ -476,41 +476,55 @@ export const zoomRegionSchema = endGteStart(
 	"startMs",
 );
 
-// External audio import (issue #350) — voiceover / BGM / SFX layered over the
-// programme. Unlike zoom/speed/annotation/trim, an audio track is NOT
-// clip-anchored: it floats over the whole timeline, addressed in RAW/document
-// timeline seconds — the same clock the ruler, playhead and clip
-// `timelineStartSec`/`timelineEndSec` use, and the one `addAudioTrack` seeds from
-// the playhead. The preview positions the track on exactly this clock (see
-// `resolveTimelineAudioPlayback` in VirtualPreview). The export's OUTPUT programme
-// is trim-compressed, so the renderer maps this position to output time when
-// building the scene — an identity map when the project has no trims/speed (the
-// common case), an accepted approximation otherwise, the same way the preview
-// approximates trims by re-seeking. See `SceneAudioTrack` (sceneDescription.ts,
-// audio.rs).
+// Audio regions (issue #350) — an imported voiceover / music bed laid over the
+// programme. A FIRST-CLASS REGION, on the same v5 clip anchor as zoom, annotation
+// and speed: `{clipId, sourceStartSec, sourceEndSec}` is the source of truth and
+// `startMs`/`endMs` the derived ruler cache, so a region travels with its clip
+// through reorder, trim and delete instead of sitting still while the content
+// slides underneath it. Everything the universal region rules give the other kinds
+// — merge, repel, one pill per run, whole-pill delete/copy — it gets for free.
 //
-// `assetId` points at an asset with `kind: "audio"`. `timelineStartSec` places
-// the track's head; `trimStartSec`/`trimEndSec` window the source file (both in
-// source seconds); `gainDb` sets its level.
-export const audioTrackSchema = z
-	.object({
+// Two departures from the other kinds, both forced by audio being CONTINUOUS MEDIA
+// rather than a value held over a span:
+//
+//   • `audioAssetId`, not `assetId`. `assetId` is in `NON_IDENTITY_FIELDS`
+//     (timelineMap) because for a TRIM it says where the cut lives; for an audio
+//     region the file IS what the region is, and two beds from different files that
+//     happen to touch must never merge into one pill. Naming the field outside that
+//     list is what makes identity read it. See timeline-model.md.
+//
+//   • `offsetSec` is the in-point of the PILL, not of each fragment. Ventilation
+//     copies the payload verbatim, so every fragment of one pill carries the same
+//     value — which is exactly what keeps them merging. The per-fragment advance
+//     (fragment 2 must start the file where fragment 1 stopped, or a bed audibly
+//     restarts at every cut) is derived at render time by
+//     `placeAudioRegions` (timeline/audio-placement.ts), the single projection the
+//     preview and the export both read.
+//
+// The played window is `[offsetSec, offsetSec + <the pill's own output length>]`:
+// the span on the ruler IS the out-point, so there is no second `trimEndSec` field
+// to drift out of agreement with it.
+export const audioRegionSchema = endGteStart(
+	z.object({
 		id: z.string().min(1),
-		assetId: z.string().min(1),
-		timelineStartSec: z.number().nonnegative().default(0),
-		// Full source duration of the underlying file, cached here so the timeline
-		// can lay out the pill before the asset is re-probed on load.
-		durationSec: z.number().nonnegative().default(0),
-		trimStartSec: z.number().nonnegative().default(0),
-		// Absent means "play to the end of the file". Explicit when the user trims
-		// the tail so the pill and the export agree on where the track stops.
-		trimEndSec: z.number().nonnegative().optional(),
+		startMs: z.number().nonnegative(),
+		endMs: z.number().nonnegative(),
+		...clipAnchorShape,
+		// The `kind: "audio"` asset this region plays.
+		audioAssetId: z.string().min(1),
+		// Which lane the region lives on. Identity-bearing, and that is the point:
+		// regions of DIFFERENT kinds never merge and never repel, so a voiceover can
+		// sit over a music bed. One lane for both would make the repel rule forbid
+		// exactly the arrangement the feature exists for.
+		kind: z.enum(["voiceover", "music"]).default("music"),
+		// In-point into the audio file, in source seconds.
+		offsetSec: z.number().nonnegative().default(0),
 		gainDb: z.number().default(0),
-		label: z.string().default(""),
-	})
-	.refine((data) => data.trimEndSec === undefined || data.trimEndSec >= data.trimStartSec, {
-		message: "trimEndSec must be greater than or equal to trimStartSec",
-		path: ["trimEndSec"],
-	});
+		origin: z.enum(["system", "agent", "user"]).default("user"),
+	}),
+	"endMs",
+	"startMs",
+);
 
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time
@@ -544,9 +558,11 @@ const documentSchemaShape = z.object({
 	}),
 	annotations: z.array(annotationRegionSchema).default([]),
 	zoomRanges: z.array(zoomRegionSchema).default([]),
-	// Imported audio tracks (issue #350). Defaulted so every document written
-	// before this loads unchanged; an older build simply strips the key on save.
-	audioTracks: z.array(audioTrackSchema).default([]),
+	// Imported audio regions (issue #350) — clip-anchored like `zoomRanges` and
+	// `annotations` above, and walked by the same `mapAllRegionCollections`.
+	// Defaulted so every document written before this loads unchanged; an older
+	// build simply strips the key on save, so no schemaVersion bump is needed.
+	audioRanges: z.array(audioRegionSchema).default([]),
 	legacyEditor: legacyEditorSchema.nullable().default(null),
 });
 
@@ -990,7 +1006,8 @@ export type AxcutTimelineOperation = z.infer<typeof timelineOperationSchema>;
 export type AxcutAnnotationRegion = z.infer<typeof annotationRegionSchema>;
 export type AxcutZoomRegion = z.infer<typeof zoomRegionSchema>;
 export type AxcutCameraTrack = z.infer<typeof cameraTrackSchema>;
-export type AxcutAudioTrack = z.infer<typeof audioTrackSchema>;
+export type AxcutAudioRegion = z.infer<typeof audioRegionSchema>;
+export type AxcutAudioKind = AxcutAudioRegion["kind"];
 export type AxcutLegacyEditor = z.infer<typeof legacyEditorSchema>;
 export type AxcutDocument = z.infer<typeof documentSchema>;
 export type AxcutDocumentInput = z.input<typeof documentSchema>;
@@ -1026,7 +1043,7 @@ export function createEmptyDocument(
 		},
 		annotations: [],
 		zoomRanges: [],
-		audioTracks: [],
+		audioRanges: [],
 		legacyEditor: null,
 	});
 }
@@ -1036,25 +1053,30 @@ export function ensureDocument(value: unknown): AxcutDocument {
 }
 
 /**
- * Build a timeline audio track for an imported audio asset (issue #350). The
- * head is placed at `timelineStartSec` (RAW/document timeline seconds — the same
- * clock the ruler, playhead and clip `timelineStartSec` use, NOT the
- * trim-compressed output programme; the export projects it with
- * `projectRawTimelineSecToPlayback`) and the track spans the whole source file
- * until the user trims it. Parsed through the schema so every default (gain,
- * trim) is applied in one place.
+ * Build an UNANCHORED audio region for a freshly imported file (issue #350).
+ * `startMs`/`endMs` are the RAW ruler span the caller wants — the playhead for the
+ * head, plus the file's own length for the tail — and the clip anchor is left off
+ * on purpose: the caller runs the result through `anchorRegionsWithDerivedMs`,
+ * which is the one place that decides which clip(s) a span lands on. Parsed through
+ * the schema so gain / offset / origin defaults are applied in a single place.
  */
-export function createAudioTrack(input: {
-	assetId: string;
-	durationSec: number;
-	timelineStartSec?: number;
-	label?: string;
-}): AxcutAudioTrack {
-	return audioTrackSchema.parse({
+export function createAudioRegion(input: {
+	audioAssetId: string;
+	startMs: number;
+	endMs: number;
+	kind?: AxcutAudioKind;
+	offsetSec?: number;
+	gainDb?: number;
+	origin?: AxcutAudioRegion["origin"];
+}): AxcutAudioRegion {
+	return audioRegionSchema.parse({
 		id: createId("audio"),
-		assetId: input.assetId,
-		durationSec: input.durationSec,
-		timelineStartSec: input.timelineStartSec ?? 0,
-		label: input.label ?? "",
+		audioAssetId: input.audioAssetId,
+		startMs: Math.max(0, input.startMs),
+		endMs: Math.max(Math.max(0, input.startMs), input.endMs),
+		kind: input.kind ?? "music",
+		offsetSec: input.offsetSec ?? 0,
+		gainDb: input.gainDb ?? 0,
+		origin: input.origin ?? "user",
 	});
 }

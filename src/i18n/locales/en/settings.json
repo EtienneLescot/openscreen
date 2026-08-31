@@ -80,11 +80,14 @@
 		"reset": "Reset audio"
 	},
 	"audioTrack": {
-		"add": "Add audio track",
+		"add": "Add music",
+		"addVoiceover": "Add voiceover",
+		"defaultLabel": "Audio",
 		"importFailed": "Could not add audio",
-		"defaultLabel": "Audio track",
-		"help": "Volume for this imported audio track. It mixes over the recording in the preview and the export. Drag the track on the timeline to move or trim it.",
-		"remove": "Delete track"
+		"lane": "Lane",
+		"music": "Music",
+		"remove": "Delete audio",
+		"voiceover": "Voiceover"
 	},
 	"effects": {
 		"title": "Composition",

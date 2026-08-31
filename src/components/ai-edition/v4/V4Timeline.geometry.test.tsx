@@ -86,9 +86,9 @@ function renderTimeline(
 		selection: null,
 		multiSelection: [],
 		clipSelection: null,
-		audioTracks: [],
-		selectedAudioTrackId: null,
-		selectAudioTrack: vi.fn(),
+		audioRanges: [],
+		audioRegions: [],
+		audioAssets: [],
 		clearSelection: vi.fn(),
 		selectRegion: vi.fn(),
 		selectClip: vi.fn(),
@@ -398,32 +398,44 @@ describe("V4Timeline clip row", () => {
 	});
 });
 
-// Issue #350 — dragging an imported audio track on its lane. The pixel→second
-// math and the single-write commit are what these pin; the clamp/guard math is
-// covered by document/audioTracks.test.ts.
+// Issue #350 — dragging an audio pill on its lane. It is an ordinary lane pill now, so
+// what these pin is the ONE thing audio adds to the shared drag: which edge you grabbed
+// decides whether the file's in-point moves with the head. The pixel→second math and the
+// pill/anchor machinery are covered by the shared pill tests and audio-placement.test.ts.
 describe("V4Timeline audio lane drag", () => {
-	const AUDIO_ASSET = { id: "aud", label: "voiceover", originalPath: "/vo.mp3", durationSec: 60 };
-	const makeTrack = () => ({
-		id: "trk1",
-		assetId: "aud",
-		timelineStartSec: 100,
-		durationSec: 60,
-		trimStartSec: 0,
-		trimEndSec: undefined as number | undefined,
-		gainDb: 0,
+	const AUDIO_ASSET = {
+		id: "aud",
+		kind: "audio" as const,
 		label: "vo",
+		originalPath: "/vo.mp3",
+		durationSec: 60,
+	};
+	const makeRegion = () => ({
+		id: "aud_1",
+		startMs: 100_000,
+		endMs: 160_000,
+		clipId: "clip_1",
+		sourceStartSec: 100,
+		sourceEndSec: 160,
+		audioAssetId: "aud",
+		kind: "music" as const,
+		offsetSec: 0,
+		gainDb: 0,
+		origin: "user" as const,
 	});
 
 	function renderAudio() {
-		const placeAudioTrack = vi.fn(
+		// Typed parameters, not a bare `async () => undefined`: the assertions below read
+		// `mock.calls[0][3]` and an inferred zero-arg mock makes that an empty tuple.
+		const updateAudioSpan = vi.fn(
 			async (
 				_id: string,
-				_placement: { timelineStartSec: number; trimStartSec: number; trimEndSec?: number },
-			) => {
-				/* the drag only awaits it */
-			},
+				_startMs: number,
+				_endMs: number,
+				_mode?: "move" | "l" | "r",
+			): Promise<void> => undefined,
 		);
-		const selectAudioTrack = vi.fn();
+		const selectRegion = vi.fn();
 		const tl = {
 			clips: [clip(0, TOTAL_SEC)],
 			assets: [AUDIO_ASSET],
@@ -435,12 +447,11 @@ describe("V4Timeline audio lane drag", () => {
 			selection: null,
 			multiSelection: [],
 			clipSelection: null,
-			audioTracks: [makeTrack()],
-			selectedAudioTrackId: null,
-			selectAudioTrack,
-			placeAudioTrack,
+			audioRegions: [makeRegion()],
+			audioAssets: [AUDIO_ASSET],
+			updateAudioSpan,
 			clearSelection: vi.fn(),
-			selectRegion: vi.fn(),
+			selectRegion,
 			selectClip: vi.fn(),
 			updateAnnotationSpan: vi.fn(async () => undefined),
 			addZoom: vi.fn(async () => undefined),
@@ -456,45 +467,53 @@ describe("V4Timeline audio lane drag", () => {
 				onEditClip={vi.fn()}
 			/>,
 		);
-		return { pill: screen.getByTitle("vo"), placeAudioTrack, selectAudioTrack };
+		return { pill: screen.getByTitle("vo"), updateAudioSpan, selectRegion };
 	}
 
 	// 900px / 1800s = 0.5 px per second, so +90px is +180s.
 	const secForPx = (px: number) => (px / VIEWPORT_PX) * TOTAL_SEC;
 
-	it("selects the track on pointer-down before any movement", () => {
-		const { pill, selectAudioTrack } = renderAudio();
+	it("selects it as an ORDINARY region, so Delete and copy/paste reach it", () => {
+		// The whole point of the region model: the pill goes through `selectRegion` with
+		// document kind "audio" rather than a selection state of its own — which is what
+		// left Delete doing nothing on the parallel implementation.
+		const { pill, selectRegion } = renderAudio();
 		fireEvent.pointerDown(pill, { clientX: 0 });
 		window.dispatchEvent(new MouseEvent("pointerup", { clientX: 0 }));
-		expect(selectAudioTrack).toHaveBeenCalledWith("trk1");
+		expect(selectRegion).toHaveBeenCalledWith("audio", "aud_1", { additive: false });
 	});
 
-	it("body drag slides the head and commits once, trims untouched", () => {
-		const { pill, placeAudioTrack } = renderAudio();
+	it("body drag slides the pill and commits once, in move mode", () => {
+		const { pill, updateAudioSpan } = renderAudio();
 		fireEvent.pointerDown(pill, { clientX: 0 });
 		window.dispatchEvent(new MouseEvent("pointermove", { clientX: 90 }));
 		window.dispatchEvent(new MouseEvent("pointerup", { clientX: 90 }));
-		expect(placeAudioTrack).toHaveBeenCalledTimes(1);
-		const [id, placement] = placeAudioTrack.mock.calls[0];
-		expect(id).toBe("trk1");
-		expect(placement.timelineStartSec).toBeCloseTo(100 + secForPx(90), 3);
-		expect(placement.trimStartSec).toBe(0);
-		expect(placement.trimEndSec).toBeCloseTo(60, 3);
+		expect(updateAudioSpan).toHaveBeenCalledTimes(1);
+		const [id, startMs, , mode] = updateAudioSpan.mock.calls[0];
+		expect(id).toBe("aud_1");
+		expect(startMs / 1000).toBeCloseTo(100 + secForPx(90), 2);
+		// "move" carries the media with the pill: the in-point does not change.
+		expect(mode).toBe("move");
 	});
 
-	it("right-handle drag pulls the out-point in, head fixed", () => {
-		const { pill, placeAudioTrack } = renderAudio();
-		// The right resize handle is the last child of the pill.
+	it("left-handle drag commits in `l` mode, which is what trims the in-point", () => {
+		const { pill, updateAudioSpan } = renderAudio();
+		// The left resize handle is the first child of the pill.
+		const handle = pill.firstElementChild as Element;
+		fireEvent.pointerDown(handle, { clientX: 0 });
+		window.dispatchEvent(new MouseEvent("pointermove", { clientX: 10 }));
+		window.dispatchEvent(new MouseEvent("pointerup", { clientX: 10 }));
+		expect(updateAudioSpan).toHaveBeenCalledTimes(1);
+		expect(updateAudioSpan.mock.calls[0][3]).toBe("l");
+	});
+
+	it("right-handle drag commits in `r` mode, leaving the in-point alone", () => {
+		const { pill, updateAudioSpan } = renderAudio();
 		const handle = pill.lastElementChild as Element;
 		fireEvent.pointerDown(handle, { clientX: 0 });
-		window.dispatchEvent(new MouseEvent("pointermove", { clientX: -30 }));
-		window.dispatchEvent(new MouseEvent("pointerup", { clientX: -30 }));
-		expect(placeAudioTrack).toHaveBeenCalledTimes(1);
-		const [, placement] = placeAudioTrack.mock.calls[0];
-		expect(placement.timelineStartSec).toBe(100);
-		expect(placement.trimStartSec).toBe(0);
-		// 60s window − 60px worth of seconds (−30px = −60s) → out-point at 0? No:
-		// −30px = −60s, so trimEnd 60 → 0 clamps to trimStart + MIN. Use a smaller drag.
-		expect(placement.trimEndSec).toBeLessThan(60);
+		window.dispatchEvent(new MouseEvent("pointermove", { clientX: -10 }));
+		window.dispatchEvent(new MouseEvent("pointerup", { clientX: -10 }));
+		expect(updateAudioSpan).toHaveBeenCalledTimes(1);
+		expect(updateAudioSpan.mock.calls[0][3]).toBe("r");
 	});
 });

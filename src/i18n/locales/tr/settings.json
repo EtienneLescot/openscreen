@@ -329,10 +329,13 @@
 		"help": "Ses çıkış seviyesini ayarlayın. Önizlemede ve dışa aktarmada aynı şekilde uygulanır."
 	},
 	"audioTrack": {
-		"add": "Ses parçası ekle",
+		"add": "Müzik ekle",
+		"addVoiceover": "Seslendirme ekle",
+		"defaultLabel": "Ses",
 		"importFailed": "Ses eklenemedi",
-		"defaultLabel": "Ses parçası",
-		"help": "Bu içe aktarılmış ses parçasının ses düzeyi. Önizlemede ve dışa aktarmada kaydın üzerine miksleniyor. Taşımak veya kırpmak için parçayı zaman çizelgesinde sürükleyin.",
-		"remove": "Parçayı sil"
+		"lane": "Kanal",
+		"music": "Müzik",
+		"remove": "Sesi sil",
+		"voiceover": "Seslendirme"
 	}
 }

@@ -329,10 +329,13 @@
 		"help": "Ajusta el nivel de salida del audio. Se aplica igual en la vista previa y en la exportación."
 	},
 	"audioTrack": {
-		"add": "Añadir pista de audio",
+		"add": "Añadir música",
+		"addVoiceover": "Añadir voz en off",
+		"defaultLabel": "Audio",
 		"importFailed": "No se pudo añadir el audio",
-		"defaultLabel": "Pista de audio",
-		"help": "Volumen de esta pista de audio importada. Se mezcla sobre la grabación en la vista previa y en la exportación. Arrastra la pista en la línea de tiempo para moverla o recortarla.",
-		"remove": "Eliminar pista"
+		"lane": "Pista",
+		"music": "Música",
+		"remove": "Eliminar audio",
+		"voiceover": "Voz en off"
 	}
 }

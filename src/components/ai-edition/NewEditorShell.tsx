@@ -428,13 +428,12 @@ export function NewEditorShell() {
 		(assetId: string) =>
 			enqueueTimelineWrite(() => {
 				const doc = useProjectStore.getState().document;
-				// An audio asset has no video, so it must never become a clip (issue
-				// #350) — it goes on the audio lane as a track. Adding it "to the
-				// timeline" reuses its existing track if it already has one (importing
-				// already placed one) so the same file can't stack up duplicate lanes.
+				// An audio asset has no video, so it must never become a clip (issue #350) —
+				// it goes on an audio lane as a region. Adding it "to the timeline" is a
+				// no-op when it is already placed, so the same file can't stack up copies.
 				if (doc?.assets.find((a) => a.id === assetId)?.kind === "audio") {
-					if (doc.audioTracks.some((t) => t.assetId === assetId)) return Promise.resolve();
-					return tl.addAudioTrack(assetId).then(() => undefined);
+					if (doc.audioRanges.some((r) => r.audioAssetId === assetId)) return Promise.resolve();
+					return tl.addAudioRegion(assetId).then(() => undefined);
 				}
 				const at = doc?.timeline.clips.length ?? 0;
 				return tl.insertClipAt(assetId, at);
@@ -826,6 +825,14 @@ export function NewEditorShell() {
 				},
 				{ history: true },
 			);
+		} else if (snapshot.kind === "audio") {
+			await saveDocument(
+				{
+					...doc,
+					audioRanges: [...doc.audioRanges, ...anchored] as typeof doc.audioRanges,
+				},
+				{ history: true },
+			);
 		} else if (snapshot.kind === "annotation") {
 			await saveDocument(
 				{
@@ -886,7 +893,9 @@ export function NewEditorShell() {
 					? tl.annotationRegions
 					: sel.kind === "speed"
 						? tl.speedRegions
-						: tl.cameraFullscreenRegions;
+						: sel.kind === "audio"
+							? tl.audioRegions
+							: tl.cameraFullscreenRegions;
 		const region = (source as Array<{ id: string }>).find((r) => r.id === sel.id);
 		if (!region) return;
 		copyRegion({ kind: sel.kind, region: region as unknown as Record<string, unknown> });
@@ -1041,11 +1050,17 @@ export function NewEditorShell() {
 				void tl.addAnnotation(newRegionDurationSec());
 				return;
 			}
-			// Unlike its neighbours this opens a file picker rather than dropping a region at
-			// the playhead — there is nothing to size, so it takes no duration (issue #350).
+			// Unlike their neighbours these open a file picker rather than dropping a region
+			// at the playhead: the file's own length is the span, so there is nothing to size
+			// and they take no duration (issue #350). Two bindings for two lanes.
 			if (matchesShortcut(e, shortcuts.addAudio, isMac)) {
 				e.preventDefault();
-				void tl.addAudio();
+				void tl.addAudio("music");
+				return;
+			}
+			if (matchesShortcut(e, shortcuts.addVoiceover, isMac)) {
+				e.preventDefault();
+				void tl.addAudio("voiceover");
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addSpeed, isMac)) {
@@ -1251,10 +1266,10 @@ export function NewEditorShell() {
 									hasProject={hasProject}
 									hasAsset={hasAsset}
 									videoSources={videoSources}
-									// Imported audio tracks (issue #350). `videoSources` already
-									// resolves a URL for every asset (audio included), so it doubles as
-									// the audio source list; VirtualPreview looks each track up by assetId.
-									audioTracks={tl.audioTracks}
+									// Imported audio (issue #350). `videoSources` already resolves a URL
+									// for every asset (audio included), so it doubles as the audio source
+									// list; VirtualPreview looks each region's asset up by id.
+									audioRegions={tl.audioRegions}
 									audioSources={videoSources}
 									clips={clips}
 									zoomRegions={tl.zoomRegions}

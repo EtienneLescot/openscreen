@@ -58,7 +58,7 @@ function makeDoc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 		},
 		annotations: [],
 		zoomRanges: [],
-		audioTracks: [],
+		audioRanges: [],
 		legacyEditor: null,
 		...overrides,
 	};
@@ -853,22 +853,22 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 	const trim = makeTrim({ startSec: 2, endSec: 4 });
 
 	it("is the identity when there are no trims", () => {
-		expect(projectRawTimelineSecToPlayback([clip], [], 6)).toBeCloseTo(6, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [], [], 6)).toBeCloseTo(6, 6);
 	});
 
 	it("pulls a raw position after a cut earlier by the removed duration", () => {
 		// Raw 6 sits 2s past the 2s cut → output 4. This is the exact bug: the track was
 		// landing at 6 (delayed by the trim) instead of 4.
-		expect(projectRawTimelineSecToPlayback([clip], [trim], 6)).toBeCloseTo(4, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [trim], [], 6)).toBeCloseTo(4, 6);
 	});
 
 	it("is unaffected for a position before the cut", () => {
-		expect(projectRawTimelineSecToPlayback([clip], [trim], 1)).toBeCloseTo(1, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [trim], [], 1)).toBeCloseTo(1, 6);
 	});
 
 	it("collapses a position inside the trimmed gap to the end of the kept content before it", () => {
 		// Raw 3 is inside the removed 2..4 span → the next audible sample is at output 2.
-		expect(projectRawTimelineSecToPlayback([clip], [trim], 3)).toBeCloseTo(2, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [trim], [], 3)).toBeCloseTo(2, 6);
 	});
 
 	it("counts overlapping trims once (union, not sum)", () => {
@@ -878,7 +878,7 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 			makeTrim({ id: "t1", startSec: 2, endSec: 5 }),
 			makeTrim({ id: "t2", startSec: 3, endSec: 4 }),
 		];
-		expect(projectRawTimelineSecToPlayback([clip], trims, 6)).toBeCloseTo(3, 6);
+		expect(projectRawTimelineSecToPlayback([clip], trims, [], 6)).toBeCloseTo(3, 6);
 	});
 
 	it("removes a raw gap between clips (concatenated, like the programme)", () => {
@@ -898,7 +898,63 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 			timelineStartSec: 15,
 			timelineEndSec: 25,
 		});
-		expect(projectRawTimelineSecToPlayback([clipA, clipB], [], 20)).toBeCloseTo(15, 6);
+		expect(projectRawTimelineSecToPlayback([clipA, clipB], [], [], 20)).toBeCloseTo(15, 6);
+	});
+
+	it("compresses a position after a 2x stretch by what the picture lost", () => {
+		// A 2x region over raw 2..6 turns 4s of source into 2s of programme, so raw 8 —
+		// which is 2s past the stretch — lands at output 6, not 8. Without this an audio
+		// region placed after a sped-up stretch played 2s late in the export.
+		const speed = [
+			{ startMs: 2000, endMs: 6000, speed: 2, clipId: clip.id, sourceStartSec: 2, sourceEndSec: 6 },
+		];
+		expect(projectRawTimelineSecToPlayback([clip], [], speed, 8)).toBeCloseTo(6, 6);
+	});
+
+	it("stretches a position after a 0.5x region by what the picture gained", () => {
+		const speed = [
+			{
+				startMs: 2000,
+				endMs: 6000,
+				speed: 0.5,
+				clipId: clip.id,
+				sourceStartSec: 2,
+				sourceEndSec: 6,
+			},
+		];
+		// 4s of source becomes 8s of programme, so raw 8 lands at output 12.
+		expect(projectRawTimelineSecToPlayback([clip], [], speed, 8)).toBeCloseTo(12, 6);
+	});
+
+	it("integrates speed only over the part of the region the playhead has passed", () => {
+		const speed = [
+			{ startMs: 2000, endMs: 6000, speed: 2, clipId: clip.id, sourceStartSec: 2, sourceEndSec: 6 },
+		];
+		// Raw 4 is halfway through the stretch: 2s at 1x + 2s at 2x = output 3.
+		expect(projectRawTimelineSecToPlayback([clip], [], speed, 4)).toBeCloseTo(3, 6);
+	});
+
+	it("ignores a speed region anchored to a different clip", () => {
+		const speed = [
+			{
+				startMs: 2000,
+				endMs: 6000,
+				speed: 2,
+				clipId: "someone_else",
+				sourceStartSec: 2,
+				sourceEndSec: 6,
+			},
+		];
+		expect(projectRawTimelineSecToPlayback([clip], [], speed, 8)).toBeCloseTo(8, 6);
+	});
+
+	it("applies trims and speed together, in that order", () => {
+		// Cut raw 2..4, then run raw 4..8 at 2x. Raw 9 → 2s kept at 1x, then 4s of source
+		// at 2x (=2s), then 1s at 1x = output 5.
+		const speed = [
+			{ startMs: 4000, endMs: 8000, speed: 2, clipId: clip.id, sourceStartSec: 4, sourceEndSec: 8 },
+		];
+		expect(projectRawTimelineSecToPlayback([clip], [trim], speed, 9)).toBeCloseTo(5, 6);
 	});
 
 	it("sums cuts across multiple clips", () => {
@@ -922,7 +978,7 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 			makeTrim({ id: "t2", startSec: 12, endSec: 14 }),
 		];
 		// Raw 18 is past both cuts (3s removed) → output 15.
-		expect(projectRawTimelineSecToPlayback([clipA, clipB], trims, 18)).toBeCloseTo(15, 6);
+		expect(projectRawTimelineSecToPlayback([clipA, clipB], trims, [], 18)).toBeCloseTo(15, 6);
 	});
 });
 

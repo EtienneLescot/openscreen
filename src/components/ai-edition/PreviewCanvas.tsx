@@ -34,7 +34,7 @@ import { useScopedT } from "@/contexts/I18nContext";
 import { resolveAspectRatioValue } from "@/lib/ai-edition/document/outputFormat";
 import type {
 	AxcutAnnotationRegion,
-	AxcutAudioTrack,
+	AxcutAudioRegion,
 	AxcutClip,
 	AxcutTrimRange,
 	AxcutZoomRegion,
@@ -68,7 +68,7 @@ interface PreviewCanvasProps {
 	videoSources: VideoSource[];
 	/** Imported audio tracks + their asset URLs (issue #350), forwarded to
 	 *  VirtualPreview. */
-	audioTracks?: AxcutAudioTrack[];
+	audioRegions?: AxcutAudioRegion[];
 	audioSources?: VideoSource[];
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];

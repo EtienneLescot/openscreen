@@ -329,10 +329,13 @@
 		"help": "Regola il livello di uscita audio. Si applica allo stesso modo nell’anteprima e nell’esportazione."
 	},
 	"audioTrack": {
-		"add": "Aggiungi traccia audio",
+		"add": "Aggiungi musica",
+		"addVoiceover": "Aggiungi voce fuori campo",
+		"defaultLabel": "Audio",
 		"importFailed": "Impossibile aggiungere l’audio",
-		"defaultLabel": "Traccia audio",
-		"help": "Volume di questa traccia audio importata. Viene mixata sopra la registrazione nell’anteprima e nell’esportazione. Trascina la traccia sulla timeline per spostarla o ritagliarla.",
-		"remove": "Elimina traccia"
+		"lane": "Traccia",
+		"music": "Musica",
+		"remove": "Elimina audio",
+		"voiceover": "Voce fuori campo"
 	}
 }

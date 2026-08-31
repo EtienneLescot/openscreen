@@ -420,7 +420,7 @@ describe("DocumentService", () => {
 			expect(after.assets[0]?.kind).toBe("audio");
 		});
 
-		it("drops audioTracks that referenced a removed audio asset", async () => {
+		it("drops audio regions that played a removed audio asset", async () => {
 			const doc = await service.createProject("P");
 			await service.addAsset(doc.project.id, { path: "/tmp/screen.mp4" });
 			const withAudio = await service.addAsset(doc.project.id, {
@@ -431,21 +431,22 @@ describe("DocumentService", () => {
 			expect(audioId).toBeTruthy();
 			const withTrack = await service.saveProject({
 				...withAudio,
-				audioTracks: [
+				audioRanges: [
 					{
-						id: "trk_1",
-						assetId: audioId,
-						timelineStartSec: 0,
-						durationSec: 10,
-						trimStartSec: 0,
+						id: "audio_1",
+						startMs: 0,
+						endMs: 10_000,
+						audioAssetId: audioId,
+						kind: "music",
+						offsetSec: 0,
 						gainDb: 0,
-						label: "music",
+						origin: "user",
 					},
 				],
 			});
-			expect(withTrack.audioTracks).toHaveLength(1);
+			expect(withTrack.audioRanges).toHaveLength(1);
 			const after = await service.removeAsset(doc.project.id, audioId);
-			expect(after.audioTracks).toEqual([]);
+			expect(after.audioRanges).toEqual([]);
 			expect(after.assets.some((a) => a.id === audioId)).toBe(false);
 		});
 

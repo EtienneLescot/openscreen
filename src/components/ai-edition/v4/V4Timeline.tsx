@@ -4,6 +4,7 @@ import {
 	Loader2,
 	Maximize2,
 	MessageSquare,
+	Mic,
 	Music,
 	Pencil,
 	Scissors,
@@ -31,7 +32,7 @@ import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
-import type { AxcutAudioTrack, AxcutClip } from "@/lib/ai-edition/schema";
+import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionStore";
@@ -337,93 +338,28 @@ const ClipWaveform = memo(function ClipWaveform({
 	);
 });
 
-// One imported audio track on its lane (issue #350). Grab the body to move it,
-// the edge handles to trim (left = in-point, which moves the head too; right =
-// out-point). The waveform reuses ClipWaveform (its `.tlWave` is inset:0, so it
-// paints behind the label here just as it does inside a clip), windowed to the
-// track's trim and scaled by the track's own gain. `leftPct`/`widthPct` are
-// precomputed by the parent — during a drag they carry the live preview geometry
-// — so this stays memoisable: a doc edit that doesn't touch this track, and a
-// drag on another one, won't re-render it.
-const AudioLanePill = memo(function AudioLanePill({
-	track,
-	url,
-	assetDurationSec,
-	leftPct,
-	widthPct,
-	selected,
-	onStartDrag,
-	onSelect,
-	label,
-	outputGain,
-}: {
-	track: AxcutAudioTrack;
-	url: string | undefined;
-	assetDurationSec: number | undefined;
-	leftPct: number;
-	widthPct: number;
-	selected: boolean;
-	onStartDrag: (e: ReactPointerEvent, track: AxcutAudioTrack, mode: "move" | "l" | "r") => void;
-	onSelect: (id: string) => void;
-	label: string;
-	/** Linear project output gain, applied on top of the track gain — the mixer
-	 *  applies both, so the bars must too or they under-read the exported level. */
-	outputGain: number;
-}) {
-	const duration = assetDurationSec ?? track.durationSec;
-	return (
-		<div
-			role="button"
-			tabIndex={0}
-			className={`${styles.lanePill} ${styles.laneAudio}${
-				selected ? ` ${styles.lanePillSel}` : ""
-			}`}
-			style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: 3 }}
-			// Body drag moves the track; it also selects and stops the .tlTracks scrub.
-			onPointerDown={(e) => onStartDrag(e, track, "move")}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					e.preventDefault();
-					onSelect(track.id);
-				}
-			}}
-			title={label}
-		>
-			<span
-				className={styles.lanePillHandle}
-				style={{ left: 0 }}
-				onPointerDown={(e) => onStartDrag(e, track, "l")}
-			/>
-			<ClipWaveform
-				videoUrl={url}
-				assetDurationSec={duration}
-				sourceStartSec={track.trimStartSec}
-				sourceEndSec={track.trimEndSec ?? duration}
-				// Track gain AND the project output gain — `finish_audio` applies both and
-				// clamps, so scaling by the track gain alone under-read a boosted output.
-				gain={audioGainScalar(track.gainDb) * outputGain}
-			/>
-			<span className={styles.laneAudioLabel}>
-				<Music size={11} />
-				{label}
-			</span>
-			<span
-				className={styles.lanePillHandle}
-				style={{ right: 0 }}
-				onPointerDown={(e) => onStartDrag(e, track, "r")}
-			/>
-		</div>
-	);
-});
-
 interface LanePill {
 	id: string;
-	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen";
+	/** Two audio kinds, one region family: `voiceover` and `music` render on their own
+	 *  lanes and never merge or repel each other (their kind is part of the region
+	 *  identity), but both address the document as `RegionKind` "audio". A single lane
+	 *  would make the repel rule forbid a voiceover over a music bed — the arrangement
+	 *  the feature exists for. */
+	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen" | "voiceover" | "music";
 	start: number;
 	end: number;
 	label: string;
 	/** Underlying row ids this pill represents — >1 for a coalesced trim group. */
 	sourceIds: string[];
+	/** Audio pills draw the file's waveform inside the box, windowed to what the pill
+	 *  actually plays. Absent on every other kind, which has no media to show. */
+	waveform?: {
+		url: string | undefined;
+		assetDurationSec: number | undefined;
+		sourceStartSec: number;
+		sourceEndSec: number;
+		gain: number;
+	};
 }
 
 export function V4Timeline({
@@ -590,6 +526,37 @@ export function V4Timeline({
 		label: `${(p.member.customScale ?? ZOOM_DEPTH_SCALES[p.member.depth]).toFixed(2)}×`,
 		sourceIds: p.ids,
 	}));
+	// Audio pills (issue #350) — the same universal merge rule as every lane above, with
+	// the file, the kind, the in-point and the gain all part of the identity, so two beds
+	// from different files (or at different levels) never collapse into one pill.
+	const audioPills = (kind: "voiceover" | "music"): LanePill[] =>
+		coalesceRegionsForRuler(tl.audioRegions.filter((r) => r.kind === kind)).map((p) => {
+			const asset = tl.audioAssets.find((a) => a.id === p.member.audioAssetId);
+			return {
+				id: p.ids[0],
+				kind,
+				start: p.start,
+				end: p.end,
+				label: asset?.label ?? ts("audioTrack.defaultLabel"),
+				sourceIds: p.ids,
+				waveform: {
+					url: asset ? toFileUrl(asset.originalPath) : undefined,
+					assetDurationSec: asset?.durationSec,
+					// The window the pill plays: its in-point, for as long as the pill is.
+					// Approximate across a ventilated pill (each fragment advances the real
+					// in-point), and deliberately so — the waveform is an aid to placement,
+					// not the projection the mixer reads.
+					sourceStartSec: p.member.offsetSec,
+					sourceEndSec: p.member.offsetSec + (p.end - p.start),
+					// Track gain AND the project output gain — `finish_audio` applies both and
+					// clamps, so scaling by the track gain alone under-reads a boosted output.
+					gain: audioGainScalar(p.member.gainDb) * audioGainScalar(settings.audioGainDb),
+				},
+			};
+		});
+	const voiceoverPills = audioPills("voiceover");
+	const musicPills = audioPills("music");
+
 	// trims: content-free (no per-instance text/settings), so touching rows —
 	// inevitable once a trim is ventilated across a clip boundary — are
 	// coalesced into one pill. This is what makes growing a trim across a
@@ -738,16 +705,23 @@ export function V4Timeline({
 		end: number;
 	} | null>(null);
 
-	// Drag a lane pill to move it (mode "move", keeps duration) or resize one
-	// edge (mode "l"/"r"). Zoom/speed/annotation are timeline-ms; trims map
-	// back to source-seconds through their carrying clip.
+	// The one door for "this pill is the thing I mean", called by both the pointer and the
+	// keyboard. Voiceover and music are two LANES of one region family: the document knows
+	// them as "audio" and the payload's own `kind` tells the lanes apart, so selection,
+	// Delete, copy/paste and multi-select all key off the document kind and need no
+	// audio-specific branch of their own. Mapping it HERE rather than in the drag is what
+	// makes that true of the keyboard path too.
 	const selectPill = useCallback(
 		(pill: LanePill, additive: boolean) => {
-			tl.selectRegion(pill.kind, pill.id, { additive });
+			const regionKind = pill.kind === "voiceover" || pill.kind === "music" ? "audio" : pill.kind;
+			tl.selectRegion(regionKind, pill.id, { additive });
 		},
 		[tl],
 	);
 
+	// Drag a lane pill to move it (mode "move", keeps duration) or resize one
+	// edge (mode "l"/"r"). Zoom/speed/annotation are timeline-ms; trims map
+	// back to source-seconds through their carrying clip.
 	const startPillDrag = useCallback(
 		(e: ReactPointerEvent, pill: LanePill, dragMode: "move" | "l" | "r") => {
 			e.preventDefault();
@@ -805,6 +779,12 @@ export function V4Timeline({
 					await tl.updateAnnotationSpan(pill.id, s * 1000, en * 1000);
 				else if (pill.kind === "cameraFullscreen")
 					await tl.updateCameraFullscreenSpan(pill.id, s * 1000, en * 1000);
+				// `dragMode` matters here and nowhere else: dragging an audio pill's LEFT edge
+				// trims its in-point (the media stays where it is in time), while moving the
+				// body carries the media with it. Every other kind holds a value over a span,
+				// so which edge you grabbed changes nothing about what it plays.
+				else if (pill.kind === "voiceover" || pill.kind === "music")
+					await tl.updateAudioSpan(pill.id, s * 1000, en * 1000, dragMode);
 				else {
 					// Trims are stored in source-time per asset but manipulated on the
 					// timeline like every other pill. Ventilate the new span across the
@@ -865,132 +845,6 @@ export function V4Timeline({
 			window.addEventListener("pointerup", up);
 		},
 		[tl, selectPill, total, clips, pxPerSec],
-	);
-
-	// Live preview geometry for an audio track being dragged (issue #350), the
-	// audio-lane counterpart of activePillDrag — see startAudioDrag. Times are
-	// output-timeline (start) and source (trimStart/trimEnd) seconds.
-	const [audioDrag, setAudioDrag] = useState<{
-		id: string;
-		start: number;
-		trimStart: number;
-		trimEnd: number;
-	} | null>(null);
-	const audioDragRef = useRef<typeof audioDrag>(null);
-
-	// Drag an audio track: "move" slides the head (both edges together), "l"/"r"
-	// trim the in/out points. The left edge moves the head AND the in-point so the
-	// right edge stays put — hence the single placeAudioTrack commit on release.
-	// Like the region pills, the preview is local state and the document is written
-	// once, on pointerup.
-	const startAudioDrag = useCallback(
-		(e: ReactPointerEvent, track: AxcutAudioTrack, mode: "move" | "l" | "r") => {
-			e.preventDefault();
-			e.stopPropagation();
-			tl.selectAudioTrack(track.id);
-			// Start clean: a previous drag's commit may still be in flight (its ref is
-			// cleared only when `placeAudioTrack` resolves). Without this, a plain
-			// select-click that never moves would let `up` read that stale value and
-			// re-commit the old drag — a redundant write and an extra undo step.
-			audioDragRef.current = null;
-			const el = canvasRef.current;
-			if (!el) return;
-			const r = el.getBoundingClientRect();
-			const startX = e.clientX;
-			const asset = tl.assets.find((a) => a.id === track.assetId);
-			// The source length caps the out-point; fall back to the current window when
-			// the file hasn't been probed (durationSec 0), so a drag can't extend past it.
-			const sourceLen = asset?.durationSec || track.durationSec || track.trimEndSec || 0;
-			const origStart = track.timelineStartSec;
-			const origTrimStart = track.trimStartSec;
-			const origTrimEnd = track.trimEndSec ?? sourceLen;
-			const maxEnd = sourceLen > 0 ? sourceLen : origTrimEnd;
-			// Snap the moving edge to clip boundaries and the timeline ends, same PILL_SNAP_PX
-			// magnet the region pills use.
-			const snapTargets = [
-				0,
-				total,
-				...clips.map((c) => c.timelineStartSec),
-				...clips.map((c) => c.timelineEndSec),
-			];
-			const snapThresh = pxPerSec > 0 ? PILL_SNAP_PX / pxPerSec : 0;
-			const snap = (v: number): number => {
-				let best = v;
-				let bestD = snapThresh;
-				for (const target of snapTargets) {
-					const d = Math.abs(target - v);
-					if (d < bestD) {
-						bestD = d;
-						best = target;
-					}
-				}
-				setSnapPct(best === v ? null : (best / total) * 100);
-				return best;
-			};
-			const move = (ev: PointerEvent) => {
-				const dxSec = ((ev.clientX - startX) / r.width) * total;
-				let ns = origStart;
-				let nts = origTrimStart;
-				let nte = origTrimEnd;
-				if (mode === "move") {
-					// Cap so the whole track lands by `total`: no pill past 100%, and the
-					// export (which truncates at the programme end) matches what's shown.
-					const upper = Math.max(0, total - (origTrimEnd - origTrimStart));
-					ns = Math.min(Math.max(0, snap(origStart + dxSec)), upper);
-				} else if (mode === "l") {
-					// The left edge can't cross the right one, and can't reveal more head
-					// than the source has (trimStart floors at 0 → head floors at
-					// origStart - origTrimStart).
-					const rightEdge = origStart + (origTrimEnd - origTrimStart);
-					const lowerLeft = Math.max(0, origStart - origTrimStart);
-					let newLeft = snap(origStart + dxSec);
-					newLeft = Math.min(Math.max(newLeft, lowerLeft), rightEdge - MIN_REGION_SEC);
-					ns = newLeft;
-					nts = origTrimStart + (newLeft - origStart);
-					nte = origTrimEnd;
-				} else {
-					// Right edge: move the out-point, head fixed. Snap on the timeline
-					// position of the edge, then map back to a source out-point.
-					const snappedRight = snap(origStart + (origTrimEnd - origTrimStart) + dxSec);
-					const newTrimEnd = origTrimStart + (snappedRight - origStart);
-					// Cap the out-point at the source length AND the programme end (`total`).
-					nte = Math.min(
-						Math.max(newTrimEnd, origTrimStart + MIN_REGION_SEC),
-						maxEnd,
-						origTrimStart + Math.max(0, total - origStart),
-					);
-				}
-				const next = { id: track.id, start: ns, trimStart: nts, trimEnd: nte };
-				audioDragRef.current = next;
-				setAudioDrag(next);
-			};
-			const up = () => {
-				setSnapPct(null);
-				window.removeEventListener("pointermove", move);
-				window.removeEventListener("pointerup", up);
-				const fin = audioDragRef.current;
-				if (fin) {
-					void tl
-						.placeAudioTrack(fin.id, {
-							timelineStartSec: fin.start,
-							trimStartSec: fin.trimStart,
-							trimEndSec: fin.trimEnd,
-						})
-						.finally(() => {
-							if (audioDragRef.current === fin) {
-								audioDragRef.current = null;
-								setAudioDrag(null);
-							}
-						});
-				} else {
-					audioDragRef.current = null;
-					setAudioDrag(null);
-				}
-			};
-			window.addEventListener("pointermove", move);
-			window.addEventListener("pointerup", up);
-		},
-		[tl, total, clips, pxPerSec],
 	);
 
 	const startNavDrag = useCallback(
@@ -1115,7 +969,11 @@ export function V4Timeline({
 					? styles.laneTrim
 					: kind === "cameraFullscreen"
 						? styles.laneCameraFullscreen
-						: styles.laneZoom;
+						: kind === "voiceover"
+							? styles.laneVoiceover
+							: kind === "music"
+								? styles.laneAudio
+								: styles.laneZoom;
 	const pillIcon = (kind: LanePill["kind"]) =>
 		kind === "annotation" ? (
 			<MessageSquare size={11} />
@@ -1125,6 +983,10 @@ export function V4Timeline({
 			<Scissors size={11} />
 		) : kind === "cameraFullscreen" ? (
 			<Maximize2 size={11} />
+		) : kind === "voiceover" ? (
+			<Mic size={11} />
+		) : kind === "music" ? (
+			<Music size={11} />
 		) : (
 			<ZoomIn size={11} />
 		);
@@ -1392,6 +1254,17 @@ export function V4Timeline({
 				}
 				title={p.label}
 			>
+				{/* `.tlWave` is inset:0, so it paints behind the label here exactly as it does
+				    inside a clip. Only audio pills carry one. */}
+				{p.waveform ? (
+					<ClipWaveform
+						videoUrl={p.waveform.url}
+						assetDurationSec={p.waveform.assetDurationSec}
+						sourceStartSec={p.waveform.sourceStartSec}
+						sourceEndSec={p.waveform.sourceEndSec}
+						gain={p.waveform.gain}
+					/>
+				) : null}
 				{seg.interactive ? (
 					<span
 						className={styles.lanePillHandle}
@@ -1579,17 +1452,29 @@ export function V4Timeline({
 								>
 									{tool.icon}
 								</button>
-								{/* Add audio sits right after Add annotation (issue #350). */}
+								{/* Add voiceover / Add music sit right after Add annotation (issue #350).
+								    Two buttons because they land on two lanes; both open the same picker. */}
 								{tool.id === "comment" ? (
-									<button
-										type="button"
-										className={styles.tlToolBtn}
-										title={ts("audioTrack.add")}
-										aria-label={ts("audioTrack.add")}
-										onClick={() => void tl.addAudio()}
-									>
-										<Music size={15} />
-									</button>
+									<>
+										<button
+											type="button"
+											className={styles.tlToolBtn}
+											title={ts("audioTrack.addVoiceover")}
+											aria-label={ts("audioTrack.addVoiceover")}
+											onClick={() => void tl.addAudio("voiceover")}
+										>
+											<Mic size={15} />
+										</button>
+										<button
+											type="button"
+											className={styles.tlToolBtn}
+											title={ts("audioTrack.add")}
+											aria-label={ts("audioTrack.add")}
+											onClick={() => void tl.addAudio("music")}
+										>
+											<Music size={15} />
+										</button>
+									</>
 								) : null}
 							</Fragment>
 						))}
@@ -1727,46 +1612,15 @@ export function V4Timeline({
 										hasAnyCamera ? t("hints.pressCameraFullscreen") : ts("layout.noWebcam"),
 									)}
 								</div>
-								{/* Imported audio tracks (issue #350). Always shown, like every other
-								    lane — "Add audio" is a toolbar peer of the region tools now (and
-								    has a keyboard shortcut), so an empty lane advertises the shortcut
-								    that fills it rather than hiding until the first import. */}
+								{/* Imported audio (issue #350). Two lanes, one per kind, always shown like
+								    every other lane — an empty lane advertises the shortcut that fills it.
+								    Voiceover and music are separate lanes so one can sit over the other:
+								    same-lane pills of different identities repel, across lanes they do not. */}
 								<div className={`${styles.tlLane} ${styles.tlLaneAudio}`}>
-									{tl.audioTracks.length === 0 ? (
-										<span
-											className={styles.laneEmpty}
-											style={{ left: `${nav.start * 100}%`, width: `${navSpan * 100}%` }}
-										>
-											{t("hints.pressAudio")}
-										</span>
-									) : (
-										tl.audioTracks.map((track) => {
-											const asset = tl.assets.find((a) => a.id === track.assetId);
-											const duration = asset?.durationSec ?? track.durationSec;
-											// While this track is being dragged, lay it out from the live
-											// preview geometry instead of the not-yet-written document.
-											const drag = audioDrag?.id === track.id ? audioDrag : null;
-											const start = drag ? drag.start : track.timelineStartSec;
-											const trimStart = drag ? drag.trimStart : track.trimStartSec;
-											const trimEnd = drag ? drag.trimEnd : (track.trimEndSec ?? duration);
-											const widthSec = Math.max(0, trimEnd - trimStart);
-											return (
-												<AudioLanePill
-													key={track.id}
-													track={track}
-													url={asset ? toFileUrl(asset.originalPath) : undefined}
-													assetDurationSec={duration}
-													leftPct={pctOf(start)}
-													widthPct={pctOf(widthSec)}
-													selected={tl.selectedAudioTrackId === track.id}
-													onStartDrag={startAudioDrag}
-													onSelect={tl.selectAudioTrack}
-													label={track.label || asset?.label || ts("audioTrack.defaultLabel")}
-													outputGain={audioGainScalar(settings.audioGainDb)}
-												/>
-											);
-										})
-									)}
+									{renderPills(voiceoverPills, t("hints.pressVoiceover"))}
+								</div>
+								<div className={`${styles.tlLane} ${styles.tlLaneAudio}`}>
+									{renderPills(musicPills, t("hints.pressAudio"))}
 								</div>
 							</>
 						) : null}

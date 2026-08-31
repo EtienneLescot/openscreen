@@ -73,7 +73,7 @@ const sampleDoc = {
 	},
 	annotations: [],
 	zoomRanges: [],
-	audioTracks: [],
+	audioRanges: [],
 	legacyEditor: null,
 };
 
@@ -374,82 +374,9 @@ describe("useProjectStore", () => {
 	});
 
 	// Placement + selection for imported audio tracks (issue #350).
-	const audioAsset = {
-		id: "audio_1",
-		kind: "audio" as const,
-		label: "voiceover.mp3",
-		originalPath: "/tmp/vo.mp3",
-		durationSec: 12,
-		cameraTrack: null,
-	};
-
-	it("addAudioTrack places a track at the playhead for an audio asset and selects it", async () => {
-		useProjectStore.setState({
-			projectId: "proj_test",
-			document: { ...sampleDoc, assets: [audioAsset] },
-			revision: 1,
-			status: "ready",
-			error: null,
-			currentTimeSec: 5,
-		});
-		bridgeMocks.save.mockImplementation((document: unknown) =>
-			Promise.resolve({ success: true, document }),
-		);
-
-		const id = await useProjectStore.getState().addAudioTrack("audio_1");
-
-		const tracks = useProjectStore.getState().document?.audioTracks ?? [];
-		expect(tracks).toHaveLength(1);
-		expect(tracks[0]).toMatchObject({ assetId: "audio_1", timelineStartSec: 5, durationSec: 12 });
-		expect(id).toBe(tracks[0]?.id);
-		// Placing a track selects it so the inspector opens on its controls.
-		expect(useProjectStore.getState().selectedAudioTrackId).toBe(id);
-	});
-
-	it("addAudioTrack refuses a non-audio (or unknown) asset and selects nothing", async () => {
-		useProjectStore.setState({
-			projectId: "proj_test",
-			document: sampleDoc, // its only asset, if any, is not audio
-			revision: 1,
-			status: "ready",
-			error: null,
-		});
-		expect(await useProjectStore.getState().addAudioTrack("nope")).toBeNull();
-		expect(useProjectStore.getState().selectedAudioTrackId).toBeNull();
-	});
-
-	it("importAudioAsset adds the asset then places and selects a track in one action", async () => {
-		useProjectStore.setState({
-			projectId: "proj_test",
-			document: sampleDoc,
-			revision: 1,
-			status: "ready",
-			error: null,
-			currentTimeSec: 0,
-		});
-		durationMocks.probeAudioDuration.mockResolvedValue(12);
-		bridgeMocks.addAsset.mockResolvedValue({
-			assetId: "audio_1",
-			document: { ...sampleDoc, assets: [audioAsset] },
-		});
-		bridgeMocks.save.mockImplementation((document: unknown) =>
-			Promise.resolve({ success: true, document }),
-		);
-
-		const asset = await useProjectStore.getState().importAudioAsset("/tmp/vo.mp3");
-
-		expect(asset?.id).toBe("audio_1");
-		const tracks = useProjectStore.getState().document?.audioTracks ?? [];
-		expect(tracks).toHaveLength(1);
-		expect(tracks[0]?.assetId).toBe("audio_1");
-		expect(useProjectStore.getState().selectedAudioTrackId).toBe(tracks[0]?.id);
-	});
-
-	it("clear() resets the audio-track selection", () => {
-		useProjectStore.setState({ selectedAudioTrackId: "audio_x" });
-		useProjectStore.getState().clear();
-		expect(useProjectStore.getState().selectedAudioTrackId).toBeNull();
-	});
+	// Placing the region is `useTimeline.addAudioRegion`'s job now, not the store's: the
+	// region model and the pill selection both live there, so the store's audio surface is
+	// down to importing the asset (covered above). See useTimeline.test.ts.
 
 	// The save boundary. Every write in the app funnels through `saveDocument`, and
 	// almost every caller `void`s it from a click handler, so what this function does

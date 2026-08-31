@@ -3,10 +3,10 @@ import { migrateRawDocumentToCurrent } from "../document/migrate";
 import {
 	annotationRegionSchema,
 	assetSchema,
-	audioTrackSchema,
+	audioRegionSchema,
 	axcutSchemaVersion,
 	clipSchema,
-	createAudioTrack,
+	createAudioRegion,
 	createEmptyDocument,
 	documentSchema,
 	ensureDocument,
@@ -42,7 +42,7 @@ describe("axcut-schema v7", () => {
 		expect(doc.timeline.captionRanges).toEqual([]);
 		expect(doc.annotations).toEqual([]);
 		expect(doc.zoomRanges).toEqual([]);
-		expect(doc.audioTracks).toEqual([]);
+		expect(doc.audioRanges).toEqual([]);
 		expect(doc.transcripts).toEqual([]);
 		expect(doc.legacyEditor).toBeNull();
 	});
@@ -974,78 +974,113 @@ describe("v6 -> v7 trim clip-anchor migration", () => {
 	});
 });
 
-describe("audio tracks (issue #350)", () => {
-	it("applies defaults for gain, trim, position, and label", () => {
-		const track = audioTrackSchema.parse({
+describe("audio regions (issue #350)", () => {
+	it("parses a minimal region and defaults the payload", () => {
+		const region = audioRegionSchema.parse({
 			id: "audio_1",
-			assetId: "asset_1",
-			durationSec: 42,
+			startMs: 1000,
+			endMs: 5000,
+			audioAssetId: "asset_1",
 		});
-		expect(track.timelineStartSec).toBe(0);
-		expect(track.trimStartSec).toBe(0);
-		expect(track.trimEndSec).toBeUndefined();
-		expect(track.gainDb).toBe(0);
-		expect(track.label).toBe("");
+		expect(region.kind).toBe("music");
+		expect(region.offsetSec).toBe(0);
+		expect(region.gainDb).toBe(0);
+		expect(region.origin).toBe("user");
 	});
 
-	it("rejects a trim window whose end precedes its start", () => {
+	it("carries the v5 clip anchor like every other region kind", () => {
+		const region = audioRegionSchema.parse({
+			id: "audio_1",
+			startMs: 1000,
+			endMs: 5000,
+			audioAssetId: "asset_1",
+			clipId: "clip_a",
+			sourceStartSec: 1,
+			sourceEndSec: 5,
+		});
+		expect(region.clipId).toBe("clip_a");
+		expect(region.sourceStartSec).toBe(1);
+		expect(region.sourceEndSec).toBe(5);
+	});
+
+	it("rejects an inverted span", () => {
 		expect(() =>
-			audioTrackSchema.parse({
+			audioRegionSchema.parse({
 				id: "audio_1",
-				assetId: "asset_1",
-				durationSec: 10,
-				trimStartSec: 5,
-				trimEndSec: 2,
+				startMs: 5000,
+				endMs: 1000,
+				audioAssetId: "asset_1",
 			}),
 		).toThrow();
 	});
 
-	it("rejects a negative timelineStartSec", () => {
+	it("rejects a negative offset", () => {
 		expect(() =>
-			audioTrackSchema.parse({
+			audioRegionSchema.parse({
 				id: "audio_1",
-				assetId: "asset_1",
-				durationSec: 10,
-				timelineStartSec: -1,
+				startMs: 0,
+				endMs: 1000,
+				audioAssetId: "asset_1",
+				offsetSec: -1,
 			}),
 		).toThrow();
 	});
 
-	it("createAudioTrack builds a schema-valid track with a prefixed id", () => {
-		const track = createAudioTrack({
-			assetId: "asset_1",
-			durationSec: 12.5,
-			timelineStartSec: 3,
-			label: "voiceover.mp3",
+	it("names the file `audioAssetId` so identity reads it", () => {
+		// `assetId` is in timelineMap's NON_IDENTITY_FIELDS — correct for a trim, where it
+		// says WHERE the cut lives. For audio the file IS what the region is, so two beds
+		// from different files that touch must not merge into one pill. The field name is
+		// what keeps them apart; renaming it back would silently reintroduce the merge.
+		const region = audioRegionSchema.parse({
+			id: "audio_1",
+			startMs: 0,
+			endMs: 1000,
+			audioAssetId: "asset_1",
 		});
-		expect(track.id).toMatch(/^audio_/);
-		expect(track.assetId).toBe("asset_1");
-		expect(track.durationSec).toBe(12.5);
-		expect(track.timelineStartSec).toBe(3);
-		expect(track.label).toBe("voiceover.mp3");
+		expect("assetId" in region).toBe(false);
+		expect(region.audioAssetId).toBe("asset_1");
+	});
+
+	it("createAudioRegion builds a schema-valid region with a prefixed id", () => {
+		const region = createAudioRegion({
+			audioAssetId: "asset_1",
+			startMs: 3000,
+			endMs: 15_500,
+			kind: "voiceover",
+		});
+		expect(region.id).toMatch(/^audio_/);
+		expect(region.audioAssetId).toBe("asset_1");
+		expect(region.kind).toBe("voiceover");
+		expect(region.startMs).toBe(3000);
+		expect(region.endMs).toBe(15_500);
 		// The factory output must itself round-trip through the schema.
-		expect(() => audioTrackSchema.parse(track)).not.toThrow();
+		expect(() => audioRegionSchema.parse(region)).not.toThrow();
 	});
 
-	it("defaults audioTracks to [] when a stored document omits the key", () => {
-		// A document written before issue #350 has no `audioTracks`; the defaulted
-		// array must fill in so older files load unchanged (no schemaVersion bump).
-		const { audioTracks: _drop, ...withoutAudio } = createEmptyDocument({
+	it("createAudioRegion never emits an inverted span", () => {
+		const region = createAudioRegion({ audioAssetId: "asset_1", startMs: 5000, endMs: 1000 });
+		expect(region.endMs).toBe(5000);
+	});
+
+	it("defaults audioRanges to [] when a stored document omits the key", () => {
+		// A document written before issue #350 has no `audioRanges`; the defaulted array
+		// must fill in so older files load unchanged (no schemaVersion bump).
+		const { audioRanges: _drop, ...withoutAudio } = createEmptyDocument({
 			projectId: "p",
 			title: "t",
 		});
-		expect("audioTracks" in withoutAudio).toBe(false);
+		expect("audioRanges" in withoutAudio).toBe(false);
 		const parsed = documentSchema.parse(withoutAudio);
-		expect(parsed.audioTracks).toEqual([]);
+		expect(parsed.audioRanges).toEqual([]);
 	});
 
-	it("round-trips a document carrying an audio track", () => {
-		const track = createAudioTrack({ assetId: "asset_1", durationSec: 8 });
+	it("round-trips a document carrying an audio region", () => {
+		const region = createAudioRegion({ audioAssetId: "asset_1", startMs: 0, endMs: 8000 });
 		const doc = {
 			...createEmptyDocument({ projectId: "p", title: "t" }),
-			audioTracks: [track],
+			audioRanges: [region],
 		};
 		const parsed = documentSchema.parse(doc);
-		expect(parsed.audioTracks).toEqual([track]);
+		expect(parsed.audioRanges).toEqual([region]);
 	});
 });

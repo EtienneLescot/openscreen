@@ -13,7 +13,6 @@ import {
 	Layout as LayoutIcon,
 	Loader2,
 	MousePointerClick,
-	Music,
 	Sliders,
 	Trash2,
 } from "lucide-react";
@@ -53,7 +52,6 @@ import {
 } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
-import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import {
 	buildAggregatedSections,
 	type ClipSection,
@@ -2300,105 +2298,6 @@ export function AudioPane() {
 				onClick={() => void set({ audioGainDb: 0 })}
 			>
 				{ts("audio.reset")}
-			</button>
-		</Pane>
-	);
-}
-
-type TimelineApi = ReturnType<typeof useTimeline>;
-
-// Per-track controls for the selected imported audio track (issue #350). Shown by
-// the inspector in place of the facet when an audio track is selected (see
-// FloatingInspector). The header is the generic "Audio track"; the body leads
-// with the file name, then the volume (a local live value during the drag,
-// committed as one undo step on release), then a delete button styled like the
-// region panes' (position and mute are edited on the lane itself).
-export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
-	const ts = useScopedT("settings");
-	const trackId = tl.selectedAudioTrackId;
-	const track = tl.audioTracks.find((t) => t.id === trackId);
-	const asset = track ? tl.assets.find((a) => a.id === track.assetId) : undefined;
-	// Live-drag value for the volume slider; null means "show the committed gain".
-	const [liveGain, setLiveGain] = useState<number | null>(null);
-	// Drop the live value when the selected track changes: a drag released outside
-	// the input never fires onCommit, so without this an uncommitted -10 dB from
-	// track A would show as track B's gain the moment B is selected.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: trackId is the trigger, not a read — the body only resets the live value.
-	useEffect(() => {
-		setLiveGain(null);
-	}, [trackId]);
-	if (!track) return null;
-	const fileName = track.label || asset?.label || asset?.originalPath?.split(/[\\/]/).pop() || "";
-
-	// Match the region panes' danger-outlined delete button (see SelectionPane).
-	const deleteBtnStyle: CSSProperties = {
-		display: "flex",
-		width: "100%",
-		alignItems: "center",
-		justifyContent: "center",
-		gap: 7,
-		padding: "9px 14px",
-		borderRadius: 10,
-		border: "1px solid var(--danger)",
-		background: "var(--danger-soft)",
-		color: "var(--danger)",
-		font: "600 13px var(--font-display)",
-		cursor: "pointer",
-	};
-
-	return (
-		<Pane
-			title={ts("audioTrack.defaultLabel")}
-			icon={<Music size={14} />}
-			helpText={ts("audioTrack.help")}
-		>
-			<div
-				title={fileName}
-				style={{
-					fontSize: 13,
-					fontWeight: 600,
-					color: "var(--fg)",
-					overflow: "hidden",
-					textOverflow: "ellipsis",
-					whiteSpace: "nowrap",
-					margin: "0 0 10px",
-				}}
-			>
-				{fileName}
-			</div>
-			<div className={styles.sliderGrid}>
-				<SliderCell
-					label={ts("audio.outputGain")}
-					value={liveGain ?? track.gainDb}
-					min={-AUDIO_GAIN_DB_LIMIT}
-					max={AUDIO_GAIN_DB_LIMIT}
-					step={0.5}
-					decimals={1}
-					suffix=" dB"
-					onChange={(value) => setLiveGain(value)}
-					onCommit={() => {
-						if (liveGain !== null) void tl.setAudioTrackGain(track.id, liveGain);
-						setLiveGain(null);
-					}}
-				/>
-			</div>
-			<button
-				type="button"
-				className={styles.secondaryBtn}
-				onClick={() => {
-					setLiveGain(null);
-					void tl.setAudioTrackGain(track.id, 0);
-				}}
-			>
-				{ts("audio.reset")}
-			</button>
-			<button
-				type="button"
-				onClick={() => void tl.removeAudioTrack(track.id)}
-				style={deleteBtnStyle}
-			>
-				<Trash2 size={14} />
-				{ts("audioTrack.remove")}
 			</button>
 		</Pane>
 	);

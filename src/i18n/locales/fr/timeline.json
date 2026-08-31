@@ -15,9 +15,10 @@
 		"pressZoom": "Appuyez sur Z pour ajouter un zoom",
 		"pressTrim": "Appuyez sur T pour ajouter une coupe",
 		"pressAnnotation": "Appuyez sur A pour ajouter une annotation",
-		"pressAudio": "Appuyez sur M pour ajouter un audio",
+		"pressAudio": "Appuyez sur M pour ajouter une musique",
 		"pressSpeed": "Appuyez sur S pour ajouter une vitesse",
-		"pressCameraFullscreen": "Appuyez sur C pour ajouter un segment Caméra plein écran"
+		"pressCameraFullscreen": "Appuyez sur C pour ajouter un segment Caméra plein écran",
+		"pressVoiceover": "Appuyez sur V pour ajouter une voix off"
 	},
 	"labels": {
 		"pan": "Panoramique",

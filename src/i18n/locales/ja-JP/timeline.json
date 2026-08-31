@@ -15,9 +15,10 @@
 		"pressZoom": "Zキーを押してズームを追加",
 		"pressTrim": "Tキーを押してトリムを追加",
 		"pressAnnotation": "Aキーを押して注釈を追加",
-		"pressAudio": "Mキーを押して音声を追加",
+		"pressAudio": "M キーで音楽を追加",
 		"pressSpeed": "Sキーを押して再生速度を追加",
-		"pressCameraFullscreen": "Cキーを押してフルスクリーンカメラのセグメントを追加"
+		"pressCameraFullscreen": "Cキーを押してフルスクリーンカメラのセグメントを追加",
+		"pressVoiceover": "V キーでナレーションを追加"
 	},
 	"labels": {
 		"pan": "移動",
