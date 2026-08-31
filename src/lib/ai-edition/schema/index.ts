@@ -63,6 +63,23 @@ export const wordSchema = z
 		startSec: z.number().nonnegative(),
 		endSec: z.number().nonnegative(),
 		text: z.string(),
+		// Provenance of the TEXT, so a hand-corrected word can be told from a
+		// transcribed one. Both fields are additive and absent on every document
+		// written before them (like `cameraTrack.width`), so no schema bump: an
+		// older build simply drops them on save.
+		//
+		// `document/transcript.ts` is the only writer, and it keeps the pair
+		// consistent: `originalText` is set from the ASR text the first time a user
+		// rewrites the word and never overwritten afterwards, so it stays the revert
+		// target however many times the word is edited; typing the original back
+		// clears both, which IS the revert.
+		//
+		// Absent `source` means the word came from the transcriber. It is what makes
+		// a re-transcription able to carry the user's corrections forward
+		// (`carryOverWordEdits`) instead of silently discarding them — and what a
+		// future TTS pass will read to know which words it has to speak.
+		originalText: z.string().optional(),
+		source: z.enum(["asr", "user", "synth"]).optional(),
 	})
 	.refine((data) => data.endSec >= data.startSec, {
 		message: "endSec must be greater than or equal to startSec",
