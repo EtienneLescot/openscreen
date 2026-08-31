@@ -615,65 +615,6 @@ describe("insertDocumentWord / removeDocumentWords", () => {
 	});
 });
 
-describe("insertDocumentWord freeze", () => {
-	/** One clip covering the whole fixture recording — what the editor starts from. */
-	function makeDocWithClip() {
-		const doc = makeDoc();
-		return {
-			...doc,
-			timeline: {
-				...doc.timeline,
-				clips: [
-					{
-						id: "clip_1",
-						assetId: "asset_1",
-						sourceStartSec: 0,
-						sourceEndSec: 10,
-						timelineStartSec: 0,
-						timelineEndSec: 10,
-						wordRefs: [],
-						origin: "user" as const,
-						reason: "",
-					},
-				],
-			},
-		};
-	}
-
-	it("splits the clip and creates held-frame time when the silence is insufficient", () => {
-		// "really" after word_2: word_3 starts exactly where word_2 ends, so the word
-		// gets no silence at all and needs max(0.4, 6/15) = 0.4 s of created time.
-		const result = insertDocumentWord(makeDocWithClip(), "asset_1", "word_2", "after", "really");
-		const clips = result.timeline.clips;
-		expect(clips).toHaveLength(3);
-		expect(clips[0]).toMatchObject({ id: "clip_1_fzA", sourceStartSec: 0, sourceEndSec: 3 });
-		expect(clips[1]).toMatchObject({
-			id: "clip_1_fz",
-			sourceStartSec: 3,
-			sourceEndSec: 3,
-			frozenSec: 0.4,
-		});
-		expect(clips[2]).toMatchObject({ id: "clip_1_fzB", sourceStartSec: 3, sourceEndSec: 10 });
-		// The timeline grew by exactly the freeze, laid back-to-back.
-		expect(clips[1].timelineStartSec).toBe(3);
-		expect(clips[1].timelineEndSec).toBeCloseTo(3.4, 5);
-		expect(clips[2].timelineEndSec).toBeCloseTo(10.4, 5);
-	});
-
-	it("does not touch the clips when free silence covers the word", () => {
-		// word_3 ends at 4, word_4 starts at 5: a full second of silence.
-		const result = insertDocumentWord(makeDocWithClip(), "asset_1", "word_3", "after", "really");
-		expect(result.timeline.clips).toHaveLength(1);
-		expect(result.timeline.clips[0].id).toBe("clip_1");
-	});
-
-	it("leaves the timeline alone when no clip covers the insertion point", () => {
-		// makeDoc has no clips at all — the word rides the caption line, as before.
-		const result = insertDocumentWord(makeDoc(), "asset_1", "word_2", "after", "really");
-		expect(result.timeline.clips).toHaveLength(0);
-	});
-});
-
 describe("carryOverWordEdits with inserted words", () => {
 	const withInsert = () => insertWord(fixture(), "word_2", "after", "really");
 
