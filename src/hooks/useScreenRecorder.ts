@@ -48,6 +48,31 @@ const RECORDING_FILE_PREFIX = "recording-";
 const VIDEO_FILE_EXTENSION = ".webm";
 const WEBCAM_FILE_SUFFIX = "-webcam";
 
+/**
+ * The cursor mode a BROWSER-pipeline take can actually honour, which is not always the
+ * one the user picked.
+ *
+ * Only win32 reaches that pipeline through `getDisplayMedia`, the sole browser API here
+ * that can exclude the system cursor (`cursor: "never"`). Everywhere else the
+ * desktop-capture stream bakes the real cursor into the pixels, so keeping
+ * "editable-overlay" would start cursor telemetry and have the editor composite a
+ * SECOND, synthetic cursor on top of it.
+ *
+ * This only bites when a platform falls back to browser capture with the editable cursor
+ * selected — on macOS 12 that is now the normal path (#515), and on Linux it is the
+ * no-PipeWire path, where the same latent defect lives.
+ *
+ * One function rather than the expression inlined twice: the mode reported to the main
+ * process at start and the mode persisted at finalize have to agree, and they are ~1200
+ * lines apart.
+ */
+function effectiveBrowserCursorMode(
+	platform: string,
+	requested: CursorCaptureMode,
+): CursorCaptureMode {
+	return platform === "win32" ? requested : "system";
+}
+
 const AUDIO_BITRATE_VOICE = 128_000;
 const AUDIO_BITRATE_SYSTEM = 192_000;
 
@@ -550,7 +575,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 								? { videoData: webcamVideoData, fileName: webcamFileName }
 								: undefined,
 						createdAt: activeRecordingId,
-						cursorCaptureMode,
+						// What this take actually did, not what was requested. Only the browser
+						// pipeline reaches this finalizer (stopRecording returns earlier for all
+						// three native paths), and off win32 it cannot exclude the system cursor
+						// — so the mode reported to the main process was forced to "system" and
+						// the stored metadata has to agree. It is user-visible: `openscreen
+						// project show` prints it.
+						cursorCaptureMode: effectiveBrowserCursorMode(
+							window.electronAPI.getPlatform(),
+							cursorCaptureMode,
+						),
 						durationMs: duration,
 					});
 
@@ -1546,12 +1580,25 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		try {
 			const platform = window.electronAPI.getPlatform();
 			if (platform === "darwin" && cursorCaptureMode === "editable-overlay") {
-				// The main process shows a native dialog that deep-links to the
-				// Accessibility settings pane when access is missing, so we just stop
-				// here and let the user grant it and press record again.
+				// Stop before the countdown ONLY when the user genuinely denied
+				// Accessibility — the main process is showing them a dialog that
+				// deep-links to the settings pane, so pressing record again after
+				// granting it will work.
+				//
+				// When the helper simply could not run (missing from the build, killed
+				// by the loader, crashed, hung) there is nothing for the user to grant,
+				// and blocking here is what left macOS 12 unable to record at all
+				// (#515). Recording degrades on its own: the session falls back to
+				// position-only cursor telemetry and the editor draws the cursor from
+				// its bundled sprites, so only the pointer/text shape hints are lost.
 				const access = await window.electronAPI.requestNativeMacCursorAccess();
-				if (!access.granted) {
+				if (!access.granted && access.status === "not-determined") {
 					return;
+				}
+				if (!access.granted) {
+					console.warn(
+						`Editable cursor unavailable (${access.status}); recording with position-only cursor telemetry.`,
+					);
 				}
 			}
 		} catch (error) {
@@ -1654,6 +1701,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		countdownRunToken?: number,
 		preparedRecordingId?: number | null,
 	) => {
+		const platform = window.electronAPI.getPlatform();
+		const browserCursorCaptureMode = effectiveBrowserCursorMode(platform, cursorCaptureMode);
+
 		try {
 			if (!isCountdownRunActive(countdownRunToken)) {
 				teardownMedia();
@@ -1688,8 +1738,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			// `getUserMedia` calls is the dominant source of the mic-vs-video lag at the
 			// start of the recording (issue #57).
 			const screenCapture = (async (): Promise<MediaStream> => {
-				const platform = window.electronAPI.getPlatform();
-
 				if (platform === "win32") {
 					// getDisplayMedia + setDisplayMediaRequestHandler (main.ts) supplies the
 					// pre-selected source. Editable cursor mode excludes the system cursor so
@@ -1920,7 +1968,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			setRecording(true);
 			setPaused(false);
 			setElapsedSeconds(0);
-			window.electronAPI?.setRecordingState(true, recordingId.current, cursorCaptureMode);
+			window.electronAPI?.setRecordingState(true, recordingId.current, browserCursorCaptureMode);
 
 			const activeScreenRecorder = screenRecorder.current;
 			const activeWebcamRecorder = webcamRecorder.current;

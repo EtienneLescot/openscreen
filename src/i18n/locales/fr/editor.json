@@ -87,7 +87,6 @@
 		"switchToLightTheme": "Passer au thème clair",
 		"switchToDarkTheme": "Passer au thème sombre",
 		"toggleTheme": "Changer de thème",
-		"settings": "Réglages",
 		"export": "Exporter",
 		"renameProject": "Renommer le projet",
 		"noProject": "Aucun projet",
@@ -139,7 +138,6 @@
 		"sourceTranscript": "Transcription de la source",
 		"close": "Fermer",
 		"transcriptReady": "Transcription prête",
-		"notGeneratedYet": "Pas encore générée",
 		"regenerateAs": "Régénérer en",
 		"auto": "Auto",
 		"regenerate": "Régénérer",
@@ -152,12 +150,7 @@
 		"transcriptionFailed": "Échec de la transcription",
 		"cpuBackendHint": "Exécution sur le processeur — environ 2× plus lent que sur le GPU",
 		"noTranscript": "Aucune transcription",
-		"generating": "Génération en cours",
-		"generationFailed": "Échec de la génération",
-		"generated": "Généré",
 		"generationFailedHint": "Échec de la génération — choisissez une langue et régénérez.",
-		"noPreviewAvailable": "Aucun aperçu disponible",
-		"restart": "Redémarrer",
 		"detectedLanguage": "Langue détectée : {{language}}",
 		"noAudioTrack": "Aucune piste audio",
 		"noAudioTrackHint": "Ce média n'a pas de piste audio — il n'y a rien à transcrire.",
@@ -213,18 +206,6 @@
 		"cameraFullscreenDescription": "Pendant cette zone, la caméra occupe tout le cadre — sans bordure, sans arrondi, sans arrière-plan — puis revient en douceur à la fin. Faites glisser les bords de la zone sur la timeline pour changer son début et sa durée.",
 		"deleteRegion": "Supprimer la zone",
 		"freehandRendersAsBox": "À l'export, un tracé libre est couvert par sa boîte englobante — on couvre trop, jamais trop peu."
-	},
-	"leftPanel": {
-		"mediaTitle": "Médias",
-		"searchPlaceholder": "Rechercher…",
-		"clearSearch": "Effacer la recherche",
-		"emptyHint": "Aucun média dans ce projet pour l'instant. Importez une vidéo ci-dessous.",
-		"transcriptReadyBadge": "TRANSCRIPTION PRÊTE"
-	},
-	"leftRail": {
-		"chat": "Chat",
-		"media": "Médias",
-		"ariaLabel": "Outils de gauche"
 	},
 	"chat": {
 		"changeProvider": "Changer de fournisseur",

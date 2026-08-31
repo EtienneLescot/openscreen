@@ -155,9 +155,9 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Reorder a placed clip: move `clipId` so it plays just before `beforeClipId` (pass null, or omit it, to move it last). Ids come from getCurrentDocument, where each clip carries its `index` and its label in `reason`. This preserves every clip id, every source range, every trim, and the zooms / speed regions / annotations anchored to each clip. This is the tool for 'swap these clips', 'put X first' and 'change the clip order' — replaceTimeline cannot reorder anything.",
 	replaceTimeline:
 		"Replace the whole timeline with the given kept intervals of the primary asset's source time. Everything outside the intervals becomes a trim. The intervals are SORTED, so this can never reorder clips — use moveClip for that. DO NOT use this for 'cut silences' or 'remove pauses' — the user has likely placed clips on the timeline that you'd be discarding. Use this ONLY when the user explicitly asks you to rebuild the timeline from scratch (e.g. 'start over with the kept intervals from the transcript'). It is refused when it would merge away, shorten or drop an existing clip; the refusal names them and the tool to use instead.",
-	addZoom: `Add a zoom-in over a span of the edited timeline (virtual seconds). depth is an ORDINAL 1–6, not a factor: it selects a magnification from a fixed table (${ZOOM_DEPTH_LEGEND}), so the default depth 3 renders at 1.80×. The result reports renderedScale — quote that, never the depth, when telling the user how strong the zoom is. focus is the zoom centre in 0–1 fractions of the frame (default centre). Use for 'zoom in on …' and the smart-zoom pass.`,
-	addZooms: `Add MANY zooms in one call: \`regions\` is a list, each entry taking exactly the fields addZoom takes (same depth table, ${ZOOM_DEPTH_LEGEND}). Use this for the smart-zoom pass, where you have decided every zoom before emitting the first one — sending them one at a time costs one round trip each. Each region stands or falls ALONE: one that covers no clip is refused by itself and listed in \`refused\` with its index and the reason, while the others are still applied. The result leads with requested / appliedCount / refusedCount, and each applied entry carries its renderedScale — quote that, never the depth.`,
-	setZoom: `Move, resize, or restyle an existing zoom by id (virtual-timeline seconds). Only the fields you pass are changed. depth selects from the same table (${ZOOM_DEPTH_LEGEND}); if the zoom carries a customScale (getCurrentDocument shows it as depthIsOverridden), that custom value is what renders, and passing depth clears it so the depth takes effect — the result says so. The result reports the resulting renderedScale.`,
+	addZoom: `Add a zoom-in over a span of the edited timeline (virtual seconds). depth is an ORDINAL 1–6, not a factor: it selects a magnification from a fixed table (${ZOOM_DEPTH_LEGEND}), so the default depth 3 renders at 1.80×. The result reports renderedScale — quote that, never the depth, when telling the user how strong the zoom is. focus is the zoom centre in 0–1 fractions of the frame (default centre). When the recording's pointer telemetry can be read for the footage under the span, the result also carries \`cursorAnchor\`: \`focus\` echoes the value this call used (including the default, if you left it out), \`cursor\` is where the pointer ACTUALLY was over the span the zoom landed on — the median of the recorded samples, \`spread\` being how far the farthest one strays from it — and \`offset\` is the distance between the two, in frame fractions. It is a measurement, not a correction: nothing is moved and no call is refused over it, and a zoom framing a slide, a face, or a region the pointer never enters is a legitimate choice. \`available:false\` names what it found instead (\`no-samples\`, \`trimmed-out\`). Its ABSENCE means no telemetry was read for that footage — never that the recording has none; assets[].hasCursorTelemetry and getCursorTrack are what answer that. Use for 'zoom in on …' and the smart-zoom pass.`,
+	addZooms: `Add MANY zooms in one call: \`regions\` is a list, each entry taking exactly the fields addZoom takes (same depth table, ${ZOOM_DEPTH_LEGEND}). Use this for the smart-zoom pass, where you have decided every zoom before emitting the first one — sending them one at a time costs one round trip each. Each region stands or falls ALONE: one that covers no clip is refused by itself and listed in \`refused\` with its index and the reason, while the others are still applied. The result leads with requested / appliedCount / refusedCount, and each applied entry carries its renderedScale — quote that, never the depth — plus the same \`cursorAnchor\` addZoom reports, whenever the footage under that region has readable pointer telemetry.`,
+	setZoom: `Move, resize, or restyle an existing zoom by id (virtual-timeline seconds). Only the fields you pass are changed. depth selects from the same table (${ZOOM_DEPTH_LEGEND}); if the zoom carries a customScale (getCurrentDocument shows it as depthIsOverridden), that custom value is what renders, and passing depth clears it so the depth takes effect — the result says so. The result reports the resulting renderedScale, and — when the footage under the span has readable pointer telemetry — the same \`cursorAnchor\` addZoom reports, measured against the zoom's EFFECTIVE focus, so a call that moved only the span still learns what its unchanged focus is now looking at.`,
 	addSpeed:
 		"Add a speed-change region over a span of the edited timeline (virtual seconds). speed > 1 fast-forwards, < 1 slows down (default 1.5×). Use to speed through slow stretches without cutting them.",
 	setSpeed:
@@ -210,6 +210,29 @@ interface ToolRuntime {
 	availableByAssetId?: Record<string, boolean>;
 }
 
+/**
+ * The tools whose RESULT depends on the recorded pointer track, so the async
+ * wrapper knows to do the read before entering the synchronous executor.
+ *
+ * ponytail: the zoom writes are on this list, not only the reader. A `focus`
+ * that nothing reports back on is a `focus` nobody can check — the write
+ * answered `ok` whether it framed the pointer or the opposite corner. They pass
+ * no assetId, so the read resolves to the primary asset and the executor reports
+ * the anchor ONLY for fragments whose clip draws on that same asset: measured
+ * against the right media, or left off, never inferred from the wrong one.
+ *
+ * No cache. The read is a local JSON parse, `addZooms` is what keeps a whole
+ * zoom pass to one call rather than N, and nothing on this path memoises today —
+ * a cache here would be one more thing to invalidate for a saving nobody has
+ * measured.
+ */
+const TOOLS_READING_CURSOR: ReadonlySet<string> = new Set([
+	"getCursorTrack",
+	"addZoom",
+	"addZooms",
+	"setZoom",
+]);
+
 // One document tool: run it through the shared executor, advance the holder so
 // the next tool in the turn sees the edit, and emit exactly ONE start/end pair
 // carrying the executor's REAL verdict.
@@ -237,10 +260,9 @@ function documentTool<S extends z.ZodType>(
 			// gate every mutation passes through, and it has to stay testable
 			// without a filesystem). So the load happens here and its verdict —
 			// including "I could not look" — goes in as data.
-			const load =
-				name === "getCursorTrack"
-					? await loadCursorTelemetry(holder.current, args, runtime)
-					: undefined;
+			const load = TOOLS_READING_CURSOR.has(name)
+				? await loadCursorTelemetry(holder.current, args, runtime)
+				: undefined;
 			const execution = executeAgentTool(holder.current, name, JSON.stringify(args), {
 				editsAllowed,
 				cursorTelemetry: { availableByAssetId: runtime.availableByAssetId, load },

@@ -40,7 +40,8 @@
 		"services": "Сервисы",
 		"hide": "Скрыть OpenScreen",
 		"hideOthers": "Скрыть остальные",
-		"unhide": "Показать все"
+		"unhide": "Показать все",
+		"saveDiagnostics": "Сохранить диагностику"
 	},
 	"updates": {
 		"available": "Доступен OpenScreen {{latestVersion}}. Установлена версия {{currentVersion}}.",
@@ -50,12 +51,6 @@
 		"blockedLocation": "Переместите OpenScreen в папку «Программы» перед обновлением.",
 		"failed": "Не удалось проверить наличие обновлений.",
 		"downloadFailed": "Не удалось загрузить обновление."
-	},
-	"playback": {
-		"play": "Воспроизвести",
-		"pause": "Пауза",
-		"fullscreen": "Полный экран",
-		"exitFullscreen": "Выход из полного экрана"
 	},
 	"units": {
 		"pixelsPerSecond": "{{value}} пикс/с",

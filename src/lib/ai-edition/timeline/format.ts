@@ -8,9 +8,7 @@
 //
 // Not covered here, deliberately: ExportDialog's `formatHms` (hh:mm:ss, always
 // padded hours, no tenths) and timeUtils' `formatTimePadded` (mm:ss) are
-// different formats, not copies of these. LeftPanel's `formatTimecode`
-// (h:mm:ss.t, hours always shown) is a third format for the same reason — it
-// stays local, but it shares `splitRoundedTime` so the carry lives in one place.
+// different formats, not copies of these.
 
 /**
  * Rounds to a tenth and carries the result, so the minute and second fields can
@@ -18,9 +16,9 @@
  * `0:60.0` renderable: at 59.96 the minutes field still saw 59.96 while the
  * seconds field had already rounded to 60.0.
  *
- * Exported for the one formatter that lives outside this file (LeftPanel's
- * `formatTimecode`) — its always-padded `h:mm:ss.t` matches neither shape here,
- * so it formats itself, but it must not re-derive the carry.
+ * Exported so the carry can be pinned directly (see format.test.ts): both
+ * formatters below depend on it, and a regression here is easier to read as a
+ * failing `splitRoundedTime` case than as two failing format assertions.
  */
 export function splitRoundedTime(value: number): { totalMinutes: number; seconds: number } {
 	const safe = Number.isFinite(value) && value > 0 ? value : 0;

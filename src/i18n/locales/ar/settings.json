@@ -40,7 +40,7 @@
 		"deleteRegion": "حذف منطقة القص"
 	},
 	"layout": {
-		"title": "التخطيط",
+		"title": "تخطيط الكاميرا",
 		"preset": "الإعداد المسبق",
 		"selectPreset": "حدد إعدادًا مسبقًا",
 		"pictureInPicture": "صورة داخل صورة",
@@ -63,10 +63,18 @@
 			"circle": "دائرة",
 			"square": "مربع",
 			"rounded": "زوايا مستديرة"
+		},
+		"webcamBackground": "خلفية الكاميرا",
+		"webcamBlurIntensity": "شدة الضبابية",
+		"bgModes": {
+			"none": "الأصلي",
+			"transparent": "تفريغ",
+			"blur": "تمويه",
+			"custom": "مخصص"
 		}
 	},
 	"effects": {
-		"title": "تأثيرات الفيديو",
+		"title": "التركيب",
 		"blurBg": "تمويه الخلفية",
 		"motionBlur": "ضبابية الحركة",
 		"off": "إيقاف",
@@ -74,6 +82,14 @@
 		"shadow": "ظل",
 		"roundness": "الاستدارة",
 		"padding": "المسافة البادئة",
+		"frame": "الإطار",
+		"format": "التنسيق",
+		"formatOriginal": "الأصلي",
+		"fitClip": "ملاءمة",
+		"fitClipOne": "مقطع واحد",
+		"fitClipFew": "{{count}} مقاطع",
+		"fitClipMany": "{{count}} مقاطع",
+		"motion": "الحركة",
 		"help": "تنسيق إطار التسجيل: ضبابية الخلفية، والظل، وضبابية الحركة، واستدارة الزوايا، والحشو حول الفيديو."
 	},
 	"background": {
@@ -291,15 +307,17 @@
 		"backgroundColor": "لون الخلفية",
 		"backgroundOpacity": "العتامة",
 		"position": "الموضع",
-		"positionTop": "أعلى",
-		"positionMiddle": "الوسط",
-		"positionBottom": "أسفل",
+		"anchorBottom": "أسفل",
+		"anchorTop": "أعلى",
+		"anchorHintBottom": "الترجمات الطويلة تمتد إلى أعلى — الحافة السفلية لا تتحرك.",
+		"anchorHintTop": "الترجمات الطويلة تمتد إلى أسفل — الحافة العلوية لا تتحرك.",
+		"distanceFromBottom": "المسافة من الأسفل",
+		"distanceFromTop": "المسافة من الأعلى",
+		"distanceFromLeft": "المسافة من اليسار",
+		"distanceFromRight": "المسافة من اليمين",
 		"alignLeft": "يسار",
 		"alignCenter": "توسيط",
 		"alignRight": "يمين",
-		"verticalOffset": "الإزاحة الرأسية",
-		"horizontalOffset": "الإزاحة الأفقية",
-		"width": "العرض",
 		"lineLength": "طول السطر",
 		"minWords": "أقل عدد كلمات في السطر",
 		"maxWords": "أكثر عدد كلمات في السطر"

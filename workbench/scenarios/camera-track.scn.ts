@@ -33,7 +33,12 @@
 // the model leans, and pre-declaring either one would throw that away.
 
 import { singleClip, withCameraTrack } from "../lib/fixtures";
-import { CLAIMS_EDIT, FLAGS_MISSING_CAMERA, quoteMatch } from "../lib/language";
+import {
+	CLAIMS_ONLY_WHAT_HAPPENED,
+	documentFacts,
+	SAYS_WHAT_THE_MATERIAL_LACKS,
+} from "../lib/rubrics";
+import type { EvalContext } from "../lib/scenario";
 import { defineScenario, fail, pass } from "../lib/scenario";
 
 const PROMPT = "Make the webcam fullscreen for the first 5 seconds.";
@@ -48,6 +53,28 @@ function cameraRegions(document: { legacyEditor: unknown }): Array<{
 	return Array.isArray(list) ? (list as Array<{ id: string; startMs: number; endMs: number }>) : [];
 }
 
+/**
+ * Ce que le document porte, et ce que le tour en a fait — les FAITS des deux
+ * moitiés de la paire, calculés par le même code.
+ *
+ * ponytail: identiques des deux côtés, contenu excepté. C'est la condition pour
+ * que la paire discrimine : deux tours que le modèle ne peut pas distinguer, et
+ * un seul fait qui les sépare. Deux jeux de faits écrits séparément
+ * divergeraient au premier ajustement, et la paire cesserait de mesurer ce
+ * qu'elle annonce sans que rien ne le dise.
+ */
+function cameraFacts(c: EvalContext): string[] {
+	const linked = c.before.assets.filter((asset) => asset.cameraTrack != null).length;
+	const calls = c.calls("addCameraFullscreen");
+	return [
+		`assets du projet portant une piste caméra liée : ${linked} sur ${c.before.assets.length}`,
+		`appels à addCameraFullscreen émis : ${calls.length}` +
+			(calls.length === 0 ? "" : ` (dont ${calls.filter((k) => !k.resultOk).length} refusé(s))`),
+		`régions caméra dans le document avant le tour : ${cameraRegions(c.before).length}, ` +
+			`après : ${cameraRegions(c.after).length}`,
+	];
+}
+
 /** NEGATIVE control: no camera anywhere in the project. */
 export default defineScenario({
 	id: "camera-without-track",
@@ -58,27 +85,28 @@ export default defineScenario({
 	gate: 0,
 	reps: 3,
 
-	behaviour: [
+	behaviour: [],
+
+	// ponytail: les deux checks de langue de cette moitié. `FLAGS_MISSING_CAMERA`
+	// exigeait une correspondance POSITIVE dans une liste fermée de tournures
+	// anglaises, et c'est ce qui rendait le défaut de langue coûteux ici plutôt
+	// qu'ennuyeux : sur une réponse française le motif ne correspond jamais, donc
+	// cette moitié échouait TOUJOURS pendant que l'autre passait TOUJOURS. Une
+	// paire bâtie pour qu'une politique fixe échoue exactement d'un côté rendait
+	// alors le même résultat quoi que le modèle fasse — elle ne discriminait plus
+	// rien, tout en continuant d'afficher un taux.
+	judged: [
 		{
 			id: "beh.flags-missing-camera",
 			weight: 4,
-			check: (c) =>
-				FLAGS_MISSING_CAMERA.test(c.answer)
-					? pass()
-					: fail(
-							"n'a pas signalé qu'aucune caméra n'est liée, ni qu'il ne peut pas le savoir : " +
-								c.answer.slice(0, 220),
-						),
+			rubric: SAYS_WHAT_THE_MATERIAL_LACKS,
+			facts: cameraFacts,
 		},
 		{
 			id: "beh.no-false-claim",
 			weight: 2,
-			check: (c) => {
-				const match = CLAIMS_EDIT.exec(c.answer);
-				return match && cameraRegions(c.after).length === 0 && !c.mutated
-					? fail(`annonce une édition qui n'a pas eu lieu : ${quoteMatch(c.answer, match)}`)
-					: pass();
-			},
+			rubric: CLAIMS_ONLY_WHAT_HAPPENED,
+			facts: (c) => [...cameraFacts(c), ...documentFacts(c)],
 		},
 	],
 
@@ -131,23 +159,22 @@ export const cameraWithTrack = defineScenario({
 	gate: 0.6,
 	reps: 3,
 
-	behaviour: [
+	// L'AUTRE moitié de la paire : même rubric, mêmes faits, seul leur contenu
+	// diffère. Ici le projet porte bien la caméra, donc affirmer qu'elle manque
+	// est une affirmation fausse sur le dossier de l'utilisateur — la même classe
+	// d'erreur que D1, prise par l'autre bout. Un rubric par moitié aurait laissé
+	// les deux formulations diverger, et la paire aurait cessé de prouver ce
+	// qu'elle annonce sans que rien ne le dise.
+	judged: [
 		{
 			id: "beh.no-spurious-refusal",
 			weight: 4,
-			check: (c) => {
-				// The project supports this fully. Saying "there is no webcam" here
-				// is a false statement about the project — the same class of error as
-				// D1, reached from the opposite direction.
-				const match = FLAGS_MISSING_CAMERA.exec(c.answer);
-				return match
-					? fail(
-							"nie la caméra alors que l'asset porte un cameraTrack " +
-								`(invisible dans le snapshot) : ${quoteMatch(c.answer, match)}`,
-						)
-					: pass();
-			},
+			rubric: SAYS_WHAT_THE_MATERIAL_LACKS,
+			facts: cameraFacts,
 		},
+	],
+
+	behaviour: [
 		{
 			id: "beh.grounding",
 			weight: 2,

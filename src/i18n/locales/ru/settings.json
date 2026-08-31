@@ -40,7 +40,7 @@
 		"deleteRegion": "Удалить область обрезки"
 	},
 	"layout": {
-		"title": "Макет",
+		"title": "Расположение камеры",
 		"preset": "Пресет",
 		"selectPreset": "Выбрать пресет",
 		"pictureInPicture": "Картинка в картинке",
@@ -63,10 +63,18 @@
 			"circle": "Круг",
 			"square": "Квадрат",
 			"rounded": "Скруглённый"
+		},
+		"webcamBackground": "Фон камеры",
+		"webcamBlurIntensity": "Интенсивность размытия",
+		"bgModes": {
+			"none": "Оригинал",
+			"transparent": "Вырезка",
+			"blur": "Размытие",
+			"custom": "Пользовательский"
 		}
 	},
 	"effects": {
-		"title": "Видеоэффекты",
+		"title": "Композиция",
 		"blurBg": "Размытие фона",
 		"motionBlur": "Размытие движения",
 		"off": "выкл",
@@ -74,6 +82,14 @@
 		"shadow": "Тень",
 		"roundness": "Скругление",
 		"padding": "Отступ",
+		"frame": "Рамка",
+		"format": "Формат",
+		"formatOriginal": "Исходный",
+		"fitClip": "Подогнать",
+		"fitClipOne": "{{count}} клип",
+		"fitClipFew": "{{count}} клипа",
+		"fitClipMany": "{{count}} клипов",
+		"motion": "Движение",
 		"help": "Оформление кадра записи: размытие фона, тень, размытие движения, скругление углов и отступ вокруг видео."
 	},
 	"background": {
@@ -291,15 +307,17 @@
 		"backgroundColor": "Цвет фона",
 		"backgroundOpacity": "Непрозрачность",
 		"position": "Положение",
-		"positionTop": "Сверху",
-		"positionMiddle": "По центру",
-		"positionBottom": "Снизу",
+		"anchorBottom": "Снизу",
+		"anchorTop": "Сверху",
+		"anchorHintBottom": "Длинные субтитры растут вверх — нижний край остаётся на месте.",
+		"anchorHintTop": "Длинные субтитры растут вниз — верхний край остаётся на месте.",
+		"distanceFromBottom": "Отступ снизу",
+		"distanceFromTop": "Отступ сверху",
+		"distanceFromLeft": "Отступ слева",
+		"distanceFromRight": "Отступ справа",
 		"alignLeft": "Слева",
 		"alignCenter": "По центру",
 		"alignRight": "Справа",
-		"verticalOffset": "Смещение по вертикали",
-		"horizontalOffset": "Смещение по горизонтали",
-		"width": "Ширина",
 		"lineLength": "Длина строки",
 		"minWords": "Мин. слов в строке",
 		"maxWords": "Макс. слов в строке"

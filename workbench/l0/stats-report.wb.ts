@@ -86,16 +86,18 @@ const SCENARIO_REPORT = {
 	failureClasses: { NONE: 3 },
 	checks: [
 		{
-			id: "beh.no-false-negative",
+			id: "beh.synthetique",
 			axis: "behaviour" as const,
 			weight: 3,
 			passed: 0,
 			total: 3,
+			indeterminate: 0,
 			wilson: wilson95(0, 3),
 			expected: true,
 			evidence: ["négation universelle : …"],
 		},
 	],
+	unmeasuredAxes: [],
 	msMean: 42,
 };
 
@@ -125,7 +127,7 @@ describe("report rendering", () => {
 
 	it("labels a known failure as such and surfaces its evidence", () => {
 		const markdown = renderMarkdown(report);
-		expect(markdown).toContain("| `beh.no-false-negative` | behaviour | 3 | 0/3 |");
+		expect(markdown).toContain("| `beh.synthetique` | behaviour | 3 | 0/3 |");
 		expect(markdown).toContain("connu");
 		expect(markdown).toContain("négation universelle");
 	});

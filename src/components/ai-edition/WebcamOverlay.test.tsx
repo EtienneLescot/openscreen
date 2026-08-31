@@ -90,6 +90,29 @@ function baseProps(currentTimeSec: number) {
 	};
 }
 
+const baseLegacyEditor = {
+	wallpaper: "#000000",
+	shadowIntensity: 0,
+	borderRadius: 0,
+	padding: 0,
+	showBlur: false,
+	motionBlurAmount: 0,
+	webcamSizePreset: 25,
+	webcamMaskShape: "rectangle",
+	webcamLayoutPreset: "picture-in-picture",
+	webcamMirrored: false,
+	webcamReactiveZoom: false,
+	webcamWallpaper: "#ff0080",
+	webcamBlurIntensity: 0.5,
+	cursorShow: false,
+	cursorSize: 1,
+	cursorSmoothing: 0,
+	cursorMotionBlur: 0,
+	cursorClickBounce: 0,
+	cursorTheme: "default",
+	cursorClipToBounds: false,
+};
+
 describe("WebcamOverlay (per-clip camera resolution)", () => {
 	afterEach(() => {
 		cleanup();
@@ -153,5 +176,33 @@ describe("WebcamOverlay (per-clip camera resolution)", () => {
 
 		rerender(<WebcamOverlay {...baseProps(2)} />);
 		expect(container.querySelector("video")).toBeTruthy();
+	});
+
+	// The webcam background effect is composited by the native compositor from the scene,
+	// not by this component: the mask reaches the shader as a texture. So the overlay renders
+	// the same thing whatever the mode — a <video> that exists to drive decode and the
+	// playback clock. It used to mount a <canvas> and paint the effect here, which is what
+	// made preview and export two different implementations of the same layer.
+	it("renders only the video element, whatever the background mode", () => {
+		for (const mode of ["none", "blur", "custom", "transparent"] as const) {
+			const doc = makeDocument();
+			doc.legacyEditor = { ...baseLegacyEditor, webcamBackgroundMode: mode };
+			useProjectStore.setState({
+				projectId: "proj_test",
+				document: doc,
+				revision: 1,
+				status: "ready",
+				error: null,
+				sourceDurationSec: 0,
+				currentTimeSec: 2,
+				dirty: false,
+				lastSavedAt: new Date(),
+			});
+
+			const { container, unmount } = render(<WebcamOverlay {...baseProps(2)} />);
+			expect(container.querySelector("video"), mode).toBeTruthy();
+			expect(container.querySelector("canvas"), mode).toBeNull();
+			unmount();
+		}
 	});
 });

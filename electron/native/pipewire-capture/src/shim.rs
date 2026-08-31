@@ -10,7 +10,7 @@
 //! letting a Rust panic unwind into C.
 
 use std::ffi::{c_char, c_void, CStr};
-use std::os::fd::{IntoRawFd, OwnedFd};
+use std::os::fd::{BorrowedFd, IntoRawFd, OwnedFd};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[repr(C)]
@@ -46,7 +46,39 @@ pub struct RawFrame {
     pub crop_width: i32,
     pub crop_height: i32,
     pub has_crop: i32,
+    /// Zero-copy dmabuf hand-off (issue #507). When non-zero, `data` is null and
+    /// the frame is a tiled GPU buffer described by the fields below — imported
+    /// as a VAAPI surface rather than read from `data`. Layout mirrors
+    /// `struct osc_pw_frame` in pw_shim.h exactly.
+    pub is_dmabuf: i32,
+    pub modifier: u64,
+    pub drm_fourcc: u32,
+    pub n_planes: i32,
+    pub plane_fd: [i32; 4],
+    pub plane_offset: [i32; 4],
+    pub plane_stride: [i32; 4],
+    /// The `struct pw_buffer *` this frame came from (opaque). Returned to
+    /// `osc_pw_requeue_buffer` once the dmabuf import has copied the pixels, if
+    /// `on_frame` took ownership of it. Null/unused on the CPU path.
+    pub buffer_handle: *mut c_void,
+    /// Registration generation of `buffer_handle`, handed back with it so the
+    /// re-queue can reject a stale pointer a renegotiation reused (see the C side).
+    pub buffer_generation: u64,
 }
+
+/// A `struct pw_buffer *` we are holding out of PipeWire's queue until its dmabuf
+/// content has been imported, tagged with its registration `generation` so the
+/// re-queue can tell it from a newer buffer reusing the same slot. Send so it can
+/// travel through the mailbox; the pointer is only ever handed back to
+/// `osc_pw_requeue_buffer`, never dereferenced on the Rust side.
+#[derive(Debug, Clone, Copy)]
+pub struct BufferHandle {
+    pub ptr: *mut c_void,
+    pub generation: u64,
+}
+// SAFETY: the pointer is an opaque token owned by libpipewire; Rust neither reads
+// nor writes through it, only returns it to the shim's locked requeue.
+unsafe impl Send for BufferHandle {}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -63,7 +95,7 @@ struct RawCallbacks {
     user: *mut c_void,
     on_format: extern "C" fn(*mut c_void, *const RawFormat),
     on_cursor: extern "C" fn(*mut c_void, *const RawCursor),
-    on_frame: extern "C" fn(*mut c_void, *const RawFrame),
+    on_frame: extern "C" fn(*mut c_void, *const RawFrame) -> i32,
     on_buffer_info: extern "C" fn(*mut c_void, u32, u32, i32, u32, *const c_char),
     on_state: extern "C" fn(*mut c_void, *const c_char, *const c_char),
 }
@@ -106,11 +138,17 @@ extern "C" {
         fd: i32,
         node_id: u32,
         want_video: i32,
+        prefer_dmabuf: i32,
         callbacks: *const RawCallbacks,
         err: *mut c_char,
         err_len: usize,
     ) -> *mut RawSession;
     fn osc_pw_stop(session: *mut RawSession);
+    fn osc_pw_requeue_buffer(
+        session: *mut RawSession,
+        buffer_handle: *mut c_void,
+        buffer_generation: u64,
+    );
 }
 
 /// Where stream events go. Called on the PipeWire thread, so it must not block:
@@ -180,6 +218,65 @@ pub struct Frame {
     /// "invalid meta" and "meta covering everything" alike — none of which is a
     /// reason to crop, and none of which may be guessed apart.
     pub has_crop: bool,
+    /// Set for a tiled dmabuf frame (issue #507): `pixels` is empty and the
+    /// content is on the GPU, described here for a VAAPI import instead. The
+    /// owned fds close when the frame is dropped or superseded.
+    pub dmabuf: Option<DmabufDesc>,
+}
+
+/// A tiled dmabuf handed up for GPU import. Holds the PipeWire buffer OUT of the
+/// queue (via `buffer_handle`) so the plane fds AND their content stay valid until
+/// the import copies the surface — dup'ing the fds alone would preserve the object
+/// but not a content snapshot, letting the compositor overwrite a re-queued buffer
+/// (CodeRabbit / issue #507). On drop the handle is pushed to `requeue`, which the
+/// main loop drains and hands back to the shim's locked re-queue.
+pub struct DmabufDesc {
+    pub width: i32,
+    pub height: i32,
+    pub drm_fourcc: u32,
+    pub modifier: u64,
+    pub planes: Vec<DmabufPlane>,
+    buffer_handle: BufferHandle,
+    requeue: std::sync::Arc<std::sync::Mutex<Vec<BufferHandle>>>,
+}
+
+impl std::fmt::Debug for DmabufDesc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DmabufDesc")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("drm_fourcc", &self.drm_fourcc)
+            .field("modifier", &self.modifier)
+            .field("planes", &self.planes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for DmabufDesc {
+    fn drop(&mut self) {
+        // Return the held PipeWire buffer once the import that read it is done
+        // (which is why this runs at drop, after `Capture::stage`). Pushed to the
+        // queue rather than re-queued here because re-queue must run on the main
+        // loop, not the PipeWire thread that supersedes a frame — see
+        // FrameMailbox and osc_pw_requeue_buffer.
+        if !self.buffer_handle.ptr.is_null() {
+            if let Ok(mut queue) = self.requeue.lock() {
+                queue.push(self.buffer_handle);
+            }
+        }
+    }
+}
+
+/// One dmabuf plane: an OWNED (dup'd) fd plus its layout. The dup is taken when the
+/// frame is claimed and closed when the owning `DmabufDesc` drops. Owning it — not
+/// borrowing the PipeWire buffer's fd — is what keeps the plane valid if a
+/// renegotiation destroys the buffer set (which closes the original fds and reuses
+/// the numbers) while this plane is still queued for import.
+#[derive(Debug)]
+pub struct DmabufPlane {
+    pub fd: OwnedFd,
+    pub offset: i32,
+    pub stride: i32,
 }
 
 /// A rectangle inside a captured frame, in stream pixels.
@@ -207,6 +304,11 @@ pub struct FrameMailbox {
     inner: std::sync::Mutex<Mailbox>,
     received: std::sync::atomic::AtomicU64,
     dropped: std::sync::atomic::AtomicU64,
+    /// PipeWire buffers held for a dmabuf import, to be re-queued once their
+    /// `DmabufDesc` drops (import done, or frame superseded). Drained by the main
+    /// loop, which re-queues each through the shim's locked path. Shared into each
+    /// `DmabufDesc` so its Drop can push here from either thread.
+    requeue: std::sync::Arc<std::sync::Mutex<Vec<BufferHandle>>>,
 }
 
 #[derive(Debug, Default)]
@@ -257,6 +359,43 @@ impl FrameMailbox {
                 height: meta.crop_height,
             },
             has_crop: meta.has_crop != 0,
+            dmabuf: None,
+        });
+        self.received.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Stores a tiled dmabuf frame — the descriptor only, no pixel copy. Same
+    /// newest-wins discipline as [`Self::put`]; a superseded frame's owned fds
+    /// close when its `Frame` drops here.
+    fn put_dmabuf(&self, desc: DmabufDesc, meta: &RawFrame) {
+        use std::sync::atomic::Ordering;
+
+        let Ok(mut inner) = self.inner.lock() else {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        let pixels = match inner.pending.take() {
+            Some(stale) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                stale.pixels
+            }
+            None => inner.spare.take().unwrap_or_default(),
+        };
+        inner.pending = Some(Frame {
+            pixels,
+            stride: meta.stride as usize,
+            width: meta.width,
+            height: meta.height,
+            video_format: meta.video_format,
+            pts_ns: meta.pts_ns,
+            crop: CropRect {
+                x: meta.crop_x,
+                y: meta.crop_y,
+                width: meta.crop_width,
+                height: meta.crop_height,
+            },
+            has_crop: meta.has_crop != 0,
+            dmabuf: Some(desc),
         });
         self.received.fetch_add(1, Ordering::Relaxed);
     }
@@ -274,6 +413,21 @@ impl FrameMailbox {
         };
         pixels.clear();
         inner.spare = Some(pixels);
+    }
+
+    /// A clone of the held-buffer re-queue queue, for a `DmabufDesc` to push its
+    /// PipeWire buffer to when it drops.
+    fn requeue_queue(&self) -> std::sync::Arc<std::sync::Mutex<Vec<BufferHandle>>> {
+        self.requeue.clone()
+    }
+
+    /// Takes the PipeWire buffers whose dmabuf imports have completed (or were
+    /// superseded), for the main loop to re-queue through the shim.
+    pub fn drain_requeue(&self) -> Vec<BufferHandle> {
+        match self.requeue.lock() {
+            Ok(mut queue) => std::mem::take(&mut *queue),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Frames the compositor delivered.
@@ -755,8 +909,12 @@ impl Session {
         node_id: u32,
         sink: Sink,
         frames: Option<std::sync::Arc<FrameMailbox>>,
+        // Offer dmabuf before shm for a whole-monitor GPU import (issue #507).
+        // Only honoured for a video session; ignored for cursor-only.
+        prefer_dmabuf: bool,
     ) -> Result<Self, String> {
         let want_video = i32::from(frames.is_some());
+        let prefer_dmabuf = i32::from(want_video != 0 && prefer_dmabuf);
         let state = Box::new(CallbackState { sink, frames });
         let user = &*state as *const CallbackState as *mut c_void;
         let callbacks = RawCallbacks {
@@ -776,6 +934,7 @@ impl Session {
                 fd.into_raw_fd(),
                 node_id,
                 want_video,
+                prefer_dmabuf,
                 &callbacks,
                 err.as_mut_ptr(),
                 ERR_LEN,
@@ -786,6 +945,16 @@ impl Session {
         }
 
         Ok(Self { raw, _state: state })
+    }
+
+    /// Re-queues a PipeWire buffer a dmabuf frame took ownership of, once its
+    /// import has copied the pixels. Call from the main loop (NOT the PipeWire
+    /// thread) — the shim takes the thread-loop lock. Drain the mailbox's
+    /// `drain_requeue` for the handles.
+    pub fn requeue(&self, handle: BufferHandle) {
+        // SAFETY: `raw` is a live session for the lifetime of `self`; the handle
+        // is an opaque pw_buffer token the shim validates and only re-queues.
+        unsafe { osc_pw_requeue_buffer(self.raw, handle.ptr, handle.generation) };
     }
 }
 
@@ -833,35 +1002,114 @@ extern "C" fn on_format(user: *mut c_void, format: *const RawFormat) {
     });
 }
 
-extern "C" fn on_frame(user: *mut c_void, frame: *const RawFrame) {
-    with_state(user, |state| {
-        let Some(mailbox) = state.frames.as_ref() else {
-            return;
-        };
-        if frame.is_null() {
-            return;
+/// Returns 1 when we TAKE OWNERSHIP of the PipeWire buffer — a tiled dmabuf held
+/// out of the queue until the main loop imports it — so the shim must not re-queue
+/// it. 0 otherwise (the CPU path, or any frame we decline), which re-queues as
+/// before.
+extern "C" fn on_frame(user: *mut c_void, frame: *const RawFrame) -> i32 {
+    if user.is_null() || frame.is_null() {
+        return 0;
+    }
+    // SAFETY: `user` is the CallbackState pointer given to osc_pw_start, valid for
+    // the session's lifetime; `frame` is valid for the callback's duration.
+    let state = unsafe { &*(user as *const CallbackState) };
+    // Same guard `with_state` gives every other callback, which this one cannot use
+    // because it returns a value: a panic (an allocation failure in
+    // `Vec::with_capacity`, a capacity overflow in `put`) must not unwind across the
+    // `extern "C"` boundary and abort the helper. Decline the frame on panic (0) so
+    // the shim re-queues it rather than leaking the buffer.
+    catch_unwind(AssertUnwindSafe(|| on_frame_inner(state, frame))).unwrap_or(0)
+}
+
+/// The body of [`on_frame`], split out so the callback can wrap it in
+/// `catch_unwind`. `frame` is non-null (checked by the caller) and valid for the
+/// callback's duration.
+fn on_frame_inner(state: &CallbackState, frame: *const RawFrame) -> i32 {
+    let Some(mailbox) = state.frames.as_ref() else {
+        return 0;
+    };
+    // SAFETY: non-null (checked in `on_frame`) and valid for the callback duration.
+    let frame = unsafe { &*frame };
+
+    // Tiled dmabuf: no pixels to copy. Take the PipeWire buffer (hold it out of
+    // the queue) so the plane fds AND their content stay valid until the main-loop
+    // import copies the surface; the buffer is re-queued when the DmabufDesc drops.
+    if frame.is_dmabuf != 0 {
+        // Decline a buffer the C side could not register (its live-buffer table was
+        // full — two overlapping sets across a renegotiation). Its generation is 0,
+        // which `osc_pw_requeue_buffer` refuses to re-queue, so holding it would
+        // leak it out of the pool for good. Returning 0 lets the shim re-queue it
+        // now; the frame is dropped instead (the previous one is held forward).
+        if frame.buffer_generation == 0 {
+            return 0;
         }
-        // SAFETY: non-NULL for the duration of the callback, by contract.
-        let frame = unsafe { &*frame };
-        if frame.data.is_null() || frame.stride <= 0 || frame.height <= 0 {
-            return;
+        let n = frame.n_planes.clamp(0, 4) as usize;
+        if n == 0 {
+            return 0;
         }
-        // Copy only the rows, not the whole mapping. `size` can include trailing
-        // slack the compositor allocated, and re-checking the product here means
-        // the slice below cannot outrun the region the C side validated.
-        let Some(rows) = (frame.stride as usize).checked_mul(frame.height as usize) else {
-            return;
-        };
-        if rows > frame.size {
-            return;
+        let mut planes = Vec::with_capacity(n);
+        for i in 0..n {
+            let fd = frame.plane_fd[i];
+            if fd < 0 {
+                return 0;
+            }
+            // Dup the plane fd so the descriptor owns a handle independent of the
+            // PipeWire buffer's lifetime: if a renegotiation destroys the buffer set
+            // while this desc is still queued for import, the original fds are closed
+            // and their numbers reused, and a borrowed fd would then import an
+            // unrelated buffer. The dup keeps the dmabuf alive until the OwnedFd drops
+            // with the desc, after `Capture::stage`; VAAPI dups again during surface
+            // creation, so it costs nothing past import.
+            // SAFETY: `fd` is valid for this callback; `try_clone_to_owned` dups it.
+            let Ok(owned) = (unsafe { BorrowedFd::borrow_raw(fd) }).try_clone_to_owned() else {
+                // fd exhaustion: decline. `planes` drops here, closing the dups taken
+                // so far, and the shim re-queues the buffer.
+                return 0;
+            };
+            planes.push(DmabufPlane {
+                fd: owned,
+                offset: frame.plane_offset[i],
+                stride: frame.plane_stride[i],
+            });
         }
-        // SAFETY: the shim clamped `size` against the mapping's `maxsize` before
-        // the callback, `rows <= size` was just checked, and the mapping stays
-        // live until this returns.
-        let pixels = unsafe { std::slice::from_raw_parts(frame.data, rows) };
-        mailbox.put(pixels, frame);
+        mailbox.put_dmabuf(
+            DmabufDesc {
+                width: frame.width,
+                height: frame.height,
+                drm_fourcc: frame.drm_fourcc,
+                modifier: frame.modifier,
+                planes,
+                buffer_handle: BufferHandle {
+                    ptr: frame.buffer_handle,
+                    generation: frame.buffer_generation,
+                },
+                requeue: mailbox.requeue_queue(),
+            },
+            frame,
+        );
         (state.sink)(StreamEvent::FrameReady);
-    });
+        return 1;
+    }
+
+    if frame.data.is_null() || frame.stride <= 0 || frame.height <= 0 {
+        return 0;
+    }
+    // Copy only the rows, not the whole mapping. `size` can include trailing
+    // slack the compositor allocated, and re-checking the product here means
+    // the slice below cannot outrun the region the C side validated.
+    let Some(rows) = (frame.stride as usize).checked_mul(frame.height as usize) else {
+        return 0;
+    };
+    if rows > frame.size {
+        return 0;
+    }
+    // SAFETY: the shim clamped `size` against the mapping's `maxsize` before
+    // the callback, `rows <= size` was just checked, and the mapping stays
+    // live until this returns.
+    let pixels = unsafe { std::slice::from_raw_parts(frame.data, rows) };
+    mailbox.put(pixels, frame);
+    (state.sink)(StreamEvent::FrameReady);
+    0
 }
 
 extern "C" fn on_buffer_info(
@@ -1028,7 +1276,8 @@ mod tests {
         // The advertised modifier set is a real set, not a wildcard: a tiled or
         // compressed buffer cannot be read through a plain mmap, so it must fail
         // negotiation rather than be accepted and decoded into garbage.
-        // 0x0300000000000001 = a vendor (AMD) modifier, neither LINEAR nor INVALID.
+        // 0x0300000000000001 = a vendor (NVIDIA — modifier vendor byte 0x03) modifier,
+        // neither LINEAR nor INVALID.
         assert_eq!(
             enum_format_accepts_dmabuf_producer(true, 0x0300_0000_0000_0001),
             0,
@@ -1086,6 +1335,8 @@ mod tests {
             // Cursor-only: this test is about negotiation reaching `streaming`
             // and about which metadata survives, neither of which needs pixels.
             None,
+            // Cursor-only, so dmabuf preference is irrelevant.
+            false,
         )
         .expect("stream must connect");
 

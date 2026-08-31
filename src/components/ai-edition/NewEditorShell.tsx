@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
+import { useEditorDialogActions } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
-import { useProviderSettings } from "@/contexts/ProviderSettingsContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import {
 	migrateProjectDataToAxcutDocument,
@@ -13,6 +13,7 @@ import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
+import { isModalOpen } from "@/lib/ai-edition/modalGuard";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
@@ -31,7 +32,7 @@ import type { AiEditionProjectSummary } from "@/native/contracts";
 import { resolveVisibleClips } from "@/native/sceneDescription";
 import { useNativePlaybackSync } from "@/native/useNativePlaybackSync";
 import { ExportDialog } from "./ExportDialog";
-import { LeftPanel } from "./LeftPanel";
+import { ChatStripPanel } from "./LeftPanel";
 import {
 	EditClipModal,
 	NewProjectModal,
@@ -131,7 +132,11 @@ export function NewEditorShell() {
 		resolve: (choice: UnsavedChoice) => void;
 	} | null>(null);
 	const { shortcuts, isMac, openConfig: openShortcutsConfig } = useShortcuts();
-	const { openProviderSettings } = useProviderSettings();
+	// The actions half of the dialog context, not the section: this component only ever *opens*
+	// one, and subscribing it to the open state would re-render the whole editor — timeline,
+	// preview, transport — twice per dialog interaction. Whether a dialog is open is a question
+	// for `isModalOpen`, which answers for every modal rather than for this context's one.
+	const { openDialog } = useEditorDialogActions();
 	// Transcription is local and every transcript-driven feature (Smart cuts,
 	// captions, the transcript pane) needs one, so the editor produces them by
 	// itself instead of waiting for the user to find the button. This hook is
@@ -155,8 +160,14 @@ export function NewEditorShell() {
 		[transcriptions],
 	);
 	const tl = useTimeline();
-	useUndoRedoShortcuts(() => {
-		// ponytail: placeholder, wire when undo stack merges with history
+	// An undo only puts the restored document back in the store and marks it dirty,
+	// so without this the reverted state never reached disk: close the window and the
+	// edit the user just undid came back. `history: false` is load-bearing — a
+	// recording save here would push the restored document straight back onto the
+	// stack and clear the redo the undo had just created.
+	const { runUndo, runRedo } = useUndoRedoShortcuts(() => {
+		const doc = useProjectStore.getState().document;
+		if (doc) void useProjectStore.getState().saveDocument(doc, { history: false });
 	});
 	const [copiedClipId, setCopiedClipId] = useState<string | null>(null);
 	const [projectSummaries, setProjectSummaries] = useState<AiEditionProjectSummary[]>([]);
@@ -306,7 +317,7 @@ export function NewEditorShell() {
 			const doc = useProjectStore.getState().document;
 			// The store already toasted the reason; answering false is what keeps the
 			// window open on top of it.
-			if (doc) return await saveDocument(doc);
+			if (doc) return await saveDocument(doc, { history: true });
 			return true;
 		});
 
@@ -363,7 +374,10 @@ export function NewEditorShell() {
 					[{ startSec: 0, endSec: known }],
 					"Auto-created full-duration clip",
 				);
-				void state.saveDocument(next);
+				// `history: false` for both writes in this callback: they are the probed
+				// duration being folded into the document on load, not something the user
+				// did — an undo landing on one of them would empty their timeline.
+				void state.saveDocument(next, { history: false });
 				return;
 			}
 			// Hand the probed duration to the pure document layer: it patches only the
@@ -374,7 +388,7 @@ export function NewEditorShell() {
 			// nothing is waiting, so there is nothing to guard here.
 			const next = applyProbedDuration(doc, assetId, known);
 			if (next !== doc) {
-				void state.saveDocument(next);
+				void state.saveDocument(next, { history: false });
 			}
 		},
 		[setSourceDuration],
@@ -561,25 +575,31 @@ export function NewEditorShell() {
 		(target: TrimTarget, startSec: number, endSec: number, reason: string) => {
 			// `clipId` is what keeps the cut on the block the user typed in: with two clips
 			// over the same media, an asset-only trim showed up on both (see `trimAppliesToClip`).
-			void applyTimelineOp({
-				type: "add_trim_range",
-				assetId: target.assetId,
-				clipId: target.clipId,
-				startSec,
-				endSec,
-				reason,
-			});
+			void applyTimelineOp(
+				{
+					type: "add_trim_range",
+					assetId: target.assetId,
+					clipId: target.clipId,
+					startSec,
+					endSec,
+					reason,
+				},
+				{ history: true },
+			);
 		},
 		[applyTimelineOp],
 	);
 
 	const handleRemoveTrimRange = useCallback(
 		(trimId: string) => {
-			void applyTimelineOp({
-				type: "remove_trim_range",
-				trimId,
-				reason: "Restored from transcript pane.",
-			});
+			void applyTimelineOp(
+				{
+					type: "remove_trim_range",
+					trimId,
+					reason: "Restored from transcript pane.",
+				},
+				{ history: true },
+			);
 		},
 		[applyTimelineOp],
 	);
@@ -637,15 +657,20 @@ export function NewEditorShell() {
 	const handleSave = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		if (await saveDocument(doc)) toast.success("Project saved");
+		if (await saveDocument(doc, { history: true })) toast.success("Project saved");
 	}, [saveDocument]);
 
 	// Native File menu (electron/main.ts) → v4 actions. The menu is shown via
 	// Menu.setApplicationMenu and dispatches these IPC events; the old editor
 	// listened to them, but the v4 shell replaced it, leaving the File items
 	// dead. Wire them to the same handlers the top-bar buttons use so the
-	// File/Edit/View menu bar works again (Edit/View items use Electron roles).
+	// File/Edit/View menu bar works again (the View items still use Electron roles).
 	// The v4 editor has no separate "Save As" location, so it maps to Save.
+	//
+	// Edit > Undo/Redo are here too, and not roles: on macOS the menu's Cmd+Z key
+	// equivalent is matched by AppKit before the key event reaches the renderer, so
+	// this subscription is the ONLY thing that makes Ctrl+Z work there. See
+	// `electron/edit-menu.ts`.
 	useEffect(() => {
 		const api = window.electronAPI;
 		if (!api) return;
@@ -654,18 +679,20 @@ export function NewEditorShell() {
 			api.onMenuLoadProject?.(() => setOpenProjectOpen(true)),
 			api.onMenuSaveProject?.(() => void handleSave()),
 			api.onMenuSaveProjectAs?.(() => void handleSave()),
+			api.onMenuUndo?.(runUndo),
+			api.onMenuRedo?.(runRedo),
 		];
 		return () => {
 			for (const unsub of unsubscribers) unsub?.();
 		};
-	}, [handleSave]);
+	}, [handleSave, runUndo, runRedo]);
 
 	const handleRenameProject = useCallback(
 		async (title: string) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			if (title === doc.project.title) return;
-			await saveDocument({ ...doc, project: { ...doc.project, title } });
+			await saveDocument({ ...doc, project: { ...doc.project, title } }, { history: true });
 		},
 		[saveDocument],
 	);
@@ -689,7 +716,7 @@ export function NewEditorShell() {
 					// A failed save cancels the action that prompted this dialog. The store has
 					// already said why -- which is what the bare `catch {}` here used to swallow,
 					// leaving the window refusing to close with nothing on screen explaining it.
-					if (doc && !(await saveDocument(doc))) {
+					if (doc && !(await saveDocument(doc, { history: true }))) {
 						resolve("cancel");
 						return;
 					}
@@ -783,24 +810,33 @@ export function NewEditorShell() {
 		);
 
 		if (snapshot.kind === "zoom") {
-			await saveDocument({
-				...doc,
-				zoomRanges: [...doc.zoomRanges, ...anchored] as typeof doc.zoomRanges,
-			});
+			await saveDocument(
+				{
+					...doc,
+					zoomRanges: [...doc.zoomRanges, ...anchored] as typeof doc.zoomRanges,
+				},
+				{ history: true },
+			);
 		} else if (snapshot.kind === "annotation") {
-			await saveDocument({
-				...doc,
-				annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
-			});
+			await saveDocument(
+				{
+					...doc,
+					annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
+				},
+				{ history: true },
+			);
 		} else {
 			// speed and cameraFullscreen are both plain spans on legacyEditor.
 			const key = snapshot.kind === "speed" ? "speedRegions" : "cameraFullscreenRegions";
 			const legacy = (doc.legacyEditor as Record<string, unknown>) ?? {};
 			const prev = (legacy[key] as unknown[]) ?? [];
-			await saveDocument({
-				...doc,
-				legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
-			});
+			await saveDocument(
+				{
+					...doc,
+					legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
+				},
+				{ history: true },
+			);
 		}
 		toast.success("Region pasted");
 		// `tl` belongs here now that the trim branch calls tl.addTrim: useTimeline
@@ -854,6 +890,13 @@ export function NewEditorShell() {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
 			if (e.target instanceof HTMLElement && e.target.isContentEditable) return;
+			// A modal owns the screen. Its own controls are buttons, not text fields, so the two
+			// guards above let every editor shortcut through underneath it: Delete destroyed the
+			// selected region behind the backdrop, Ctrl+O stacked a second `aria-modal` dialog on
+			// top, and `?` stacked the shortcuts dialog. One question about the screen, not one
+			// flag per dialog — the flag version knew only about the two dialogs whose open state
+			// happened to live in a context, so Z/T/C kept adding regions under Export (#434).
+			if (isModalOpen()) return;
 			const ctrl = e.ctrlKey || e.metaKey;
 			if (ctrl && e.key === "s") {
 				e.preventDefault();
@@ -868,7 +911,7 @@ export function NewEditorShell() {
 					if (choice === "save") {
 						const doc = useProjectStore.getState().document;
 						// Stay put if the save did not land -- the store has already said why.
-						if (doc && !(await saveDocument(doc))) return;
+						if (doc && !(await saveDocument(doc, { history: true }))) return;
 					}
 					setNewProjectOpen(true);
 				})();
@@ -882,7 +925,7 @@ export function NewEditorShell() {
 					if (choice === "save") {
 						const doc = useProjectStore.getState().document;
 						// Stay put if the save did not land -- the store has already said why.
-						if (doc && !(await saveDocument(doc))) return;
+						if (doc && !(await saveDocument(doc, { history: true }))) return;
 					}
 					setOpenProjectOpen(true);
 				})();
@@ -1138,7 +1181,7 @@ export function NewEditorShell() {
 					openSettings: handleOpenSettings,
 					renameProject: handleRenameProject,
 					toggleChat: () => setChatOpen((v) => !v),
-					openProviderSettings,
+					openProviderSettings: () => openDialog("providers"),
 					showAbout: handleShowAbout,
 					checkForUpdates: handleCheckForUpdates,
 				}}
@@ -1148,7 +1191,7 @@ export function NewEditorShell() {
 				{mode === "edit" && chatOpen ? (
 					<>
 						<aside className={v4.agent} aria-label={te("shell.aiEditor")}>
-							<LeftPanel active="chat" />
+							<ChatStripPanel />
 						</aside>
 						<div
 							className={v4.chatResizeHandle}
@@ -1319,8 +1362,14 @@ export function NewEditorShell() {
 				videoSources={videoSources}
 				onApply={(sStart, sEnd, cropRegion) => {
 					if (!editClipTarget) return;
-					void tl.updateClipSourceRange(editClipTarget.id, sStart, sEnd);
-					if (cropRegion !== undefined) void tl.updateClipCrop(editClipTarget.id, cropRegion);
+					const clipId = editClipTarget.id;
+					// One user action, one document, one save. This used to be two calls —
+					// `updateClipSourceRange` then `updateClipCrop` — each building its next
+					// document from the same pre-Apply one, so the second write clobbered the
+					// first and one of the two edits vanished silently (#355). It goes on the
+					// shared write queue for the same reason every other timeline edit does:
+					// so it can't clobber, or be clobbered by, a save already in flight.
+					void enqueueTimelineWrite(() => tl.applyClipEdit(clipId, sStart, sEnd, cropRegion));
 					setEditClipTarget(null);
 				}}
 			/>

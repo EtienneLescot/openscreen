@@ -12,8 +12,20 @@ path = "src/lib.rs"
 bindgen = "0.70"
 cc = "1"
 
+[features]
+default = ["segmentation"]
+# Segmentation IA de la webcam via ONNX Runtime (EP CPU).
+#
+# Activée par défaut, ce qui ne coûte rien au build : `ort` est lié en `load-dynamic`, donc
+# aucune bibliothèque n'est nécessaire pour COMPILER. Elle l'est pour tourner — absente,
+# `Segmenter::load` échoue, le compositeur écrit une ligne et dessine la webcam telle quelle.
+# La désactiver reste possible pour une build qui ne veut pas du tout du code d'inférence.
+segmentation = ["dep:ort", "dep:ndarray"]
+
 [dependencies]
 anyhow.workspace = true
+ort = { workspace = true, optional = true }
+ndarray = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true

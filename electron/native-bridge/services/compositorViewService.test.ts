@@ -259,6 +259,9 @@ describe("resolveSceneAssetPaths", () => {
 		resources = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-scene-assets-"));
 		fs.mkdirSync(path.join(resources, "wallpapers"), { recursive: true });
 		fs.writeFileSync(path.join(resources, "wallpapers", "wallpaper1.jpg"), "jpg");
+		const modelDir = path.join(resources, "mediapipe", "selfie_segmentation");
+		fs.mkdirSync(modelDir, { recursive: true });
+		fs.writeFileSync(path.join(modelDir, "selfie_segmentation_landscape.onnx"), "onnx");
 		const assetPaths = [
 			...Object.values(themed?.assets ?? {}).map((a) => a.assetPath),
 			...Object.values(DEFAULT_CURSOR_SPRITES).map((s) => s.assetPath),
@@ -299,12 +302,91 @@ describe("resolveSceneAssetPaths", () => {
 	 *  service declares for the sprite map it builds. */
 	type ResolvedSprite = { path: string; hotspotX: number; hotspotY: number };
 
+	// The renderer asks for an effect and knows nothing about the disk; this process answers
+	// where the model is. Same division as the wallpaper and the cursor sprites above.
+	it("fills in the segmentation model path when the scene asks for an effect", () => {
+		const out = resolved({ webcamEffect: { mode: "blur", blurIntensity: 0.5 } });
+		expect(out.webcamEffect.modelPath).toBe(
+			path.join(
+				resources,
+				"mediapipe",
+				"selfie_segmentation",
+				"selfie_segmentation_landscape.onnx",
+			),
+		);
+	});
+
+	it("leaves the model path alone when no effect is requested", () => {
+		expect(resolved({ webcamEffect: { mode: "none" } }).webcamEffect.modelPath).toBeUndefined();
+		expect(resolved({ background: { kind: "color", color: "#000" } }).webcamEffect).toBeUndefined();
+	});
+
+	// A model that does not resolve must turn the effect off in the compositor, not fail the
+	// scene — the same contract a missing cursor sprite has.
+	it("leaves the model path unset rather than inventing one when the file is absent", () => {
+		fs.rmSync(path.join(resources, "mediapipe"), { recursive: true, force: true });
+		const out = resolved({ webcamEffect: { mode: "transparent" } });
+		expect(out.webcamEffect.modelPath).toBeUndefined();
+		expect(out.webcamEffect.mode).toBe("transparent");
+	});
+
 	it("resolves a bundled wallpaper to the extraResources copy, not the unreadable asar path", () => {
 		const out = resolved({ background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" } });
 
 		expect(out.background.path).toBe(path.join(resources, "wallpapers", "wallpaper1.jpg"));
 		expect(out.background.path).not.toContain("app.asar");
 		expect(fs.existsSync(out.background.path)).toBe(true);
+	});
+
+	// The camera's own background under the "custom" mode. It was NOT resolved, and the failure
+	// was silent and total: the compositor got "/wallpapers/wallpaper1.jpg", could not open it,
+	// and painted the bubble black — behind every one of the 18 bundled wallpapers, including
+	// the default. The screen's background had the fix; this one was simply missed.
+	it("resolves the camera's custom background, not just the screen's", () => {
+		const out = resolved({
+			webcamEffect: {
+				mode: "custom",
+				background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+			},
+		});
+
+		expect(out.webcamEffect.background.path).toBe(
+			path.join(resources, "wallpapers", "wallpaper1.jpg"),
+		);
+		expect(out.webcamEffect.background.path).not.toContain("app.asar");
+		expect(fs.existsSync(out.webcamEffect.background.path)).toBe(true);
+	});
+
+	// The two are independent: a scene can put a wallpaper behind the screen and a different one
+	// behind the camera, and resolving one must not depend on the other being present.
+	it("resolves both backgrounds in the same scene", () => {
+		const out = resolved({
+			background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+			webcamEffect: {
+				mode: "custom",
+				background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+			},
+		});
+
+		expect(out.background.path).toBe(path.join(resources, "wallpapers", "wallpaper1.jpg"));
+		expect(out.webcamEffect.background.path).toBe(out.background.path);
+	});
+
+	// A colour or a gradient carries no path, and the compositor renders both itself. Rewriting
+	// them would be a bug, not a no-op.
+	it("leaves a colour or gradient camera background untouched", () => {
+		const colour = resolved({
+			webcamEffect: { mode: "custom", background: { kind: "color", color: "#ff0080" } },
+		});
+		expect(colour.webcamEffect.background).toEqual({ kind: "color", color: "#ff0080" });
+
+		const gradient = resolved({
+			webcamEffect: {
+				mode: "custom",
+				background: { kind: "gradient", angleDeg: 90, stops: ["#000", "#fff"] },
+			},
+		});
+		expect(gradient.webcamEffect.background.stops).toEqual(["#000", "#fff"]);
 	});
 
 	it("resolves a cursor theme's arrow sprite to a path that exists on disk", () => {

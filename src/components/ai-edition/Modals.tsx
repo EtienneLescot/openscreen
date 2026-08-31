@@ -1,18 +1,4 @@
-import {
-	AlertTriangle,
-	Crop,
-	FolderOpen,
-	FolderPlus,
-	Loader2,
-	Maximize2,
-	Pencil,
-	Plus,
-	RefreshCw,
-	RotateCcw,
-	Trash2,
-	Triangle,
-	X,
-} from "lucide-react";
+import { AlertTriangle, Crop, FolderOpen, FolderPlus, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
@@ -20,47 +6,12 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { CropRegion } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
-import { toAxcutTranscriptDsl } from "@/lib/ai-edition/document/transcribe";
-import type { AxcutClip, AxcutTranscript } from "@/lib/ai-edition/schema";
-import { formatSec, formatSeconds } from "@/lib/ai-edition/timeline/format";
+import type { AxcutClip } from "@/lib/ai-edition/schema";
+import { formatSeconds } from "@/lib/ai-edition/timeline/format";
 import styles from "./NewEditorShell.module.css";
 import type { VideoSource } from "./VirtualPreview";
-
-// ponytail: keep the UI's language list literal in one place. Mirrors
-// `transcriptLanguageSchema` in schema/index.ts; if the schema gains a
-// language, add it here too.
-const REGEN_LANGUAGES = [
-	"auto",
-	"en",
-	"fr",
-	"de",
-	"es",
-	"it",
-	"pt",
-	"nl",
-	"ja",
-	"ko",
-	"zh",
-] as const;
-
-type TranscriptLanguage = (typeof REGEN_LANGUAGES)[number];
-
-const LANGUAGE_LABELS: Record<TranscriptLanguage, string> = {
-	auto: "Auto",
-	en: "EN",
-	fr: "FR",
-	de: "DE",
-	es: "ES",
-	it: "IT",
-	pt: "PT",
-	nl: "NL",
-	ja: "JA",
-	ko: "KO",
-	zh: "ZH",
-};
 
 interface BaseModalProps {
 	open: boolean;
@@ -81,6 +32,7 @@ function useEscape(open: boolean, onClose: () => void) {
 export function ModalShell({
 	open,
 	onClose,
+	closeOnEscape = true,
 	title,
 	subtitle,
 	wide,
@@ -89,13 +41,35 @@ export function ModalShell({
 	title: string;
 	subtitle?: string;
 	wide?: boolean;
+	/** Off for a dialog that handles Escape itself — two listeners both fire for one
+	 *  keypress, and this one's `onClose` wins whatever order they registered in. */
+	closeOnEscape?: boolean;
 	children: ReactNode;
 }) {
 	const tc = useScopedT("common");
-	useEscape(open, onClose);
+	const dialogRef = useRef<HTMLDivElement | null>(null);
+	useEscape(open && closeOnEscape, onClose);
+	// Move focus into the dialog as it opens, and hand it back to whatever had it when the
+	// dialog goes. The app menu closes without restoring focus to its trigger — right for a
+	// pointer user — so otherwise the opener is left on document.body: Tab then walks the
+	// editor *behind* the backdrop, and a screen reader is never told a dialog appeared.
+	// Closing has the mirror problem: the focused node is the one being unmounted.
+	useEffect(() => {
+		if (!open) return;
+		// Whatever opened this. Often document.body (the app menu unmounts its own row before
+		// the dialog mounts), in which case restoring is a no-op; the panel's gear is still
+		// there, and gets it back.
+		const opener = document.activeElement;
+		dialogRef.current?.focus();
+		return () => {
+			if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+		};
+	}, [open]);
 	if (!open) return null;
 	return (
 		<div
+			ref={dialogRef}
+			tabIndex={-1}
 			className={`${styles.modal} ${open ? styles.isOpen : ""}`}
 			role="dialog"
 			aria-modal="true"
@@ -681,7 +655,7 @@ interface EditClipModalProps extends BaseModalProps {
 // a draggable dual-handle range over the asset's full source duration —
 // replaces the old numeric-input-only form. Trim range AND crop are both
 // per-clip and both edited here (see clipSchema.cropRegion / useTimeline's
-// updateClipSourceRange + updateClipCrop) — crop used to be a document-wide
+// applyClipEdit, which composes the two into one save) — crop used to be a document-wide
 // setting behind its own facet-rail button; it's a framing choice for one
 // piece of footage, so it belongs with the rest of this clip's edits.
 export function EditClipModal({
@@ -1512,453 +1486,6 @@ export function InsertSourceModal({
 					</div>
 				</button>
 			</div>
-		</ModalShell>
-	);
-}
-
-export interface SourceTranscriptModalProps extends BaseModalProps {
-	assetLabel: string;
-	assetPath: string;
-	tcFormatted: string;
-	transcript: AxcutTranscript | null;
-	isTranscribing: boolean;
-	isFailed: boolean;
-	/** Why the last run produced nothing — "no audio track", or the engine's own message. */
-	failureMessage?: string;
-	onRegenerate: (language: TranscriptLanguage) => void;
-}
-
-export function SourceTranscriptModal({
-	open,
-	onClose,
-	assetLabel,
-	assetPath,
-	tcFormatted,
-	transcript,
-	isTranscribing,
-	isFailed,
-	failureMessage,
-	onRegenerate,
-}: SourceTranscriptModalProps) {
-	const t = useScopedT("editor");
-	const tc = useScopedT("common");
-	const videoRef = useRef<HTMLVideoElement | null>(null);
-	const [isPlaying, setIsPlaying] = useState(false);
-	const [playTime, setPlayTime] = useState(0);
-	const [duration, setDuration] = useState<number | null>(null);
-	const [regenLang, setRegenLang] = useState<TranscriptLanguage>(
-		(transcript?.language as TranscriptLanguage) ?? "auto",
-	);
-
-	// ponytail: sync the language picker to whatever the stored transcript was
-	// generated with. Avoids surprising the user with a different selection on
-	// every open after a regenerate.
-	useEffect(() => {
-		if (open) setRegenLang((transcript?.language as TranscriptLanguage) ?? "auto");
-	}, [open, transcript?.language]);
-
-	useEffect(() => {
-		if (!open) {
-			setIsPlaying(false);
-			setPlayTime(0);
-			setDuration(null);
-			const v = videoRef.current;
-			if (v) {
-				v.pause();
-				v.currentTime = 0;
-			}
-		}
-	}, [open]);
-
-	const detectedLanguage =
-		transcript?.language && transcript.language !== "auto" ? transcript.language : null;
-
-	const statusLabel = isTranscribing
-		? t("mediaStage.generating")
-		: isFailed
-			? t("mediaStage.generationFailed")
-			: transcript
-				? t("mediaStage.generated")
-				: t("mediaStage.notGeneratedYet");
-
-	const transcriptBody = transcript
-		? toAxcutTranscriptDsl(transcript, assetLabel || undefined, duration ?? undefined)
-		: null;
-
-	const playLabel = isPlaying ? tc("playback.pause") : tc("playback.play");
-
-	const togglePlay = () => {
-		const v = videoRef.current;
-		if (!v) return;
-		if (v.paused) {
-			// Same catch as VirtualPreview's: `play()` rejects on the autoplay policy
-			// or when a new load interrupts it, and `isPlaying` is driven by the
-			// element's own play/pause events — so a rejection leaves nothing to
-			// reconcile, it just must not escape as an unhandled rejection.
-			void v.play().catch(() => {
-				// swallow: rejection just means playback never started
-			});
-		} else {
-			v.pause();
-		}
-	};
-
-	const restart = () => {
-		const v = videoRef.current;
-		if (!v) return;
-		v.currentTime = 0;
-		setPlayTime(0);
-	};
-
-	const requestFullscreen = () => {
-		const v = videoRef.current;
-		if (!v) return;
-		// Rejects when the gesture isn't accepted or the element can't go fullscreen.
-		// Nothing to reconcile — the document stays as it was.
-		void v.requestFullscreen?.().catch(() => {
-			// swallow: rejection just means we stayed windowed
-		});
-	};
-
-	return (
-		<ModalShell
-			open={open}
-			onClose={onClose}
-			title={t("mediaStage.sourceTranscript")}
-			subtitle={assetLabel}
-			wide
-		>
-			<div
-				style={{
-					display: "grid",
-					gridTemplateColumns: "minmax(220px, 320px) 1fr",
-					gap: 14,
-				}}
-			>
-				<div
-					style={{
-						position: "relative",
-						aspectRatio: "16 / 9",
-						borderRadius: "var(--r-md)",
-						overflow: "hidden",
-						background: "linear-gradient(135deg, #16171d, #16171d)",
-						border: "1px solid var(--border)",
-					}}
-				>
-					{assetPath ? (
-						<video
-							ref={videoRef}
-							src={toFileUrl(assetPath)}
-							style={{
-								width: "100%",
-								height: "100%",
-								objectFit: "contain",
-								background: "#16171d",
-							}}
-							preload="metadata"
-							onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-							onTimeUpdate={(e) => setPlayTime(e.currentTarget.currentTime)}
-							onPlay={() => setIsPlaying(true)}
-							onPause={() => setIsPlaying(false)}
-							onEnded={() => setIsPlaying(false)}
-						/>
-					) : (
-						<div
-							style={{
-								width: "100%",
-								height: "100%",
-								display: "grid",
-								placeItems: "center",
-								color: "var(--muted)",
-								font: "500 12px var(--font-body)",
-							}}
-						>
-							{t("mediaStage.noPreviewAvailable")}
-						</div>
-					)}
-					<div
-						style={{
-							position: "absolute",
-							left: 0,
-							right: 0,
-							bottom: 0,
-							display: "flex",
-							alignItems: "center",
-							gap: 8,
-							padding: "8px 10px",
-							background: "linear-gradient(180deg, transparent, rgba(22,23,29,.55))",
-							color: "#fff",
-						}}
-					>
-						<button
-							type="button"
-							aria-label={playLabel}
-							title={playLabel}
-							onClick={togglePlay}
-							style={{
-								background: "transparent",
-								border: 0,
-								color: "inherit",
-								cursor: "pointer",
-								padding: 2,
-								borderRadius: 4,
-								display: "inline-flex",
-								alignItems: "center",
-								justifyContent: "center",
-							}}
-						>
-							{isPlaying ? (
-								<span style={{ display: "inline-flex", gap: 2 }}>
-									<span
-										style={{
-											width: 4,
-											height: 12,
-											background: "currentColor",
-											borderRadius: 1,
-										}}
-									/>
-									<span
-										style={{
-											width: 4,
-											height: 12,
-											background: "currentColor",
-											borderRadius: 1,
-										}}
-									/>
-								</span>
-							) : (
-								<Triangle size={12} fill="currentColor" style={{ transform: "rotate(0deg)" }} />
-							)}
-						</button>
-						<button
-							type="button"
-							aria-label={t("mediaStage.restart")}
-							title={t("mediaStage.restart")}
-							onClick={restart}
-							style={{
-								background: "transparent",
-								border: 0,
-								color: "inherit",
-								cursor: "pointer",
-								padding: 2,
-								borderRadius: 4,
-								display: "inline-flex",
-								alignItems: "center",
-								justifyContent: "center",
-							}}
-						>
-							<RotateCcw size={13} />
-						</button>
-						<button
-							type="button"
-							aria-label={tc("playback.fullscreen")}
-							title={tc("playback.fullscreen")}
-							onClick={requestFullscreen}
-							style={{
-								background: "transparent",
-								border: 0,
-								color: "inherit",
-								cursor: "pointer",
-								padding: 2,
-								borderRadius: 4,
-								display: "inline-flex",
-								alignItems: "center",
-								justifyContent: "center",
-							}}
-						>
-							<Maximize2 size={13} />
-						</button>
-						<span
-							style={{
-								marginLeft: "auto",
-								font: "500 12px/1 var(--font-mono)",
-								display: "inline-flex",
-								alignItems: "baseline",
-								gap: 4,
-							}}
-						>
-							<strong>{formatSec(playTime)}</strong>
-							<i style={{ fontStyle: "normal", opacity: 0.55, margin: "0 2px" }}>/</i>
-							<span style={{ opacity: 0.8 }}>{duration ? formatSec(duration) : tcFormatted}</span>
-						</span>
-						{isTranscribing ? (
-							<span
-								style={{
-									width: 8,
-									height: 8,
-									borderRadius: "50%",
-									background: "var(--accent)",
-									boxShadow: "0 0 0 3px var(--accent-soft)",
-									marginLeft: 6,
-								}}
-								aria-label={t("mediaStage.transcribing")}
-							/>
-						) : (
-							<span
-								style={{
-									width: 8,
-									height: 8,
-									borderRadius: "50%",
-									background: isFailed ? "var(--danger)" : "var(--danger)",
-									boxShadow: isFailed
-										? "0 0 0 3px var(--danger-soft)"
-										: "0 0 0 3px rgba(239, 68, 68, 0.2)",
-									marginLeft: 6,
-								}}
-								aria-hidden
-							/>
-						)}
-					</div>
-				</div>
-				<div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-					<div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-						<span
-							style={{
-								display: "inline-flex",
-								alignItems: "center",
-								gap: 6,
-								padding: "6px 12px",
-								borderRadius: 999,
-								background: isFailed ? "var(--danger-soft)" : "var(--success-soft)",
-								color: isFailed ? "var(--danger)" : "var(--success)",
-								font: "500 12px var(--font-body)",
-								border: `1px solid color-mix(in srgb, ${isFailed ? "var(--danger)" : "var(--success)"} 22%, transparent)`,
-							}}
-						>
-							{isTranscribing ? (
-								<Loader2 size={11} className="animate-spin" />
-							) : (
-								<span
-									style={{
-										width: 7,
-										height: 7,
-										borderRadius: "50%",
-										background: isFailed ? "var(--danger)" : "var(--success)",
-									}}
-								/>
-							)}
-							{statusLabel}
-						</span>
-						{detectedLanguage ? (
-							<span
-								style={{
-									display: "inline-flex",
-									alignItems: "center",
-									padding: "6px 12px",
-									borderRadius: 999,
-									background: "var(--success-soft)",
-									color: "var(--success)",
-									font: "500 12px var(--font-body)",
-									border: "1px solid color-mix(in srgb, var(--success) 22%, transparent)",
-								}}
-							>
-								{t("mediaStage.detectedLanguage", { language: detectedLanguage })}
-							</span>
-						) : null}
-					</div>
-					<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-						<label
-							style={{
-								font: "500 12px/1 var(--font-body)",
-								color: "var(--muted)",
-							}}
-						>
-							{t("mediaStage.regenerateAs")}
-						</label>
-						<div
-							style={{
-								display: "grid",
-								gridTemplateColumns: "1fr auto",
-								gap: 8,
-								alignItems: "center",
-							}}
-						>
-							<select
-								aria-label={t("mediaStage.regenerateAs")}
-								value={regenLang}
-								disabled={isTranscribing}
-								onChange={(e) => setRegenLang(e.target.value as TranscriptLanguage)}
-								style={{
-									width: "100%",
-									padding: "10px 12px",
-									borderRadius: "var(--r-md)",
-									border: "1px solid var(--border)",
-									background: "var(--surface)",
-									color: "var(--fg)",
-									font: "500 13px var(--font-body)",
-								}}
-							>
-								{REGEN_LANGUAGES.map((code) => (
-									<option key={code} value={code}>
-										{code === "auto" ? t("mediaStage.auto") : LANGUAGE_LABELS[code]}
-									</option>
-								))}
-							</select>
-							<button
-								type="button"
-								title={t("mediaStage.regenerate")}
-								aria-label={t("mediaStage.regenerate")}
-								disabled={isTranscribing}
-								onClick={() => onRegenerate(regenLang)}
-								style={{
-									width: 38,
-									height: 38,
-									borderRadius: "var(--r-md)",
-									border: "1px solid var(--border)",
-									background: "var(--surface)",
-									color: "var(--fg)",
-									cursor: isTranscribing ? "not-allowed" : "pointer",
-									display: "inline-flex",
-									alignItems: "center",
-									justifyContent: "center",
-									opacity: isTranscribing ? 0.6 : 1,
-								}}
-							>
-								{isTranscribing ? (
-									<Loader2 size={15} className="animate-spin" />
-								) : (
-									<RefreshCw size={15} />
-								)}
-							</button>
-						</div>
-					</div>
-				</div>
-			</div>
-			{transcriptBody ? (
-				<pre
-					style={{
-						margin: 0,
-						padding: "14px 16px",
-						borderRadius: "var(--r-md)",
-						border: "1px solid var(--border)",
-						background: "var(--surface-warm)",
-						font: "400 12px/1.55 var(--font-mono)",
-						color: "var(--fg)",
-						whiteSpace: "pre",
-						overflow: "auto",
-						maxHeight: "38vh",
-					}}
-				>
-					{transcriptBody}
-				</pre>
-			) : (
-				<div
-					style={{
-						padding: 32,
-						textAlign: "center",
-						color: "var(--muted)",
-						font: "500 13px var(--font-body)",
-						border: "1px dashed var(--border)",
-						borderRadius: "var(--r-md)",
-					}}
-				>
-					{isFailed
-						? (failureMessage ?? t("mediaStage.generationFailedHint"))
-						: isTranscribing
-							? t("mediaStage.transcribingEllipsis")
-							: t("mediaStage.notGeneratedHint")}
-				</div>
-			)}
 		</ModalShell>
 	);
 }

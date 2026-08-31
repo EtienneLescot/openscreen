@@ -47,9 +47,16 @@ export async function importPendingRecording(): Promise<boolean> {
 	// overwrites this when handleLoadedMetadata fires with a finite value.
 	const doc = useProjectStore.getState().document;
 	if (doc && doc.timeline.clips.length === 0 && doc.assets.length > 0) {
+		// `history: false`. Nothing here is an edit: the user finished a recording and the
+		// editor built them a project around it, unattended, on mount. Recording it left a
+		// brand-new project sitting at `past.length === 1` before the user had touched
+		// anything, so their FIRST Ctrl+Z restored the state before the seed -- an empty
+		// timeline -- and the persist that follows an undo wrote that empty timeline to disk.
 		await useProjectStore
 			.getState()
-			.replaceTimeline([{ startSec: 0, endSec: 60 }], "Auto-imported recording");
+			.replaceTimeline([{ startSec: 0, endSec: 60 }], "Auto-imported recording", {
+				history: false,
+			});
 	}
 	return true;
 }

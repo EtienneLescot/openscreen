@@ -8,7 +8,7 @@
 {
   lib,
   rustPlatform,
-  ffmpeg,
+  ffmpeg-lgpl,
   symlinkJoin,
   pkg-config,
   rustfmt,
@@ -18,21 +18,9 @@
 }:
 
 let
-  # nixpkgs' default ffmpeg has no H.264 encoder this project can use, which the
-  # app reports precisely:
-  #
-  #   aucun encodeur video utilisable : libopenh264: absent de ce build ffmpeg
-  #
-  # withOpenh264 defaults to withFullDeps, so only ffmpeg-full carries it, while
-  # withX264 is on by default and is GPL. Both halves of this override matter.
-  # scripts/fetch-ffmpeg.mjs vendors BtbN's *lgpl* build and asserts the licence
-  # before using it, so linking GPL x264 into an MIT application is the exact
-  # thing upstream takes care to avoid -- a nix package that quietly did it would
-  # be a licensing fault, not a packaging shortcut.
-  ffmpegLgpl = ffmpeg.override {
-    withOpenh264 = true;
-    withGPL = false;
-  };
+  # Was an inline `ffmpeg.override` here; moved to nix/ffmpeg-lgpl.nix once the
+  # PipeWire helper became a third consumer of the same subtle pair of flags.
+  ffmpegLgpl = ffmpeg-lgpl;
 
   # crates/compositor/build.rs wants a single tree holding both include/ and
   # lib/, the shape of the vendored ffmpeg the Windows and Linux scripts
@@ -224,13 +212,7 @@ rustPlatform.buildRustPackage {
     # time rather than rewriting afterwards).
     patchelf --add-rpath '$ORIGIN' "$out/lib/compositor_view.node"
 
-    # The Vulkan loader, which nothing else pulls in: wgpu reaches Vulkan through
-    # ash's dlopen("libvulkan.so.1"), never a DT_NEEDED, which is why this
-    # derivation builds without it and then fails at export time. The ICD stays
-    # the host's job -- forcing a rasteriser would put every user with a real GPU
-    # into software rendering -- but the loader cannot be, because NixOS has no
-    # ld.so.cache and /run/opengl-driver/lib carries ICDs, not libvulkan.so.1.
-    patchelf --add-rpath "${lib.makeLibraryPath [ vulkan-loader ]}" "$out/lib/compositor_view.node"
+    # The Vulkan loader is added in postFixup, not here -- see the comment there.
 
     # What the reference build ends with (assertNoUnprefixedFfmpegImports in
     # scripts/build-linux-compositor-addon.mjs). preBuild's `count -eq 0` proves
@@ -247,6 +229,24 @@ rustPlatform.buildRustPackage {
     fi
     echo "verified: no unprefixed ffmpeg imports remain in the addon"
     runHook postInstall
+  '';
+
+  # The Vulkan loader, which nothing else pulls in: wgpu reaches Vulkan through
+  # ash's dlopen("libvulkan.so.1"), never a DT_NEEDED, which is why this
+  # derivation builds without it and then fails at export time. The ICD stays the
+  # host's job -- forcing a rasteriser would put every user with a real GPU into
+  # software rendering -- but the loader cannot be, because NixOS has no
+  # ld.so.cache and /run/opengl-driver/lib carries ICDs, not libvulkan.so.1.
+  #
+  # postFixup, and this was in installPhase until the PipeWire helper proved why
+  # that does not work: fixupPhase runs `patchelf --shrink-rpath`, which drops
+  # every RPATH entry no DT_NEEDED library needs -- which is the definition of an
+  # entry added for a dlopen. It was being added and then stripped, and the
+  # runner never noticed because ubuntu-latest has a system libvulkan that
+  # satisfies the dlopen regardless. On NixOS it would not have.
+  postFixup = ''
+    patchelf --force-rpath --add-rpath "${lib.makeLibraryPath [ vulkan-loader ]}" \
+      "$out/lib/compositor_view.node"
   '';
 
   meta = {

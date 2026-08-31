@@ -159,9 +159,19 @@ jobs:
       # [env] block (cargo has no [target.<cfg>.env] — the macOS section in that file
       # is inert and cargo warns "unused key"), so before that change this job pointed
       # bindgen at the win64 tree and could never have gone green.
+      #
+      # Without a library on ORT_DYLIB_PATH, `runtime_available()` is false and every
+      # segmentation test returns early — the suite goes green having exercised no
+      # inference at all, which is exactly how the `ort`-panics-when-absent bug got
+      # in. Staging it here is what makes `the_whole_loop_produces_a_mask_from_
+      # compose_frame_alone` a real test on this runner instead of a skipped one.
+      # ~30 MB, next to nothing beside `brew install ffmpeg` above.
+      - name: Stage ONNX Runtime
+        run: node scripts/fetch-onnxruntime.mjs
       - name: cargo test (compositor, aarch64-apple-darwin)
         env:
           MAC_FFMPEG_DIR: /opt/homebrew/opt/ffmpeg
+          ORT_DYLIB_PATH: ${{ github.workspace }}/electron/native/bin/darwin-arm64/libonnxruntime.dylib
         run: |
           cd crates
           cargo test -p openscreen-compositor --lib --tests
@@ -266,11 +276,21 @@ jobs:
           # et rendre une erreur qui ne designe pas la cause non plus.
           test -n "$libclang" || { echo "libclang introuvable apres l'installation"; exit 1; }
           echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
+      # Meme raison que sur le job macOS : sans bibliotheque sur ORT_DYLIB_PATH,
+      # `runtime_available()` est faux et chaque test de segmentation rend la main
+      # tout de suite — la suite passe au vert sans avoir exerce la moindre
+      # inference, ce qui est exactement par ou le bug « ort panique quand elle
+      # manque » est entre. C'est ce qui fait de
+      # `the_whole_loop_produces_a_mask_from_compose_frame_alone` un vrai test ici
+      # plutot qu'un test saute. Builtins node uniquement, comme fetch:ffmpeg:sdk.
+      - name: Stage ONNX Runtime
+        run: node scripts/fetch-onnxruntime.mjs
       - name: cargo test (compositor)
         env:
           # Les .so ffmpeg vendorises ne sont dans aucun chemin systeme : sans ca
           # le binaire de test se lance puis meurt sur `libavformat.so.62`.
           LD_LIBRARY_PATH: ${{ github.workspace }}/crates/thirdparty/ffmpeg-linux64-lgpl-shared/lib
+          ORT_DYLIB_PATH: ${{ github.workspace }}/electron/native/bin/linux-x64/libonnxruntime.so
           # Fait ECHOUER `cpu_backend_linux.rs` s'il n'obtient pas le backend CPU,
           # au lieu de le sauter en silence comme sur un poste sans lavapipe.
           OPENSCREEN_REQUIRE_CPU_BACKEND: "1"

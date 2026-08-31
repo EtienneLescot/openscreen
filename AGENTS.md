@@ -85,6 +85,12 @@ every edit is the main way an agent turns a 5-minute task into a 30-minute one, 
 
 This section is the *mechanics*. **What to actually run is [`technical-documentation/testing/manual-e2e-checklist.md`](technical-documentation/testing/manual-e2e-checklist.md)** — the capture-to-export pass, per-platform sections, and a results log to append to. Run it before promoting a release candidate and after any change to native capture, preview or export. For cursor work specifically, [`native-cursor-diagnostics.md`](technical-documentation/testing/native-cursor-diagnostics.md) gets you sidecars and reports without a full record-edit-export cycle. The checklist links back here for the mechanics below; the pairing only works if you know both halves exist.
 
+**If the computer-use MCP is available to you, this pass is yours to run — offer it, don't hand it back.** "Manual" names the input (real OS mouse and keyboard events), not the operator; an agent holding that mouse satisfies every check in the file. So when the work calls for it — a change to native capture, preview or export, or a release candidate waiting on QA — say you can run it and run it, instead of closing with "manual e2e pass required" and leaving a maintainer to do what you were already equipped to do. `list_granted_applications` answers whether the MCP is there at all; if it is not, say *that* plainly, because then the checklist genuinely does fall to a human.
+
+**Run whatever slice was asked for.** The whole file is one option, not the only one: a single section, one platform block, or the three checks that cover the change you just made are all legitimate runs — every row in the results log so far is a partial. What is not legitimate is silence about the rest. A check you did not run is **skipped with its reason**, never passed, and the run only exists once it is a row in the results log carrying the build/tag, the platform, and what you did not cover.
+
+**A release candidate is the exception.** The checklist asks for the whole file before a promote, in its own opening, and that is not softened by anything above: a slice covers a *change*, never a promotion. Scope one down and the row you write says `Partial`, which is not a green light to dispatch `promote.yml`.
+
 **Launch the app**
 
 - Normal: `npm run dev` — Vite serves the renderer and `vite-plugin-electron` opens the Electron window. The main process logs `Global shortcut registered: CommandOrControl+Shift+O` when ready (Ctrl/Cmd+Shift+O toggles the HUD).

@@ -10,7 +10,6 @@ import {
 	PanelLeft,
 	RefreshCw,
 	Save,
-	Settings,
 	Sparkles,
 	Sun,
 } from "lucide-react";
@@ -184,15 +183,6 @@ export function EditorTopBar({
 			</button>
 			<button
 				type="button"
-				className={styles.iconBtn}
-				title={t("topbar.settings")}
-				aria-label={t("topbar.settings")}
-				onClick={actions.openSettings}
-			>
-				<Settings size={16} />
-			</button>
-			<button
-				type="button"
 				className={styles.exportBtn}
 				title={t("topbar.export")}
 				aria-label={t("topbar.export")}
@@ -278,9 +268,12 @@ function ProjectNameField({
  *  paid for out of the mode labels, in the most verbose of 13 locales, at the 800px minimum
  *  window width.
  *
- *  Every label is an EXISTING common.actions / shortcuts key — the same ones electron/main.ts
- *  builds the native menu from. Reusing them is what stops the two menus from drifting apart,
- *  and it is why this component adds no translation work. */
+ *  No row invents a label. Each one reuses the key of the thing it opens: `common.actions.*`
+ *  for the rows electron/main.ts also builds native menu items from (About, Check for
+ *  Updates), and the dialog's own title key for the rows that open a dialog (`shortcuts.title`,
+ *  `editor.providerSettings.title`). That is what stops this menu from drifting away from the
+ *  native menu on one side and from what its rows actually open on the other — and it is why
+ *  this component adds no translation work. */
 /** Shared by the mount seed and the per-open refresh below. A rejection — no preload, browser
  *  mode — resolves to "no", which hides the item rather than shipping a button whose click the
  *  main process would refuse without saying so. */

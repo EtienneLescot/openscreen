@@ -28,11 +28,14 @@
 //      and referenced by name; the sha is the report's own fingerprint field,
 //      so the reference is verifiable rather than decorative.
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { documentSchema } from "../../src/lib/ai-edition/schema";
+import { buildEvalContext } from "./oracles";
 import { writeReportFile } from "./report";
 import type { RepetitionResult } from "./runner";
+import type { EvalContext } from "./scenario";
 import { allResults } from "./score";
-import { systemTextOf } from "./wire";
+import { systemTextOf, type WireTranscript } from "./wire";
 
 /** Default root. Gitignored — these are run outputs, not sources. */
 export const RUNS_DIR = "workbench/runs";
@@ -63,8 +66,14 @@ export interface PersistedMessage {
 }
 
 export interface PersistedTurn {
-	/** Bump when the shape changes: these files outlive the code that wrote them. */
-	schema: 1;
+	/**
+	 * Bump when the shape changes: these files outlive the code that wrote them.
+	 *
+	 * 2 — `scores.checks[].indeterminate`, le troisième verdict. Un fichier de
+	 * schéma 1 n'en porte pas, ce qui est exact : à l'époque où il a été écrit
+	 * un check ne pouvait que passer ou échouer.
+	 */
+	schema: 1 | 2;
 	label: string;
 	scenarioId: string;
 	rep: number;
@@ -75,6 +84,9 @@ export interface PersistedTurn {
 	run: { ok: boolean; error?: string; ms: number; failureClass: string };
 	/** The model's final text, verbatim. */
 	answer: string;
+	/** True when a tool mutated a document — le fait que `runChat` rapporte, et
+	 *  qu'un diff des deux documents ci-dessous ne rend pas. Absent en schéma 1. */
+	mutated?: boolean;
 	wire: {
 		rounds: number;
 		systemSha256: string;
@@ -99,7 +111,14 @@ export interface PersistedTurn {
 		dsl: number;
 		gateScore: number;
 		passed: boolean;
-		checks: Array<{ id: string; ok: boolean; expected: boolean; evidence?: string }>;
+		checks: Array<{
+			id: string;
+			ok: boolean;
+			expected: boolean;
+			/** Absent sur un fichier de schéma 1. */
+			indeterminate?: boolean;
+			evidence?: string;
+		}>;
 	};
 	/** Every field this file had to shorten, by name. Empty means complete. */
 	truncated: string[];
@@ -152,7 +171,7 @@ export function buildPersistedTurn(options: BuildPersistedTurnOptions): Persiste
 	const truncated: string[] = [];
 	const lastRequest = result.run.requests.at(-1);
 	return {
-		schema: 1,
+		schema: 2,
 		label: options.label,
 		scenarioId: result.scenarioId,
 		rep: result.rep,
@@ -169,6 +188,7 @@ export function buildPersistedTurn(options: BuildPersistedTurnOptions): Persiste
 			failureClass: result.scored.failureClass,
 		},
 		answer: cut(result.run.answer, "answer", truncated),
+		mutated: result.context.mutated,
 		wire: {
 			rounds: wire.rounds,
 			systemSha256: wire.systemSha256,
@@ -208,6 +228,7 @@ export function buildPersistedTurn(options: BuildPersistedTurnOptions): Persiste
 				id: check.id,
 				ok: check.ok,
 				expected: check.expected,
+				indeterminate: check.indeterminate,
 				...(check.evidence === undefined
 					? {}
 					: { evidence: cut(check.evidence, `check.${check.id}`, truncated, 2_000) }),
@@ -251,4 +272,136 @@ export function persistRepetition(options: PersistRepetitionOptions): {
 		writeReportFile(systemFile, systemTextOf(options.result.run.wire));
 	}
 	return { file, systemFile };
+}
+
+// ───────────────────────── relecture ─────────────────────────
+//
+// ponytail: la relecture existe pour le juge (`lib/judge.ts`). Un run live coûte
+// de l'argent et ne se rejoue pas ; faire tourner le juge PENDANT le tour lierait
+// chaque changement de rubric à un nouveau run payé. Il tourne donc après, sur ce
+// que ce fichier a écrit, autant de fois qu'on veut — c'est la raison d'être de
+// `runs/`, enfin utilisée pour autre chose que la lecture humaine.
+
+/**
+ * `cut()` inscrit ses coupes sous la forme `<champ> (<n> → <max> car.)`. La
+ * comparaison porte donc sur `<champ> ` et pas sur un préfixe : `argsJson` et
+ * `argsJsonBrut` commenceraient pareil, et `wire.calls[1]` serait un préfixe de
+ * `wire.calls[12]`.
+ */
+function wasTruncated(turn: PersistedTurn, field: string): boolean {
+	return turn.truncated.some((entry) => entry.startsWith(`${field} (`));
+}
+
+export function readPersistedTurn(file: string): PersistedTurn {
+	const turn = JSON.parse(readFileSync(file, "utf8")) as PersistedTurn;
+	if (turn.schema !== 1 && turn.schema !== 2) {
+		throw new Error(`${file} : schéma ${String(turn.schema)} inconnu de cette version du banc`);
+	}
+	return turn;
+}
+
+/** Les tours d'un label, groupés par scénario, dans l'ordre des répétitions. */
+export function listPersistedTurns(options: {
+	label: string;
+	root?: string;
+	scenarioIds?: string[];
+}): Array<{ scenarioId: string; files: string[] }> {
+	const directory = `${options.root ?? RUNS_DIR}/${options.label}`;
+	if (!existsSync(directory)) return [];
+	const wanted = new Set(options.scenarioIds ?? []);
+	const out: Array<{ scenarioId: string; files: string[] }> = [];
+	for (const entry of readdirSync(directory, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		if (wanted.size > 0 && !wanted.has(entry.name)) continue;
+		const files = readdirSync(`${directory}/${entry.name}`)
+			.filter((name) => /^rep-\d+\.json$/.test(name))
+			.sort((a, b) => Number(a.match(/\d+/)?.[0]) - Number(b.match(/\d+/)?.[0]))
+			.map((name) => `${directory}/${entry.name}/${name}`);
+		if (files.length > 0) out.push({ scenarioId: entry.name, files });
+	}
+	return out.sort((a, b) => a.scenarioId.localeCompare(b.scenarioId));
+}
+
+/**
+ * Rebuilds an `EvalContext` from a turn on disk.
+ *
+ * ponytail: UNE chose ne survit pas au fichier, et la taire la rendrait
+ * mesurable par erreur. `systemBlocks` et `toolsSent` ne sont pas persistés —
+ * seuls leurs sha, leurs noms et le message système voisin le sont — donc un
+ * check qui les lirait verrait des tableaux vides, ce qui ressemble à « rien
+ * n'a été envoyé » et n'en est pas. Aucun check jugé ne les touche ; ce
+ * commentaire est ce qui doit être lu avant qu'un futur check le fasse.
+ *
+ * Tout le reste est RELU, jamais redérivé. `mutating` et `mutated` viennent du
+ * fichier plutôt que d'un recalcul : ils décrivent ce que ce tour-là a fait, et
+ * un recalcul avec le roster d'aujourd'hui rejugerait un tour de l'an dernier
+ * avec des outils qu'il n'avait pas.
+ */
+export function contextFromPersistedTurn(turn: PersistedTurn): EvalContext {
+	const wire: WireTranscript = {
+		systemBlocks: [],
+		systemChars: turn.wire.systemChars,
+		systemSha256: turn.wire.systemSha256,
+		toolsSent: [],
+		toolNames: turn.wire.toolNames,
+		toolsSha256: turn.wire.toolsSha256,
+		rounds: turn.wire.rounds,
+		calls: turn.wire.calls.map((call, index) => {
+			let args: unknown;
+			try {
+				args = JSON.parse(call.argsJson);
+			} catch {
+				// ponytail: `args: undefined` a un sens PRÉCIS dans `WireCall` — le
+				// modèle a émis du JSON invalide, ce qu'un scénario peut provoquer
+				// exprès. Mais `cut()` coupe `argsJson` à MAX_FIELD_CHARS, et un JSON
+				// tronqué ne parse pas non plus : sans cette branche, notre propre
+				// troncature se relisait comme « le modèle n'a pas passé d'arguments ».
+				// C'est l'absence traitée comme un non-événement, la faute que ce
+				// fichier passe son temps à refuser ailleurs.
+				//
+				// Il refuse donc plutôt que de rendre un tour amputé. Le champ exact,
+				// jamais le préfixe `wire.calls[` : `resultJson` est coupé sous le même
+				// préfixe et sa troncature, elle, est sans conséquence ici.
+				if (wasTruncated(turn, `wire.calls[${index}].argsJson`)) {
+					throw new Error(
+						`tour illisible : les arguments de ${call.name} (appel ${call.id}) ont été ` +
+							"tronqués à l'écriture, on ne peut pas les relire. Rejugez un run dont " +
+							"`truncated[]` est vide, ou remontez MAX_FIELD_CHARS avant de le rejouer.",
+					);
+				}
+				args = undefined;
+			}
+			return {
+				round: call.round,
+				id: call.id,
+				name: call.name,
+				argsJson: call.argsJson,
+				args,
+				mutating: call.mutating,
+				...(call.resultJson === undefined ? {} : { resultJson: call.resultJson }),
+				resultOk: call.resultOk,
+			};
+		}),
+	};
+	return buildEvalContext({
+		answer: turn.answer,
+		wire,
+		before: documentSchema.parse(turn.documents.before),
+		after: documentSchema.parse(turn.documents.after),
+		// `runChat` ne rend un document que lorsqu'un outil a muté quelque chose,
+		// donc `mutated` est un fait sur le TOUR et pas un diff de documents : un
+		// `setZoom` idempotent mute sans rien changer, et comparer les deux
+		// documents effacerait la distinction que `consent` mesure.
+		mutated: turn.mutated ?? turn.wire.calls.some((call) => call.mutating),
+		// ponytail: relu du fichier, jamais redérivé — c'est le réglage sous lequel
+		// CE tour-là a tourné. Le déduire de la définition du scénario
+		// d'aujourd'hui rejugerait un tour d'hier sous un réglage qu'il n'avait
+		// pas, ce qui est la même faute que recalculer `mutating`.
+		allowAgentEdits: turn.allowAgentEdits,
+		run: {
+			ok: turn.run.ok,
+			...(turn.run.error === undefined ? {} : { error: turn.run.error }),
+			ms: turn.run.ms,
+		},
+	});
 }

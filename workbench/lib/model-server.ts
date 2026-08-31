@@ -33,6 +33,9 @@ export interface CapturedRequest {
 export interface ModelServerHandle {
 	url: string;
 	requests: CapturedRequest[];
+	/** Le modèle que le flux s'est attribué, quand un enregistreur l'a lu. Null
+	 *  tant qu'aucune réponse n'est passée, et absent des serveurs scriptés. */
+	resolvedModel?: string | null;
 	close: () => void;
 }
 

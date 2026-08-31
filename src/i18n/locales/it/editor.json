@@ -87,7 +87,6 @@
 		"switchToLightTheme": "Passa al tema chiaro",
 		"switchToDarkTheme": "Passa al tema scuro",
 		"toggleTheme": "Cambia tema",
-		"settings": "Impostazioni",
 		"export": "Esporta",
 		"renameProject": "Rinomina progetto",
 		"noProject": "Nessun progetto",
@@ -139,7 +138,6 @@
 		"sourceTranscript": "Trascrizione sorgente",
 		"close": "Chiudi",
 		"transcriptReady": "Trascrizione pronta",
-		"notGeneratedYet": "Non ancora generata",
 		"regenerateAs": "Rigenera in",
 		"auto": "Auto",
 		"regenerate": "Rigenera",
@@ -152,12 +150,7 @@
 		"transcriptionFailed": "Trascrizione non riuscita",
 		"cpuBackendHint": "In esecuzione su CPU — circa 2× più lento che su GPU",
 		"noTranscript": "Nessuna trascrizione",
-		"generating": "Generazione in corso",
-		"generationFailed": "Generazione non riuscita",
-		"generated": "Generato",
 		"generationFailedHint": "Generazione non riuscita — scegli una lingua e rigenera.",
-		"noPreviewAvailable": "Anteprima non disponibile",
-		"restart": "Riavvia",
 		"detectedLanguage": "Lingua rilevata: {{language}}",
 		"noAudioTrack": "Nessuna traccia audio",
 		"noAudioTrackHint": "Questo contenuto non ha una traccia audio: non c'è nulla da trascrivere.",
@@ -213,18 +206,6 @@
 		"cameraFullscreenDescription": "Mentre questa regione è in riproduzione, la camera occupa l'intero fotogramma — senza bordo, senza arrotondamento, senza sfondo — e rientra dolcemente alla fine. Trascina i bordi della regione sulla timeline per cambiarne l'inizio e la durata.",
 		"deleteRegion": "Elimina regione",
 		"freehandRendersAsBox": "Nell'esportazione, una forma libera è coperta dal suo rettangolo di delimitazione: copre di più, mai di meno."
-	},
-	"leftPanel": {
-		"mediaTitle": "Contenuti multimediali",
-		"searchPlaceholder": "Cerca…",
-		"clearSearch": "Cancella ricerca",
-		"emptyHint": "Nessun contenuto multimediale in questo progetto. Importa un video qui sotto.",
-		"transcriptReadyBadge": "TRASCRIZIONE PRONTA"
-	},
-	"leftRail": {
-		"chat": "Chat",
-		"media": "Contenuti multimediali",
-		"ariaLabel": "Strumenti a sinistra"
 	},
 	"chat": {
 		"changeProvider": "Cambia provider",

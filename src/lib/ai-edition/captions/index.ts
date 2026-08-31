@@ -8,21 +8,21 @@ export {
 	sourceSpanToTimelineSpans,
 } from "./cues";
 export type {
-	CaptionBandRect,
-	CaptionOffsetRange,
+	CaptionAnchorH,
+	CaptionAnchorV,
+	CaptionBoxRect,
 	CaptionSettings,
 	CaptionSettingsPatch,
-	CaptionTextAlign,
-	CaptionVerticalPosition,
 } from "./settings";
 export {
-	CAPTION_BAND_HEIGHT_PCT,
-	CAPTION_EDGE_MARGIN_PCT,
+	CAPTION_INSET_X_MAX,
+	CAPTION_INSET_Y_MAX,
 	captionBackgroundCss,
-	captionBandRect,
-	captionInkHeightPct,
-	captionOffsetRange,
+	captionBoxRect,
+	captionSafeColumn,
 	DEFAULT_CAPTION_SETTINGS,
+	defaultCaptionInsetX,
+	defaultCaptionInsetY,
 	getCaptionSettings,
 	patchCaptionSettings,
 } from "./settings";

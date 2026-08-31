@@ -63,14 +63,19 @@ function clip(startSec: number, endSec: number) {
 	};
 }
 
+/** The asset every clip above points at. No `cameraTrack`: this recording has no webcam,
+ *  which is what the Full Camera button is gated on. */
+const NO_CAMERA_ASSET = { id: "a1", label: "rec", durationSec: TOTAL_SEC };
+
 /** By default one 30-minute clip carrying a single one-second annotation. */
 function renderTimeline(
 	clips = [clip(0, TOTAL_SEC)],
 	annotation = { id: "ann1", startMs: 10_000, endMs: 11_000 },
+	assets: Array<Record<string, unknown>> = [NO_CAMERA_ASSET],
 ) {
 	const tl = {
 		clips,
-		assets: [{ id: "a1", label: "rec", durationSec: TOTAL_SEC }],
+		assets,
 		annotationRegions: [annotation],
 		speedRegions: [],
 		cameraFullscreenRegions: [],
@@ -117,12 +122,16 @@ function dragHandle(handle: Element, dxPx: number) {
 	window.dispatchEvent(new MouseEvent("pointerup", { clientX: dxPx }));
 }
 
-/** Ctrl+wheel up = zoom in; the handler is a native listener, so dispatch real events. */
-function zoomIn(notches: number) {
-	const canvas = document.querySelector("[class*=tlTracks]") as HTMLElement;
+/** Ctrl+wheel up = zoom in; the handler is a native listener, so dispatch real events.
+ *  Takes the target element so a test can prove the listener isn't confined to the
+ *  lanes — it fires from wherever in the pane the cursor happens to be. */
+function wheelZoomOn(el: HTMLElement, notches: number) {
 	for (let i = 0; i < notches; i++) {
-		fireEvent.wheel(canvas, { ctrlKey: true, deltaY: -100, clientX: 0 });
+		fireEvent.wheel(el, { ctrlKey: true, deltaY: -100, clientX: 0 });
 	}
+}
+function zoomIn(notches: number) {
+	wheelZoomOn(document.querySelector("[class*=tlTracks]") as HTMLElement, notches);
 }
 
 describe("V4Timeline lane pills", () => {
@@ -207,6 +216,32 @@ describe("V4Timeline create-from-toolbar", () => {
 		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
 	});
 
+	it("zooms from a wheel over the ruler too, not just the lanes", () => {
+		// The ruler row is pinned above .tlTracks (so its ticks don't scroll away
+		// with the lanes) and isn't a descendant of it. The wheel listener used to
+		// live on .tlTracks alone, so Ctrl/Shift+scrolling anywhere else in the
+		// pane — the ruler included — silently did nothing.
+		const { tl } = renderTimeline();
+		const ruler = document.querySelector("[class*=tlRulerRow]") as HTMLElement;
+		wheelZoomOn(ruler, 40);
+		fireEvent.click(screen.getByTitle("buttons.addZoom"));
+		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
+	});
+
+	it("pans from a wheel over the ruler too, not just the lanes", () => {
+		// Same gap as the zoom case above, but for the Shift+wheel pan path.
+		// Panning is a no-op fully zoomed out (nav already spans the whole
+		// timeline, so there is nowhere to pan to), so zoom in first — from the
+		// ruler too — to open up room to pan within.
+		renderTimeline();
+		const ruler = document.querySelector("[class*=tlRulerRow]") as HTMLElement;
+		wheelZoomOn(ruler, 40);
+		const navWindow = document.querySelector("[class*=tlNavWindow]") as HTMLElement;
+		const before = navWindow.style.left;
+		fireEvent.wheel(ruler, { shiftKey: true, deltaY: 100, clientX: 0 });
+		expect(navWindow.style.left).not.toBe(before);
+	});
+
 	it("never asks for a slice too short to be worth creating", () => {
 		// Past ~30x on a short timeline the pixels are worth hundredths of a
 		// second; the region would be born unusable, so the duration floors.
@@ -214,6 +249,46 @@ describe("V4Timeline create-from-toolbar", () => {
 		zoomIn(40);
 		fireEvent.click(screen.getByTitle("buttons.addZoom"));
 		expect(durationOf(tl)).toBeCloseTo(0.25, 3);
+	});
+
+	// #353. A camera-fullscreen region grows the webcam overlay, so with no webcam on the
+	// timeline it renders nothing in the preview and nothing in the export — the region is
+	// stored and forgotten. `addCameraFullscreen` now refuses to write one; the button says
+	// so before it is clicked instead of looking like it worked.
+	it("disables Add Full Camera when no clip on the timeline has a camera", () => {
+		renderTimeline();
+		expect(screen.getByTitle("buttons.addCameraFullscreen")).toBeDisabled();
+	});
+
+	it("enables Add Full Camera as soon as a clip's asset carries one", () => {
+		renderTimeline(undefined, undefined, [
+			{
+				...NO_CAMERA_ASSET,
+				cameraTrack: { sourcePath: "/tmp/cam.webm", startMs: 0, offsetMs: 0, visible: true },
+			},
+		]);
+		expect(screen.getByTitle("buttons.addCameraFullscreen")).toBeEnabled();
+	});
+
+	// The disabled button is only half the promise: an empty lane advertises the shortcut
+	// that fills it, so on a camera-less project it was still inviting a `C` press that
+	// `addCameraFullscreen` now refuses. It borrows the Layout pane's "No Webcam" wording
+	// instead, so the two surfaces agree about the same project.
+	it("does not advertise the C shortcut on a lane that cannot be filled", () => {
+		renderTimeline();
+		expect(screen.getByText("layout.noWebcam")).toBeInTheDocument();
+		expect(screen.queryByText("hints.pressCameraFullscreen")).not.toBeInTheDocument();
+	});
+
+	it("advertises it again once a camera is on the timeline", () => {
+		renderTimeline(undefined, undefined, [
+			{
+				...NO_CAMERA_ASSET,
+				cameraTrack: { sourcePath: "/tmp/cam.webm", startMs: 0, offsetMs: 0, visible: true },
+			},
+		]);
+		expect(screen.getByText("hints.pressCameraFullscreen")).toBeInTheDocument();
+		expect(screen.queryByText("layout.noWebcam")).not.toBeInTheDocument();
 	});
 });
 
