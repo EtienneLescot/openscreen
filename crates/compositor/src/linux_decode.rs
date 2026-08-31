@@ -343,6 +343,7 @@ impl SwDecoder {
         // comme `live::Player::step` rattrape la webcam par une boucle monotone vers
         // l'avant, une fois garée dans le futur elle ne revient jamais — elle fige.
         let seek_flags = SEEK_SET | AVSEEK_FLAG_BACKWARD;
+        let target_ts_seconds = target_ts / 1_000_000.0;
         let r = av_seek_frame(self.fmt, -1, target_ts as i64, seek_flags);
         if r < 0 {
             // Repli : rembobiner au début et balayer en avant.
@@ -355,7 +356,7 @@ impl SwDecoder {
             // écrivent des fichiers indexés.
             //
             // Rembobiner à 0 reste possible sans index (c'est le début du fichier), et
-            // la boucle ci-dessous sait déjà avancer jusqu'à `target_ts`. Le coût est
+            // `pump_to_target` sait déjà avancer jusqu'à `target_ts`. Le coût est
             // linéaire, ce qui n'est acceptable que depuis le pompage séquentiel : le
             // décodage mesure ~0,07 ms/frame, donc rejoindre la seconde 14 d'un
             // enregistrement coûte quelques dizaines de ms au lieu d'échouer.
@@ -374,11 +375,49 @@ impl SwDecoder {
         // Le seek rouvre le flux : le drapeau EOF du pompage sequentiel retombe.
         self.sent_eof = false;
 
+        let mut found = self.pump_to_target(target_ts_seconds)?;
+
+        // Repli si le seek BACKWARD s'est calé si près de l'EOF que le pompage n'a
+        // rendu AUCUNE frame. Cas concret : une cible AU niveau ou au-delà de la
+        // dernière frame — fréquent sur les captures à frames droppées, dont la
+        // cadence réelle (`avg_frame_rate`, p.ex. 56,34) est sous le nominal 60,
+        // si bien qu'un index calculé sur la grille 60 fps demande une frame
+        // au-delà du compte réel. `av_seek_frame` réussit alors (`r == 0`) mais
+        // atterrit sur un unique packet non décodable juste avant l'EOF : après
+        // `flush_buffers`, ce P-frame isolé sans référence ne sort rien, même
+        // drainé, et `decode_at` échouait avec « aucune frame reçue ».
+        //
+        // Rembobiner à 0 puis re-pomper garantit de rendre la dernière frame
+        // <= cible (donc la toute dernière du flux quand la cible est au-delà),
+        // au lieu d'échouer. C'est le même balayage linéaire que le repli WebM
+        // ci-dessus, réservé au cas rare où le seek indexé n'a rien produit.
+        if found.is_null() {
+            let rewound = av_seek_frame(self.fmt, -1, 0, seek_flags);
+            if rewound >= 0 {
+                avcodec_flush_buffers(self.dec);
+                self.sent_eof = false;
+                found = self.pump_to_target(target_ts_seconds)?;
+            }
+        }
+
+        if found.is_null() {
+            bail!("decode_at(frame_idx={frame_idx}) : aucune frame reçue");
+        }
+        let pts = (*found).best_effort_timestamp;
+        self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
+        Ok(found)
+    }
+
+    /// Pompe `read_frame` → `send_packet` → `receive_frame` depuis la position
+    /// COURANTE du démuxeur (le caller a déjà seeké et appelé
+    /// `avcodec_flush_buffers`) et renvoie la dernière frame dont le pts est
+    /// <= `target_ts_seconds`, ou la toute dernière frame du flux si la cible est
+    /// au-delà. Renvoie un pointeur NUL si aucune frame n'a pu être décodée — le
+    /// caller décide alors de rembobiner et de re-pomper.
+    unsafe fn pump_to_target(&mut self, target_ts_seconds: f64) -> Result<*mut AVFrame> {
         let mut pkt: *mut crate::ffi::AVPacket = ptr::null_mut();
         let mut frame: *mut AVFrame = ptr::null_mut();
         let mut found: *mut AVFrame = ptr::null_mut();
-
-        let target_ts_seconds = target_ts / 1_000_000.0;
         let mut invalid_skips = 0u32;
         'outer: loop {
             pkt = av_packet_alloc();
@@ -391,12 +430,10 @@ impl SwDecoder {
                 // frames en interne (latence de décodage / réordonnancement B-frames).
                 // Sans drain, une cible proche de la fin — le seek BACKWARD se cale sur
                 // la dernière keyframe et il reste alors trop peu de packets après elle
-                // pour vaincre la latence du décodeur — ne recevait JAMAIS de frame :
-                // `found` restait null et `decode_at` échouait avec « aucune frame
-                // reçue ». Symptôme signalé : le preview casse par intermittence quand on
-                // scrube jusqu'au bout. On envoie donc un packet NULL pour passer le
-                // décodeur en mode drain, puis on vide les frames restantes — exactement
-                // ce que fait `receive_into` du pompage séquentiel à l'EOF.
+                // pour vaincre la latence du décodeur — ne recevait JAMAIS de frame.
+                // On envoie donc un packet NULL pour passer le décodeur en mode drain,
+                // puis on vide les frames restantes — exactement ce que fait
+                // `receive_into` du pompage séquentiel à l'EOF.
                 av_packet_free(&mut pkt);
                 avcodec_send_packet(self.dec, ptr::null_mut());
                 frame = av_frame_alloc();
@@ -507,11 +544,6 @@ impl SwDecoder {
         if !pkt.is_null() {
             av_packet_free(&mut pkt);
         }
-        if found.is_null() {
-            bail!("decode_at(frame_idx={frame_idx}) : aucune frame reçue");
-        }
-        let pts = (*found).best_effort_timestamp;
-        self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
         Ok(found)
     }
 
@@ -560,5 +592,32 @@ mod tests {
     fn open_sur_chemin_inexistant_renvoie_err() {
         let r = SwDecoder::open("Z:/does/not/exist.mp4");
         assert!(r.is_err());
+    }
+
+    /// Régression : `decode_at` doit rendre une frame pour TOUT index de 0 jusqu'à
+    /// AU-DELÀ de la dernière frame — jamais « aucune frame reçue ». Le dépassement
+    /// couvre le cas des captures à frames droppées (`avg_frame_rate` < 60), où un
+    /// index calculé sur la grille 60 fps demande une frame passé le compte réel :
+    /// le seek BACKWARD atterrit sur un packet isolé non décodable en fin de fichier
+    /// et `decode_at` doit basculer sur le repli rembobinage → dernière frame.
+    ///
+    /// Env-gated comme les tests `OPENSCREEN_GOLDEN_*` (pas de fixture mp4 commitée) :
+    /// `OPENSCREEN_SWEEP_FILE=/path/to.mp4 cargo test decode_at_never_fails_past_end -- --ignored`
+    #[test]
+    #[ignore]
+    fn decode_at_never_fails_past_end() {
+        let path = std::env::var("OPENSCREEN_SWEEP_FILE").expect("set OPENSCREEN_SWEEP_FILE");
+        let mut dec = SwDecoder::open(&path).expect("open");
+        let n = ((dec.duration_sec().unwrap_or(0.0) * dec.fps()).ceil() as u32) + 30;
+        let mut failures: Vec<u32> = Vec::new();
+        for idx in 0..n {
+            unsafe {
+                match dec.decode_at(idx) {
+                    Ok(f) => SwDecoder::free_frame(f),
+                    Err(_) => failures.push(idx),
+                }
+            }
+        }
+        assert!(failures.is_empty(), "decode_at failed at indices {failures:?} (of 0..{n})");
     }
 }
