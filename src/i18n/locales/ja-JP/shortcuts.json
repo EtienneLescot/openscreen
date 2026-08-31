@@ -21,6 +21,7 @@
 		"addSpeed": "速度を追加",
 		"addAnnotation": "注釈を追加",
 		"addAudio": "音声を追加",
+		"addVoiceover": "ナレーションを録音",
 		"addKeyframe": "キーフレームを追加",
 		"addCameraFullscreen": "フルスクリーンカメラを追加",
 		"deleteSelected": "選択を削除",

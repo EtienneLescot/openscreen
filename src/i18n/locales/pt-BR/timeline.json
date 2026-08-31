@@ -87,5 +87,17 @@
 		"smartCutsNoAudio": "Esta mídia não tem áudio",
 		"smartCutsNoSpeech": "Nenhuma fala detectada",
 		"smartCutsFailed": "Falha na transcrição — tente de novo em Mídia"
+	},
+	"audio": {
+		"addVoiceover": "Adicionar narração",
+		"subtitle": "Coloque uma camada de narração ou de música de fundo na linha do tempo",
+		"record": "Gravar narração",
+		"importFile": "Importar arquivo de áudio",
+		"recording": "Gravando",
+		"stop": "Parar",
+		"micDenied": "Acesso ao microfone negado",
+		"recordingUnavailable": "A gravação não está disponível aqui",
+		"saveFailed": "Não foi possível salvar a gravação",
+		"importFailed": "Não foi possível importar o arquivo de áudio"
 	}
 }

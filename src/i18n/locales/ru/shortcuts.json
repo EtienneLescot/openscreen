@@ -21,6 +21,7 @@
 		"addSpeed": "Изменить скорость",
 		"addAnnotation": "Добавить аннотацию",
 		"addAudio": "Добавить аудио",
+		"addVoiceover": "Записать закадровый голос",
 		"addKeyframe": "Добавить ключевой кадр",
 		"addCameraFullscreen": "Добавить камеру на весь экран",
 		"deleteSelected": "Удалить выбранное",
