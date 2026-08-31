@@ -589,7 +589,7 @@ export function LaunchWindow() {
 	const openSourceSelector = useCallback(async () => {
 		if (window.electronAPI) {
 			return await openSourceSelectorWithPermissionRetry({
-				openSourceSelector: () => window.electronAPI.openSourceSelector(),
+				openSourceSelector: (options) => window.electronAPI.openSourceSelector(options),
 				requestScreenAccess: () => window.electronAPI.requestScreenAccess(),
 			});
 		}

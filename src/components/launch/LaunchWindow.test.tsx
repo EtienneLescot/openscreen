@@ -211,6 +211,7 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 			success: true,
 			granted: true,
 			status: "granted",
+			promptRaised: false,
 		})),
 		// Follows the platform under test. Pinned to "darwin" before, which was
 		// invisible while only `nativeBridgeClient` was consulted for it — and
