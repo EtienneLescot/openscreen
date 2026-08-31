@@ -72,19 +72,25 @@ and **one** encoder + muxer pair:
   head, `cos² + sin² = 1`) covers each internal boundary to suppress the
   click where two recordings meet butt-joined, without shifting timing.
   The in-tree WSOLA stretcher is still there, but only as the fallback
-  `stretch_pcm_to_length` takes when the filter chain cannot be built or
-  yields too little audio (see [Audio](native-compositor.md#audio)).
+  `stretch_pcm_to_length` takes when the filter chain cannot be built,
+  negotiates a format the drain does not read, or still comes up short of
+  the target after the corrected pass (see
+  [Audio](native-compositor.md#audio)).
 
 - **The stretch is not overlapped with the encode.** Decode and stretch
   run inside `walk_composited_timeline`'s `on_clip_end` callback
   (`pipeline.rs`), which fires once per clip *after* that clip's frames
-  have been composed and encoded, on the same thread — so the stretch
-  time is added to the export wall, not hidden behind it. `progress()` is
-  driven only by encoded video frames, so nothing moves while it runs and
-  a long clip parks the export at whatever percentage the last frame
-  reported. That is why the `atempo` path matters: it is O(n) where WSOLA
-  is O(grain × radius) per rendered sample, which on a long clip meant
-  minutes of an apparently frozen export.
+  have been composed and submitted to the encoder, on the same thread —
+  so the stretch time is added to the export wall, not hidden behind it.
+  `progress()` counts composed frames as they are handed to the encoder,
+  and nothing calls it during the audio phase, so a long clip parks the
+  export at whatever percentage its last frame reported. (The encoder's
+  own flush comes later still, after the timeline walk.) That reporting
+  gap is why the `atempo` path matters so much here: WSOLA is
+  O(grain × radius) per rendered sample, which on a long clip meant
+  minutes of an apparently frozen export. Reporting progress across the
+  audio phase would fix the symptom rather than the cost, and is tracked
+  separately.
 
 - **Output** honours the timeline's selected aspect ratio
   (`resolveAspectRatioValue` over `getEditorSettings(document).aspectRatio` —
