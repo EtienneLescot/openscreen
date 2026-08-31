@@ -33,6 +33,7 @@ import {
 import { parseCliArgs } from "./cli/args";
 import { runCli } from "./cli/cliMain";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "./diagnostics/main-log-buffer";
+import { buildEditMenuSubmenu, type EditorUndoRedoChannel, routeEditorUndoRedo } from "./edit-menu";
 import {
 	loadAndRegisterGlobalShortcut,
 	registerOpenAppShortcut,
@@ -40,7 +41,11 @@ import {
 } from "./globalShortcut";
 import { mainT, setMainLocale } from "./i18n";
 import { getInstallChannel, offersUpdateCheck, platformOwnsUpdates } from "./install-channel";
-import { getSelectedDesktopSource, registerIpcHandlers } from "./ipc/handlers";
+import {
+	exportDiagnosticFile,
+	getSelectedDesktopSource,
+	registerIpcHandlers,
+} from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
 import { registerSttIpc, shutdownStt } from "./stt";
 import { checkLatestRelease } from "./update-checker";
@@ -189,6 +194,15 @@ function sendEditorMenuAction(
 	targetWindow.webContents.send(channel);
 }
 
+/**
+ * Resolve which window the Edit menu's Undo/Redo is aimed at. The routing itself
+ * is `routeEditorUndoRedo`, in `edit-menu.ts`, where a test can reach it.
+ */
+function sendEditorUndoRedo(channel: EditorUndoRedoChannel) {
+	const targetWindow = BrowserWindow.getFocusedWindow() ?? mainWindow;
+	routeEditorUndoRedo(channel, targetWindow, () => !!targetWindow && isEditorWindow(targetWindow));
+}
+
 function setupApplicationMenu() {
 	const isMac = process.platform === "darwin";
 	const template: Electron.MenuItemConstructorOptions[] = [];
@@ -200,6 +214,11 @@ function setupApplicationMenu() {
 				{
 					role: "about",
 					label: mainT("common", "actions.about") || "About OpenScreen",
+				},
+				{ type: "separator" as const },
+				{
+					label: mainT("common", "actions.saveDiagnostics") || "Save Diagnostics",
+					click: runSaveDiagnostics,
 				},
 				// Omitted entirely — here, in the Help menu and in the tray — where a package
 				// manager owns the update. See `canOfferUpdateCheck`.
@@ -274,18 +293,11 @@ function setupApplicationMenu() {
 		},
 		{
 			label: mainT("common", "actions.edit") || "Edit",
-			submenu: [
-				{ role: "undo", label: mainT("common", "actions.undo") || "Undo" },
-				{ role: "redo", label: mainT("common", "actions.redo") || "Redo" },
-				{ type: "separator" },
-				{ role: "cut", label: mainT("common", "actions.cut") || "Cut" },
-				{ role: "copy", label: mainT("common", "actions.copy") || "Copy" },
-				{ role: "paste", label: mainT("common", "actions.paste") || "Paste" },
-				{
-					role: "selectAll",
-					label: mainT("common", "actions.selectAll") || "Select All",
-				},
-			],
+			// Built in `edit-menu.ts` — read its header for why Undo/Redo are not roles.
+			submenu: buildEditMenuSubmenu({
+				label: (key, fallback) => mainT("common", key) || fallback,
+				dispatch: sendEditorUndoRedo,
+			}),
 		},
 		{
 			label: mainT("common", "actions.view") || "View",
@@ -365,6 +377,11 @@ function setupApplicationMenu() {
 				{
 					label: mainT("common", "actions.about") || "About OpenScreen",
 					click: runAboutDialog,
+				},
+				{ type: "separator" as const },
+				{
+					label: mainT("common", "actions.saveDiagnostics") || "Save Diagnostics",
+					click: runSaveDiagnostics,
 				},
 			],
 		});
@@ -514,6 +531,47 @@ function runUpdateCheck() {
 	checkForUpdates().catch((error) => {
 		console.error("[updates] check failed", error);
 	});
+}
+
+/**
+ * Menu and tray entry point for exporting a diagnostic bundle. The backend
+ * (`exportDiagnosticFile`) and its "Save Diagnostics" label already existed —
+ * nothing in the app ever called it (getopenscreen/openscreen#460). Reveals
+ * the written file on success, the same confirmation the export flow's "Show
+ * in folder" gives, so there is no need for a second dialog on top of the
+ * native Save dialog the user already went through.
+ *
+ * No renderer `projectState`/`logs` to attach from here, unlike the in-app
+ * crash path this shares a payload shape with — the diagnostic value for a
+ * capture bug is almost entirely `helperOutput`/`mainProcessLogs`, which
+ * `exportDiagnosticFile` reads straight from the main process regardless.
+ */
+function runSaveDiagnostics() {
+	exportDiagnosticFile({ error: "Manual diagnostic export", projectState: null, logs: [] })
+		.then((result) => {
+			if (result.canceled) return;
+			if (!result.success) {
+				// exportDiagnosticFile resolves rather than rejects on a write
+				// failure, so this is the branch that turns "user picked a save
+				// location and got silence" into a visible error instead of a
+				// menu action that looks like it did nothing.
+				showMessageBox({
+					type: "error",
+					title: PRODUCT_NAME,
+					message: mainT("dialogs", "export.failed") || "Export Failed",
+					detail: result.error,
+				}).catch((error) => {
+					console.error("[diagnostics] failure dialog failed", error);
+				});
+				return;
+			}
+			if (result.path) {
+				shell.showItemInFolder(result.path);
+			}
+		})
+		.catch((error) => {
+			console.error("[diagnostics] save failed", error);
+		});
 }
 
 /** Mirrors the flag that already drives the tray icon. An update must never interrupt a take —
@@ -727,6 +785,14 @@ function updateTrayMenu(recording: boolean = false) {
 							label: mainT("common", "actions.about") || "About OpenScreen",
 							click: runAboutDialog,
 						},
+				// Right next to About, and reachable without opening any window: this is the
+				// one place in the app most likely to still be usable right after a recording
+				// failed to stop, which is exactly when the [stop-timing]/encoder-selection
+				// lines this exports are worth the most (getopenscreen/openscreen#460).
+				{
+					label: mainT("common", "actions.saveDiagnostics") || "Save Diagnostics",
+					click: runSaveDiagnostics,
+				},
 				{ type: "separator" as const },
 				{
 					label: mainT("common", "actions.quit") || "Quit",

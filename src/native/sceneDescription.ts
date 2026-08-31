@@ -15,7 +15,11 @@
  * contract — do not change the exported types.
  */
 
-import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
+import type {
+	CameraFullscreenRegion,
+	SpeedRegion,
+	WebcamBackgroundMode,
+} from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION, getZoomScale } from "@/components/video-editor/types";
 import { annotationFontSizeFraction } from "@/lib/ai-edition/annotationScale";
 import {
@@ -146,6 +150,11 @@ export interface SceneAnnotation {
 		fontStyle: "normal" | "italic";
 		textDecoration: "none" | "underline";
 		textAlign: "left" | "center" | "right";
+		/** Which edge of the drawn text block is pinned to the box. Omitted for
+		 *  annotations, which keep the historical centring — so their payload does not
+		 *  change shape at all. Captions send it because a centred block moves BOTH its
+		 *  edges as it grows, which made a subtitle drift every time its text wrapped. */
+		verticalAlign?: "top" | "center" | "bottom";
 		animation: string | null;
 	};
 	/** Present for `kind: "image"` — the authored `imageContent` (path or data URI). */
@@ -396,6 +405,24 @@ export interface SceneDescription {
 	cropByClip: Array<{ x: number; y: number; width: number; height: number } | null>;
 	/** Output frame. `fps` null = use the first clip's source fps. */
 	output: { width: number; height: number; fps: number | null };
+	/** Webcam background effect. Omitted when the mode is "none". */
+	webcamEffect?: SceneWebcamEffect;
+}
+
+/**
+ * The webcam background effect, as the compositor needs it.
+ *
+ * Carries the MODE and its parameters only — never pixels. The per-pixel subject mask is
+ * produced by the segmentation running in the compositor process and reaches the shader as a
+ * texture. An earlier design baked the composite here and shipped it as a video track; the codec
+ * could not carry alpha, and preview and export drifted apart.
+ */
+export interface SceneWebcamEffect {
+	mode: WebcamBackgroundMode;
+	/** 0..1, only meaningful for "blur". */
+	blurIntensity: number;
+	/** Background behind the subject for "custom", parsed like `settings.wallpaper`. */
+	background?: SceneBackground;
 }
 
 /** Parse the settings wallpaper string into the discriminated SceneBackground union. */
@@ -523,10 +550,19 @@ export function buildSceneDescription(
 	// so the compositor measures it against the output frame while annotations stay on the screen
 	// rect. Subtitles have to sit where the viewer's frame ends, not where the footage does, or
 	// they slide inward the moment padding shrinks the screen rect (issue #396).
-	const captionSettings = getCaptionSettings(document);
+	//
+	// The output aspect is what decides the caption column and the default inset (a
+	// caption 5% off the bottom of a 16:9 export sits under the platform's own chrome
+	// on a 9:16 one). It comes off `pickOutputDims`, hoisted above the webcam block that
+	// used to own it so there is exactly ONE caller — preview and export cannot pick a
+	// different column from each other.
+	const outputDims = pickOutputDims(document, settings.aspectRatio);
+	const captionAspect = outputDims.height > 0 ? outputDims.width / outputDims.height : 16 / 9;
+	const captionSettings = getCaptionSettings(document, captionAspect);
 	const captionRegions = captionCuesToTextRegions(
 		deriveCaptionCues(document, captionSettings, getCaptionTranslations(document)),
 		captionSettings,
+		captionAspect,
 	);
 	const projectedAnnotations = projectRegionsToSource(
 		[
@@ -567,7 +603,7 @@ export function buildSceneDescription(
 	// fait sur la résolution de sortie (= taille du canvas rendu) avec les unités sources du
 	// premier asset visible — la même convention que `pickOutputDims` + SCREEN_SOURCE_SIZE /
 	// WEBCAM_SOURCE_SIZE dans PreviewCanvas — ce qui garde preview/export/natif alignés.
-	const outputDims = pickOutputDims(document, settings.aspectRatio);
+	// (`outputDims` est résolu plus haut, avec le bloc sous-titres qui en dépend aussi.)
 	// ponytail: when the active camera has been probed (real webcam dims cached by
 	// WebcamOverlay's loadedmetadata handler), use them so the box matches the actual
 	// camera aspect. Without this the box defaults to a hardcoded 4:3 (960x720) and the
@@ -805,6 +841,8 @@ export function buildSceneDescription(
 				// Only captions carry a space; annotations must keep emitting the exact same keys
 				// they always have, so the field is omitted rather than sent as null/undefined.
 				const space = (region as { space?: "frame" }).space;
+				// Same treatment, same reason: only captions pin an edge.
+				const verticalAlign = (region as { verticalAlign?: "top" | "bottom" }).verticalAlign;
 				const base = {
 					id: region.id,
 					startSec: region.startMs / 1000,
@@ -839,6 +877,7 @@ export function buildSceneDescription(
 							fontStyle: style.fontStyle,
 							textDecoration: style.textDecoration,
 							textAlign: style.textAlign,
+							...(verticalAlign ? { verticalAlign } : {}),
 							animation: style.textAnimation ?? null,
 						},
 					};
@@ -896,5 +935,16 @@ export function buildSceneDescription(
 		})),
 		cropByClip,
 		output: { ...pickOutputDims(document, settings.aspectRatio), fps: null },
+		// Omitted rather than sent as `{mode:"none"}`: the Rust side defaults the field, and
+		// every project without a webcam effect would otherwise carry it for nothing.
+		...(settings.webcamBackgroundMode !== "none"
+			? {
+					webcamEffect: {
+						mode: settings.webcamBackgroundMode,
+						blurIntensity: settings.webcamBlurIntensity,
+						background: parseWallpaper(settings.webcamWallpaper),
+					},
+				}
+			: {}),
 	};
 }

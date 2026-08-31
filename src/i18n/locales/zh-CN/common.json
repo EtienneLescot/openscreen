@@ -40,7 +40,8 @@
 		"services": "服务",
 		"hide": "隐藏 OpenScreen",
 		"hideOthers": "隐藏其他",
-		"unhide": "显示全部"
+		"unhide": "显示全部",
+		"saveDiagnostics": "保存诊断信息"
 	},
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} 已发布。当前版本为 {{currentVersion}}。",
@@ -50,12 +51,6 @@
 		"blockedLocation": "更新前请将 OpenScreen 移动到「应用程序」文件夹。",
 		"failed": "无法检查更新。",
 		"downloadFailed": "无法下载更新。"
-	},
-	"playback": {
-		"play": "播放",
-		"pause": "暂停",
-		"fullscreen": "全屏",
-		"exitFullscreen": "退出全屏"
 	},
 	"units": {
 		"pixelsPerSecond": "{{value}} 像素/秒",

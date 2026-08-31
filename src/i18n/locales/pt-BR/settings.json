@@ -40,7 +40,7 @@
 		"deleteRegion": "Excluir Região de Recorte"
 	},
 	"layout": {
-		"title": "Layout",
+		"title": "Layout da câmera",
 		"preset": "Predefinição",
 		"selectPreset": "Selecionar predefinição",
 		"pictureInPicture": "Picture in Picture",
@@ -63,10 +63,18 @@
 			"circle": "Círculo",
 			"square": "Quadrado",
 			"rounded": "Arredondado"
+		},
+		"webcamBackground": "Plano de fundo da câmera",
+		"webcamBlurIntensity": "Intensidade do desfoque",
+		"bgModes": {
+			"none": "Original",
+			"transparent": "Recorte",
+			"blur": "Desfocado",
+			"custom": "Personalizado"
 		}
 	},
 	"effects": {
-		"title": "Efeitos de Vídeo",
+		"title": "Composição",
 		"blurBg": "Desfocar Fundo",
 		"motionBlur": "Desfoque de Movimento",
 		"off": "desativado",
@@ -74,6 +82,14 @@
 		"shadow": "Sombra",
 		"roundness": "Arredondamento",
 		"padding": "Espaçamento",
+		"frame": "Moldura",
+		"format": "Formato",
+		"formatOriginal": "Original",
+		"fitClip": "Ajustar",
+		"fitClipOne": "{{count}} clipe",
+		"fitClipFew": "{{count}} clipes",
+		"fitClipMany": "{{count}} clipes",
+		"motion": "Movimento",
 		"help": "Estilo do quadro da gravação: desfoque de fundo, sombra, desfoque de movimento, raio dos cantos e margem em volta do vídeo."
 	},
 	"background": {
@@ -291,15 +307,17 @@
 		"backgroundColor": "Cor do fundo",
 		"backgroundOpacity": "Opacidade",
 		"position": "Posição",
-		"positionTop": "Topo",
-		"positionMiddle": "Meio",
-		"positionBottom": "Base",
+		"anchorBottom": "Base",
+		"anchorTop": "Topo",
+		"anchorHintBottom": "Legendas longas crescem para cima — a borda inferior não se move.",
+		"anchorHintTop": "Legendas longas crescem para baixo — a borda superior não se move.",
+		"distanceFromBottom": "Distância da base",
+		"distanceFromTop": "Distância do topo",
+		"distanceFromLeft": "Distância da esquerda",
+		"distanceFromRight": "Distância da direita",
 		"alignLeft": "Esquerda",
 		"alignCenter": "Centro",
 		"alignRight": "Direita",
-		"verticalOffset": "Deslocamento vertical",
-		"horizontalOffset": "Deslocamento horizontal",
-		"width": "Largura",
 		"lineLength": "Comprimento da linha",
 		"minWords": "Mín. de palavras por linha",
 		"maxWords": "Máx. de palavras por linha"

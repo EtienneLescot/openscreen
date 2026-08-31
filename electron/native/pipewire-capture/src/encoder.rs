@@ -33,6 +33,18 @@ pub enum Backend {
     Software,
 }
 
+/// Whether the dmabuf → VAAPI zero-copy import may be used for a `forced` encoder
+/// choice. The import can only feed VAAPI, so `software`/`vulkan` must skip it —
+/// otherwise the documented `OPENSCREEN_LINUX_ENCODER` override is silently
+/// ignored on the dmabuf path.
+///
+/// The SINGLE source of truth for this: the negotiation offer (`prefer_dmabuf` in
+/// main) and the importer build (`Capture::start`) both call it, so they cannot
+/// drift into offering dmabuf that no importer will consume.
+pub fn forced_allows_dmabuf(forced: Option<Backend>) -> bool {
+    matches!(forced, None | Some(Backend::Vaapi))
+}
+
 impl Backend {
     /// The name the app reports and the tests match on. Kept in the same
     /// vocabulary as the Windows helper's `encoder-selection` event.
@@ -193,6 +205,11 @@ pub struct VideoEncoder {
     sw_frame: *mut ff::AVFrame,
     /// The GPU-side frame handed to a hardware encoder. Null for software.
     hw_frame: *mut ff::AVFrame,
+    /// A ready-to-encode VAAPI NV12 surface produced by the dmabuf importer
+    /// (issue #507). When non-null it is sent directly — no sws_scale, no upload —
+    /// and held across the clock-driven re-encodes until the next frame replaces
+    /// it. Null on the shm/software path.
+    hw_staged: *mut ff::AVFrame,
     sws: *mut ff::SwsContext,
     sws_src_format: ff::AVPixelFormat,
     packet: *mut ff::AVPacket,
@@ -235,7 +252,7 @@ impl VideoEncoder {
                 failures.push(format!("{}: {reason}", backend.as_str()));
                 continue;
             }
-            match Self::open_backend(backend, &params) {
+            match Self::open_backend(backend, &params, None) {
                 Ok(encoder) => return Ok(encoder),
                 Err(error) => {
                     on_attempt(backend, &error);
@@ -252,7 +269,26 @@ impl VideoEncoder {
         ))
     }
 
-    fn open_backend(backend: Backend, params: &VideoParams) -> Result<Self, String> {
+    /// Opens the VAAPI encoder to consume surfaces from an EXISTING device and
+    /// NV12 frames pool — the ones the dmabuf importer built. Sharing the pool is
+    /// what lets `encode_staged` send an imported surface straight to
+    /// `avcodec_send_frame` without a copy (issue #507).
+    ///
+    /// SAFETY: `device` and `frames_ctx` must be a live VAAPI device and an NV12
+    /// VAAPI frames context on it; the encoder takes its own references.
+    pub unsafe fn open_importing(
+        params: VideoParams,
+        device: *mut ff::AVBufferRef,
+        frames_ctx: *mut ff::AVBufferRef,
+    ) -> Result<Self, String> {
+        Self::open_backend(Backend::Vaapi, &params, Some((device, frames_ctx)))
+    }
+
+    fn open_backend(
+        backend: Backend,
+        params: &VideoParams,
+        external: Option<(*mut ff::AVBufferRef, *mut ff::AVBufferRef)>,
+    ) -> Result<Self, String> {
         // SAFETY: this whole function is a single ffmpeg setup sequence. Every
         // allocation is stored in `encoder` as soon as it succeeds, so the Drop
         // impl frees whatever was reached if a later step fails.
@@ -277,6 +313,7 @@ impl VideoEncoder {
                 hw_frames: ptr::null_mut(),
                 sw_frame: ptr::null_mut(),
                 hw_frame: ptr::null_mut(),
+                hw_staged: ptr::null_mut(),
                 sws: ptr::null_mut(),
                 sws_src_format: ff::AV_PIX_FMT_NONE,
                 packet: ptr::null_mut(),
@@ -320,7 +357,7 @@ impl VideoEncoder {
             (*codec_ctx).flags |= ff::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
 
             if let Some(device_type) = backend.hw_device_type() {
-                encoder.attach_hardware(device_type, params)?;
+                encoder.attach_hardware(device_type, params, external)?;
             }
 
             let opened = ff::avcodec_open2(codec_ctx, codec, ptr::null_mut());
@@ -350,7 +387,36 @@ impl VideoEncoder {
         &mut self,
         device_type: ff::AVHWDeviceType,
         params: &VideoParams,
+        external: Option<(*mut ff::AVBufferRef, *mut ff::AVBufferRef)>,
     ) -> Result<(), String> {
+        // The dmabuf importer already built a VAAPI device and an NV12 pool; the
+        // encoder must consume from THAT pool, so take references to it instead of
+        // creating a second, incompatible one. See `open_importing`.
+        if let Some((device, frames_ctx)) = external {
+            // The guard belongs on the INPUTS, before the refs are taken:
+            // av_buffer_ref dereferences its argument (`*ret = *buf`), so a null
+            // one faults inside ffmpeg instead of coming back as a null return
+            // value the old check could inspect. And null IS reachable here --
+            // `DmabufImporter::output_frames_ctx` is av_buffersink_get_hw_frames_ctx,
+            // which returns NULL whenever the sink's input link carries no hw
+            // frames context.
+            if device.is_null() || frames_ctx.is_null() {
+                return Err("av_buffer_ref on the shared VAAPI context returned null".to_owned());
+            }
+            self.hw_device = ff::av_buffer_ref(device);
+            self.hw_frames = ff::av_buffer_ref(frames_ctx);
+            // The results still get checked: av_buffer_ref allocates, and the
+            // hw_frames_ctx ref below would dereference whatever it handed back.
+            if self.hw_device.is_null() || self.hw_frames.is_null() {
+                return Err("av_buffer_ref on the shared VAAPI context returned null".to_owned());
+            }
+            (*self.codec_ctx).hw_frames_ctx = ff::av_buffer_ref(self.hw_frames);
+            if (*self.codec_ctx).hw_frames_ctx.is_null() {
+                return Err("av_buffer_ref on the shared frames context returned null".to_owned());
+            }
+            return Ok(());
+        }
+
         let created = ff::av_hwdevice_ctx_create(
             &mut self.hw_device,
             device_type,
@@ -493,14 +559,38 @@ impl VideoEncoder {
             if scaled < 0 {
                 return Err(format!("sws_scale: {}", ff::err_to_string(scaled)));
             }
+            // This CPU frame is now what `encode_staged` must send, so drop any hw
+            // surface a previous dmabuf frame left staged — e.g. after the stream
+            // renegotiates to a modifier-less format and frames start arriving on
+            // the sws path. `encode_staged` prefers `hw_staged` whenever it is
+            // non-null, so without this it would keep re-sending that stale surface
+            // and freeze the video. `av_frame_free` nulls the pointer.
+            if !self.hw_staged.is_null() {
+                ff::av_frame_free(&mut self.hw_staged);
+            }
             self.staged = true;
         }
         Ok(())
     }
 
-    /// True once [`Self::stage`] has put a picture in the staging buffer. Before
-    /// that there is nothing to encode and [`Self::encode_staged`] would emit a
-    /// frame of uninitialised memory.
+    /// Stages a ready VAAPI NV12 surface produced by the dmabuf importer. Takes
+    /// ownership of `frame`; the previous one is released. Unlike [`Self::stage`]
+    /// there is no conversion or upload — the surface is encoded as-is and held
+    /// across the clock-driven re-encodes until the next frame replaces it.
+    ///
+    /// SAFETY: `frame` must be a valid VAAPI NV12 `AVFrame` from the shared pool
+    /// the encoder was opened against (see `open_importing`).
+    pub unsafe fn stage_hw(&mut self, frame: *mut ff::AVFrame) {
+        if !self.hw_staged.is_null() {
+            let mut old = self.hw_staged;
+            ff::av_frame_free(&mut old);
+        }
+        self.hw_staged = frame;
+        self.staged = true;
+    }
+
+    /// True once a picture has been staged — via [`Self::stage`] (shm/software)
+    /// or [`Self::stage_hw`] (dmabuf). Before that there is nothing to encode.
     pub fn has_staged_frame(&self) -> bool {
         self.staged
     }
@@ -521,7 +611,13 @@ impl VideoEncoder {
         // `sw_frame`, and every pointer below is owned by `self`.
         unsafe {
             let upload_started = std::time::Instant::now();
-            let frame = if self.hw_frames.is_null() {
+            let mut used_upload = false;
+            let frame = if !self.hw_staged.is_null() {
+                // Imported dmabuf surface: already NV12 on the GPU. No upload, no
+                // conversion — just timestamp it. Held for the next re-encode.
+                (*self.hw_staged).pts = pts;
+                self.hw_staged
+            } else if self.hw_frames.is_null() {
                 (*self.sw_frame).pts = pts;
                 self.sw_frame
             } else {
@@ -540,6 +636,7 @@ impl VideoEncoder {
                     ));
                 }
                 (*self.hw_frame).pts = pts;
+                used_upload = true;
                 self.hw_frame
             };
             self.stats.upload_ns += upload_started.elapsed().as_nanos();
@@ -549,11 +646,13 @@ impl VideoEncoder {
             self.stats.encode_ns += encode_started.elapsed().as_nanos();
             self.stats.frames += 1;
 
-            if !self.hw_frame.is_null() {
-                // Release our reference to the GPU surface; the encoder keeps
-                // its own for as long as it needs one. Without this the pool
-                // drains after `initial_pool_size` frames and every subsequent
-                // av_hwframe_get_buffer blocks.
+            if used_upload {
+                // Release our reference to the per-encode upload surface; the
+                // encoder keeps its own for as long as it needs one. Without this
+                // the pool drains after `initial_pool_size` frames and every
+                // subsequent av_hwframe_get_buffer blocks. The imported
+                // `hw_staged` surface is NOT released here — it is held for the
+                // next clock-driven re-encode and freed in `stage_hw`/`Drop`.
                 ff::av_frame_unref(self.hw_frame);
             }
         }
@@ -696,6 +795,9 @@ impl Drop for VideoEncoder {
             }
             if !self.hw_frame.is_null() {
                 ff::av_frame_free(&mut self.hw_frame);
+            }
+            if !self.hw_staged.is_null() {
+                ff::av_frame_free(&mut self.hw_staged);
             }
             if !self.sw_frame.is_null() {
                 ff::av_frame_free(&mut self.sw_frame);

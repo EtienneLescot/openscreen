@@ -17,13 +17,27 @@
     {
       # -- Per-system outputs (packages, dev shells) --
 
-      packages = forAllSystems (pkgs: {
-        compositor-view = pkgs.callPackage ./nix/compositor-view.nix { };
-        openscreen = pkgs.callPackage ./nix/package.nix {
-          compositor-view = pkgs.callPackage ./nix/compositor-view.nix { };
-        };
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.openscreen;
-      });
+      packages = forAllSystems (
+        pkgs:
+        let
+          # Bound once and reused. compositor-view used to be applied twice --
+          # once for the exposed attribute, once inline as package.nix's argument
+          # -- which produces the same store path today but means an override
+          # applied to the attribute never reaches the app. With a second native
+          # component the same mistake would have been made twice.
+          ffmpeg-lgpl = pkgs.callPackage ./nix/ffmpeg-lgpl.nix { };
+          compositor-view = pkgs.callPackage ./nix/compositor-view.nix { inherit ffmpeg-lgpl; };
+          pipewire-helper = pkgs.callPackage ./nix/pipewire-helper.nix { inherit ffmpeg-lgpl; };
+          whisper-stt = pkgs.callPackage ./nix/whisper-stt.nix { };
+        in
+        {
+          inherit compositor-view pipewire-helper whisper-stt;
+          openscreen = pkgs.callPackage ./nix/package.nix {
+            inherit compositor-view pipewire-helper whisper-stt;
+          };
+          default = self.packages.${pkgs.stdenv.hostPlatform.system}.openscreen;
+        }
+      );
 
       devShells = forAllSystems (
         pkgs:

@@ -43,7 +43,20 @@ concurrency:
   # Keying on the event as well keeps a merge train collapsing to its latest push
   # without letting it cancel the schedule.
   group: nix-build-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  # false, where a PR-branch check would want true. This job takes half an hour
+  # and main takes merges minutes apart, so cancel-in-progress meant each merge
+  # evicted the previous run before it finished: the first four runs on main were
+  # cancelled at 21m38s, 25s, 7m05s and then one that only survived because the
+  # merges happened to stop. A cancelled run is not a failure either, so the
+  # branch showed nothing while the workflow reported nothing.
+  #
+  # What this buys is that a started run finishes, not that every merge is
+  # verified: GitHub holds a single pending entry per group and a newer push
+  # replaces it, so merges landing while a run is in flight still go unbuilt.
+  # That is the affordable half. Verifying each merge would need a queue this
+  # workflow does not have, and is not worth it for a half-hour job whose purpose
+  # is catching drift rather than gating a commit.
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -134,6 +147,109 @@ jobs:
           echo "closure: $(nix path-info --closure-size --human-readable ./result | tail -1)"
           ls -la result/bin/
 
+      # The native components are resolved at runtime behind existence checks, so
+      # a wrapper pointing at a path that is not there degrades the app instead of
+      # failing it -- silently, which is the failure mode this whole workflow was
+      # written for. The smoke test below covers the compositor addon by
+      # exercising export; nothing exercises the PipeWire helper, because that
+      # needs a Wayland portal this runner does not have. Asserting the file
+      # exists and is executable is the part that can be checked here, and it is
+      # the part that actually broke when a --set pointed somewhere wrong.
+      - name: Check the wrapper's native components
+        run: |
+          set -euo pipefail
+          missing=0
+
+          wrapper_value() {
+            sed -nE "s/^export $1='(.*)'\$/\1/p" result/bin/openscreen | tail -1
+          }
+
+          # -x, not -e, for the ones that get spawned. The app agrees: the helper
+          # lookup in pipeWireCursorRecordingSession.ts requires X_OK before it
+          # accepts a candidate, so a present-but-not-executable file would pass a
+          # mere existence check here and be rejected at runtime. The compositor
+          # addon is require()'d rather than spawned, so readable is its bar.
+          for entry in \
+            "OPENSCREEN_FFMPEG_PATH:-x" \
+            "OPENSCREEN_COMPOSITOR_VIEW_NODE:-r" \
+            "OPENSCREEN_LINUX_CURSOR_HELPER_EXE:-x" \
+            "OPENSCREEN_WHISPER_SERVER_EXE:-x"; do
+            var=${entry%:*}
+            test=${entry##*:}
+            # Read the value the wrapper exports rather than re-deriving it here,
+            # so this checks the artefact and not the recipe.
+            path=$(wrapper_value "$var")
+            if [ -z "$path" ]; then
+              echo "::error::$var is not set by the wrapper"
+              missing=$((missing + 1))
+              continue
+            fi
+            if [ ! "$test" "$path" ]; then
+              echo "::error::$var points at $path, which fails $test"
+              missing=$((missing + 1))
+              continue
+            fi
+            echo "$var -> $path ($test)"
+          done
+
+          # ldd was the wrong instrument here, and it passed for the wrong reason:
+          # it resolves DT_NEEDED entries, and libpipewire is reached by dlopen, so
+          # it is never a DT_NEEDED and never appears. The check would have gone
+          # green with the hand-added RPATH missing entirely -- validating
+          # everything except the one thing this packaging adds.
+          #
+          # Read the RPATH out of the object instead, and require that one of its
+          # directories actually holds the soname handed to dlopen.
+          #
+          # Both components have one. The helper's libpipewire entry is the one
+          # that caught a real regression; the addon's libvulkan entry is the same
+          # construction and was silently being stripped too, unnoticed because
+          # ubuntu-latest has a system libvulkan that satisfies the dlopen anyway.
+          # That is exactly why it needs asserting rather than exercising: the
+          # runner cannot reproduce the host where it matters.
+          check_dlopen_rpath() {
+            local what="$1" obj="$2" soname="$3"
+            [ -n "$obj" ] || return 0
+            echo "--- $what dlopen contract ---"
+            # DT_RPATH or DT_RUNPATH: the derivations ask for the former, but read
+            # whichever is there rather than asserting which, so a silent
+            # conversion is reported instead of looking like an absent RPATH.
+            local rpath
+            rpath=$(readelf -d "$obj" | sed -nE 's/.*\((RPATH|RUNPATH)\).*\[(.*)\]/\2/p' | tail -1)
+            echo "rpath: ${rpath:-<none>}"
+            local origin found="" dirs dir
+            origin=$(dirname "$obj")
+            IFS=: read -ra dirs <<<"$rpath"
+            for dir in ${dirs[@]+"${dirs[@]}"}; do
+              # $ORIGIN is relative to the object; the ffmpeg entries use it.
+              dir=${dir//\$ORIGIN/$origin}
+              if [ -e "$dir/$soname" ]; then
+                found="$dir"
+                break
+              fi
+            done
+            if [ -z "$found" ]; then
+              echo "::error::no RPATH entry of the $what holds $soname; its dlopen will fail on any host without an ld.so.cache"
+              missing=$((missing + 1))
+            else
+              echo "$soname resolves from $found"
+            fi
+            # Unresolved DT_NEEDED entries are a different fault, and this is
+            # where they would show.
+            if ldd "$obj" | grep -q "not found"; then
+              echo "::error::the $what has unresolved DT_NEEDED libraries"
+              ldd "$obj" | grep "not found"
+              missing=$((missing + 1))
+            fi
+          }
+
+          check_dlopen_rpath "PipeWire helper" \
+            "$(wrapper_value OPENSCREEN_LINUX_CURSOR_HELPER_EXE)" libpipewire-0.3.so.0
+          check_dlopen_rpath "compositor addon" \
+            "$(wrapper_value OPENSCREEN_COMPOSITOR_VIEW_NODE)" libvulkan.so.1
+
+          [ "$missing" -eq 0 ]
+
       # Electron initialises Chromium even for the headless CLI, so it needs a
       # display server present. xvfb ships on ubuntu-latest.
       #
@@ -174,7 +290,19 @@ jobs:
           # the capture failure remains unexplained.
           XVFB_SCREEN="-screen 0 1920x1080x24"
           CHROME_FLAGS="--disable-dev-shm-usage"
-          run_cli() { timeout --signal=TERM --kill-after=10s "${CLI_TIMEOUT:-120}" xvfb-run -a -s "$XVFB_SCREEN" ./result/bin/openscreen "$@"; }
+          # Counted, because position is the variable under test and it is not
+          # fixed. The sandbox probe costs one invocation or two depending on the
+          # host, and the record loop breaks on first success, so it costs anywhere
+          # between two and six. An aggregate success rate therefore cannot be
+          # attributed to position on its own -- the workload ahead of it moved
+          # too. Labelling every block with the invocation it starts at is what
+          # makes the rates comparable across runs; reading them unlabelled is the
+          # mistake this counter exists to prevent.
+          RUN_CLI_N=0
+          run_cli() {
+            RUN_CLI_N=$((RUN_CLI_N + 1))
+            timeout --signal=TERM --kill-after=10s "${CLI_TIMEOUT:-120}" xvfb-run -a -s "$XVFB_SCREEN" ./result/bin/openscreen "$@"
+          }
 
           SANDBOX=""
           echo "--- probe: as shipped ---"
@@ -219,14 +347,23 @@ jobs:
           FAILED=0
           LAST_OK=""
           for i in $(seq 1 "$ATTEMPTS"); do
-            echo "=== attempt $i/$ATTEMPTS ==="
+            echo "=== attempt $i/$ATTEMPTS (run_cli #$((RUN_CLI_N + 1))) ==="
             RC=0
             # 120, matching record: the renderer's own bounds can legitimately
             # spend 35s here (20s on getSources, then up to 3x5s on the audio
             # path), and 60 left barely 25s for a cold Electron start under Xvfb
             # from a 1.7G closure -- so the outer kill could fire while every
             # internal bound was working.
-            CLI_TIMEOUT=$SOURCES_TIMEOUT OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>"/tmp/sources.$i.err" || RC=$?
+            # 2>&1, like record and export: the probe above established that this
+            # host's xvfb-run folds stderr into stdout anyway, so the separate .err
+            # capture was a file nothing could ever read.
+            CLI_TIMEOUT=$SOURCES_TIMEOUT OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>&1 || RC=$?
+            # Before the branching, so a success reports its duration too. The
+            # measurement was added to compare this path against record's, and the
+            # first run to carry it printed only record's -- the grep lived in a
+            # failure branch, so the successful side, which is the interesting one,
+            # went into a scratch file and stayed there.
+            grep -a "get-sources\]" "/tmp/sources.$i.out" || true
             # Every non-zero outcome is a failure. The kill is tracked on top of
             # that rather than instead of it, because it says something different:
             # the run never got far enough to report a reason at all.
@@ -272,10 +409,10 @@ jobs:
           PY
           fi
 
-          # Noted, not acted on yet. Enumeration is flaky here and the export
-          # assertion below is the more important question; letting one flaky
-          # attempt exit the step meant the run never reached it. Verdict at the
-          # end, once both have had their say.
+          # Noted, not acted on. Enumeration is flaky here and the export
+          # assertion below is the more
+          # important question; a flaky attempt costs an annotation rather than
+          # the answer. Verdict at the end, once both have had their say.
           if [ "$HUNG" -gt 0 ]; then
             echo "::warning::openscreen sources had to be killed on $HUNG of $ATTEMPTS attempts. Check the milestones above for how far it got before the outer bound fired."
           fi
@@ -285,25 +422,54 @@ jobs:
 
           # The real acceptance test. Everything above proves the package starts
           # and can list a screen; none of it touches the compositor addon, which
-          # is what actually renders output. Record a couple of seconds, export
-          # it, and look at what came out.
+          # is what actually renders output. Record a couple of seconds, export it,
+          # and look at what came out.
           #
-          # Up to three goes, because screen capture on this host is unreliable
-          # in its own right -- `sources` fails a couple of times in five. One
-          # success is enough to answer the question being asked here; repeated
-          # capture failures are a separate problem, already reported above.
-          echo "--- record then export ---"
+          # This block was briefly moved ahead of the sources loop and moved back,
+          # so that it is not tried a third time. The theory was that position
+          # explained why record seemed to fail far more often than sources --
+          # run_cli spawns a fresh `xvfb-run -a` each time, so record was always
+          # invocations 6-8, after five Xvfb servers had come and gone. The
+          # experiment could not answer it: by the time it ran, record had started
+          # succeeding from its old position anyway, so there was no contrast left
+          # to measure. From position 4 it succeeded, which proves nothing it was
+          # not already doing from position 9.
+          #
+          # What the runs did establish is that the premise was wrong. Enumeration
+          # here is bimodal -- 12-31ms when it answers, no return at all when it
+          # does not, with nothing in between across every measurement so far --
+          # and the failures cluster by run and by window within a run rather than
+          # by command. The apparent record-versus-sources gap was that clustering
+          # seen through a denominator, not a property of either path. Reopen this
+          # with the run_cli labels, on a run that actually fails, before assuming
+          # otherwise.
+          #
+          # Up to three goes, because screen capture on this host is unreliable in
+          # its own right. One success is enough for the question being asked here.
+          echo "--- record then export (first run_cli here is #$((RUN_CLI_N + 1))) ---"
           EXPORTED=""
+          # Tracked apart from EXPORTED so the verdict can name the stage that
+          # actually failed. For three runs every attempt died in record without
+          # export ever executing, while the annotation said "the export path does
+          # not work" -- an accusation aimed at the one component the run never
+          # reached, and the compositor addon is precisely what this step exists
+          # to vouch for.
+          RECORDED=0
           for i in 1 2 3; do
-            echo "=== export attempt $i/3 ==="
+            echo "=== export attempt $i/3 (run_cli #$((RUN_CLI_N + 1))) ==="
             rm -f /tmp/demo.openscreen /tmp/demo.mp4
             RC=0
             CLI_TIMEOUT=120 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX $CHROME_FLAGS record --duration 2 --project /tmp/demo.openscreen >"/tmp/rec.$i.out" 2>&1 || RC=$?
+            # Outside the failure branch for the same reason as above: a record that
+            # works is exactly the measurement missing from the comparison, since
+            # this path has never yet produced one.
+            grep -a "get-sources\]" "/tmp/rec.$i.out" || true
             if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.openscreen ]; then
               echo "record failed (rc=$RC); last lines:"
               tail -5 "/tmp/rec.$i.out" || true
               continue
             fi
+            RECORDED=1
             echo "recorded. project:"
             head -c 200 /tmp/demo.openscreen; echo
 
@@ -319,8 +485,10 @@ jobs:
           done
 
           EXPORT_OK=0
-          if [ -z "$EXPORTED" ]; then
-            echo "::error::No attempt produced an MP4. The compositor addon is packaged but the export path does not work."
+          if [ -z "$EXPORTED" ] && [ "$RECORDED" -eq 0 ]; then
+            echo "::error::No attempt got past record, so export never ran and the compositor addon is unproven. This is a capture failure on this host, not an export failure."
+          elif [ -z "$EXPORTED" ]; then
+            echo "::error::record produced a project but no attempt produced an MP4. The compositor addon is packaged and the export path does not work."
           else
             SIZE=$(wc -c < "$EXPORTED")
             # An MP4 opens with a 4-byte length then 'ftyp'. A zero-length or
@@ -350,7 +518,7 @@ jobs:
           # per-attempt warnings above keep that flakiness visible without letting
           # it decide the build; tighten this to $ATTEMPTS once the capture failure
           # is understood and fixed.
-          echo "=== verdict: enumeration $OK/$ATTEMPTS ok, export $EXPORT_OK ==="
+          echo "=== verdict: enumeration $OK/$ATTEMPTS ok, record $RECORDED, export $EXPORT_OK, $RUN_CLI_N run_cli invocations ==="
           if [ "$EXPORT_OK" -ne 1 ] || [ "$OK" -eq 0 ]; then
             exit 1
           fi

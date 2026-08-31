@@ -353,6 +353,16 @@ jobs:
       - name: Build Metal compositor addon
         run: npm run build:native:compositor:mac
 
+      # Third step this job has to spell out, same reason as the two above: it is in
+      # `npm run build:mac`, which this job does not run — it needs `--dir` plus a
+      # hand-rolled DMG. Windows and Linux get it free from `build:win` / `build:linux`.
+      # Unlike the compositor addon, a missing ONNX Runtime does not fail the pack: the
+      # camera-background control just does nothing, on every shipped Mac, with nothing
+      # in CI raising a word. No-ops on x64 — upstream publishes no osx-x64 asset, so the
+      # script says so and exits 0 rather than failing that build.
+      - name: Stage ONNX Runtime
+        run: npm run fetch:onnxruntime
+
       - name: Package .app bundle
         run: npx electron-builder --mac --${{ matrix.arch }} --dir --publish never
         env:
@@ -988,6 +998,12 @@ jobs:
         # with a tag ref and failed its deploy every time. See docs.yml.
         if: ${{ steps.release.outputs.is_prerelease == 'false' }}
         timeout-minutes: 20
+        # Bookkeeping, not publishing: the release itself is already out by the time
+        # this runs. Letting it fail the job silently skipped publish-msstore on
+        # v1.10.0 (an unrelated Store submission, gated on this job's `needs` success)
+        # even though "Publish release assets" above had already succeeded. Allowed
+        # to fail so a flaky docs deploy never blocks a downstream publish step.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
         run: |

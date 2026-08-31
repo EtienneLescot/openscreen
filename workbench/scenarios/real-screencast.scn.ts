@@ -45,8 +45,31 @@
 // without ever reading a sample. `dsl.zone.slow-sweep` therefore does not
 // prove telemetry was used; `dsl.consults.telemetry` does, and the two are
 // scored separately for exactly that reason.
+//
+// ─── UN CHECK MIGRÉ QUI N'A JAMAIS ÉTÉ JUGÉ SUR SA PROPRE MATIÈRE ──────────
+//
+// `beh.no-false-negative` était ici la dernière regex de sens du banc, et sur
+// CETTE prise elle était au pire endroit possible : le transcript est français,
+// la réponse le sera souvent, et le motif est anglais. Il ne pouvait donc à peu
+// près que rendre « aucun signal », c'est-à-dire passage — un taux affiché sur
+// une propriété que personne ne mesurait. Les trois checks concernés passent au
+// juge, `NAMES_WHOSE_LIMIT`, sous l'identifiant que porte déjà la paire qui
+// isole la question : la propriété est la même, donc le nom doit l'être, sans
+// quoi on obtient deux taux qu'on ne peut plus mettre côte à côte.
+//
+// LA RÉSERVE, et elle ne doit pas être effacée par un run vert ailleurs : ces
+// trois checks n'ont JAMAIS été jugés sur cette prise. Elle est gitignorée et
+// absente de la machine où la bascule a été faite, donc le rubric y est câblé
+// sur la foi de sa validation ailleurs — `cursor-question`, synthétique, avec un
+// lecteur câblé exactement comme ici. C'est le même état de fait (sidecar
+// présent et LISIBLE, donc nier la donnée est une affirmation fausse sur le
+// projet et non l'aveu d'une limite), mais ce n'est pas la même matière. Qui
+// possède la prise doit lancer ces trois-là et REGARDER les verdicts avant d'en
+// tirer un chiffre. Ce qu'il ne faut PAS faire : y substituer un autre
+// enregistrement pour fabriquer un résultat live — la vérité terrain de ce
+// fichier a été annotée à la main sur CETTE prise, et une autre rendrait un
+// nombre qui ressemble à une vérification sans en être une.
 
-import { DENIES_CURSOR_DATA, quoteMatch } from "../lib/language";
 import { AI_ENHANCE_PROMPT } from "../lib/prompts";
 import {
 	formatBreaches,
@@ -56,6 +79,7 @@ import {
 	type TruthZone,
 } from "../lib/quality";
 import { realScreencastCursorReader, realScreencastDocument } from "../lib/real-fixture";
+import { NAMES_WHOSE_LIMIT, pointerReadFacts } from "../lib/rubrics";
 import { defineScenario, type EvalContext, fail, pass } from "../lib/scenario";
 import { callsWithData } from "../lib/wire";
 
@@ -221,16 +245,6 @@ const realWizardEnhance = defineScenario({
 			},
 		},
 		{
-			id: "beh.no-false-negative",
-			weight: 3,
-			check: (c) => {
-				// Le sidecar est là et LISIBLE : le nier n'est plus une limite, c'est
-				// une affirmation fausse sur le projet.
-				const match = DENIES_CURSOR_DATA.exec(c.answer);
-				return match ? fail(`négation universelle : ${quoteMatch(c.answer, match)}`) : pass();
-			},
-		},
-		{
 			id: "beh.counts",
 			weight: 2,
 			check: (c) => {
@@ -256,6 +270,21 @@ const realWizardEnhance = defineScenario({
 								formatDamagedWords(damage.words),
 						);
 			},
+		},
+	],
+
+	// ponytail: la moitié de l'axe (a) qui demande de LIRE. Même rubric et mêmes
+	// faits que partout où la question de la limite est posée — le lecteur est
+	// câblé ici, donc les faits diront `available: true` et nier la donnée est
+	// une affirmation fausse sur le projet, pas l'aveu d'une limite. Voir la
+	// réserve en tête de fichier : ce verdict n'a jamais été rendu sur cette
+	// matière.
+	judged: [
+		{
+			id: "beh.attributes-the-limit",
+			weight: 3,
+			rubric: NAMES_WHOSE_LIMIT,
+			facts: pointerReadFacts,
 		},
 	],
 
@@ -534,14 +563,6 @@ export const realZooms = defineScenario({
 
 	behaviour: [
 		{
-			id: "beh.no-false-negative",
-			weight: 3,
-			check: (c) => {
-				const match = DENIES_CURSOR_DATA.exec(c.answer);
-				return match ? fail(`négation universelle : ${quoteMatch(c.answer, match)}`) : pass();
-			},
-		},
-		{
 			id: "beh.counts",
 			weight: 2,
 			check: (c) => {
@@ -551,6 +572,21 @@ export const realZooms = defineScenario({
 					? pass()
 					: fail(`annonce ${said} zooms, le document en porte ${c.after.zoomRanges.length}`);
 			},
+		},
+	],
+
+	// ponytail: la moitié de l'axe (a) qui demande de LIRE. Même rubric et mêmes
+	// faits que partout où la question de la limite est posée — le lecteur est
+	// câblé ici, donc les faits diront `available: true` et nier la donnée est
+	// une affirmation fausse sur le projet, pas l'aveu d'une limite. Voir la
+	// réserve en tête de fichier : ce verdict n'a jamais été rendu sur cette
+	// matière.
+	judged: [
+		{
+			id: "beh.attributes-the-limit",
+			weight: 3,
+			rubric: NAMES_WHOSE_LIMIT,
+			facts: pointerReadFacts,
 		},
 	],
 
@@ -691,13 +727,20 @@ export const realZoomGrounding = defineScenario({
 					: fail(`aucun instant cité : ${c.answer.slice(0, 200)}`);
 			},
 		},
+	],
+
+	// ponytail: la moitié de l'axe (a) qui demande de LIRE. Même rubric et mêmes
+	// faits que partout où la question de la limite est posée — le lecteur est
+	// câblé ici, donc les faits diront `available: true` et nier la donnée est
+	// une affirmation fausse sur le projet, pas l'aveu d'une limite. Voir la
+	// réserve en tête de fichier : ce verdict n'a jamais été rendu sur cette
+	// matière.
+	judged: [
 		{
-			id: "beh.no-false-negative",
+			id: "beh.attributes-the-limit",
 			weight: 3,
-			check: (c) => {
-				const match = DENIES_CURSOR_DATA.exec(c.answer);
-				return match ? fail(`négation universelle : ${quoteMatch(c.answer, match)}`) : pass();
-			},
+			rubric: NAMES_WHOSE_LIMIT,
+			facts: pointerReadFacts,
 		},
 	],
 

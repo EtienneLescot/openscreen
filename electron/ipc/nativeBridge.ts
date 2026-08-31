@@ -353,6 +353,12 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 							return createSuccessResponse(requestId, {
 								backend: compositorViewService.probeBackend(),
 							});
+						case "probeSegmentation":
+							// No view needed either: the layout panel decides whether to offer the
+							// camera-background control before any preview exists.
+							return createSuccessResponse(requestId, {
+								support: compositorViewService.probeSegmentation(),
+							});
 						case "setRect":
 							compositorViewService.setRect(request.payload.id, request.payload.rect);
 							return createSuccessResponse(requestId, { ok: true });

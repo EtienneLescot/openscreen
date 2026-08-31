@@ -16,34 +16,6 @@
 	user-select: none;
 }
 
-.app[data-collapse~="left"] {
-	--panel-w-left: 0px;
-}
-.app[data-collapse~="left"] .leftRail,
-.app[data-collapse~="left"] .leftPanel,
-.app[data-collapse~="left"] .handleLeft {
-	display: none;
-}
-
-.app[data-collapse~="right"] {
-	--panel-w-right: 0px;
-}
-.app[data-collapse~="right"] .rightStack,
-.app[data-collapse~="right"] .rightRail,
-.app[data-collapse~="right"] .handleRight {
-	display: none;
-}
-
-.app[data-collapse~="bottom"] {
-	--bottom-h: 0px;
-}
-.app[data-collapse~="bottom"] .bottombar {
-	display: none;
-}
-.app[data-collapse~="bottom"] .handleBottom {
-	display: none;
-}
-
 /* ─── titlebar ──────────────────────────────────────────────────── */
 .titlebar {
 	display: flex;
@@ -253,62 +225,6 @@
 	border-left: 1px solid var(--border-soft);
 }
 
-.leftPanel {
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-	min-height: 0;
-}
-
-/* ─── rails — vertical icon strips ─────────────────────────────── */
-.rail {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: var(--sp-1);
-	padding: var(--sp-2) 0;
-	background: var(--bg);
-	min-width: 0;
-}
-.rail button {
-	width: 36px;
-	height: 36px;
-	display: grid;
-	place-items: center;
-	border-radius: var(--r-md);
-	color: var(--muted);
-	background: transparent;
-	border: 0;
-	cursor: pointer;
-	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
-	position: relative;
-}
-.rail button:hover {
-	background: var(--surface-3);
-	color: var(--fg);
-}
-.rail button[aria-pressed="true"] {
-	color: var(--accent);
-	background: var(--accent-soft);
-}
-.rail button[aria-pressed="true"]::before {
-	content: "";
-	position: absolute;
-	left: -8px;
-	top: 8px;
-	bottom: 8px;
-	width: 3px;
-	border-radius: 2px;
-	background: var(--accent);
-}
-.rail .sepH {
-	width: 24px;
-	height: 1px;
-	background: var(--border);
-	margin: var(--sp-1) 0;
-}
-
-/* ─── panels (chat, transcript, etc.) ──────────────────────────── */
 .panel {
 	display: flex;
 	flex-direction: column;
@@ -326,43 +242,6 @@
 }
 .panel > .panelBody {
 	flex: 1 1 0;
-}
-.panelHead {
-	display: flex;
-	align-items: center;
-	gap: var(--sp-2);
-	padding: var(--sp-3) var(--sp-4);
-	border-bottom: 1px solid var(--border-soft);
-	min-height: 44px;
-}
-.panelHead h2 {
-	margin: 0;
-	font-family: var(--font-display);
-	font-size: 14px;
-	font-weight: 500;
-	letter-spacing: -0.005em;
-	color: var(--fg);
-}
-.panelHead .right {
-	margin-left: auto;
-	display: inline-flex;
-	gap: var(--sp-1);
-}
-.panelHead .iconBtn {
-	width: 24px;
-	height: 24px;
-	display: grid;
-	place-items: center;
-	border-radius: var(--r-sm);
-	color: var(--meta);
-	background: transparent;
-	border: 0;
-	cursor: pointer;
-	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
-}
-.panelHead .iconBtn:hover {
-	background: var(--surface-3);
-	color: var(--fg-2);
 }
 .panelBody {
 	overflow-y: auto;
@@ -594,7 +473,7 @@
 	padding: var(--sp-3) var(--sp-4);
 	border-radius: var(--r-sm);
 	background: var(--primary, #34B27B);
-	color: #fff;
+	color: var(--accent-on);
 	border: none;
 	font-weight: 500;
 	font-size: 0.875rem;
@@ -894,13 +773,6 @@
 .transport .spacer { flex: 1; }
 
 /* ─── right panel-stack (one pane visible at a time) ──────────── */
-.rightStack {
-	grid-column: 6;
-	display: grid;
-	min-width: 0;
-	min-height: 0;
-	background: var(--bg);
-}
 .pane {
 	display: none;
 	grid-template-rows: auto 1fr;
@@ -987,6 +859,99 @@
 	color: var(--fg-2);
 	margin: 4px var(--sp-4) 8px;
 }
+/* ─── action menu (a button's list of things it could do) ─────── */
+/* Sits where a Toggle would; reads as the current value, not as on/off. */
+.rowAction {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 5px 8px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg);
+	color: var(--fg-2);
+	font: 500 var(--fs-app-sm)/1 var(--font-body);
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+	transition: border-color 150ms ease, color 150ms ease;
+}
+.rowAction:hover:not(:disabled) { border-color: var(--brand); color: var(--fg); }
+.rowAction:disabled { cursor: default; opacity: 0.5; }
+.actionMenu {
+	min-width: 216px;
+	padding: 6px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface-1);
+	box-shadow: var(--elev-pop);
+	/* Ten shapes must cost no more room than two. */
+	max-height: min(var(--radix-popover-content-available-height, 60vh), 320px);
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+.actionMenuRow {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 8px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--fg);
+	cursor: pointer;
+	text-align: left;
+}
+.actionMenuRow:hover { background: var(--surface-2); }
+.actionMenuRow.isActive { background: color-mix(in oklab, var(--brand), transparent 82%); }
+/* Separates the fixed presets from the shapes this timeline actually holds. */
+.actionMenuGroup {
+	padding: 8px 8px 4px;
+	font: 600 10px/1 var(--font-body);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+/* Resolution leads: it is the thing a user recognises about their own footage. */
+.actionMenuMain { font: 600 12.5px var(--font-display); font-variant-numeric: tabular-nums; }
+/* The ratio token second, for whoever does read them — `64:27` means nothing alone. */
+.actionMenuMeta { font: 400 11px var(--font-body); color: var(--muted); }
+.actionMenuCount {
+	margin-left: auto;
+	font: 500 11px var(--font-body);
+	font-variant-numeric: tabular-nums;
+	color: var(--meta);
+}
+
+/* A section title that carries an action on its right. */
+.sectionHead {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin: 4px var(--sp-4) 8px;
+}
+.sectionHead .sectionLabel { margin: 0; }
+/* Deliberately quieter than the settings it overwrites: it is reached on purpose, not
+   stumbled into, and it must not read as a fifth control in the group. */
+.sectionAction {
+	padding: 3px 8px;
+	border: 1px solid transparent;
+	border-radius: 999px;
+	background: var(--surface-2);
+	color: var(--muted);
+	font: 500 var(--fs-app-sm)/1.4 var(--font-body);
+	white-space: nowrap;
+	cursor: pointer;
+	transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+.sectionAction:hover:not(:disabled) {
+	border-color: var(--brand);
+	background: var(--bg);
+	color: var(--fg);
+}
+.sectionAction:disabled { cursor: default; opacity: 0.45; }
 .uploadBtn {
 	display: flex;
 	align-items: center;
@@ -1048,6 +1013,54 @@
 .bgThumb.isActive {
 	border-color: var(--brand);
 	box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand), transparent 70%);
+}
+
+/* ─── background picker (collapsed trigger + floating panel) ───── */
+/* The trigger paints the CURRENT background as its own surface, so the pane shows what is
+   selected without spending the ~300px the inline swatch grid used to cost. */
+.bgTrigger {
+	display: flex;
+	align-items: flex-end;
+	justify-content: flex-end;
+	height: 52px;
+	margin: 0 var(--sp-4) 12px;
+	padding: 6px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-2);
+	cursor: pointer;
+	overflow: hidden;
+	transition: border-color 150ms ease;
+}
+.bgTrigger:hover { border-color: var(--brand); }
+/* Sits ON an arbitrary photo, so it carries its own ground rather than trusting contrast. */
+.bgTriggerChip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 3px 7px;
+	border-radius: 999px;
+	background: color-mix(in oklab, var(--bg), transparent 10%);
+	color: var(--fg);
+	font: 500 var(--fs-app-sm)/1 var(--font-body);
+}
+.bgPopover {
+	width: 300px;
+	padding-top: 4px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface-1);
+	box-shadow: var(--elev-pop);
+	/* Radix measures the room actually left below the trigger and publishes it here, so the
+	   picker uses the screen it has instead of a number guessed at authoring time. The second
+	   term is the tallest it ever needs: the gradient tab is ~640px (tabs + preset grid + the
+	   240px-wide editor, whose wheel is square). A fixed 460px cap cut that editor in half and
+	   read as "the gradient panel is gone" — the content was there, below the fold, behind a
+	   scroll nobody could see. Beyond 680px there is nothing left to reveal. */
+	max-height: min(var(--radix-popover-content-available-height, 80vh), 680px);
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
 }
 
 /* ─── toggle (switch) ──────────────────────────────────────────── */
@@ -1411,14 +1424,6 @@
 
 
 /* ─── bottombar / timeline ─────────────────────────────────────── */
-.bottombar {
-	display: grid;
-	grid-template-columns: 1fr;
-	min-height: 0;
-	background: var(--bg);
-	overflow: hidden;
-}
-
 /* Region lanes (annotations / speed / zoom) inside the timeline body. */
 /* Lanes: fixed-width label column + one shared dnd-timeline surface column.
    Both columns lay out 3 rows independently but with identical height (22px)
@@ -1858,78 +1863,6 @@
 	box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
-/* ─── media card (left panel media list) ───────────────────────── */
-.mediaList {
-	list-style: none;
-	padding: 0;
-	margin: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
-}
-.mediaCard {
-	display: flex;
-	flex-direction: column;
-	border-radius: var(--r-md);
-	overflow: hidden;
-	border: 1px solid var(--border-soft);
-	background: var(--bg);
-	cursor: pointer;
-	transition: border-color var(--motion-fast) var(--ease);
-}
-.mediaCard:hover { border-color: var(--brand); }
-.mediaCard .thumb {
-	aspect-ratio: 16 / 9;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	color: rgba(255, 255, 255, 0.95);
-}
-.thumbRed   { background: var(--danger); }
-.thumbGreen { background: var(--success); }
-.thumbAmber { background: var(--warn); }
-.thumbCyan  { background: var(--accent); }
-.mediaMeta {
-	padding: 8px 10px 10px;
-	background: var(--surface-2);
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-}
-.mediaMeta .name {
-	font: var(--fs-app) var(--font-body);
-	color: var(--fg);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.mediaMeta .row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
-}
-.mediaMeta .timecode { font: 11px var(--font-mono); color: var(--muted); }
-.mediaMeta .size     { font: 11px var(--font-body);  color: var(--muted); }
-
-.importBtn {
-	margin: 8px var(--sp-3) 12px;
-	padding: 10px 12px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: var(--sp-2);
-	border: 1px dashed var(--border-hi);
-	border-radius: var(--r-md);
-	background: transparent;
-	color: var(--muted);
-	font: var(--fs-app) var(--font-body);
-	font-weight: 500;
-	cursor: pointer;
-}
-.importBtn:hover { background: var(--surface-warm); color: var(--fg); border-color: var(--accent); }
-
-/* Custom range slider / progress bar */
 .scrubBar {
 	flex: 1;
 	min-width: 0;

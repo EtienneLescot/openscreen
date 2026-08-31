@@ -235,8 +235,19 @@ function mapAllRegionCollections(
 	fn: (regions: StoredRegion[], prefix: string) => StoredRegion[],
 ): AxcutDocument {
 	const legacy = document.legacyEditor as Record<string, unknown> | null;
-	const speedRegions = legacy?.speedRegions as StoredRegion[] | undefined;
-	const cameraFullscreenRegions = legacy?.cameraFullscreenRegions as StoredRegion[] | undefined;
+	// The envelope is `z.object({}).passthrough()`, so zod validates NOTHING inside it: a
+	// project file whose `speedRegions` is a string loads clean and only detonates here, on
+	// the first clip edit (`regions.filter is not a function` — #356). Guard exactly as
+	// `upgradeV4DocumentToV5` already does, and for the same reason: a non-array is not a
+	// collection we can walk. Treating it as absent leaves it in place via the `...legacy`
+	// spread below, so the rest of the document still edits normally and nothing the user
+	// had is thrown away on our way past it.
+	const speedRegions = Array.isArray(legacy?.speedRegions)
+		? (legacy?.speedRegions as StoredRegion[])
+		: undefined;
+	const cameraFullscreenRegions = Array.isArray(legacy?.cameraFullscreenRegions)
+		? (legacy?.cameraFullscreenRegions as StoredRegion[])
+		: undefined;
 
 	return {
 		...document,

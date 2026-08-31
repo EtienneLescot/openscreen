@@ -11,13 +11,14 @@ The provider layer defines model metadata, protects credentials, discovers model
 | [`electron/ai-edition/deep-agent/chat-model.ts`](../../electron/ai-edition/deep-agent/chat-model.ts) | Per-provider reasoning-effort capability and its LangChain wire options. |
 | [`electron/native-bridge/services/aiEditionService.ts`](../../electron/native-bridge/services/aiEditionService.ts) | IPC surface: connect / disconnect, snapshot, `llmListProviderModels`. |
 | [`src/components/ai-edition/ProviderSettings.tsx`](../../src/components/ai-edition/ProviderSettings.tsx) | Renders cards and forms directly from `PROVIDER_DEFINITIONS`. `ProviderSettingsDialog`, in the same file, is its one mount — `App.tsx`, beside `ShortcutsConfigDialog`. |
-| [`src/contexts/ProviderSettingsContext.tsx`](../../src/contexts/ProviderSettingsContext.tsx) | Open state for that dialog, so every entry point opens the same one. |
+| [`src/contexts/EditorDialogsContext.tsx`](../../src/contexts/EditorDialogsContext.tsx) | Which editor dialog is open (`section`), so every entry point opens the same one. |
 
 > **Two doors, one dialog.** The settings dialog is opened from the AI panel — its gear, the
-> welcome card's CTA, the model pill with nothing configured, and a send attempt with no
-> provider — and from the app menu under the wordmark. Its open state lives in a context rather
-> than in `LeftPanel` because that panel mounts only in Edit mode with the chat panel expanded,
-> which would have left the menu item dead in Media and Rec (issue #420).
+> welcome card's CTA, the model pill with nothing configured, the quick-pick popover's "full
+> settings" row, and a send attempt with no provider — and from the app menu under the
+> wordmark. Its open state lives in a context rather than in `ChatStripPanel` because that panel
+> mounts only in Edit mode with the chat panel expanded, which would have left the menu item
+> dead in Media and Rec (issue #420).
 
 > **There is one transport.** `llm-call.ts` (`streamLlm` / `callLlm`) and
 > `codex-session.ts` were deleted in 1.8.0 along with the two account-backed

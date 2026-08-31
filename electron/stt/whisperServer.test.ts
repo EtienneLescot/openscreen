@@ -356,10 +356,12 @@ describe("WhisperServerManager", () => {
 		try {
 			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
 			await writeFile(modelPath, "dummy-ggml");
-			const fakeBinaryPath = path.join(
-				dir,
-				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
-			);
+			// ponytail: no `.exe` branch on Windows, because there is no name to get
+			// right: every test here hands `start()` an explicit `binaryPath`, which is
+			// the branch that skips `resolveBinaryPath()` entirely. A `process.platform`
+			// read that decides nothing is a platform gate CI cannot pin and cannot
+			// exercise — it only looks like coverage.
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			// mode 0o755: the manager refuses a helper it cannot execute, and the
 			// default write mode is not executable on POSIX.
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
@@ -498,14 +500,166 @@ describe("WhisperServerManager", () => {
 		}
 	});
 
+	it("logs a startup death once, and keeps the more specific reason on status", async () => {
+		// ponytail: the `exit` listener and the startup catch both answer for the
+		// SAME death — the listener because the child died, the catch because the
+		// promise that death rejects is the one `launch` awaits. Two `[stt]` lines
+		// worded differently for one event teaches a reader to skim the log. The
+		// field still takes the second, more specific message: that is what
+		// `status.lastError` is for.
+		const fs = await import("node:fs/promises");
+		const { spawn } = await import("node:child_process");
+		const dir = await mkdtemp(path.join(tmpdir(), "whisper-one-log-"));
+		const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		try {
+			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
+			await fs.writeFile(modelPath, "dummy-ggml");
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
+
+			const child = Object.assign(new EventEmitter(), {
+				stdout: new EventEmitter(),
+				stderr: new EventEmitter(),
+				pid: 4321,
+				kill: vi.fn(),
+			});
+			vi.mocked(spawn).mockImplementationOnce(() => {
+				// No GPU vocabulary in the tail, so this death is NOT read as a GPU
+				// startup failure and nothing retries on CPU — the throw is the result.
+				queueMicrotask(() => {
+					child.stderr.emit("data", Buffer.from("could not open model"));
+					child.emit("exit", 3);
+				});
+				return child as never;
+			});
+
+			const mgr = new WhisperServerManager();
+			await expect(
+				mgr.start({ modelPath, binaryPath: fakeBinaryPath, backend: "whispercpp-cpu" }),
+			).rejects.toThrow(/exited during startup/);
+
+			const stt = errors.mock.calls.map(String).filter((line) => line.startsWith("[stt] "));
+			expect(stt, `lignes [stt] émises : ${JSON.stringify(stt)}`).toHaveLength(1);
+			// The one that survives is the listener's — the catch is the second voice.
+			expect(stt[0]).toMatch(/exited with code 3/);
+			// …and the field keeps the more specific of the two.
+			expect(mgr.status.lastError).toMatch(/exited during startup \(3\)/);
+		} finally {
+			errors.mockRestore();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("logs a spawn error once, the same as a death by exit", async () => {
+		// ponytail: the `error` listener is the OTHER way a helper never reaches
+		// readiness, and it reaches the startup catch by the same route — the
+		// `exitedBeforeReady` race rejects on `error` as well as on `exit`. Whatever
+		// keeps one voice on an exit has to keep one voice here too, or the fix has
+		// simply moved the duplicate into the branch nobody looked at.
+		const fs = await import("node:fs/promises");
+		const { spawn } = await import("node:child_process");
+		const dir = await mkdtemp(path.join(tmpdir(), "whisper-spawn-error-"));
+		const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		try {
+			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
+			await fs.writeFile(modelPath, "dummy-ggml");
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
+
+			const child = Object.assign(new EventEmitter(), {
+				stdout: new EventEmitter(),
+				stderr: new EventEmitter(),
+				pid: undefined,
+				kill: vi.fn(() => true),
+			});
+			vi.mocked(spawn).mockImplementationOnce(() => {
+				// No "exit" at all: the process never came up, so only "error" fires.
+				queueMicrotask(() => child.emit("error", new Error("spawn EACCES")));
+				return child as never;
+			});
+
+			const mgr = new WhisperServerManager();
+			await expect(
+				mgr.start({ modelPath, binaryPath: fakeBinaryPath, backend: "whispercpp-cpu" }),
+			).rejects.toThrow(/spawn EACCES/);
+
+			const stt = errors.mock.calls.map(String).filter((line) => line.startsWith("[stt] "));
+			expect(stt, `lignes [stt] émises : ${JSON.stringify(stt)}`).toHaveLength(1);
+			expect(stt[0]).toMatch(/spawn error: spawn EACCES/);
+			// The listener cleared the startup state, so nothing is left claiming a
+			// helper is up — `status` must agree with the log.
+			expect(mgr.status.running).toBe(false);
+		} finally {
+			errors.mockRestore();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("logs a readiness timeout, which no exit listener would ever see", async () => {
+		// The other direction: nothing exits, so the startup catch is the ONLY voice
+		// on this failure and must not be silenced by the de-duplication above.
+		//
+		// ponytail: the clock is moved, not the timers. `pollUntilReady` bounds
+		// itself with `Date.now()`, so a clock that leaps 60 s per reading walks past
+		// the 30 s deadline on its own — no fake timers, and therefore nothing that
+		// has to also drive the real socket I/O `pickFreePort` waits on. An earlier
+		// version of this test did use fake timers and deadlocked on Linux CI while
+		// passing on Windows, which is a worse failure than the one it tests for.
+		const fs = await import("node:fs/promises");
+		const { spawn } = await import("node:child_process");
+		const dir = await mkdtemp(path.join(tmpdir(), "whisper-timeout-log-"));
+		const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const realNow = Date.now;
+		let nowSpy = vi.spyOn(Date, "now");
+		let clock = realNow();
+		try {
+			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
+			await fs.writeFile(modelPath, "dummy-ggml");
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
+
+			const child = Object.assign(new EventEmitter(), {
+				stdout: new EventEmitter(),
+				stderr: new EventEmitter(),
+				pid: 4322,
+				// Alive until asked to stop — `stop()` awaits the exit it triggers.
+				kill: vi.fn(() => {
+					queueMicrotask(() => child.emit("exit", 0));
+					return true;
+				}),
+			});
+			vi.mocked(spawn).mockImplementationOnce(() => child as never);
+			vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false } as Response));
+
+			clock = realNow();
+			nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+				clock += 60_000;
+				return clock;
+			});
+
+			const mgr = new WhisperServerManager();
+			await expect(
+				mgr.start({ modelPath, binaryPath: fakeBinaryPath, backend: "whispercpp-cpu" }),
+			).rejects.toThrow(/did not respond within/);
+
+			const stt = errors.mock.calls.map(String).filter((line) => line.startsWith("[stt] "));
+			expect(stt, `lignes [stt] émises : ${JSON.stringify(stt)}`).toHaveLength(1);
+			expect(stt[0]).toMatch(/did not respond within/);
+		} finally {
+			// Targeted, not `restoreAllMocks()`: the module-level `spawn` stub belongs
+			// to the whole file and the next test relies on it.
+			nowSpy.mockRestore();
+			errors.mockRestore();
+			vi.unstubAllGlobals();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("refuses to start when the model file is missing", async () => {
 		const fs = await import("node:fs/promises");
 		const dir = await mkdtemp(path.join(tmpdir(), "whisper-no-model-"));
 		try {
-			const fakeBinaryPath = path.join(
-				dir,
-				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
-			);
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			// Executable on purpose: this test asserts the *model* check fires, so
 			// the binary must get past the executability check first.
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });

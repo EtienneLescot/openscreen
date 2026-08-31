@@ -13,14 +13,14 @@
 // with them. Credentials live in the safeStorage blob (LlmConfigStore) — the
 // renderer never sees raw keys, only `kind`.
 //
-// ponytail: existing consumers (ProviderSettings used as <ProviderSettings open onClose />)
-// must keep working. Internal state is local-only.
+// `ProviderSettingsDialog` at the bottom is the only mount, and the only caller of the
+// `open` / `onClose` component above it. Internal state is local-only.
 
 import { AlertCircle, Check, Loader2, Unplug, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useEditorDialogActions, useEditorDialogSection } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
-import { useProviderSettings } from "@/contexts/ProviderSettingsContext";
 import { nativeBridgeClient } from "@/native/client";
 import type { AiEditionLlmConfig, AiEditionLlmSnapshot } from "@/native/contracts";
 import {
@@ -37,14 +37,9 @@ type Mode = "list" | "form";
 interface ProviderSettingsProps {
 	open: boolean;
 	onClose: () => void;
-	onActiveProviderChanged?: (providerId: string | null) => void;
 }
 
-export function ProviderSettings({
-	open,
-	onClose,
-	onActiveProviderChanged,
-}: ProviderSettingsProps) {
+function ProviderSettings({ open, onClose }: ProviderSettingsProps) {
 	const te = useScopedT("editor");
 	const [snapshot, setSnapshot] = useState<AiEditionLlmSnapshot | null>(null);
 	const [mode, setMode] = useState<Mode>("list");
@@ -90,6 +85,10 @@ export function ProviderSettings({
 		setError(null);
 	}, [busy]);
 
+	// Escape is ours alone — see `closeOnEscape={false}` on the ModalShell below. While
+	// ModalShell also handled it, both listeners fired for one keypress and its `onClose` won,
+	// so Escape in the connect form left the dialog entirely (discarding a half-typed key)
+	// instead of stepping back to the grid, and the branch below was dead.
 	useEffect(() => {
 		if (!open) return;
 		const onKey = (e: KeyboardEvent) => {
@@ -138,8 +137,7 @@ export function ProviderSettings({
 				setApiKey("");
 			}
 			await nativeBridgeClient.aiEdition.llmSetConfig(config);
-			const snap = await refreshSnapshot();
-			onActiveProviderChanged?.(snap?.config?.provider ?? null);
+			await refreshSnapshot();
 			toast.success(te("providerSettings.saved", { provider: active.label }));
 			setMode("list");
 			setActive(null);
@@ -156,8 +154,11 @@ export function ProviderSettings({
 		setError(null);
 		try {
 			const result = await nativeBridgeClient.aiEdition.llmDisconnect(active.id);
-			const snap = result.snapshot ?? (await refreshSnapshot());
-			onActiveProviderChanged?.(snap.config?.provider ?? null);
+			// `snapshot` is not optional on the result, so a `?? refreshSnapshot()` fallback here
+			// never ran — and `refreshSnapshot` is the only thing that calls `setSnapshot`. The
+			// form and the grid behind it went on showing the provider as CONNECTED until the
+			// dialog was closed and reopened.
+			setSnapshot(result.snapshot);
 			toast.success(te("providerSettings.disconnected", { provider: active.label }));
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
@@ -170,6 +171,7 @@ export function ProviderSettings({
 		<ModalShell
 			open={open}
 			onClose={close}
+			closeOnEscape={false}
 			title={te("providerSettings.title")}
 			subtitle={te("providerSettings.subtitle")}
 			wide
@@ -206,7 +208,7 @@ export function ProviderSettings({
 
 /**
  * The one mount of {@link ProviderSettings} in the editor window, bound to the context that
- * carries its open state.
+ * carries which editor dialog is open.
  *
  * It sits beside `ShortcutsConfigDialog` in `App.tsx` rather than inside the chat panel, so the
  * app menu can offer it in every mode (issue #420). The dialog above stays a plain
@@ -214,8 +216,9 @@ export function ProviderSettings({
  * it as a section of a larger dialog, which is not a thing that can mount itself.
  */
 export function ProviderSettingsDialog() {
-	const { isProviderSettingsOpen, closeProviderSettings } = useProviderSettings();
-	return <ProviderSettings open={isProviderSettingsOpen} onClose={closeProviderSettings} />;
+	const section = useEditorDialogSection();
+	const { closeDialog } = useEditorDialogActions();
+	return <ProviderSettings open={section === "providers"} onClose={closeDialog} />;
 }
 
 function ProviderList({

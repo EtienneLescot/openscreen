@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Issue #420: the AI provider dialog used to be a `useState` inside LeftPanel's chat strip, so
 // it existed only in Edit mode with the chat panel expanded and nothing else could open it. It
-// is mounted once now, above the mode switch, and driven by ProviderSettingsContext.
+// is mounted once now, above the mode switch, and driven by EditorDialogsContext.
 //
 // These tests are about *reach*, not about the dialog's own screens: that the app menu's row
 // really opens it, that it opens in Media and Rec too, and that the row and the heading are one
@@ -10,8 +10,8 @@
 import "@testing-library/jest-dom";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EditorDialogsProvider, useEditorDialogActions } from "@/contexts/EditorDialogsContext";
 import { I18nProvider } from "@/contexts/I18nContext";
-import { ProviderSettingsProvider, useProviderSettings } from "@/contexts/ProviderSettingsContext";
 import { LOCALE_STORAGE_KEY } from "@/i18n/config";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 
@@ -39,7 +39,7 @@ const noop = () => {};
 /** The top bar as NewEditorShell builds it: the menu row's action is the context's opener, and
  *  nothing else in `actions` matters here. */
 function TopBar({ mode }: { mode: EditorMode }) {
-	const { openProviderSettings } = useProviderSettings();
+	const { openDialog } = useEditorDialogActions();
 	return (
 		<EditorTopBar
 			mode={mode}
@@ -56,7 +56,7 @@ function TopBar({ mode }: { mode: EditorMode }) {
 				openSettings: noop,
 				renameProject: noop,
 				toggleChat: noop,
-				openProviderSettings,
+				openProviderSettings: () => openDialog("providers"),
 				showAbout: noop,
 				checkForUpdates: noop,
 			}}
@@ -71,10 +71,10 @@ function renderEditorChrome(locale: string, mode: EditorMode = "edit") {
 	localStorage.setItem(LOCALE_STORAGE_KEY, locale);
 	return render(
 		<I18nProvider>
-			<ProviderSettingsProvider>
+			<EditorDialogsProvider>
 				<TopBar mode={mode} />
 				<ProviderSettingsDialog />
-			</ProviderSettingsProvider>
+			</EditorDialogsProvider>
 		</I18nProvider>,
 	);
 }
@@ -109,7 +109,7 @@ describe("ProviderSettings, reached from the app menu", () => {
 		"media",
 		"rec",
 	])("opens in %s mode, where the chat panel that used to own it does not exist", (mode) => {
-		// The reason the state was lifted. LeftPanel renders only under `mode === "edit" &&
+		// The reason the state was lifted. ChatStripPanel renders only under `mode === "edit" &&
 		// chatOpen`, so before this change the row would have been dead in both of these.
 		renderEditorChrome("en", mode);
 

@@ -303,6 +303,7 @@ function resetLaunchMocks() {
 	i18nState.value.acceptSystemLocaleSuggestion.mockClear();
 	i18nState.value.dismissSystemLocaleSuggestion.mockClear();
 	i18nState.value.resolveSystemLocaleSuggestion.mockClear();
+	i18nState.value.setLocale.mockClear();
 	linuxHelperAvailable.value = true;
 	appInfoState.value = { version: "1.9.6", canCheckForUpdates: true };
 	updateCheckMock.mockReset();
@@ -826,6 +827,126 @@ describe("LaunchWindow language menu", () => {
 		expect(menu.parentElement?.parentElement).toContainElement(
 			screen.getByTestId("hud-drag-handle"),
 		);
+	});
+});
+
+describe("LaunchWindow popover dismissal", () => {
+	beforeEach(() => {
+		platformState.value = "darwin";
+		resetLaunchMocks();
+	});
+
+	afterEach(() => {
+		cleanup();
+		vi.unstubAllGlobals();
+	});
+
+	/** Opens the language menu the way a user does, and hands back its panel. */
+	async function openLanguageMenu() {
+		fireEvent.click(await screen.findByRole("button", { name: "English" }));
+		return await screen.findByTestId("hud-language-menu");
+	}
+
+	/** Same for the device-settings panel. */
+	async function openDeviceSettings() {
+		fireEvent.click(await screen.findByTestId("launch-device-settings-button"));
+		return await screen.findByTestId("hud-device-settings");
+	}
+
+	it("closes the language menu on Escape without changing the locale", async () => {
+		renderLaunchWindow();
+		await openLanguageMenu();
+
+		fireEvent.keyDown(window, { key: "Escape" });
+
+		await waitFor(() => {
+			expect(screen.queryByTestId("hud-language-menu")).not.toBeInTheDocument();
+		});
+		// Escape dismisses; it must never pick whatever entry happened to be under
+		// the cursor or focused.
+		expect(i18nState.value.setLocale).not.toHaveBeenCalled();
+		expect(i18nState.value.resolveSystemLocaleSuggestion).not.toHaveBeenCalled();
+	});
+
+	it("closes the language menu on a pointerdown outside the trigger and the panel", async () => {
+		renderLaunchWindow();
+		await openLanguageMenu();
+
+		// The HUD window is mostly empty reserve above the bar; a press there is a
+		// real DOM pointerdown on the root, and it has to dismiss.
+		fireEvent.pointerDown(document.body);
+
+		await waitFor(() => {
+			expect(screen.queryByTestId("hud-language-menu")).not.toBeInTheDocument();
+		});
+		expect(i18nState.value.setLocale).not.toHaveBeenCalled();
+	});
+
+	it("keeps the language menu open for a pointerdown inside the panel", async () => {
+		renderLaunchWindow();
+		const menu = await openLanguageMenu();
+
+		fireEvent.pointerDown(menu);
+
+		expect(screen.getByTestId("hud-language-menu")).toBeInTheDocument();
+	});
+
+	it("closes the language menu when the HUD window loses focus", async () => {
+		renderLaunchWindow();
+		await openLanguageMenu();
+
+		// A click that lands beyond the HUD's native window produces no pointerdown
+		// in this renderer at all — the only signal it gets is the window blur. And
+		// once focus is gone, Escape can no longer be delivered here either, so this
+		// is the one listener that can unstick that state (issue #435).
+		fireEvent.blur(window);
+
+		await waitFor(() => {
+			expect(screen.queryByTestId("hud-language-menu")).not.toBeInTheDocument();
+		});
+		expect(i18nState.value.setLocale).not.toHaveBeenCalled();
+	});
+
+	it("closes the device-settings panel on Escape", async () => {
+		renderLaunchWindow();
+		await openDeviceSettings();
+
+		fireEvent.keyDown(window, { key: "Escape" });
+
+		await waitFor(() => {
+			expect(screen.queryByTestId("hud-device-settings")).not.toBeInTheDocument();
+		});
+	});
+
+	it("closes the device-settings panel on a pointerdown outside the trigger and the panel", async () => {
+		renderLaunchWindow();
+		await openDeviceSettings();
+
+		fireEvent.pointerDown(document.body);
+
+		await waitFor(() => {
+			expect(screen.queryByTestId("hud-device-settings")).not.toBeInTheDocument();
+		});
+	});
+
+	it("closes the device-settings panel when the HUD window loses focus", async () => {
+		renderLaunchWindow();
+		await openDeviceSettings();
+
+		fireEvent.blur(window);
+
+		await waitFor(() => {
+			expect(screen.queryByTestId("hud-device-settings")).not.toBeInTheDocument();
+		});
+	});
+
+	it("leaves a key that is not Escape alone", async () => {
+		renderLaunchWindow();
+		await openLanguageMenu();
+
+		fireEvent.keyDown(window, { key: "a" });
+
+		expect(screen.getByTestId("hud-language-menu")).toBeInTheDocument();
 	});
 });
 

@@ -87,7 +87,6 @@
 		"switchToLightTheme": "Переключить на светлую тему",
 		"switchToDarkTheme": "Переключить на тёмную тему",
 		"toggleTheme": "Переключить тему",
-		"settings": "Настройки",
 		"export": "Экспорт",
 		"renameProject": "Переименовать проект",
 		"noProject": "Нет проекта",
@@ -139,7 +138,6 @@
 		"sourceTranscript": "Транскрипт источника",
 		"close": "Закрыть",
 		"transcriptReady": "Транскрипт готов",
-		"notGeneratedYet": "Ещё не создан",
 		"regenerateAs": "Пересоздать на",
 		"auto": "Авто",
 		"regenerate": "Пересоздать",
@@ -152,12 +150,7 @@
 		"transcriptionFailed": "Ошибка расшифровки",
 		"cpuBackendHint": "Выполняется на процессоре — примерно в 2× медленнее, чем на GPU",
 		"noTranscript": "Нет расшифровки",
-		"generating": "Создание",
-		"generationFailed": "Ошибка создания",
-		"generated": "Создано",
 		"generationFailedHint": "Ошибка создания — выберите язык и создайте заново.",
-		"noPreviewAvailable": "Предпросмотр недоступен",
-		"restart": "Перезапустить",
 		"detectedLanguage": "Обнаруженный язык: {{language}}",
 		"noAudioTrack": "Нет аудиодорожки",
 		"noAudioTrackHint": "В этом медиафайле нет аудиодорожки — расшифровывать нечего.",
@@ -213,18 +206,6 @@
 		"cameraFullscreenDescription": "Пока играет этот участок, камера занимает весь кадр — без рамки, скруглений и фона — и плавно возвращается в конце. Перетаскивайте края участка на таймлайне, чтобы изменить его начало и длительность.",
 		"deleteRegion": "Удалить участок",
 		"freehandRendersAsBox": "При экспорте произвольная форма закрывается своим ограничивающим прямоугольником — с запасом, а не с недостатком."
-	},
-	"leftPanel": {
-		"mediaTitle": "Медиа",
-		"searchPlaceholder": "Поиск…",
-		"clearSearch": "Очистить поиск",
-		"emptyHint": "В этом проекте пока нет медиафайлов. Импортируйте видео ниже.",
-		"transcriptReadyBadge": "РАСШИФРОВКА ГОТОВА"
-	},
-	"leftRail": {
-		"chat": "Чат",
-		"media": "Медиа",
-		"ariaLabel": "Левые инструменты"
 	},
 	"chat": {
 		"changeProvider": "Сменить провайдера",

@@ -16,6 +16,7 @@ import { fakeCursorReader, runScenario } from "../lib/harness";
 import { EXPECTED_TOOL_COUNT, OPENSCREEN_TOOLS, PHANTOM_TOOLS } from "../lib/prompts";
 import { buildReport, fingerprintOf, renderMarkdown, summarizeScenario } from "../lib/report";
 import { runRepetition, runScenarioReps } from "../lib/runner";
+import type { Scenario } from "../lib/scenario";
 import { allScenarios, getScenario } from "../scenarios/registry";
 
 describe("the context the model actually receives", () => {
@@ -78,7 +79,12 @@ describe("scenarios end to end, offline", () => {
 			expect(result.run.ok).toBe(true);
 			// Every check produced a verdict, and none of them threw.
 			const all = [...result.scored.behaviour.results, ...result.scored.dsl.results];
-			expect(all.length).toBe(scenario.behaviour.length + scenario.dsl.length + 2 /* structural */);
+			expect(all.length).toBe(
+				scenario.behaviour.length +
+					(scenario.judged ?? []).length +
+					scenario.dsl.length +
+					2 /* structural */,
+			);
 			for (const check of all) {
 				expect(check.evidence ?? "").not.toContain("check threw");
 			}
@@ -87,6 +93,25 @@ describe("scenarios end to end, offline", () => {
 			);
 		});
 	}
+
+	it("un check jugé sort de L1 en indéterminé, jamais en passage", async () => {
+		// ponytail: le verrou de la contrainte « L1 reste sans LLM et sans réseau
+		// sortant ». Le juge n'est sur le chemin d'aucun tour — il relit les tours
+		// persistés, plus tard — donc un check jugé ne PEUT pas être tranché ici.
+		// Ce que ce test interdit est qu'il le devienne en silence, dans le sens
+		// commode : un `demoScript` qui « passerait » un check que personne n'a
+		// posé serait précisément le faux-vert que ce banc existe pour attraper.
+		const scenario = allScenarios().find((s) => (s.judged ?? []).length > 0);
+		expect(scenario, "aucun scénario jugé dans le pack — ce verrou ne teste rien").toBeDefined();
+		const result = await runRepetition({ scenario: scenario as Scenario });
+		for (const judged of (scenario as Scenario).judged ?? []) {
+			const verdict = result.scored.behaviour.results.find((r) => r.id === judged.id);
+			expect(verdict?.indeterminate).toBe(true);
+			expect(verdict?.ok).toBe(false);
+			expect(verdict?.evidence).toContain("wb:judge");
+		}
+		expect(result.scored.behaviour.undecidedWeight).toBeGreaterThan(0);
+	});
 
 	it("mints a fresh projectId per repetition", async () => {
 		// sessionsByProject and messageCheckpointsBySession are module Maps with
@@ -190,14 +215,26 @@ describe("the sink announces each call exactly once, with the real verdict", () 
 });
 
 describe("wizard-enhance reproduces the two defects it was written for", () => {
-	it("D1 — a fabricated focus and a false negative about cursor data", async () => {
+	it("D1 — a fabricated focus, and the denial now waiting on a judge", async () => {
 		const result = await runRepetition({ scenario: getScenario("wizard-enhance") });
 		const byId = new Map(
 			[...result.scored.behaviour.results, ...result.scored.dsl.results].map((r) => [r.id, r]),
 		);
 		expect(byId.get("dsl.focus.not-fabricated")?.ok).toBe(false);
 		expect(byId.get("dsl.focus.not-fabricated")?.expected).toBe(true);
-		expect(byId.get("beh.no-false-negative")?.ok).toBe(false);
+		// ponytail: la moitié calculée de D1 est toujours notée ici, hors ligne.
+		// L'autre moitié était `beh.no-false-negative`, une regex ANGLAISE — et le
+		// `demoScript` rejoué ci-dessus nie la donnée EN ANGLAIS, ce qui est la
+		// seule raison pour laquelle elle échouait. Une reproduction de ce tour en
+		// français l'aurait laissée verte, sur un mensonge identique.
+		//
+		// La question est passée au juge, et L1 ne juge pas : le verdict sort
+		// `indéterminé`, JAMAIS en passage. C'est ce qui est asserté — un check
+		// jugé qui deviendrait vert hors ligne serait le faux vert que tout ce
+		// fichier existe pour attraper.
+		const jugé = byId.get("beh.attributes-the-limit");
+		expect(jugé?.indeterminate).toBe(true);
+		expect(jugé?.ok).toBe(false);
 	});
 
 	it("D2 — the stated multiplier is not the one the pill renders", async () => {
@@ -352,7 +389,11 @@ describe("report assembly", () => {
 
 		const report = buildReport({
 			label: "l1",
-			fingerprint: fingerprintOf({ results, model: "workbench-scripted", reps: 2 }),
+			fingerprint: fingerprintOf({
+				wire: results[0]?.run.wire,
+				model: "workbench-scripted",
+				reps: 2,
+			}),
 			scenarios: [summary],
 			notices: [],
 		});

@@ -81,6 +81,17 @@ export function NativeCompositorOverlay() {
 
 	// `null` = document pas encore chargé (on attend) ; `{}` = chargé sans asset (→ fixture) ;
 	// `{screenPath,…}` = vraies sources de l'asset primaire.
+	const settings = useMemo(() => getEditorSettings(document), [document]);
+
+	// The real camera path, independent of whether NATIVE is the one drawing it: the scene
+	// still needs it to look up the probed webcam size, which shapes the PiP box.
+	const cameraPath = useMemo(() => {
+		if (!document) return undefined;
+		const primary =
+			document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
+		return primary ? assetCameraSource(primary).path || undefined : undefined;
+	}, [document]);
+
 	const sources = useMemo(() => {
 		if (!document) {
 			return null;
@@ -132,8 +143,7 @@ export function NativeCompositorOverlay() {
 			return;
 		}
 		try {
-			const activeWebcamPath = sources && "webcamPath" in sources ? sources.webcamPath : undefined;
-			const webcamSourceSize = activeWebcamPath ? getWebcamNativeSize(activeWebcamPath) : null;
+			const webcamSourceSize = cameraPath ? getWebcamNativeSize(cameraPath) : null;
 			const scene = buildSceneDescription(document, webcamSourceSize);
 			setNativeScene(JSON.stringify(scene));
 		} catch (error) {
@@ -164,7 +174,6 @@ export function NativeCompositorOverlay() {
 	// n'a pas d'importance. Et ca ne peut pas lutter contre un drag de slider :
 	// `setLive` passe par `setDocument`, donc `document` a deja la NOUVELLE
 	// valeur a chaque tick -- la meme que celle que le handler vient de pousser.
-	const settings = useMemo(() => getEditorSettings(document), [document]);
 	useEffect(() => {
 		const push = () => pushAllNativeParams(settings);
 		push();

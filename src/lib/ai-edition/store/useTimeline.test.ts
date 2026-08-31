@@ -5,6 +5,8 @@ import { I18nProvider } from "@/contexts/I18nContext";
 import type { AxcutDocument } from "../schema";
 import { axcutSchemaVersion } from "../schema";
 import { useProjectStore } from "./projectStore";
+import { clearHistory, redo, undo } from "./undo";
+import { future, past } from "./undoStack";
 import { useTimeline } from "./useTimeline";
 
 /**
@@ -341,7 +343,7 @@ describe("useTimeline backfills missing source dimensions on load", () => {
 	});
 });
 
-describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
+describe("useTimeline.applyClipEdit (Edit-clip modal)", () => {
 	const anchoredZoom = (id: string, s: number, e: number) => ({
 		id,
 		startMs: s * 1000,
@@ -380,7 +382,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 		const { result } = renderTimeline();
 		// Trim the 10s clip down to its first 4s of source.
 		await act(async () => {
-			await result.current.updateClipSourceRange("clip_a", 0, 4);
+			await result.current.applyClipEdit("clip_a", 0, 4);
 		});
 		const clip = useProjectStore.getState().document?.timeline.clips[0];
 		expect(clip).toMatchObject({ sourceStartSec: 0, sourceEndSec: 4 });
@@ -392,7 +394,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 	it("drops a pill sitting over the truncated tail and keeps the one that survives", async () => {
 		const { result } = renderTimeline();
 		await act(async () => {
-			await result.current.updateClipSourceRange("clip_a", 0, 4);
+			await result.current.applyClipEdit("clip_a", 0, 4);
 		});
 		const zooms = useProjectStore.getState().document?.zoomRanges ?? [];
 		// z_keep (source 2-3) stays; z_drop (source 6-8) is entirely past the new 4s end.
@@ -414,7 +416,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 		});
 		const { result } = renderTimeline();
 		await act(async () => {
-			await result.current.updateClipSourceRange("clip_a", 0, 5);
+			await result.current.applyClipEdit("clip_a", 0, 5);
 		});
 		const zooms = useProjectStore.getState().document?.zoomRanges ?? [];
 		expect(zooms).toHaveLength(1);
@@ -425,6 +427,123 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 			startMs: 3000,
 			endMs: 5000,
 		});
+	});
+
+	// #355. Apply used to fire `updateClipSourceRange` and `updateClipCrop` as two
+	// concurrent saves, each built from the same pre-Apply document — so the second
+	// write clobbered the first and one of the two edits vanished with no error and no
+	// toast. Which one survived depended on IPC timing, which is why it read as "the app
+	// randomly forgets my crop".
+	it("keeps BOTH the source range and the crop when Apply changes them together", async () => {
+		const { result } = renderTimeline();
+		const crop = { x: 0.1, y: 0.2, width: 0.5, height: 0.5 };
+		await act(async () => {
+			await result.current.applyClipEdit("clip_a", 0, 4, crop);
+		});
+		const clip = useProjectStore.getState().document?.timeline.clips[0];
+		expect(clip).toMatchObject({ sourceStartSec: 0, sourceEndSec: 4, cropRegion: crop });
+		// The width still followed the range edit — the crop is applied to the
+		// RESEQUENCED clips, not to a stale copy of them.
+		expect(clip?.timelineEndSec).toBe(4);
+		// One user action, one document, one write: two saves is the race itself.
+		expect(bridgeMocks.save).toHaveBeenCalledTimes(1);
+	});
+
+	it("clears the crop on an explicit null and leaves it alone on undefined", async () => {
+		useProjectStore.setState({
+			document: {
+				...sampleDoc,
+				timeline: {
+					...sampleDoc.timeline,
+					clips: [
+						{ ...sampleDoc.timeline.clips[0], cropRegion: { x: 0, y: 0, width: 0.5, height: 1 } },
+					],
+				},
+			},
+		});
+		const { result } = renderTimeline();
+		// `undefined` is the modal's "crop section untouched" — the stored region stays.
+		await act(async () => {
+			await result.current.applyClipEdit("clip_a", 0, 6);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips[0].cropRegion).toEqual({
+			x: 0,
+			y: 0,
+			width: 0.5,
+			height: 1,
+		});
+		// `null` is "reset to no crop", stored as an absent field rather than the
+		// identity region.
+		await act(async () => {
+			await result.current.applyClipEdit("clip_a", 0, 6, null);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips[0].cropRegion).toBeUndefined();
+	});
+});
+
+// #353. The toolbar button and the `C` shortcut both used to write a region on a
+// project with no webcam: it persists into `legacyEditor.cameraFullscreenRegions`,
+// renders nothing in the preview (PreviewCanvas short-circuits on a missing
+// `webcamRect`) and nothing in the export, forever, with no feedback. The gate lives
+// in the shared mutation so both entry points — and any future one — are covered.
+describe("useTimeline.addCameraFullscreen (camera gate)", () => {
+	const cameraAsset = {
+		...sampleDoc.assets[0],
+		cameraTrack: {
+			sourcePath: "/tmp/camera.webm",
+			startMs: 0,
+			offsetMs: 0,
+			visible: true,
+			// Dimensions filled in so the hook's backfill probe has nothing to do — an
+			// unprobed camera would fire its own `saveDocument` alongside this test's.
+			width: 1280,
+			height: 720,
+		},
+	};
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			currentTimeSec: 1,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("writes nothing when no clip on the timeline has a camera", async () => {
+		// sampleDoc's only asset carries `cameraTrack: null`.
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addCameraFullscreen();
+		});
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+		expect(useProjectStore.getState().document?.legacyEditor).toBeNull();
+		expect(result.current.cameraFullscreenRegions).toEqual([]);
+	});
+
+	it("still writes a region when a clip's asset carries a camera", async () => {
+		useProjectStore.setState({ document: { ...sampleDoc, assets: [cameraAsset] } });
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addCameraFullscreen();
+		});
+		const legacy = useProjectStore.getState().document?.legacyEditor as Record<string, unknown>;
+		const regions = legacy.cameraFullscreenRegions as Array<{ startMs: number; endMs: number }>;
+		expect(regions).toHaveLength(1);
+		// 2s at the playhead (currentTimeSec = 1), the shared default.
+		expect(regions[0]).toMatchObject({ startMs: 1000, endMs: 3000 });
 	});
 });
 
@@ -779,5 +898,390 @@ describe("useTimeline save failures", () => {
 
 		expect(added).toBe(0);
 		expect(useProjectStore.getState().document?.zoomRanges).toHaveLength(0);
+	});
+});
+
+describe("useTimeline undo history", () => {
+	// `addAsset` (electron/ai-edition/document-service.ts) never writes `durationSec`,
+	// so EVERY freshly imported asset lands at the 60s placeholder and fires the
+	// background probe. Anything the probe records is therefore on the undo stack of
+	// every single drop, which is what makes these two the common case and not an
+	// edge one.
+	const unprobed = {
+		id: "asset_3",
+		kind: "video" as const,
+		label: "fresh-import.mp4",
+		originalPath: "/tmp/fresh-import.mp4",
+		durationSec: undefined,
+		// No `video` either: that is what `addAsset` produces, and it is what makes
+		// `probeAndCorrectClip` save even once the clip it came for is gone.
+		cameraTrack: null,
+	};
+
+	const docWithZoom: AxcutDocument = {
+		...sampleDoc,
+		zoomRanges: [
+			{
+				id: "zoom_a",
+				startMs: 1000,
+				endMs: 3000,
+				depth: 3,
+				focus: { cx: 0.5, cy: 0.5 },
+				focusMode: "manual",
+				clipId: "clip_a",
+				sourceStartSec: 1,
+				sourceEndSec: 3,
+			},
+		],
+	};
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		clearHistory();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		probeVideoDurationMock.mockReset();
+		probeVideoDimensionsMock.mockResolvedValue({ width: 1920, height: 1080 });
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	function seed(document: AxcutDocument) {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	}
+
+	it("keeps the background duration probe off the undo stack", async () => {
+		// Without `{ history: false }` on `probeAndCorrectClip`'s save, dropping a clip
+		// left `past` = [beforeDrop, dropWithPlaceholderClip]: the first Ctrl+Z snapped
+		// the clip back to a 60s placeholder instead of removing it.
+		seed({ ...sampleDoc, assets: [...sampleDoc.assets, unprobed] });
+		probeVideoDurationMock.mockResolvedValue(5);
+		const { result } = renderTimeline();
+
+		await act(async () => {
+			await result.current.insertClipAt("asset_3", 1);
+		});
+		await waitFor(() => {
+			const inserted = useProjectStore
+				.getState()
+				.document?.timeline.clips.find((c) => c.assetId === "asset_3");
+			expect(inserted?.sourceEndSec).toBe(5);
+		});
+
+		// One step for the drop the user made, none for the probe that corrected it.
+		expect(past).toHaveLength(1);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(1);
+	});
+
+	it("does not let a probe landing after an undo destroy the redo", async () => {
+		// The probe is detached from the drop, so it can resolve at any point — including
+		// after the user has already pressed Ctrl+Z. A recording save there ran
+		// `pushHistory`, which clears `future` on its way past: redo was gone, wiped by a
+		// write the user never made and never saw.
+		seed({ ...sampleDoc, assets: [...sampleDoc.assets, unprobed] });
+		let landProbe!: (durationSec: number) => void;
+		probeVideoDurationMock.mockReturnValue(
+			new Promise<number>((resolvePromise) => {
+				landProbe = resolvePromise;
+			}),
+		);
+		const { result } = renderTimeline();
+
+		await act(async () => {
+			await result.current.insertClipAt("asset_3", 1);
+		});
+		expect(past).toHaveLength(1);
+
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(1);
+		expect(future).toHaveLength(1);
+
+		await act(async () => {
+			landProbe(5);
+			// The clip is gone, so only the dimensions half of the probe still has
+			// anything to write — and that is exactly the write that used to be recorded.
+			await new Promise((resolveTick) => setTimeout(resolveTick, 0));
+		});
+
+		expect(past).toHaveLength(0);
+		expect(future).toHaveLength(1);
+		act(() => {
+			expect(redo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(2);
+	});
+
+	it("leaves no undo step behind a focus drag whose commit failed", async () => {
+		// The drag used to push its pre-drag document from the FIRST `setDocument`. When
+		// the commit then failed, `commitZoomFocus` restored that same document through
+		// `setState` — which cannot pop the entry. `past` was left holding a snapshot
+		// identical to what was on screen (a Ctrl+Z that visibly does nothing) and
+		// `future` had already been wiped by the push.
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+
+		// An edit and an undo, so there is a redo entry to lose.
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 5);
+		});
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(past).toHaveLength(0);
+		expect(future).toHaveLength(1);
+
+		const beforeDrag = useProjectStore.getState().document;
+		bridgeMocks.save.mockResolvedValue({ success: false, error: "disk full" });
+		act(() => {
+			result.current.updateZoomFocusLive("zoom_a", { cx: 0.2, cy: 0.3 });
+			result.current.updateZoomFocusLive("zoom_a", { cx: 0.25, cy: 0.35 });
+		});
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(useProjectStore.getState().document).toBe(beforeDrag);
+		expect(past).toHaveLength(0);
+		expect(future).toHaveLength(1);
+		act(() => {
+			expect(redo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0].depth).toBe(5);
+	});
+
+	it("records one undo step for a whole focus drag once it commits", async () => {
+		// The other half of the same change: moving the record to the commit must not
+		// lose it. Sixty pointermoves, one Ctrl+Z, back to where the drag started.
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+
+		act(() => {
+			for (let i = 0; i < 60; i++) {
+				result.current.updateZoomFocusLive("zoom_a", { cx: 0.2 + i / 1000, cy: 0.3 });
+			}
+		});
+		expect(past).toHaveLength(0);
+
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(past).toHaveLength(1);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0].focus).toEqual({
+			cx: 0.5,
+			cy: 0.5,
+		});
+	});
+});
+
+// What a drag's snapshot is allowed to still be holding once the drag is over.
+//
+// `zoomFocusRollbackRef` / `annotationRollbackRef` hold the document a drag started
+// from, kept until the commit that records it. A drag does not always reach a commit,
+// and both commits are reachable without one: the inspector's annotation `<textarea>`
+// writes live on every keystroke and commits `onBlur`, so closing the panel unmounts the
+// focused node before blur can fire (the region's own delete button is an `onClick`, which
+// runs after blur, so that route does not reach here) -- and `SliderCell` wires
+// mouseup/touchend/keyup straight to `onCommit` with no `onChange` in front, so a bare
+// click on a stroke-width thumb reaches `commitAnnotationChange()` carrying that
+// leftover. `NewEditorShell` builds ONE `useTimeline()` and hands it to the inspector,
+// so the abandonable live write and the bare commit share an instance.
+describe("useTimeline drag snapshots", () => {
+	const docWithRegions: AxcutDocument = {
+		...sampleDoc,
+		zoomRanges: [
+			{
+				id: "zoom_a",
+				startMs: 1000,
+				endMs: 3000,
+				depth: 3,
+				focus: { cx: 0.5, cy: 0.5 },
+				focusMode: "manual",
+				clipId: "clip_a",
+				sourceStartSec: 1,
+				sourceEndSec: 3,
+			},
+		],
+		annotations: [
+			{
+				id: "ann_a",
+				startMs: 1000,
+				endMs: 3000,
+				clipId: "clip_a",
+				sourceStartSec: 1,
+				sourceEndSec: 3,
+				type: "text",
+				content: "before",
+				textContent: "",
+				position: { x: 50, y: 50 },
+				size: { width: 30, height: 20 },
+				style: {
+					color: "#ffffff",
+					backgroundColor: "transparent",
+					fontSize: 32,
+					fontFamily: "Inter",
+					fontWeight: "bold",
+					fontStyle: "normal",
+					textDecoration: "none",
+					textAlign: "center",
+					textAnimation: "none",
+				},
+				zIndex: 1,
+			},
+		],
+	};
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		clearHistory();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		probeVideoDimensionsMock.mockResolvedValue({ width: 1920, height: 1080 });
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: docWithRegions,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		clearHistory();
+		vi.clearAllMocks();
+	});
+
+	/** Two recording edits between the abandoned live write and the bare commit, so the
+	 *  stale snapshot is one the stack has already buried. */
+	async function twoZoomDepthEdits(result: { current: ReturnType<typeof useTimeline> }) {
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 4);
+		});
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 5);
+		});
+	}
+
+	it("does not hand a bare annotation commit a base the edits since have buried", async () => {
+		const { result } = renderTimeline();
+
+		// The keystrokes that never reach their `onBlur`.
+		act(() => result.current.updateAnnotationLive("ann_a", { content: "typed" }));
+		await twoZoomDepthEdits(result);
+		expect(past).toHaveLength(2);
+
+		// The bare click on a slider thumb.
+		await act(async () => {
+			await result.current.commitAnnotationChange();
+		});
+
+		// Same project, so nothing is cleared -- the cost is that one Ctrl+Z jumps over
+		// BOTH zoom edits and lands on the document the abandoned typing started from.
+		expect(past).toHaveLength(2);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		const doc = useProjectStore.getState().document;
+		expect(doc?.zoomRanges[0].depth).toBe(4);
+		expect(doc?.annotations[0].content).toBe("typed");
+	});
+
+	it("does not restore a buried document when a bare annotation commit fails", async () => {
+		// The worse half: `rollback` is used as a DOCUMENT here, not only as a
+		// `historyBase`, so a failed bare commit wrote the stale snapshot back into the
+		// store and both zoom edits were silently gone.
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateAnnotationLive("ann_a", { content: "typed" }));
+		await twoZoomDepthEdits(result);
+
+		const onScreen = useProjectStore.getState().document;
+		bridgeMocks.save.mockResolvedValueOnce({ success: false, error: "disk full" });
+		await act(async () => {
+			await result.current.commitAnnotationChange();
+		});
+
+		expect(useProjectStore.getState().document).toBe(onScreen);
+		expect(onScreen?.zoomRanges[0].depth).toBe(5);
+		expect(onScreen?.annotations[0].content).toBe("typed");
+	});
+
+	it("does not hand a bare focus commit a base the edits since have buried", async () => {
+		// `ZoomFocusOverlay.handlePointerDown` sets `draggingRef` BEFORE its live write,
+		// and that write returns early on a zero-size overlay rect -- so `endDrag` fires
+		// `commitZoomFocus()` with nothing in front of it.
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+		await twoZoomDepthEdits(result);
+		expect(past).toHaveLength(2);
+
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(past).toHaveLength(2);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		const doc = useProjectStore.getState().document;
+		expect(doc?.zoomRanges[0].depth).toBe(4);
+		expect(doc?.zoomRanges[0].focus).toEqual({ cx: 0.8, cy: 0.2 });
+	});
+
+	it("does not restore a buried document when a bare focus commit fails", async () => {
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+		await twoZoomDepthEdits(result);
+
+		const onScreen = useProjectStore.getState().document;
+		bridgeMocks.save.mockResolvedValueOnce({ success: false, error: "disk full" });
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(useProjectStore.getState().document).toBe(onScreen);
+		expect(onScreen?.zoomRanges[0].depth).toBe(5);
+	});
+
+	it("still records the pre-drag document when an annotation drag reaches its commit", async () => {
+		// The guard must not cost the feature it guards: a drag that ends the way a drag
+		// normally ends is still ONE undo step, back to before it.
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateAnnotationLive("ann_a", { content: "ty" }));
+		act(() => result.current.updateAnnotationLive("ann_a", { content: "typed" }));
+		await act(async () => {
+			await result.current.commitAnnotationChange();
+		});
+
+		expect(past).toHaveLength(1);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.annotations[0].content).toBe("before");
 	});
 });

@@ -354,6 +354,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.on("menu-save-project-as", listener);
 		return () => ipcRenderer.removeListener("menu-save-project-as", listener);
 	},
+	// The Edit menu's Undo/Redo. On macOS this is the ONLY way Cmd+Z reaches the
+	// renderer: AppKit matches the menu's key equivalent before the key event is
+	// delivered to the web contents, so the document-level keydown handler never
+	// runs. See `electron/edit-menu.ts`.
+	onMenuUndo: (callback: () => void) => {
+		const listener = () => callback();
+		ipcRenderer.on("menu-undo", listener);
+		return () => ipcRenderer.removeListener("menu-undo", listener);
+	},
+	onMenuRedo: (callback: () => void) => {
+		const listener = () => callback();
+		ipcRenderer.on("menu-redo", listener);
+		return () => ipcRenderer.removeListener("menu-redo", listener);
+	},
 	quitApp: () => {
 		ipcRenderer.send("app-quit");
 	},
