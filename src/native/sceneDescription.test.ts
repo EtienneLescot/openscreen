@@ -91,6 +91,7 @@ function makeDoc(
 		},
 		annotations: overrides.annotations ?? [],
 		zoomRanges: overrides.zoomRanges ?? [],
+		cursorMotionRegions: overrides.cursorMotionRegions ?? [],
 		legacyEditor: overrides.legacyEditor ?? null,
 	};
 }
@@ -1822,5 +1823,64 @@ describe("buildSceneDescription.captions", () => {
 		// The text colour is independently chosen via ColorField (hex); the background is the
 		// only piece that goes through the opacity-combining path.
 		expect(text?.color).toBe("#ffffff");
+	});
+});
+
+// --- cursor motion ---------------------------------------------------------
+
+describe("buildSceneDescription.cursor.motion", () => {
+	const region = {
+		id: "cm_1",
+		startMs: 4000,
+		endMs: 6000,
+		clipId: "c1",
+		assetId: "a1",
+		// The clip starts at source 3s, so the region's SOURCE span (3.5..5.5) is
+		// deliberately different from its virtual span (4..6). That difference is the
+		// whole point of these assertions.
+		sourceStartSec: 3.5,
+		sourceEndSec: 5.5,
+		startPoint: { cx: 0.1, cy: 0.2 },
+		endPoint: { cx: 0.8, cy: 0.9 },
+		controlPoint: { cx: 0.4, cy: 0.3 },
+		startAnchor: "rest" as const,
+		endAnchor: "click" as const,
+		segmentKind: "move" as const,
+		preset: "arc" as const,
+		speed: 2,
+		cycles: 3,
+		easing: "ease-out" as const,
+	};
+
+	it("emits the SOURCE span, not the timeline one", () => {
+		// `CursorTrack::with_motion` applies these to the cursor track, which is
+		// loaded per asset with its own offset already removed. Emitting virtual time
+		// here would drift the whole path by however much sits before the clip —
+		// silently, and only in projects that have anything before it.
+		const scene = buildSceneDescription(makeDoc({ cursorMotionRegions: [region] }));
+		expect(scene.cursor.motion).toHaveLength(1);
+		expect(scene.cursor.motion?.[0]).toMatchObject({ startSec: 3.5, endSec: 5.5 });
+	});
+
+	it("hands the geometry over resolved, in the compositor's own vocabulary", () => {
+		const scene = buildSceneDescription(makeDoc({ cursorMotionRegions: [region] }));
+		expect(scene.cursor.motion?.[0]).toEqual({
+			id: "cm_1",
+			startSec: 3.5,
+			endSec: 5.5,
+			startPoint: { cx: 0.1, cy: 0.2 },
+			endPoint: { cx: 0.8, cy: 0.9 },
+			controlPoint: { cx: 0.4, cy: 0.3 },
+			preset: "arc",
+			cycles: 3,
+			speed: 2,
+			easing: "ease-out",
+		});
+	});
+
+	it("emits an empty list for a project that never opened the feature", () => {
+		// Absent or empty means "play the recorded trajectory", which is what every
+		// existing project must keep doing.
+		expect(buildSceneDescription(makeDoc()).cursor.motion).toEqual([]);
 	});
 });

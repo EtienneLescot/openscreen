@@ -4,9 +4,11 @@ import {
 	Loader2,
 	Maximize2,
 	MessageSquare,
+	Pause,
 	Pencil,
 	Scissors,
 	Sparkles,
+	Spline,
 	SplitSquareHorizontal,
 	Trash2,
 	Wand2,
@@ -37,13 +39,17 @@ import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
+import { toCursorMotionSamples } from "@/lib/ai-edition/timeline/cursorMotionRegions";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
 	newRegionDurationSec,
 	setTimelineScale,
 } from "@/lib/ai-edition/timeline/newRegionDuration";
 import { ventilateSpanAcrossClips } from "@/lib/ai-edition/timeline/region-ventilation";
-import { coalesceRegionsForRuler } from "@/lib/ai-edition/timeline/timelineMap";
+import {
+	coalesceRegionsForRuler,
+	resolveNativePosition,
+} from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	coalescedTrimGroups,
 	resolveTimelineSpanToTrim,
@@ -54,6 +60,7 @@ import {
 	buildAutoZoomSuggestionsForClips,
 } from "@/lib/ai-edition/timeline/zoom-suggestions";
 import { nativeBridgeClient } from "@/native/client";
+import { resolveVisibleClips } from "@/native/sceneDescription";
 import { TransportBar } from "../TransportBar";
 import type { VideoSource } from "../VirtualPreview";
 import styles from "./EditorShellV4.module.css";
@@ -337,12 +344,15 @@ const ClipWaveform = memo(function ClipWaveform({
 
 interface LanePill {
 	id: string;
-	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen";
+	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen" | "cursorMotion";
 	start: number;
 	end: number;
 	label: string;
 	/** Underlying row ids this pill represents — >1 for a coalesced trim group. */
 	sourceIds: string[];
+	/** A cursor-motion HOLD: the pointer stays where it stopped. Drawn quieter than
+	 *  a move because there is no path in it to direct — see `laneCursorHold`. */
+	quiet?: boolean;
 }
 
 export function V4Timeline({
@@ -509,6 +519,30 @@ export function V4Timeline({
 		label: `${(p.member.customScale ?? ZOOM_DEPTH_SCALES[p.member.depth]).toFixed(2)}×`,
 		sourceIds: p.ids,
 	}));
+	// Cursor motion is the one lane that does NOT coalesce. Everywhere else, two
+	// touching regions with equal properties are the same effect and merging them
+	// is what makes a ventilated region read as one pill. Here they are two
+	// SECTIONS, and being individually selectable is the whole feature: an editor
+	// tunes one move, walks to the next, tunes that one. Merging the two moves
+	// that happen to share a preset would silently take that away — and it is the
+	// state a fresh auto-split is always in, since every section starts
+	// `recorded` at 1x.
+	const cursorMotionPills: LanePill[] = (tl.cursorMotionRegions ?? []).map((region) => ({
+		id: region.id,
+		kind: "cursorMotion" as const,
+		start: region.startMs / 1000,
+		end: region.endMs / 1000,
+		// The speed rides on the label because it is the property with no other
+		// visible tell: a preset shows itself in the preview path, a 3x does not.
+		label:
+			region.segmentKind === "hold"
+				? t("cursorMotion.segmentKinds.hold")
+				: `${t(`cursorMotion.presets.${region.preset}`)}${
+						region.speed === 1 ? "" : ` ${region.speed.toFixed(1)}×`
+					}`,
+		sourceIds: [region.id],
+		quiet: region.segmentKind === "hold",
+	}));
 	// trims: content-free (no per-instance text/settings), so touching rows —
 	// inevitable once a trim is ventilated across a clip boundary — are
 	// coalesced into one pill. This is what makes growing a trim across a
@@ -665,6 +699,12 @@ export function V4Timeline({
 			e.preventDefault();
 			e.stopPropagation();
 			tl.selectRegion(pill.kind, pill.id, { additive: e.shiftKey });
+			// A cursor motion section selects but does not drag. Its two ends are not
+			// a span someone chose — they are a rest, a click, or a cut, each pinned to
+			// a POINT the recording puts the pointer at. Sliding the section would keep
+			// the anchors and move the times, so the path would start where the cursor
+			// no longer is. Re-splitting is how you change these boundaries.
+			if (pill.kind === "cursorMotion") return;
 			// Scale drag deltas against the canvas (full zoomed timeline) width, so a
 			// drag tracks the cursor exactly regardless of padding, scrollbar or zoom.
 			const el = canvasRef.current;
@@ -892,25 +932,37 @@ export function V4Timeline({
 		transform: `translateX(${(-nav.start * 100).toFixed(3)}%)`,
 	} as const;
 
-	const laneOf = (kind: LanePill["kind"]) =>
-		kind === "annotation"
+	const laneOf = (pill: LanePill) =>
+		pill.kind === "annotation"
 			? styles.laneAnnotation
-			: kind === "speed"
+			: pill.kind === "speed"
 				? styles.laneSpeed
-				: kind === "trim"
+				: pill.kind === "trim"
 					? styles.laneTrim
-					: kind === "cameraFullscreen"
+					: pill.kind === "cameraFullscreen"
 						? styles.laneCameraFullscreen
-						: styles.laneZoom;
-	const pillIcon = (kind: LanePill["kind"]) =>
-		kind === "annotation" ? (
+						: pill.kind === "cursorMotion"
+							? pill.quiet
+								? styles.laneCursorHold
+								: styles.laneCursorMotion
+							: styles.laneZoom;
+	const pillIcon = (pill: LanePill) =>
+		pill.kind === "annotation" ? (
 			<MessageSquare size={11} />
-		) : kind === "speed" ? (
+		) : pill.kind === "speed" ? (
 			<Clock size={11} />
-		) : kind === "trim" ? (
+		) : pill.kind === "trim" ? (
 			<Scissors size={11} />
-		) : kind === "cameraFullscreen" ? (
+		) : pill.kind === "cameraFullscreen" ? (
 			<Maximize2 size={11} />
+		) : pill.kind === "cursorMotion" ? (
+			// A hold is the absence of movement, so it gets the pause glyph rather
+			// than a dimmer copy of the path one — the lane already dims it.
+			pill.quiet ? (
+				<Pause size={11} />
+			) : (
+				<Spline size={11} />
+			)
 		) : (
 			<ZoomIn size={11} />
 		);
@@ -1081,6 +1133,56 @@ export function V4Timeline({
 		}
 	}, [videoSources, clips, tl, t]);
 
+	// Cursor motion — build the sections from the playhead to the next recorded
+	// click. Unlike auto-zoom above, this reads the RECORDING data rather than the
+	// position telemetry: the split points are clicks, and only the native cursor
+	// sampler records those. A capture with position-only telemetry (the fallback
+	// adapter, or a platform without the helper) therefore has nothing to split on,
+	// which is one of the three ways this can legitimately find nothing.
+	const [cursorMotionBusy, setCursorMotionBusy] = useState(false);
+	const runCursorMotion = useCallback(async () => {
+		const state = useProjectStore.getState();
+		const doc = state.document;
+		// Which recording's telemetry to read is decided by the clip UNDER THE
+		// PLAYHEAD, not by the primary asset: in a multi-clip project those are
+		// different recordings, and reading the wrong one produces sections whose
+		// anchors sit where that other capture's cursor was.
+		const position = doc
+			? resolveNativePosition(state.currentTimeSec ?? 0, resolveVisibleClips(doc), clips)
+			: null;
+		const source = position
+			? videoSources.find((s) => s.id === position.clip.assetId)
+			: videoSources[0];
+		if (!source) {
+			toast.error(t("toolbar.importRecordingFirst"));
+			return;
+		}
+		setCursorMotionBusy(true);
+		try {
+			const data = await nativeBridgeClient.cursor.getRecordingData(fromFileUrl(source.src));
+			const samples = data?.samples ?? [];
+			if (samples.length === 0) {
+				toast.info(t("cursorMotion.noCursorData"));
+				return;
+			}
+			const added = await tl.addCursorMotion(toCursorMotionSamples(samples));
+			// Nothing added has exactly one cause worth naming: there is no click left
+			// to reach. Saying "no cursor data" there would send the user looking for a
+			// recording problem they do not have.
+			if (added === 0) {
+				toast.info(t("cursorMotion.noFollowingClick"));
+				return;
+			}
+			toast.success(t("cursorMotion.createdSegments", { count: added }));
+		} catch (err) {
+			toast.error(t("cursorMotion.failed"), {
+				description: err instanceof Error ? err.message : String(err),
+			});
+		} finally {
+			setCursorMotionBusy(false);
+		}
+	}, [clips, videoSources, tl, t]);
+
 	// Auto-enhance option 2 — hand a generic prompt to the AI agent (smart
 	// zooms + cuts) via the chat prompt-bus. The chat panel owns the outcome
 	// toast: submitting is not the same as being accepted (no usable provider
@@ -1133,12 +1235,16 @@ export function V4Timeline({
 		// The box is exactly as long as the effect is; only what fits INSIDE it
 		// varies with the zoom.
 		const { compact, roomForLabel } = pillAffordance(durSec, pxPerSec);
+		// No edge handles on a cursor motion section: its boundaries are anchors the
+		// recording placed, not a span to stretch (see `startPillDrag`). Showing grab
+		// strips that refuse to grab is worse than showing none.
+		const resizable = p.kind !== "cursorMotion";
 		return (
 			<div
 				key={seg.key}
 				role={seg.interactive ? "button" : undefined}
 				tabIndex={seg.interactive ? 0 : undefined}
-				className={`${styles.lanePill} ${laneOf(p.kind)}${
+				className={`${styles.lanePill} ${laneOf(p)}${
 					compact ? ` ${styles.lanePillCompact}` : ""
 				}${seg.interactive && isPillSelected(p.id) ? ` ${styles.lanePillSel}` : ""}`}
 				style={{
@@ -1160,7 +1266,7 @@ export function V4Timeline({
 				onPointerDown={seg.interactive ? (e) => startPillDrag(e, p, "move") : undefined}
 				title={p.label}
 			>
-				{seg.interactive ? (
+				{seg.interactive && resizable ? (
 					<span
 						className={styles.lanePillHandle}
 						style={{ left: compact ? -PILL_HANDLE_OUT_PX : 0 }}
@@ -1169,11 +1275,11 @@ export function V4Timeline({
 				) : null}
 				{seg.showContent && roomForLabel ? (
 					<>
-						{pillIcon(p.kind)}
+						{pillIcon(p)}
 						<span className={styles.lanePillLabel}>{p.label}</span>
 					</>
 				) : null}
-				{seg.interactive ? (
+				{seg.interactive && resizable ? (
 					<span
 						className={styles.lanePillHandle}
 						style={{ right: compact ? -PILL_HANDLE_OUT_PX : 0 }}
@@ -1374,6 +1480,20 @@ export function V4Timeline({
 						<button
 							type="button"
 							className={styles.tlToolBtn}
+							title={t("buttons.addCursorMotion")}
+							aria-label={t("buttons.addCursorMotion")}
+							disabled={cursorMotionBusy}
+							onClick={() => void runCursorMotion()}
+						>
+							{cursorMotionBusy ? (
+								<Loader2 size={15} className={styles.spin} />
+							) : (
+								<Spline size={15} />
+							)}
+						</button>
+						<button
+							type="button"
+							className={styles.tlToolBtn}
 							title={t("buttons.addCameraFullscreen")}
 							aria-label={t("buttons.addCameraFullscreen")}
 							disabled={!hasAnyCamera}
@@ -1473,6 +1593,14 @@ export function V4Timeline({
 								</div>
 								<div className={styles.tlLane}>{renderPills(trimPills, t("hints.pressTrim"))}</div>
 								<div className={styles.tlLane}>{renderPills(zoomPills, t("hints.pressZoom"))}</div>
+								<div className={styles.tlLane}>
+									{/* No shortcut hint here, unlike every lane above: this one cannot be
+									    filled by a keystroke at an arbitrary playhead. It needs recorded
+									    cursor telemetry and a click after the playhead to reach, so the
+									    toolbar button is the only entry point and it says why when it
+									    refuses. */}
+									{renderPills(cursorMotionPills, t("hints.cursorMotionEmpty"))}
+								</div>
 								<div className={styles.tlLane}>
 									{/* Advertising "Press C" on a project with no webcam invites a keystroke
 									    that `addCameraFullscreen` now refuses (#353). The toolbar button is

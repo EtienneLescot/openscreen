@@ -1,7 +1,9 @@
 import {
 	AudioLines,
 	Captions as CaptionsIcon,
+	ChevronLeft,
 	ChevronRight,
+	Copy,
 	FileText,
 	Layout as LayoutIcon,
 	Maximize2,
@@ -9,6 +11,7 @@ import {
 	Pencil,
 	Scissors,
 	SlidersHorizontal,
+	Spline,
 	Trash2,
 	X,
 	ZoomIn,
@@ -39,6 +42,16 @@ import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { formatSeconds } from "@/lib/ai-edition/timeline/format";
 import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
+import {
+	CURSOR_MOTION_CYCLES_MAX,
+	CURSOR_MOTION_CYCLES_MIN,
+	CURSOR_MOTION_EASINGS,
+	CURSOR_MOTION_PRESETS,
+	CURSOR_MOTION_SPEED_MAX,
+	CURSOR_MOTION_SPEED_MIN,
+	type CursorMotionEasing,
+	type CursorMotionPreset,
+} from "@/lib/cursor/cursorMotion";
 import { CaptionsPane } from "../CaptionsPane";
 import { ColorField } from "../ColorField";
 import {
@@ -299,6 +312,53 @@ function paneRow(label: string, control: React.ReactNode) {
 			<span style={{ fontSize: 12.5, color: "var(--fg-2)", fontWeight: 500 }}>{label}</span>
 			{control}
 		</div>
+	);
+}
+
+// The preset glyphs, path data unchanged from #113 where the shapes were drawn.
+// A preset is a SHAPE, and a row of words asks the reader to imagine six of them;
+// the picture is the control. `recorded` draws a wobble on purpose — it is the
+// captured trace, the one shape the editor did not choose.
+const CURSOR_MOTION_PREVIEW_PATHS: Record<CursorMotionPreset, string> = {
+	recorded: "M4 18 C12 8 18 21 27 11 S38 4 44 9",
+	straight: "M4 18 L44 6",
+	arc: "M4 18 Q24 1 44 18",
+	wave: "M4 13 C10 2 16 2 22 13 S34 24 44 13",
+	loop: "M4 16 C14 2 34 2 32 15 C30 25 14 23 18 13 C22 5 36 8 44 16",
+	overshoot: "M4 18 C24 18 37 5 46 8 C42 8 40 10 44 14",
+};
+const CURSOR_MOTION_PREVIEW_END_Y: Record<CursorMotionPreset, number> = {
+	recorded: 9,
+	straight: 6,
+	arc: 18,
+	wave: 13,
+	loop: 16,
+	overshoot: 14,
+};
+// The speeds worth one click. The slider covers everything between them; these are
+// the values an editor actually reaches for, and hunting for "2.0" on a 0.1-step
+// slider is a worse way to get there.
+const CURSOR_MOTION_SPEED_PRESETS = [1, 1.5, 2, 3, 4] as const;
+
+function CursorMotionPresetGlyph({ preset }: { preset: CursorMotionPreset }) {
+	return (
+		<svg viewBox="0 0 48 26" style={{ width: "100%", height: 26 }} aria-hidden="true">
+			<path
+				d={CURSOR_MOTION_PREVIEW_PATHS[preset]}
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="2.4"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			/>
+			<circle
+				cx="4"
+				cy={preset === "wave" ? 13 : preset === "loop" ? 16 : 18}
+				r="2.4"
+				fill="currentColor"
+			/>
+			<circle cx="44" cy={CURSOR_MOTION_PREVIEW_END_Y[preset]} r="2.4" fill="currentColor" />
+		</svg>
 	);
 }
 
@@ -604,6 +664,291 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
 						{ts("zoom.deleteZoom")}
+					</button>
+				</div>
+			</div>
+		);
+	}
+
+	if (selection.kind === "cursorMotion") {
+		const regions = tl.cursorMotionRegions ?? [];
+		const region = regions.find((r) => r.id === selection.id);
+		if (!region) return null;
+		// Sections in timeline order, so "previous / next" walks the recording rather
+		// than the order they happen to sit in the document.
+		const ordered = [...regions].sort((a, b) => a.startMs - b.startMs);
+		const index = ordered.findIndex((r) => r.id === region.id);
+		const step = (delta: number) => {
+			const target = ordered[index + delta];
+			if (target) tl.selectRegion("cursorMotion", target.id);
+		};
+		const isHold = region.segmentKind === "hold";
+		return (
+			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+				{paneHeader(<Spline size={15} />, ts("cursorMotion.title"), onClose, tc("actions.close"))}
+				<div style={bodyStyle}>
+					<div
+						style={{
+							display: "grid",
+							gridTemplateColumns: "32px 1fr 32px",
+							alignItems: "center",
+							gap: 6,
+						}}
+					>
+						<button
+							type="button"
+							onClick={() => step(-1)}
+							disabled={index <= 0}
+							title={ts("cursorMotion.previousSection")}
+							aria-label={ts("cursorMotion.previousSection")}
+							style={{
+								...secondaryBtnStyle,
+								padding: 0,
+								height: 30,
+								opacity: index <= 0 ? 0.35 : 1,
+							}}
+						>
+							<ChevronLeft size={14} />
+						</button>
+						<span
+							style={{
+								textAlign: "center",
+								fontSize: 12,
+								fontWeight: 600,
+								color: "var(--fg-2)",
+								fontVariantNumeric: "tabular-nums",
+							}}
+						>
+							{ts("cursorMotion.sectionCounter", {
+								current: index + 1,
+								total: ordered.length,
+							})}
+						</span>
+						<button
+							type="button"
+							onClick={() => step(1)}
+							disabled={index < 0 || index >= ordered.length - 1}
+							title={ts("cursorMotion.nextSection")}
+							aria-label={ts("cursorMotion.nextSection")}
+							style={{
+								...secondaryBtnStyle,
+								padding: 0,
+								height: 30,
+								opacity: index >= ordered.length - 1 ? 0.35 : 1,
+							}}
+						>
+							<ChevronRight size={14} />
+						</button>
+					</div>
+
+					{isHold ? (
+						// A hold has no path, so every control below would be inert on it. Say
+						// what the section IS instead of showing six shapes that cannot apply —
+						// this is the section that keeps the cursor still, and that is the whole
+						// reason the rests were split out in the first place.
+						<p style={{ margin: 0, font: "400 11.5px/1.5 var(--font-sans)", color: "var(--fg-2)" }}>
+							{ts("cursorMotion.holdDescription")}
+						</p>
+					) : (
+						<>
+							<div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+								<span style={{ fontSize: 12.5, color: "var(--fg-2)", fontWeight: 500 }}>
+									{ts("cursorMotion.preset")}
+								</span>
+								<div
+									style={{
+										display: "grid",
+										gridTemplateColumns: "repeat(3, 1fr)",
+										gap: 6,
+									}}
+								>
+									{CURSOR_MOTION_PRESETS.map((preset) => {
+										const active = region.preset === preset;
+										return (
+											<button
+												key={preset}
+												type="button"
+												aria-pressed={active}
+												onClick={() => void tl.updateCursorMotionSettings(region.id, { preset })}
+												title={ts(`cursorMotion.presets.${preset}`)}
+												style={{
+													display: "flex",
+													flexDirection: "column",
+													alignItems: "center",
+													gap: 2,
+													padding: "6px 4px",
+													borderRadius: 9,
+													border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+													background: active ? "var(--accent-soft)" : "transparent",
+													color: active ? "var(--accent)" : "var(--fg-2)",
+													cursor: "pointer",
+												}}
+											>
+												<CursorMotionPresetGlyph preset={preset} />
+												<span style={{ fontSize: 10, fontWeight: 600 }}>
+													{ts(`cursorMotion.presets.${preset}`)}
+												</span>
+											</button>
+										);
+									})}
+								</div>
+							</div>
+
+							{/* `recorded` is inert: it plays the captured trace, so speed, turns and
+							    timing have nothing to reshape. Hiding them is the honest reading of
+							    "this section is unedited" — greying six controls says the same thing
+							    at four times the visual weight. */}
+							{region.preset !== "recorded" ? (
+								<>
+									<div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+										{paneRow(
+											ts("cursorMotion.speed"),
+											<span
+												style={{
+													fontSize: 12.5,
+													fontWeight: 600,
+													color: "var(--accent)",
+													fontVariantNumeric: "tabular-nums",
+												}}
+											>
+												{region.speed.toFixed(1)}×
+											</span>,
+										)}
+										<div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4 }}>
+											{CURSOR_MOTION_SPEED_PRESETS.map((speed) => (
+												<button
+													key={speed}
+													type="button"
+													aria-pressed={region.speed === speed}
+													onClick={() => void tl.updateCursorMotionSettings(region.id, { speed })}
+													style={{
+														...secondaryBtnStyle,
+														padding: "5px 0",
+														fontSize: 11,
+														...(region.speed === speed
+															? {
+																	borderColor: "var(--accent)",
+																	background: "var(--accent-soft)",
+																	color: "var(--accent)",
+																}
+															: {}),
+													}}
+												>
+													{speed}×
+												</button>
+											))}
+										</div>
+										<input
+											type="range"
+											min={CURSOR_MOTION_SPEED_MIN}
+											max={CURSOR_MOTION_SPEED_MAX}
+											step={0.1}
+											value={region.speed}
+											onChange={(e) =>
+												void tl.updateCursorMotionSettings(region.id, {
+													speed: Number(e.target.value),
+												})
+											}
+											style={{ width: "100%", accentColor: "var(--accent)" }}
+										/>
+										<p
+											style={{
+												margin: 0,
+												font: "400 11px/1.45 var(--font-sans)",
+												color: "var(--fg-2)",
+											}}
+										>
+											{ts("cursorMotion.speedHint")}
+										</p>
+									</div>
+
+									{region.preset === "wave" || region.preset === "loop" ? (
+										<div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+											{paneRow(
+												ts("cursorMotion.cycles"),
+												<span
+													style={{
+														fontSize: 12.5,
+														fontWeight: 600,
+														color: "var(--accent)",
+														fontVariantNumeric: "tabular-nums",
+													}}
+												>
+													{region.cycles}
+												</span>,
+											)}
+											<input
+												type="range"
+												min={CURSOR_MOTION_CYCLES_MIN}
+												max={CURSOR_MOTION_CYCLES_MAX}
+												step={1}
+												value={region.cycles}
+												onChange={(e) =>
+													void tl.updateCursorMotionSettings(region.id, {
+														cycles: Number(e.target.value),
+													})
+												}
+												style={{ width: "100%", accentColor: "var(--accent)" }}
+											/>
+										</div>
+									) : null}
+
+									{paneRow(
+										ts("cursorMotion.easing"),
+										<select
+											value={region.easing}
+											onChange={(e) =>
+												void tl.updateCursorMotionSettings(region.id, {
+													easing: e.target.value as CursorMotionEasing,
+												})
+											}
+											style={selectStyle}
+										>
+											{CURSOR_MOTION_EASINGS.map((easing) => (
+												<option key={easing} value={easing}>
+													{ts(`cursorMotion.easings.${easing}`)}
+												</option>
+											))}
+										</select>,
+									)}
+
+									<button
+										type="button"
+										onClick={() => {
+											void tl.applyCursorMotionToAllMoves(region.id).then((count) => {
+												if (count > 0) toast.success(ts("cursorMotion.appliedToAllMoves"));
+											});
+										}}
+										style={secondaryBtnStyle}
+									>
+										<Copy size={14} />
+										{ts("cursorMotion.applyToAllMoves")}
+									</button>
+								</>
+							) : null}
+						</>
+					)}
+
+					<p style={{ margin: 0, font: "400 11px/1.45 var(--font-sans)", color: "var(--fg-2)" }}>
+						{ts("cursorMotion.anchorHint")}
+					</p>
+
+					<button
+						type="button"
+						onClick={() => {
+							void tl.splitCursorMotionAtPlayhead(region.id).then((ok) => {
+								if (!ok) toast.info(ts("cursorMotion.splitOutsideRegion"));
+							});
+						}}
+						style={secondaryBtnStyle}
+					>
+						<Scissors size={14} />
+						{ts("cursorMotion.splitAtPlayhead")}
+					</button>
+
+					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
+						<Trash2 size={14} />
+						{ts("cursorMotion.delete")}
 					</button>
 				</div>
 			</div>

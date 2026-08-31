@@ -22,6 +22,7 @@
 
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { fromFileUrl } from "@/components/video-editor/projectPersistence";
 import {
 	type CameraFullscreenRegion,
 	type CropRegion,
@@ -35,6 +36,7 @@ import { resolveAspectRatioValue } from "@/lib/ai-edition/document/outputFormat"
 import type {
 	AxcutAnnotationRegion,
 	AxcutClip,
+	AxcutCursorMotionRegion,
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
@@ -53,8 +55,10 @@ import {
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { computeCameraFullscreenProgress } from "@/lib/zoomMath/cameraFullscreenUtils";
+import { useCursorTelemetry } from "@/native/hooks/useCursorTelemetry";
 import { clamp, clamp01 } from "@/utils/math";
 import { AnnotationLayer } from "./AnnotationLayer";
+import { CursorMotionPathOverlay } from "./CursorMotionPathOverlay";
 import { NativeCompositorOverlay } from "./NativeCompositorOverlay";
 import styles from "./NewEditorShell.module.css";
 import { type VideoSource, VirtualPreview } from "./VirtualPreview";
@@ -73,6 +77,10 @@ interface PreviewCanvasProps {
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;
+	cursorMotionRegions?: AxcutCursorMotionRegion[];
+	selectedCursorMotionId?: string | null;
+	onCursorMotionControlPointChange?: (id: string, point: { cx: number; cy: number }) => void;
+	onCursorMotionControlPointCommit?: () => void;
 	annotationRegions?: AxcutAnnotationRegion[];
 	selectedAnnotationId?: string | null;
 	onSelectAnnotation?: (id: string) => void;
@@ -387,6 +395,23 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 
 	const isPipGrab = settings.webcamLayoutPreset === "picture-in-picture";
 
+	// Telemetry for the recorded-trace comparison line. Loaded from the SELECTED
+	// section's own asset, not the primary one: in a multi-clip project those differ,
+	// and comparing an edited path against another recording's trace would be worse
+	// than showing no comparison at all.
+	const selectedCursorMotion = props.selectedCursorMotionId
+		? (props.cursorMotionRegions?.find((r) => r.id === props.selectedCursorMotionId) ?? null)
+		: null;
+	// The recorded trace is loaded through the same hook the cursor preview layer
+	// uses, keyed by the SELECTED section's asset. `useCursorTelemetry` takes null
+	// as "nothing to load" and returns an empty list, so nothing is fetched while no
+	// section is selected — which is the common case.
+	const cursorMotionSource = selectedCursorMotion?.assetId
+		? (props.videoSources.find((v) => v.id === selectedCursorMotion.assetId) ?? null)
+		: null;
+	const { samples: cursorMotionTelemetry } = useCursorTelemetry(
+		cursorMotionSource ? fromFileUrl(cursorMotionSource.src) : null,
+	);
 	const selectedZoomRegion = props.selectedZoomRegionId
 		? (props.zoomRegions?.find((z) => z.id === props.selectedZoomRegionId) ?? null)
 		: null;
@@ -429,6 +454,14 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 							/>
 						);
 					})()}
+					{selectedCursorMotion && props.onCursorMotionControlPointChange ? (
+						<CursorMotionPathOverlay
+							region={selectedCursorMotion}
+							telemetry={cursorMotionTelemetry}
+							onControlPointChange={props.onCursorMotionControlPointChange}
+							onControlPointCommit={props.onCursorMotionControlPointCommit}
+						/>
+					) : null}
 					{selectedZoomRegion && props.onZoomFocusChange ? (
 						<ZoomFocusOverlay
 							region={selectedZoomRegion}

@@ -9,14 +9,16 @@
 		"addTrim": "Thêm Cắt (T)",
 		"addAnnotation": "Thêm Chú thích (A)",
 		"addSpeed": "Thêm Tốc độ (S)",
-		"addCameraFullscreen": "Thêm Camera Toàn màn hình (C)"
+		"addCameraFullscreen": "Thêm Camera Toàn màn hình (C)",
+		"addCursorMotion": "Split cursor path into editable sections"
 	},
 	"hints": {
 		"pressZoom": "Nhấn Z để thêm thu phóng",
 		"pressTrim": "Nhấn T để thêm cắt",
 		"pressAnnotation": "Nhấn A để thêm chú thích",
 		"pressSpeed": "Nhấn S để thêm tốc độ",
-		"pressCameraFullscreen": "Nhấn C để thêm một đoạn Camera Toàn màn hình"
+		"pressCameraFullscreen": "Nhấn C để thêm một đoạn Camera Toàn màn hình",
+		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
 	},
 	"labels": {
 		"pan": "Xoay",
@@ -86,5 +88,23 @@
 		"smartCutsNoAudio": "Media này không có âm thanh",
 		"smartCutsNoSpeech": "Không phát hiện giọng nói",
 		"smartCutsFailed": "Phiên âm thất bại — thử lại trong Media"
+	},
+	"cursorMotion": {
+		"segmentKinds": {
+			"move": "Move",
+			"hold": "Hold"
+		},
+		"presets": {
+			"recorded": "Recorded",
+			"straight": "Straight",
+			"arc": "Arc",
+			"wave": "Wave",
+			"loop": "Loop",
+			"overshoot": "Overshoot"
+		},
+		"noCursorData": "This recording has no cursor data to direct.",
+		"noFollowingClick": "No recorded click after the playhead to move towards.",
+		"createdSegments": "Split the cursor path into {{count}} sections.",
+		"failed": "Could not read the cursor recording"
 	}
 }

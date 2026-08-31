@@ -870,6 +870,16 @@ export function NewEditorShell() {
 			return;
 		}
 
+		// A cursor motion region is a path between two RESOLVED points — the cursor's
+		// actual position at a rest or a recorded click. Pasting it at the playhead
+		// would draw that path between two places the cursor never was. The inspector's
+		// "apply to all move sections" is the operation that means what copy would mean
+		// here, and it copies the styling without the anchors.
+		if (sel.kind === "cursorMotion") {
+			toast.info("Cursor motion is tied to its anchors — use Apply to all moves instead");
+			return;
+		}
+
 		const source =
 			sel.kind === "zoom"
 				? tl.zoomRegions
@@ -1243,6 +1253,12 @@ export function NewEditorShell() {
 									selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
 									onZoomFocusChange={tl.updateZoomFocusLive}
 									onZoomFocusCommit={() => void tl.commitZoomFocus()}
+									cursorMotionRegions={tl.cursorMotionRegions}
+									selectedCursorMotionId={
+										tl.selection?.kind === "cursorMotion" ? tl.selection.id : null
+									}
+									onCursorMotionControlPointChange={tl.updateCursorMotionControlPointLive}
+									onCursorMotionControlPointCommit={() => void tl.commitCursorMotionControlPoint()}
 									annotationRegions={tl.annotationRegions}
 									selectedAnnotationId={
 										tl.selection?.kind === "annotation" ? tl.selection.id : null

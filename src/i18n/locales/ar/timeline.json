@@ -9,14 +9,16 @@
 		"addTrim": "إضافة قص (T)",
 		"addAnnotation": "إضافة شرح (A)",
 		"addSpeed": "إضافة سرعة (S)",
-		"addCameraFullscreen": "إضافة كاميرا كاملة الشاشة (C)"
+		"addCameraFullscreen": "إضافة كاميرا كاملة الشاشة (C)",
+		"addCursorMotion": "Split cursor path into editable sections"
 	},
 	"hints": {
 		"pressZoom": "اضغط Z لإضافة تكبير",
 		"pressTrim": "اضغط T لإضافة قص",
 		"pressAnnotation": "اضغط A لإضافة شرح",
 		"pressSpeed": "اضغط S لإضافة سرعة",
-		"pressCameraFullscreen": "اضغط C لإضافة مقطع كاميرا كاملة الشاشة"
+		"pressCameraFullscreen": "اضغط C لإضافة مقطع كاميرا كاملة الشاشة",
+		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
 	},
 	"labels": {
 		"pan": "تحريك",
@@ -86,5 +88,23 @@
 		"smartCutsNoAudio": "لا يحتوي هذا الملف على صوت",
 		"smartCutsNoSpeech": "لم يتم اكتشاف كلام",
 		"smartCutsFailed": "فشل النسخ — أعد المحاولة من قسم الوسائط"
+	},
+	"cursorMotion": {
+		"segmentKinds": {
+			"move": "Move",
+			"hold": "Hold"
+		},
+		"presets": {
+			"recorded": "Recorded",
+			"straight": "Straight",
+			"arc": "Arc",
+			"wave": "Wave",
+			"loop": "Loop",
+			"overshoot": "Overshoot"
+		},
+		"noCursorData": "This recording has no cursor data to direct.",
+		"noFollowingClick": "No recorded click after the playhead to move towards.",
+		"createdSegments": "Split the cursor path into {{count}} sections.",
+		"failed": "Could not read the cursor recording"
 	}
 }

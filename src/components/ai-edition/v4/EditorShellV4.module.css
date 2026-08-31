@@ -1496,6 +1496,20 @@
 	border-color: #a855f7;
 	background: rgba(168, 85, 247, 0.14);
 }
+/* Cursor motion sits on its own hue rather than borrowing the zoom accent: the two
+   lanes are adjacent and both describe where the frame is looking, so sharing a
+   colour would make them one band at a glance. */
+.laneCursorMotion {
+	border-color: #22d3ee;
+	background: rgba(34, 211, 238, 0.16);
+}
+/* A hold has no path to direct. It is drawn as the same colour turned down rather
+   than a neutral grey, so a run of sections still reads as one lane. */
+.laneCursorHold {
+	border-color: rgba(34, 211, 238, 0.4);
+	background: rgba(34, 211, 238, 0.06);
+	color: color-mix(in oklch, currentColor 65%, transparent);
+}
 .tlClips {
 	position: relative;
 	/* NOT a flex row. Clips are absolutely positioned by percentage of the

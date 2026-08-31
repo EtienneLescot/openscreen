@@ -9,14 +9,16 @@
 		"addTrim": "トリムを追加 (T)",
 		"addAnnotation": "注釈を追加 (A)",
 		"addSpeed": "再生速度を追加 (S)",
-		"addCameraFullscreen": "フルスクリーンカメラを追加 (C)"
+		"addCameraFullscreen": "フルスクリーンカメラを追加 (C)",
+		"addCursorMotion": "Split cursor path into editable sections"
 	},
 	"hints": {
 		"pressZoom": "Zキーを押してズームを追加",
 		"pressTrim": "Tキーを押してトリムを追加",
 		"pressAnnotation": "Aキーを押して注釈を追加",
 		"pressSpeed": "Sキーを押して再生速度を追加",
-		"pressCameraFullscreen": "Cキーを押してフルスクリーンカメラのセグメントを追加"
+		"pressCameraFullscreen": "Cキーを押してフルスクリーンカメラのセグメントを追加",
+		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
 	},
 	"labels": {
 		"pan": "移動",
@@ -86,5 +88,23 @@
 		"smartCutsNoAudio": "このメディアには音声がありません",
 		"smartCutsNoSpeech": "音声が検出されませんでした",
 		"smartCutsFailed": "文字起こしに失敗しました — メディアから再試行してください"
+	},
+	"cursorMotion": {
+		"segmentKinds": {
+			"move": "Move",
+			"hold": "Hold"
+		},
+		"presets": {
+			"recorded": "Recorded",
+			"straight": "Straight",
+			"arc": "Arc",
+			"wave": "Wave",
+			"loop": "Loop",
+			"overshoot": "Overshoot"
+		},
+		"noCursorData": "This recording has no cursor data to direct.",
+		"noFollowingClick": "No recorded click after the playhead to move towards.",
+		"createdSegments": "Split the cursor path into {{count}} sections.",
+		"failed": "Could not read the cursor recording"
 	}
 }

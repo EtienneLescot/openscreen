@@ -328,5 +328,37 @@
 		"outputGain": "輸出音量",
 		"reset": "重設音訊",
 		"help": "調整音訊輸出電平。它在預覽與匯出中的效果完全一致。"
+	},
+	"cursorMotion": {
+		"title": "Cursor Motion",
+		"preset": "Path preset",
+		"presets": {
+			"recorded": "Recorded",
+			"straight": "Straight",
+			"arc": "Arc",
+			"wave": "Wave",
+			"loop": "Loop",
+			"overshoot": "Overshoot"
+		},
+		"speed": "Movement speed",
+		"speedHint": "Higher speeds cover the distance early and settle near the target. The section still ends on the recorded click, at its original time.",
+		"cycles": "Turns",
+		"easing": "Timing",
+		"easings": {
+			"linear": "Linear",
+			"ease-in-out": "Smooth",
+			"ease-in": "Accelerate",
+			"ease-out": "Decelerate"
+		},
+		"anchorHint": "Sections start and end where the cursor stopped or clicked, so they cannot be dragged. Split one to move a boundary.",
+		"holdDescription": "The cursor stays where it stopped. Nothing to shape here — this section is what keeps it still while the moves around it are directed.",
+		"applyToAllMoves": "Apply to all move sections",
+		"appliedToAllMoves": "Preset, speed, turns and timing copied to every move section.",
+		"splitAtPlayhead": "Split at playhead",
+		"splitOutsideRegion": "Move the playhead inside this section to split it.",
+		"delete": "Delete Cursor Motion",
+		"previousSection": "Previous section",
+		"nextSection": "Next section",
+		"sectionCounter": "Section {{current}} / {{total}}"
 	}
 }

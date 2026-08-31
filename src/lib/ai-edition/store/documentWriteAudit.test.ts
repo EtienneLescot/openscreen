@@ -222,6 +222,13 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "addTrim", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addZoom", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addZoomsBulk", "save", "gesture"),
+	// Cursor motion. `addCursorMotion` writes several sections in one save, so the
+	// whole auto-split is one undo step — the same deal `addZoomsBulk` gets, and for
+	// the same reason: the user pressed one button.
+	w("src/lib/ai-edition/store/useTimeline.ts", "addCursorMotion", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "applyCursorMotionToAllMoves", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "splitCursorMotionAtPlayhead", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "updateCursorMotionSettings", "save", "gesture"),
 	// The two drag commits. One undo step per gesture, recorded on release and only
 	// if the write lands — `historyBase` carries the pre-drag document.
 	w("src/lib/ai-edition/store/useTimeline.ts", "commitAnnotationChange", "save", "gesture"),
@@ -231,6 +238,14 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "commitAnnotationChange", "state", "unrecorded"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "commitZoomFocus", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "commitZoomFocus", "state", "unrecorded"),
+	// The third drag commit, same shape as the two above: the cursor motion handle.
+	w("src/lib/ai-edition/store/useTimeline.ts", "commitCursorMotionControlPoint", "save", "gesture"),
+	w(
+		"src/lib/ai-edition/store/useTimeline.ts",
+		"commitCursorMotionControlPoint",
+		"state",
+		"unrecorded",
+	),
 	w("src/lib/ai-edition/store/useTimeline.ts", "duplicateClip", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "insertClipAt", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "moveClip", "save", "gesture"),
@@ -243,6 +258,12 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "setTrimEntries", "save", "gesture"),
 	// The live halves of the two drags.
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAnnotationLive", "set", "automatic"),
+	w(
+		"src/lib/ai-edition/store/useTimeline.ts",
+		"updateCursorMotionControlPointLive",
+		"set",
+		"automatic",
+	),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAnnotationSpan", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateCameraFullscreenSpan", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateSpeedSpan", "save", "gesture"),

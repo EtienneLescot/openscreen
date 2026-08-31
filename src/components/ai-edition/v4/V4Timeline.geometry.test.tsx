@@ -80,6 +80,7 @@ function renderTimeline(
 		speedRegions: [],
 		cameraFullscreenRegions: [],
 		zoomRegions: [],
+		cursorMotionRegions: [],
 		trimRanges: [],
 		selection: null,
 		multiSelection: [],

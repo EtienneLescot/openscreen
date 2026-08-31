@@ -9,14 +9,16 @@
 		"addTrim": "Добавить обрезку (T)",
 		"addAnnotation": "Добавить аннотацию (A)",
 		"addSpeed": "Изменить скорость (S)",
-		"addCameraFullscreen": "Добавить камеру на весь экран (C)"
+		"addCameraFullscreen": "Добавить камеру на весь экран (C)",
+		"addCursorMotion": "Split cursor path into editable sections"
 	},
 	"hints": {
 		"pressZoom": "Нажмите Z для добавления масштабирования",
 		"pressTrim": "Нажмите T для добавления обрезки",
 		"pressAnnotation": "Нажмите A для добавления аннотации",
 		"pressSpeed": "Нажмите S для изменения скорости",
-		"pressCameraFullscreen": "Нажмите C, чтобы добавить сегмент камеры на весь экран"
+		"pressCameraFullscreen": "Нажмите C, чтобы добавить сегмент камеры на весь экран",
+		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
 	},
 	"labels": {
 		"pan": "Панорамирование",
@@ -86,5 +88,23 @@
 		"smartCutsNoAudio": "В этом медиафайле нет звука",
 		"smartCutsNoSpeech": "Речь не обнаружена",
 		"smartCutsFailed": "Не удалось расшифровать — повторите из раздела «Медиа»"
+	},
+	"cursorMotion": {
+		"segmentKinds": {
+			"move": "Move",
+			"hold": "Hold"
+		},
+		"presets": {
+			"recorded": "Recorded",
+			"straight": "Straight",
+			"arc": "Arc",
+			"wave": "Wave",
+			"loop": "Loop",
+			"overshoot": "Overshoot"
+		},
+		"noCursorData": "This recording has no cursor data to direct.",
+		"noFollowingClick": "No recorded click after the playhead to move towards.",
+		"createdSegments": "Split the cursor path into {{count}} sections.",
+		"failed": "Could not read the cursor recording"
 	}
 }

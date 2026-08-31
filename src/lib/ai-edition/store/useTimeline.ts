@@ -7,6 +7,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
+import {
+	buildCursorMotionRegionDrafts,
+	type CursorMotionEasing,
+	type CursorMotionPoint,
+	type CursorMotionPreset,
+	type CursorMotionTelemetrySample,
+	clampCursorMotionCycles,
+	clampCursorMotionPoint,
+	clampCursorMotionSpeed,
+} from "@/lib/cursor/cursorMotion";
+import { resolveVisibleClips } from "@/native/sceneDescription";
 import { createId } from "../document/ids";
 import {
 	duplicateClip as duplicateClipInDocument,
@@ -19,13 +30,18 @@ import {
 	resequenceClips,
 	setClipSourceRange,
 } from "../document/timeline";
-import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
+import type { AxcutClipCropRegion, AxcutCursorMotionRegion, AxcutDocument } from "../schema";
 import { hasAnyClipWithCamera } from "../timeline/camera";
+import {
+	sampleStoredCursorMotionRegion,
+	toModelCursorMotionRegion,
+} from "../timeline/cursorMotionRegions";
 import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
 	anchorRegionsWithDerivedMs,
 	dropPillsByIds,
 	replacePillSpan,
+	resolveNativePosition,
 	resolvePillIds,
 } from "../timeline/timelineMap";
 import { dropTrimPillsByIds, resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
@@ -275,6 +291,238 @@ export function useTimeline() {
 			};
 			if (!(await saveDocument(next, { history: true }))) return 0;
 			return suggestions.length;
+		},
+		[document, saveDocument],
+	);
+
+	// ---- Cursor motion -------------------------------------------------------
+	//
+	// The one add* that cannot invent its own span. Every other region is "2 s at
+	// the playhead" because 2 s of zoom is a meaningful thing to make; 2 s of
+	// cursor path is not. A motion region only means something between two moments
+	// the RECORDING contains, so the model reads the telemetry and hands back one
+	// draft per stretch, split at every cursor rest and every click, up to the
+	// first click after the playhead. No later click means no drafts — the caller
+	// gets 0 back and says so, rather than a region drawn over nothing.
+	//
+	// Samples arrive from the caller instead of being fetched here. They live
+	// behind the native bridge keyed by video path, and the pane that owns the
+	// button already holds them (`useCursorRecordingData`); pulling the IPC into
+	// the store would make every consumer of this hook wait on it.
+	const addCursorMotion = useCallback(
+		async (samples: readonly CursorMotionTelemetrySample[]) => {
+			if (!document || samples.length === 0) return 0;
+			const position = resolveNativePosition(
+				playheadSec(),
+				resolveVisibleClips(document),
+				document.timeline.clips,
+			);
+			if (!position) return 0;
+			const clip = position.clip;
+			const drafts = buildCursorMotionRegionDrafts({
+				owner: { clipId: clip.id, assetId: clip.assetId },
+				currentSourceTimeMs: position.sourceTimeSec * 1000,
+				currentVirtualTimeMs: playheadSec() * 1000,
+				clipSourceEndMs: (clip.sourceEndSec ?? clip.sourceStartSec) * 1000,
+				samples,
+			});
+			if (drafts.length === 0) return 0;
+			// Anchored the same way every other region is, rather than trusting the
+			// draft's own virtual times: the model offsets source→virtual linearly,
+			// which is only right when no trim sits between the clip start and the
+			// playhead. `anchorRegionsWithDerivedMs` resolves it against the real
+			// layout, so a region created after a trim lands where it was authored.
+			const anchored = anchorRegionsWithDerivedMs(
+				drafts.map((draft) => ({
+					id: createId("cursormotion"),
+					startMs: finiteMs(draft.startMs),
+					endMs: finiteMs(draft.endMs),
+					assetId: draft.assetId,
+					startPoint: draft.startPoint,
+					endPoint: draft.endPoint,
+					controlPoint: draft.controlPoints[0] ?? draft.startPoint,
+					startAnchor: draft.startAnchor,
+					endAnchor: draft.endAnchor,
+					segmentKind: draft.segmentKind,
+					preset: draft.preset,
+					speed: draft.speed,
+					cycles: draft.cycles,
+					easing: draft.easing,
+				})),
+				document.timeline.clips,
+				() => createId("cursormotion"),
+			);
+			const next: AxcutDocument = {
+				...document,
+				cursorMotionRegions: [
+					...(document.cursorMotionRegions ?? []),
+					...anchored,
+				] as AxcutDocument["cursorMotionRegions"],
+			};
+			if (!(await saveDocument(next, { history: true }))) return 0;
+			return anchored.length;
+		},
+		[document, saveDocument],
+	);
+
+	// Preset / speed / turns / timing. One setter for the four because they are one
+	// gesture in the inspector and each is a single clamped scalar; splitting them
+	// into four identical callbacks the way the zoom controls are split would buy
+	// nothing but four more lines of the same shape.
+	const updateCursorMotionSettings = useCallback(
+		async (
+			id: string,
+			patch: {
+				preset?: CursorMotionPreset;
+				speed?: number;
+				cycles?: number;
+				easing?: CursorMotionEasing;
+			},
+		) => {
+			if (!document) return;
+			const next: AxcutDocument = {
+				...document,
+				cursorMotionRegions: patchPillById(document.cursorMotionRegions ?? [], id, {
+					...(patch.preset !== undefined ? { preset: patch.preset } : {}),
+					...(patch.speed !== undefined ? { speed: clampCursorMotionSpeed(patch.speed) } : {}),
+					...(patch.cycles !== undefined ? { cycles: clampCursorMotionCycles(patch.cycles) } : {}),
+					...(patch.easing !== undefined ? { easing: patch.easing } : {}),
+				}) as AxcutDocument["cursorMotionRegions"],
+			};
+			await saveDocument(next, { history: true });
+		},
+		[document, saveDocument],
+	);
+
+	// Dragging the handle over the preview, live/commit exactly like the zoom focus
+	// point above — same rollback discipline, same reason: the whole drag has to be
+	// ONE undo step, recorded only once the write landed.
+	const cursorMotionLiveRef = useRef<AxcutDocument | null>(null);
+	const cursorMotionRollbackRef = useRef<AxcutDocument | null>(null);
+
+	const updateCursorMotionControlPointLive = useCallback(
+		(id: string, point: CursorMotionPoint) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			if (cursorMotionLiveRef.current !== doc) cursorMotionRollbackRef.current = doc;
+			const next: AxcutDocument = {
+				...doc,
+				cursorMotionRegions: patchPillById(doc.cursorMotionRegions ?? [], id, {
+					controlPoint: clampCursorMotionPoint(point),
+				}) as AxcutDocument["cursorMotionRegions"],
+			};
+			setDocument(next, { history: false });
+			cursorMotionLiveRef.current = next;
+		},
+		[setDocument],
+	);
+
+	const commitCursorMotionControlPoint = useCallback(async () => {
+		const doc = useProjectStore.getState().document;
+		if (!doc) return;
+		const rollback = cursorMotionLiveRef.current === doc ? cursorMotionRollbackRef.current : null;
+		cursorMotionRollbackRef.current = null;
+		cursorMotionLiveRef.current = null;
+		if (!(await saveDocument(doc, { history: true, historyBase: rollback })) && rollback) {
+			useProjectStore.setState((state) =>
+				state.document === doc ? { document: rollback, revision: state.revision + 1 } : {},
+			);
+		}
+	}, [saveDocument]);
+
+	// Copy the LOOK of one section onto every move section: preset, speed, turns,
+	// timing. Deliberately not the control point — it is an absolute position on
+	// the frame, so copying it would drag every other path towards this one's
+	// midpoint. Holds are skipped because a hold has no path to shape.
+	const applyCursorMotionToAllMoves = useCallback(
+		async (id: string) => {
+			if (!document) return 0;
+			const regions = document.cursorMotionRegions ?? [];
+			const source = regions.find((region) => region.id === id);
+			if (!source) return 0;
+			const targets = regions.filter((region) => region.segmentKind === "move");
+			if (targets.length === 0) return 0;
+			const next: AxcutDocument = {
+				...document,
+				cursorMotionRegions: regions.map((region) =>
+					region.segmentKind === "move"
+						? {
+								...region,
+								preset: source.preset,
+								speed: source.speed,
+								cycles: source.cycles,
+								easing: source.easing,
+							}
+						: region,
+				) as AxcutDocument["cursorMotionRegions"],
+			};
+			if (!(await saveDocument(next, { history: true }))) return 0;
+			return targets.length;
+		},
+		[document, saveDocument],
+	);
+
+	// Cut one section in two at the playhead. The shared anchor is SAMPLED off the
+	// region's own path rather than interpolated between its endpoints: the halves
+	// have to meet where the cursor already passed, or splitting a curve visibly
+	// teleports it. The new anchor is `manual` on both sides — it is the editor's
+	// cut, not something the recording said.
+	const splitCursorMotionAtPlayhead = useCallback(
+		async (id: string) => {
+			if (!document) return false;
+			const region = (document.cursorMotionRegions ?? []).find((r) => r.id === id);
+			if (!region) return false;
+			const model = toModelCursorMotionRegion(region);
+			const position = resolveNativePosition(
+				playheadSec(),
+				resolveVisibleClips(document),
+				document.timeline.clips,
+			);
+			if (!position || position.clip.id !== region.clipId) return false;
+			const sourceMs = position.sourceTimeSec * 1000;
+			// A split needs room on both sides; the model's own floor for a section is
+			// 2 ms, and anything under it produces a region no renderer can sample.
+			if (sourceMs <= model.sourceStartMs + 2 || sourceMs >= model.sourceEndMs - 2) return false;
+			const middle = sampleStoredCursorMotionRegion(region, sourceMs);
+			const splitVirtualMs = finiteMs(
+				region.startMs +
+					((sourceMs - model.sourceStartMs) /
+						Math.max(1, model.sourceEndMs - model.sourceStartMs)) *
+						(region.endMs - region.startMs),
+			);
+			const halves: AxcutCursorMotionRegion[] = [
+				{
+					...region,
+					id: createId("cursormotion"),
+					endMs: splitVirtualMs,
+					sourceEndSec: sourceMs / 1000,
+					endPoint: middle,
+					endAnchor: "manual",
+					controlPoint: clampCursorMotionPoint({
+						cx: (region.startPoint.cx + middle.cx) / 2,
+						cy: (region.startPoint.cy + middle.cy) / 2,
+					}),
+				},
+				{
+					...region,
+					id: createId("cursormotion"),
+					startMs: splitVirtualMs,
+					sourceStartSec: sourceMs / 1000,
+					startPoint: middle,
+					startAnchor: "manual",
+					controlPoint: clampCursorMotionPoint({
+						cx: (middle.cx + region.endPoint.cx) / 2,
+						cy: (middle.cy + region.endPoint.cy) / 2,
+					}),
+				},
+			];
+			const next: AxcutDocument = {
+				...document,
+				cursorMotionRegions: (document.cursorMotionRegions ?? []).flatMap((r) =>
+					r.id === id ? halves : [r],
+				) as AxcutDocument["cursorMotionRegions"],
+			};
+			return await saveDocument(next, { history: true });
 		},
 		[document, saveDocument],
 	);
@@ -1175,6 +1423,7 @@ export function useTimeline() {
 
 	return {
 		zoomRegions: document?.zoomRanges ?? [],
+		cursorMotionRegions: document?.cursorMotionRegions ?? [],
 		trimRanges: document?.timeline.trimRanges ?? [],
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
 		speedRegions,
@@ -1187,6 +1436,12 @@ export function useTimeline() {
 		clipSelection,
 		addZoom,
 		addZoomsBulk,
+		addCursorMotion,
+		updateCursorMotionSettings,
+		updateCursorMotionControlPointLive,
+		commitCursorMotionControlPoint,
+		applyCursorMotionToAllMoves,
+		splitCursorMotionAtPlayhead,
 		addTrim,
 		addAnnotation,
 		addSpeed,

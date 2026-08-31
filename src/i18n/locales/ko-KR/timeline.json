@@ -9,14 +9,16 @@
 		"addTrim": "트림 추가 (T)",
 		"addAnnotation": "주석 추가 (A)",
 		"addSpeed": "속도 추가 (S)",
-		"addCameraFullscreen": "전체 화면 카메라 추가 (C)"
+		"addCameraFullscreen": "전체 화면 카메라 추가 (C)",
+		"addCursorMotion": "Split cursor path into editable sections"
 	},
 	"hints": {
 		"pressZoom": "Z를 눌러 줌 추가",
 		"pressTrim": "T를 눌러 트림 추가",
 		"pressAnnotation": "A를 눌러 주석 추가",
 		"pressSpeed": "S를 눌러 속도 추가",
-		"pressCameraFullscreen": "C를 눌러 전체 화면 카메라 구간을 추가하세요"
+		"pressCameraFullscreen": "C를 눌러 전체 화면 카메라 구간을 추가하세요",
+		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
 	},
 	"labels": {
 		"pan": "이동",
@@ -86,5 +88,23 @@
 		"smartCutsNoAudio": "이 미디어에는 오디오가 없습니다",
 		"smartCutsNoSpeech": "음성이 감지되지 않음",
 		"smartCutsFailed": "받아쓰기에 실패했습니다 — 미디어에서 다시 시도하세요"
+	},
+	"cursorMotion": {
+		"segmentKinds": {
+			"move": "Move",
+			"hold": "Hold"
+		},
+		"presets": {
+			"recorded": "Recorded",
+			"straight": "Straight",
+			"arc": "Arc",
+			"wave": "Wave",
+			"loop": "Loop",
+			"overshoot": "Overshoot"
+		},
+		"noCursorData": "This recording has no cursor data to direct.",
+		"noFollowingClick": "No recorded click after the playhead to move towards.",
+		"createdSegments": "Split the cursor path into {{count}} sections.",
+		"failed": "Could not read the cursor recording"
 	}
 }

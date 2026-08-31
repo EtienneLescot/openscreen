@@ -847,6 +847,36 @@ export function buildSceneDescription(
 			clickBounce: settings.cursor.clickBounce,
 			clipToBounds: settings.cursor.clipToBounds,
 			theme: settings.cursorTheme,
+			// Emitted in SOURCE seconds and deliberately NOT run through
+			// `projectRegionsToSource` like the zoom and annotation regions above.
+			// Those are matched against each frame's time; these are applied once to
+			// the CURSOR TRACK (`CursorTrack::with_motion`), which is loaded per asset
+			// with its own offset already subtracted — the same clock the region's
+			// `sourceStartSec`/`sourceEndSec` are stored in. Projecting them would
+			// convert a value that is already in the target base.
+			//
+			// LIMITATION, multi-asset: `Scene.cursor.motion` carries no owner, and the
+			// compositor applies the whole list to whichever track is loaded. In a
+			// project whose clips draw on two different RECORDINGS, the second one's
+			// regions land on the first one's track. Single-asset projects — every
+			// project this feature has been used on so far — are unaffected. The fix
+			// belongs in the contract (an owner field, filtered in `live.rs` beside
+			// `resolve_scene_clip_index`), not here.
+			motion: (document.cursorMotionRegions ?? []).map((region) => {
+				const startSec = region.sourceStartSec ?? 0;
+				return {
+					id: region.id,
+					startSec,
+					endSec: region.sourceEndSec ?? startSec,
+					startPoint: region.startPoint,
+					endPoint: region.endPoint,
+					controlPoint: region.controlPoint,
+					preset: region.preset,
+					cycles: region.cycles,
+					speed: region.speed,
+					easing: region.easing,
+				};
+			}),
 		},
 		audio: {
 			gainDb: settings.audioGainDb,

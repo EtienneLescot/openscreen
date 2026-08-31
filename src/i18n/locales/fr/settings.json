@@ -327,5 +327,37 @@
 		"outputGain": "Niveau de sortie",
 		"reset": "Réinitialiser l’audio",
 		"help": "Ajustez le niveau de sortie audio. Il s’applique à l’identique dans l’aperçu et à l’export."
+	},
+	"cursorMotion": {
+		"title": "Trajectoire du curseur",
+		"preset": "Forme du tracé",
+		"presets": {
+			"recorded": "Enregistrée",
+			"straight": "Droite",
+			"arc": "Arc",
+			"wave": "Vague",
+			"loop": "Boucle",
+			"overshoot": "Dépassement"
+		},
+		"speed": "Vitesse du mouvement",
+		"speedHint": "Plus la vitesse est élevée, plus le curseur couvre la distance tôt puis se pose près de la cible. La section se termine toujours sur le clic enregistré, à son instant d'origine.",
+		"cycles": "Tours",
+		"easing": "Progression",
+		"easings": {
+			"linear": "Linéaire",
+			"ease-in-out": "Douce",
+			"ease-in": "Accélération",
+			"ease-out": "Décélération"
+		},
+		"anchorHint": "Une section commence et finit là où le curseur s'est arrêté ou a cliqué : elle ne se déplace donc pas. Découpez-la pour changer une limite.",
+		"holdDescription": "Le curseur reste où il s'est arrêté. Rien à modeler ici : cette section est ce qui le maintient immobile pendant que les mouvements autour sont dirigés.",
+		"applyToAllMoves": "Appliquer à toutes les sections de mouvement",
+		"appliedToAllMoves": "Forme, vitesse, tours et progression copiés sur chaque section de mouvement.",
+		"splitAtPlayhead": "Découper à la tête de lecture",
+		"splitOutsideRegion": "Placez la tête de lecture dans cette section pour la découper.",
+		"delete": "Supprimer la trajectoire",
+		"previousSection": "Section précédente",
+		"nextSection": "Section suivante",
+		"sectionCounter": "Section {{current}} / {{total}}"
 	}
 }

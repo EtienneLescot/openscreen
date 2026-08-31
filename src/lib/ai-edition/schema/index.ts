@@ -471,6 +471,61 @@ export const zoomRegionSchema = endGteStart(
 	"startMs",
 );
 
+const cursorMotionPointSchema = z.object({
+	cx: z.number().min(0).max(1),
+	cy: z.number().min(0).max(1),
+});
+
+// One editable stretch of cursor trajectory. The recorded telemetry stays the
+// source of truth: a region overrides the path drawn between its two anchors and
+// nothing else, so deleting it returns that stretch to the capture.
+//
+// Two shapes meet here and they are deliberately not the same:
+//
+//   - The DOCUMENT stores the region the way every other modifier is stored —
+//     `clipAnchorShape`, i.e. `{clipId, sourceStartSec, sourceEndSec}` with
+//     `startMs`/`endMs` as the derived cache. That is what survives a reorder or
+//     a trim (see technical-documentation/architecture/timeline-model.md), and
+//     forking the convention for one region kind would strand it exactly the way
+//     trims were stranded before v7.
+//   - The MODEL in `src/lib/cursor/cursorMotion.ts` works in `sourceStartMs` /
+//     `sourceEndMs` and takes `controlPoints[]`. It is a pure sampler with no
+//     knowledge of the document; the conversion happens at the call site.
+//
+// `controlPoint` is singular here where the model takes a list, because the
+// editor exposes exactly one handle and `SceneCursorMotionRegion` carries
+// exactly one. The model averages whatever list it is given, so passing
+// `[controlPoint]` is the same curve. Storing a list we never write a second
+// entry into would be a shape inviting a feature nobody asked for.
+export const cursorMotionRegionSchema = endGteStart(
+	z.object({
+		id: z.string().min(1),
+		startMs: z.number().nonnegative(),
+		endMs: z.number().nonnegative(),
+		...clipAnchorShape,
+		// Which asset's telemetry the points were resolved against. Optional because
+		// a clip resolves to its asset anyway; stored so a region survives being read
+		// without the timeline at hand (the CLI export path does exactly that).
+		assetId: z.string().min(1).optional(),
+		startPoint: cursorMotionPointSchema,
+		endPoint: cursorMotionPointSchema,
+		controlPoint: cursorMotionPointSchema,
+		startAnchor: z.enum(["manual", "rest", "click"]).default("manual"),
+		endAnchor: z.enum(["manual", "rest", "click"]).default("click"),
+		segmentKind: z.enum(["move", "hold"]).default("move"),
+		// `recorded` is inert and it is the default: creating regions must change
+		// nothing on screen until someone picks a shape.
+		preset: z
+			.enum(["recorded", "straight", "arc", "wave", "loop", "overshoot"])
+			.default("recorded"),
+		speed: z.number().min(1).max(4).default(1),
+		cycles: z.number().int().min(1).max(6).default(1),
+		easing: z.enum(["linear", "ease-in-out", "ease-in", "ease-out"]).default("ease-in-out"),
+	}),
+	"endMs",
+	"startMs",
+);
+
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time
 // by the existing pipeline (see technical-documentation/architecture/document-model.md).
@@ -503,6 +558,10 @@ const documentSchemaShape = z.object({
 	}),
 	annotations: z.array(annotationRegionSchema).default([]),
 	zoomRanges: z.array(zoomRegionSchema).default([]),
+	// Additive, like `annotations` and `zoomRanges` were at v3: the default fills
+	// in for every document written before the field existed, so no version bump
+	// and no migration entry.
+	cursorMotionRegions: z.array(cursorMotionRegionSchema).default([]),
 	legacyEditor: legacyEditorSchema.nullable().default(null),
 });
 
@@ -941,6 +1000,7 @@ export type AxcutTimeline = z.infer<typeof timelineSchema>;
 export type AxcutTimelineOperation = z.infer<typeof timelineOperationSchema>;
 export type AxcutAnnotationRegion = z.infer<typeof annotationRegionSchema>;
 export type AxcutZoomRegion = z.infer<typeof zoomRegionSchema>;
+export type AxcutCursorMotionRegion = z.infer<typeof cursorMotionRegionSchema>;
 export type AxcutCameraTrack = z.infer<typeof cameraTrackSchema>;
 export type AxcutLegacyEditor = z.infer<typeof legacyEditorSchema>;
 export type AxcutDocument = z.infer<typeof documentSchema>;

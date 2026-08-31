@@ -4,6 +4,7 @@ import { useScopedT } from "@/contexts/I18nContext";
 import type {
 	AxcutAnnotationRegion,
 	AxcutClip,
+	AxcutCursorMotionRegion,
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
@@ -29,6 +30,10 @@ interface PreviewProps {
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;
+	cursorMotionRegions?: AxcutCursorMotionRegion[];
+	selectedCursorMotionId?: string | null;
+	onCursorMotionControlPointChange?: (id: string, point: { cx: number; cy: number }) => void;
+	onCursorMotionControlPointCommit?: () => void;
 	annotationRegions?: AxcutAnnotationRegion[];
 	selectedAnnotationId?: string | null;
 	onSelectAnnotation?: (id: string) => void;
@@ -59,6 +64,10 @@ export function Preview({
 	trimRanges,
 	selectedZoomRegionId,
 	onZoomFocusChange,
+	cursorMotionRegions,
+	selectedCursorMotionId,
+	onCursorMotionControlPointChange,
+	onCursorMotionControlPointCommit,
 	onZoomFocusCommit,
 	annotationRegions,
 	selectedAnnotationId,
@@ -185,6 +194,10 @@ export function Preview({
 						trimRanges={trimRanges}
 						selectedZoomRegionId={selectedZoomRegionId}
 						onZoomFocusChange={onZoomFocusChange}
+						cursorMotionRegions={cursorMotionRegions}
+						selectedCursorMotionId={selectedCursorMotionId}
+						onCursorMotionControlPointChange={onCursorMotionControlPointChange}
+						onCursorMotionControlPointCommit={onCursorMotionControlPointCommit}
 						onZoomFocusCommit={onZoomFocusCommit}
 						annotationRegions={annotationRegions}
 						selectedAnnotationId={selectedAnnotationId}

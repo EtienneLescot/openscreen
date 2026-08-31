@@ -9,14 +9,16 @@
 		"addTrim": "Add Trim (T)",
 		"addAnnotation": "Add Annotation (A)",
 		"addSpeed": "Add Speed (S)",
-		"addCameraFullscreen": "Add Full Camera (C)"
+		"addCameraFullscreen": "Add Full Camera (C)",
+		"addCursorMotion": "Split cursor path into editable sections"
 	},
 	"hints": {
 		"pressZoom": "Press Z to add zoom",
 		"pressTrim": "Press T to add trim",
 		"pressAnnotation": "Press A to add annotation",
 		"pressSpeed": "Press S to add speed",
-		"pressCameraFullscreen": "Press C to add a Full Camera segment"
+		"pressCameraFullscreen": "Press C to add a Full Camera segment",
+		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
 	},
 	"labels": {
 		"pan": "Pan",
@@ -86,5 +88,23 @@
 		"smartCutsNoAudio": "This media has no audio",
 		"smartCutsNoSpeech": "No speech detected",
 		"smartCutsFailed": "Transcription failed — retry it from Media"
+	},
+	"cursorMotion": {
+		"segmentKinds": {
+			"move": "Move",
+			"hold": "Hold"
+		},
+		"presets": {
+			"recorded": "Recorded",
+			"straight": "Straight",
+			"arc": "Arc",
+			"wave": "Wave",
+			"loop": "Loop",
+			"overshoot": "Overshoot"
+		},
+		"noCursorData": "This recording has no cursor data to direct.",
+		"noFollowingClick": "No recorded click after the playhead to move towards.",
+		"createdSegments": "Split the cursor path into {{count}} sections.",
+		"failed": "Could not read the cursor recording"
 	}
 }

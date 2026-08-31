@@ -9,14 +9,16 @@
 		"addTrim": "Adicionar Recorte (T)",
 		"addAnnotation": "Adicionar Anotação (A)",
 		"addSpeed": "Adicionar Velocidade (S)",
-		"addCameraFullscreen": "Adicionar Câmera em Tela Cheia (C)"
+		"addCameraFullscreen": "Adicionar Câmera em Tela Cheia (C)",
+		"addCursorMotion": "Split cursor path into editable sections"
 	},
 	"hints": {
 		"pressZoom": "Pressione Z para adicionar zoom",
 		"pressTrim": "Pressione T para adicionar recorte",
 		"pressAnnotation": "Pressione A para adicionar anotação",
 		"pressSpeed": "Pressione S para adicionar velocidade",
-		"pressCameraFullscreen": "Pressione C para adicionar um segmento de Câmera em Tela Cheia"
+		"pressCameraFullscreen": "Pressione C para adicionar um segmento de Câmera em Tela Cheia",
+		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
 	},
 	"labels": {
 		"pan": "Mover",
@@ -86,5 +88,23 @@
 		"smartCutsNoAudio": "Esta mídia não tem áudio",
 		"smartCutsNoSpeech": "Nenhuma fala detectada",
 		"smartCutsFailed": "Falha na transcrição — tente de novo em Mídia"
+	},
+	"cursorMotion": {
+		"segmentKinds": {
+			"move": "Move",
+			"hold": "Hold"
+		},
+		"presets": {
+			"recorded": "Recorded",
+			"straight": "Straight",
+			"arc": "Arc",
+			"wave": "Wave",
+			"loop": "Loop",
+			"overshoot": "Overshoot"
+		},
+		"noCursorData": "This recording has no cursor data to direct.",
+		"noFollowingClick": "No recorded click after the playhead to move towards.",
+		"createdSegments": "Split the cursor path into {{count}} sections.",
+		"failed": "Could not read the cursor recording"
 	}
 }

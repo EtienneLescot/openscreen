@@ -9,14 +9,16 @@
 		"addTrim": "添加剪辑 (T)",
 		"addAnnotation": "添加标注 (A)",
 		"addSpeed": "添加速度 (S)",
-		"addCameraFullscreen": "添加全屏摄像头 (C)"
+		"addCameraFullscreen": "添加全屏摄像头 (C)",
+		"addCursorMotion": "Split cursor path into editable sections"
 	},
 	"hints": {
 		"pressZoom": "按 Z 添加缩放",
 		"pressTrim": "按 T 添加剪辑",
 		"pressAnnotation": "按 A 添加标注",
 		"pressSpeed": "按 S 添加速度",
-		"pressCameraFullscreen": "按 C 添加一个全屏摄像头片段"
+		"pressCameraFullscreen": "按 C 添加一个全屏摄像头片段",
+		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
 	},
 	"labels": {
 		"pan": "平移",
@@ -86,5 +88,23 @@
 		"smartCutsNoAudio": "此媒体没有音频",
 		"smartCutsNoSpeech": "未检测到语音",
 		"smartCutsFailed": "转录失败 — 请在“媒体”中重试"
+	},
+	"cursorMotion": {
+		"segmentKinds": {
+			"move": "Move",
+			"hold": "Hold"
+		},
+		"presets": {
+			"recorded": "Recorded",
+			"straight": "Straight",
+			"arc": "Arc",
+			"wave": "Wave",
+			"loop": "Loop",
+			"overshoot": "Overshoot"
+		},
+		"noCursorData": "This recording has no cursor data to direct.",
+		"noFollowingClick": "No recorded click after the playhead to move towards.",
+		"createdSegments": "Split the cursor path into {{count}} sections.",
+		"failed": "Could not read the cursor recording"
 	}
 }

@@ -17,7 +17,13 @@ import { createId } from "./ids";
  *  exist" has exactly one definition. `trim` is a source-time cut; the rest are pill-merged
  *  effects (zoom / speed / annotation / camera-fullscreen). Clips are removed via
  *  {@link removeClip}, not here — deleting a clip reflows the whole timeline. */
-export type RegionKind = "zoom" | "trim" | "annotation" | "speed" | "cameraFullscreen";
+export type RegionKind =
+	| "zoom"
+	| "trim"
+	| "annotation"
+	| "speed"
+	| "cameraFullscreen"
+	| "cursorMotion";
 
 /** Length a clip is given before its media has been probed. Lives here, in the pure
  *  document layer, because that layer decides which clips are still waiting for a real
@@ -879,6 +885,16 @@ export function removeRegion(document: AxcutDocument, kind: RegionKind, id: stri
 			};
 		case "annotation":
 			return { ...document, annotations: dropPillById(document.annotations, id) };
+		// Deleting a motion region is how an editor reverts to the recorded path for
+		// that stretch — it is the undo of a choice, not the loss of data.
+		case "cursorMotion":
+			return {
+				...document,
+				cursorMotionRegions: dropPillById(
+					document.cursorMotionRegions,
+					id,
+				) as AxcutDocument["cursorMotionRegions"],
+			};
 		case "trim":
 			return {
 				...document,

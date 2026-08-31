@@ -9,14 +9,16 @@
 		"addTrim": "Ajouter une coupe (T)",
 		"addAnnotation": "Ajouter une annotation (A)",
 		"addSpeed": "Ajouter une vitesse (S)",
-		"addCameraFullscreen": "Ajouter Caméra plein écran (C)"
+		"addCameraFullscreen": "Ajouter Caméra plein écran (C)",
+		"addCursorMotion": "Découper la trajectoire du curseur en sections éditables"
 	},
 	"hints": {
 		"pressZoom": "Appuyez sur Z pour ajouter un zoom",
 		"pressTrim": "Appuyez sur T pour ajouter une coupe",
 		"pressAnnotation": "Appuyez sur A pour ajouter une annotation",
 		"pressSpeed": "Appuyez sur S pour ajouter une vitesse",
-		"pressCameraFullscreen": "Appuyez sur C pour ajouter un segment Caméra plein écran"
+		"pressCameraFullscreen": "Appuyez sur C pour ajouter un segment Caméra plein écran",
+		"cursorMotionEmpty": "Placez la tête de lecture avant une activité du curseur, puis utilisez l'outil tracé"
 	},
 	"labels": {
 		"pan": "Panoramique",
@@ -86,5 +88,23 @@
 		"smartCutsNoAudio": "Ce média n'a pas d'audio",
 		"smartCutsNoSpeech": "Aucune parole détectée",
 		"smartCutsFailed": "Échec de la transcription — relancez-la depuis Médias"
+	},
+	"cursorMotion": {
+		"segmentKinds": {
+			"move": "Mouvement",
+			"hold": "Pause"
+		},
+		"presets": {
+			"recorded": "Enregistrée",
+			"straight": "Droite",
+			"arc": "Arc",
+			"wave": "Vague",
+			"loop": "Boucle",
+			"overshoot": "Dépassement"
+		},
+		"noCursorData": "Cet enregistrement n'a aucune donnée de curseur à diriger.",
+		"noFollowingClick": "Aucun clic enregistré après la tête de lecture.",
+		"createdSegments": "Trajectoire découpée en {{count}} sections.",
+		"failed": "Lecture de l'enregistrement du curseur impossible"
 	}
 }

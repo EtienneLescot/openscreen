@@ -9,14 +9,16 @@
 		"addTrim": "新增剪輯 (T)",
 		"addAnnotation": "新增標註 (A)",
 		"addSpeed": "新增速度 (S)",
-		"addCameraFullscreen": "新增全螢幕攝影機 (C)"
+		"addCameraFullscreen": "新增全螢幕攝影機 (C)",
+		"addCursorMotion": "Split cursor path into editable sections"
 	},
 	"hints": {
 		"pressZoom": "按 Z 新增縮放",
 		"pressTrim": "按 T 新增剪輯",
 		"pressAnnotation": "按 A 新增標註",
 		"pressSpeed": "按 S 新增速度",
-		"pressCameraFullscreen": "按 C 新增一個全螢幕攝影機片段"
+		"pressCameraFullscreen": "按 C 新增一個全螢幕攝影機片段",
+		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
 	},
 	"labels": {
 		"pan": "平移",
@@ -86,5 +88,23 @@
 		"smartCutsNoAudio": "此媒體沒有音訊",
 		"smartCutsNoSpeech": "未偵測到語音",
 		"smartCutsFailed": "轉錄失敗 — 請在「媒體」中重試"
+	},
+	"cursorMotion": {
+		"segmentKinds": {
+			"move": "Move",
+			"hold": "Hold"
+		},
+		"presets": {
+			"recorded": "Recorded",
+			"straight": "Straight",
+			"arc": "Arc",
+			"wave": "Wave",
+			"loop": "Loop",
+			"overshoot": "Overshoot"
+		},
+		"noCursorData": "This recording has no cursor data to direct.",
+		"noFollowingClick": "No recorded click after the playhead to move towards.",
+		"createdSegments": "Split the cursor path into {{count}} sections.",
+		"failed": "Could not read the cursor recording"
 	}
 }
