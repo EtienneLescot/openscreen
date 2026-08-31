@@ -1348,6 +1348,9 @@ unsafe fn render_thread(
     let mut last_preview_size: (u32, u32) = (0, 0);
     let mut last_ip: Option<InspectorParams> = None;
     let mut last_smoothing: f32 = -1.0; // force la 1re application (0.0 est une valeur valide)
+    // Dernières régions appliquées. La liste vide est l'état de repos ET une valeur valide :
+    // c'est `last_smoothing = -1.0` qui garantit la première application, pas ce champ.
+    let mut last_motion: Vec<crate::cursor::CursorMotionRegion> = Vec::new();
     // La vue live est TOUJOURS pilotée par la scène de l'app. Tant qu'aucune scène n'a été
     // appliquée, on refuse de jouer le layout fixture (POC) : un fallback fixture ne ferait que
     // MASQUER un scene-push cassé. On attend la scène avant de produire le 1er frame.
@@ -1492,14 +1495,6 @@ unsafe fn render_thread(
             cursor_motion_blur: ip.cursor_motion_blur,
             has_webcam: has_real_webcam,
         });
-        // Lissage ressort-amortisseur : re-génère la piste (240 Hz) uniquement quand la valeur
-        // change (pas à chaque frame — le resample+ressort parcourt tout l'enregistrement).
-        if let Some(raw) = &raw_cursor {
-            if ip.cursor_smoothing != last_smoothing {
-                comp.set_cursor(raw.smoothed(ip.cursor_smoothing));
-                last_smoothing = ip.cursor_smoothing;
-            }
-        }
         // un changement de param doit se voir même en pause (édition live des sliders) :
         // on recompose la frame courante dans la branche pause ci-dessous.
         let ip_changed = last_ip != Some(ip);
@@ -1527,6 +1522,25 @@ unsafe fn render_thread(
                 scene_for_clip(&base_scene, active_clip_index)
             });
             comp.set_scene(scene);
+        }
+
+        // Piste curseur : trajectoire éditée puis lissage ressort-amortisseur. Re-générée
+        // uniquement quand l'un des deux change — le resample 240 Hz parcourt tout
+        // l'enregistrement, c'est trop cher par frame.
+        //
+        // Placé APRÈS le bloc de scène, pas avant : les régions viennent de `full_scene`, et
+        // les lire au-dessus les prendrait à l'état du tour précédent — une trajectoire
+        // éditée n'apparaîtrait qu'à la frame suivante, ou jamais si rien d'autre ne bouge.
+        if let Some(raw) = &raw_cursor {
+            let motion: Vec<crate::cursor::CursorMotionRegion> = full_scene
+                .as_ref()
+                .map(|s| s.cursor.motion.iter().map(Into::into).collect())
+                .unwrap_or_default();
+            if ip.cursor_smoothing != last_smoothing || motion != last_motion {
+                comp.set_cursor(raw.with_motion(&motion).smoothed(ip.cursor_smoothing));
+                last_smoothing = ip.cursor_smoothing;
+                last_motion = motion;
+            }
         }
 
         // résolution cible du preview (le canvas Electron) → force le recadrage des

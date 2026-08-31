@@ -382,6 +382,87 @@ pub struct SceneCursor {
     /// `#[serde(default)]` : champ ajouté après coup, absent des JSON de test existants.
     #[serde(default)]
     pub cursor_sprites: std::collections::HashMap<String, SceneCursorSprite>,
+    /// Portions de trajectoire éditées, dans l'ordre de la timeline. Absent ou vide → la
+    /// télémétrie enregistrée joue telle quelle, ce que produit tout projet sans l'éditeur
+    /// de choréographie. `#[serde(default)]` pour cette raison : les scènes existantes ne
+    /// portent pas ce champ et doivent rester lisibles.
+    #[serde(default)]
+    pub motion: Vec<SceneCursorMotionRegion>,
+}
+
+/// Point normalisé dans le cadre screen.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct ScenePoint {
+    pub cx: f32,
+    pub cy: f32,
+}
+
+/// Une région de trajectoire éditée. Miroir de `SceneCursorMotionRegion` (TS,
+/// `src/native/sceneDescription.ts`) — les ancres arrivent résolues, ce module ne fait que
+/// de la géométrie.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneCursorMotionRegion {
+    #[allow(dead_code)]
+    pub id: String,
+    pub start_sec: f32,
+    pub end_sec: f32,
+    pub start_point: ScenePoint,
+    pub end_point: ScenePoint,
+    pub control_point: ScenePoint,
+    pub preset: SceneCursorMotionPreset,
+    pub cycles: u32,
+    pub speed: f32,
+    pub easing: SceneCursorMotionEasing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SceneCursorMotionPreset {
+    Recorded,
+    Straight,
+    Arc,
+    Wave,
+    Loop,
+    Overshoot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SceneCursorMotionEasing {
+    Linear,
+    EaseInOut,
+    EaseIn,
+    EaseOut,
+}
+
+impl From<&SceneCursorMotionRegion> for crate::cursor::CursorMotionRegion {
+    fn from(r: &SceneCursorMotionRegion) -> Self {
+        use crate::cursor::{CursorMotionEasing as E, CursorMotionPreset as P};
+        crate::cursor::CursorMotionRegion {
+            start_s: r.start_sec,
+            end_s: r.end_sec,
+            start: (r.start_point.cx, r.start_point.cy),
+            end: (r.end_point.cx, r.end_point.cy),
+            control: (r.control_point.cx, r.control_point.cy),
+            preset: match r.preset {
+                SceneCursorMotionPreset::Recorded => P::Recorded,
+                SceneCursorMotionPreset::Straight => P::Straight,
+                SceneCursorMotionPreset::Arc => P::Arc,
+                SceneCursorMotionPreset::Wave => P::Wave,
+                SceneCursorMotionPreset::Loop => P::Loop,
+                SceneCursorMotionPreset::Overshoot => P::Overshoot,
+            },
+            cycles: r.cycles,
+            speed: r.speed,
+            easing: match r.easing {
+                SceneCursorMotionEasing::Linear => E::Linear,
+                SceneCursorMotionEasing::EaseInOut => E::EaseInOut,
+                SceneCursorMotionEasing::EaseIn => E::EaseIn,
+                SceneCursorMotionEasing::EaseOut => E::EaseOut,
+            },
+        }
+    }
 }
 
 /// Un sprite de curseur : image + point de pivot.
@@ -792,5 +873,46 @@ mod annotation_tests {
             filtered.annotations.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
             vec!["keep"]
         );
+    }
+
+    /// Le contrat JS→Rust, dans les deux sens où il dérive en silence : le camelCase des
+    /// champs et l'orthographe des variantes. `easing` est en kebab-case (`ease-in-out`)
+    /// alors que `preset` est en minuscules collées — deux conventions dans le même objet,
+    /// donc exactement le genre de détail qu'un test doit tenir.
+    #[test]
+    fn a_cursor_motion_region_parses_from_the_typescript_shape() {
+        let json = r#"{
+            "show": true, "size": 1.0, "smoothing": 0.5, "motionBlur": 0.0,
+            "clickBounce": 1.0, "clipToBounds": false, "theme": "system",
+            "motion": [{
+                "id": "r1",
+                "startSec": 1.0, "endSec": 2.5,
+                "startPoint": { "cx": 0.1, "cy": 0.2 },
+                "endPoint": { "cx": 0.8, "cy": 0.4 },
+                "controlPoint": { "cx": 0.5, "cy": 0.9 },
+                "preset": "overshoot", "cycles": 3, "speed": 2.5,
+                "easing": "ease-in-out"
+            }]
+        }"#;
+        let cursor: SceneCursor = serde_json::from_str(json).expect("SceneCursor doit parser");
+        assert_eq!(cursor.motion.len(), 1);
+        let r = &cursor.motion[0];
+        assert_eq!(r.preset, SceneCursorMotionPreset::Overshoot);
+        assert_eq!(r.easing, SceneCursorMotionEasing::EaseInOut);
+        assert_eq!(r.start_sec, 1.0);
+        assert_eq!(r.control_point.cy, 0.9);
+        assert_eq!(r.cycles, 3);
+    }
+
+    /// Une scène d'avant ce champ doit rester lisible : `motion` absent → aucune région,
+    /// pas une erreur de parse. C'est le cas de tout projet existant.
+    #[test]
+    fn a_cursor_without_motion_still_parses() {
+        let json = r#"{
+            "show": true, "size": 1.0, "smoothing": 0.0, "motionBlur": 0.0,
+            "clickBounce": 1.0, "clipToBounds": false, "theme": "system"
+        }"#;
+        let cursor: SceneCursor = serde_json::from_str(json).expect("scène héritée");
+        assert!(cursor.motion.is_empty());
     }
 }

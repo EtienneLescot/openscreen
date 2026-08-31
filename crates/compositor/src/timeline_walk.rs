@@ -159,6 +159,10 @@ pub(crate) unsafe fn walk_composited_timeline(
 ) -> Result<u64> {
     let cursor_enabled = scene.as_ref().map(|s| s.cursor.show).unwrap_or(false);
     let cursor_smoothing = scene.as_ref().map(|s| s.cursor.smoothing).unwrap_or(0.0);
+    // Régions éditées converties une fois : elles sont les mêmes pour tous les clips, et la
+    // conversion n'a pas à être refaite à chaque piste chargée.
+    let cursor_motion: Vec<crate::cursor::CursorMotionRegion> =
+        scene.as_ref().map(|s| s.cursor.motion.iter().map(Into::into).collect()).unwrap_or_default();
     let mut cursor_tracks: HashMap<String, CursorTrack> = HashMap::new();
     let mut cursor_active_path: Option<String> = None;
 
@@ -283,7 +287,12 @@ pub(crate) unsafe fn walk_composited_timeline(
             if !cursor_tracks.contains_key(&clip.screen) {
                 let path = format!("{}.cursor.json", clip.screen);
                 if let Ok(raw) = CursorTrack::load(&path, 0.0, 24.0 * 3600.0) {
-                    cursor_tracks.insert(clip.screen.clone(), raw.smoothed(cursor_smoothing));
+                    // Trajectoire éditée d'ABORD, lissage ensuite : le preset définit le tracé,
+                    // le lissage est un filtre de rendu qui s'applique à celui qu'on a. Dans
+                    // l'autre ordre les portions éditées resteraient nettes au milieu d'une
+                    // piste amortie, et le slider n'aurait plus d'effet sur elles.
+                    let edited = raw.with_motion(&cursor_motion);
+                    cursor_tracks.insert(clip.screen.clone(), edited.smoothed(cursor_smoothing));
                 }
                 // absente/illisible → pas d'entrée : ce clip s'exporte sans curseur (visible,
                 // pas masqué en un curseur fantôme d'un autre clip).

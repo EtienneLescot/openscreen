@@ -330,6 +330,48 @@ export interface SceneEffects {
 	motionBlur: number;
 }
 
+/** Shape a cursor motion region draws between its two anchors. `recorded` keeps the
+ *  captured trajectory, i.e. the region is inert — it exists so the editor can hold a
+ *  selection without altering the path. */
+export type SceneCursorMotionPreset =
+	| "recorded"
+	| "straight"
+	| "arc"
+	| "wave"
+	| "loop"
+	| "overshoot";
+
+export type SceneCursorMotionEasing = "linear" | "ease-in-out" | "ease-in" | "ease-out";
+
+/** One editable stretch of cursor trajectory, overriding the recorded telemetry between
+ *  `startSec` and `endSec`.
+ *
+ *  Anchors arrive RESOLVED: the editor owns anchor discovery (rests, clicks, manual
+ *  splits) and hands over absolute normalised points, so the compositor never has to
+ *  re-derive them from telemetry. That keeps this contract a pure geometry description —
+ *  the same list yields the same path whatever produced it.
+ *
+ *  `controlPoint` is absolute too, not an offset: the sampler takes its displacement from
+ *  the start/end midpoint, so a control point left at the midpoint is a no-op for every
+ *  preset. */
+export interface SceneCursorMotionRegion {
+	id: string;
+	startSec: number;
+	endSec: number;
+	/** Normalised screen-frame position the region starts from. */
+	startPoint: { cx: number; cy: number };
+	endPoint: { cx: number; cy: number };
+	/** Absolute normalised point steering the curve; midpoint = straight line. */
+	controlPoint: { cx: number; cy: number };
+	preset: SceneCursorMotionPreset;
+	/** Oscillations for `wave` and `loop`, 1..6. Ignored by the other presets. */
+	cycles: number;
+	/** 1..4. Higher settles near the destination sooner; it reshapes progress, it does
+	 *  not retime the region. */
+	speed: number;
+	easing: SceneCursorMotionEasing;
+}
+
 /** Cursor rendering, from the editor settings. */
 export interface SceneCursor {
 	show: boolean;
@@ -342,6 +384,10 @@ export interface SceneCursor {
 	clipToBounds: boolean;
 	/** Cursor theme id (sprite set). */
 	theme: string;
+	/** Editable motion regions, in timeline order. Absent or empty means the recorded
+	 *  trajectory plays untouched — which is what every project without the cursor
+	 *  choreography editor produces. */
+	motion?: SceneCursorMotionRegion[];
 }
 
 /** Everything native needs to compose the scene, serialized from one document. */
