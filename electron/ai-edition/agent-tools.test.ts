@@ -190,6 +190,7 @@ describe("the mutating-tool table", () => {
 				"setClipRange",
 				"setSpeed",
 				"setTrim",
+				"setWordText",
 				"setZoom",
 			].sort(),
 		);
@@ -2184,5 +2185,161 @@ describe("addAudio / setAudio", () => {
 		);
 		expect(result.ok).toBe(true);
 		expect((result.document as AxcutDocument).audioTracks).toEqual([]);
+	});
+});
+
+// ─── Correcting a word from the chat ─────────────────────────────
+// The model could READ the transcript and CUT it, and that was all. Asked to fix a
+// misheard name it had exactly one tool that touched a word — addTrim — which removes the
+// audio with it. These two close that: one read that hands out word ids, one write that
+// changes text and nothing else.
+
+/** A transcript with real words, one of them already corrected by the user. */
+function documentWithWords(): AxcutDocument {
+	const base = fixtureDocument();
+	return {
+		...base,
+		transcripts: [
+			{
+				assetId: "asset_1",
+				language: "en",
+				segments: [
+					{
+						id: "seg_1",
+						kind: "speech",
+						startSec: 0,
+						endSec: 3,
+						text: "I use Cuber Nettes",
+						wordIds: ["word_1", "word_2", "word_3"],
+					},
+				],
+				words: [
+					{ id: "word_1", segmentId: "seg_1", startSec: 0, endSec: 1, text: "I" },
+					{ id: "word_2", segmentId: "seg_1", startSec: 1, endSec: 2, text: "use" },
+					{
+						id: "word_3",
+						segmentId: "seg_1",
+						startSec: 2,
+						endSec: 3,
+						text: "Cuber Nettes",
+					},
+				],
+			},
+		],
+	};
+}
+
+function run(document: AxcutDocument, name: string, args: unknown) {
+	return executeAgentTool(document, name, JSON.stringify(args), { editsAllowed: true });
+}
+
+describe("getTranscriptWords", () => {
+	it("hands out the ids setWordText takes", () => {
+		const result = run(documentWithWords(), "getTranscriptWords", {});
+		const payload = JSON.parse(result.resultJson) as {
+			words: Array<{ id: string; text: string }>;
+			total: number;
+		};
+		expect(result.ok).toBe(true);
+		expect(payload.total).toBe(3);
+		expect(payload.words.map((w) => w.id)).toEqual(["word_1", "word_2", "word_3"]);
+	});
+
+	// A half-hour transcript is ~70k tokens. Fixing one name should cost one phrase.
+	it("returns only the words touching the span it is given", () => {
+		const result = run(documentWithWords(), "getTranscriptWords", { startSec: 2, endSec: 3 });
+		const payload = JSON.parse(result.resultJson) as {
+			words: Array<{ id: string }>;
+			total: number;
+		};
+		// Touching counts: `word_2` ends exactly where the span begins. Inclusive on
+		// purpose — a word with no duration at all (one the user typed in) sits on a
+		// single point, and a strict overlap would drop it from every span it meets.
+		expect(payload.words.map((w) => w.id)).toEqual(["word_2", "word_3"]);
+		// `total` still reports the whole transcript, so a filtered read never reads as
+		// the entire thing.
+		expect(payload.total).toBe(3);
+	});
+
+	it("says nothing about provenance for a plainly transcribed word", () => {
+		const result = run(documentWithWords(), "getTranscriptWords", {});
+		const payload = JSON.parse(result.resultJson) as { words: Array<Record<string, unknown>> };
+		expect(payload.words[0]).not.toHaveProperty("source");
+		expect(payload.words[0]).not.toHaveProperty("originalText");
+	});
+
+	it("names what the transcriber had heard, once a word is corrected", () => {
+		const corrected = run(documentWithWords(), "setWordText", {
+			wordId: "word_3",
+			text: "Kubernetes",
+		});
+		const result = run(corrected.document as AxcutDocument, "getTranscriptWords", {});
+		const payload = JSON.parse(result.resultJson) as {
+			words: Array<{ id: string; source?: string; originalText?: string }>;
+		};
+		expect(payload.words.find((w) => w.id === "word_3")).toMatchObject({
+			source: "user",
+			originalText: "Cuber Nettes",
+		});
+	});
+
+	it("refuses an asset with no transcript instead of answering with nothing", () => {
+		const result = run({ ...fixtureDocument(), transcripts: [] }, "getTranscriptWords", {});
+		expect(result.ok).toBe(false);
+		expect(result.resultJson).toContain("No transcript");
+	});
+});
+
+describe("setWordText", () => {
+	it("changes the text and leaves the timeline alone", () => {
+		const before = documentWithWords();
+		const result = run(before, "setWordText", { wordId: "word_3", text: "Kubernetes" });
+		expect(result.ok).toBe(true);
+		const next = result.document as AxcutDocument;
+		expect(next.transcripts[0].words.find((w) => w.id === "word_3")?.text).toBe("Kubernetes");
+		expect(next.timeline).toEqual(before.timeline);
+		expect(next.transcripts[0].segments[0].text).toBe("I use Kubernetes");
+	});
+
+	// The document carries the transcript twice; a write that reaches only one leaves the
+	// legacy mirror serving the old text forever.
+	it("writes the legacy mirror too", () => {
+		const result = run(documentWithWords(), "setWordText", {
+			wordId: "word_3",
+			text: "Kubernetes",
+		});
+		const next = result.document as AxcutDocument;
+		expect(next.transcript).toBe(next.transcripts.find((t) => t.assetId === "asset_1"));
+	});
+
+	it("empties a word without cutting the speech around it", () => {
+		const result = run(documentWithWords(), "setWordText", { wordId: "word_2", text: "" });
+		const next = result.document as AxcutDocument;
+		expect(next.transcripts[0].words.find((w) => w.id === "word_2")?.text).toBe("");
+		expect(next.transcripts[0].segments[0].text).toBe("I Cuber Nettes");
+		expect(JSON.parse(result.resultJson)).toMatchObject({ blanked: true });
+	});
+
+	it("points an unknown id at the read that hands them out", () => {
+		const result = run(documentWithWords(), "setWordText", { wordId: "seg_1", text: "x" });
+		expect(result.ok).toBe(false);
+		// `seg_1` is a real id — of a SEGMENT. The two namespaces are the trap.
+		expect(result.resultJson).toContain("getTranscriptWords");
+	});
+
+	it("refuses a write that would change nothing", () => {
+		const result = run(documentWithWords(), "setWordText", { wordId: "word_2", text: "use" });
+		expect(result.ok).toBe(false);
+		expect(result.document).toBeUndefined();
+	});
+
+	it("is a consented edit, not a read", () => {
+		const result = executeAgentTool(
+			documentWithWords(),
+			"setWordText",
+			JSON.stringify({ wordId: "word_3", text: "Kubernetes" }),
+			{ editsAllowed: false },
+		);
+		expect(result.document).toBeUndefined();
 	});
 });
