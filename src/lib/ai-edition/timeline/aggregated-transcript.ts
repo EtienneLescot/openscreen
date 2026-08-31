@@ -197,6 +197,32 @@ export function buildClipSection(
 	asset: AxcutAsset | null,
 	trimRanges: AxcutTrimRange[],
 ): ClipSection {
+	// A FREEZE clip is the created time behind an inserted word: its source window is
+	// the single point it holds, so the ordinary range filter matches nothing — and it
+	// must not. The words it shows are the SYNTH words touching that point: the word
+	// the freeze exists for. While the playhead runs through the freeze the cue
+	// resolves against this section and lights the amber word through the whole pause.
+	if (clip.frozenSec !== undefined) {
+		const atSec = clip.sourceStartSec;
+		const words = transcript
+			? transcript.words.filter(
+					(word) => word.source === "synth" && word.startSec <= atSec && word.endSec >= atSec,
+				)
+			: [];
+		return {
+			clip,
+			asset,
+			transcript,
+			words: words.map((word) => ({
+				id: clipWordId(clip.id, word.id),
+				word,
+				kept: true,
+				trimId: null,
+			})),
+			trimRuns: [],
+		};
+	}
+
 	// `trimAppliesToClip` — not a bare `assetId` match — is what keeps a cut on the
 	// second of two clips over the same media from also greying out the first one's
 	// words. Same media, same source range: only the clip anchor tells them apart.
@@ -281,13 +307,30 @@ export function buildAggregatedSections(
 ): ClipSection[] {
 	const transcriptById = new Map(transcripts.map((t) => [t.assetId, t]));
 	const assetById = new Map(assets.map((a) => [a.id, a]));
-	return clips.map((clip) =>
+	const sections = clips.map((clip) =>
 		buildClipSection(
 			clip,
 			transcriptById.get(clip.assetId) ?? null,
 			assetById.get(clip.assetId) ?? null,
 			trimRanges,
 		),
+	);
+
+	// A freeze clip claims the inserted word it was created for, and the clip after the
+	// split starts at the very moment that word sits on — so the word matched BOTH and the
+	// pane showed it twice, in two blocks. The freeze owns it: it is the section the
+	// playhead is inside while the pause plays, and the one whose whole reason to exist is
+	// that word.
+	const claimed = new Set(
+		sections
+			.filter((section) => section.clip.frozenSec !== undefined)
+			.flatMap((section) => section.words.map((cw) => cw.word.id)),
+	);
+	if (claimed.size === 0) return sections;
+	return sections.map((section) =>
+		section.clip.frozenSec !== undefined
+			? section
+			: { ...section, words: section.words.filter((cw) => !claimed.has(cw.word.id)) },
 	);
 }
 

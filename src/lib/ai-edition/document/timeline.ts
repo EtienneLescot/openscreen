@@ -128,6 +128,73 @@ export function resequenceClips(clips: AxcutClip[]): AxcutClip[] {
 	});
 }
 
+/**
+ * Split the clip covering `atSec` (source time, `assetId`'s media) into
+ * [before · FREEZE · after], where the freeze holds the frame at `atSec` for
+ * `frozenSec` of timeline time. The pause an inserted word creates: without it the
+ * word only borrows free silence, and a word dropped between two words that run into
+ * each other has no time at all. With it the timeline grows, everything downstream
+ * shifts, and a future TTS voice has a slot to speak in.
+ *
+ * No clip covers `atSec` (gap between clips, boundary of the asset) → unchanged, the
+ * caller decides whether that is acceptable. Trims anchored to the split clip stay on
+ * their id; `trimAppliesToClip` matches by asset when a trim has no clipId, and both
+ * halves keep the asset, so a trim that straddles the freeze point still narrows both
+ * halves exactly as it narrowed the whole clip before.
+ */
+export function insertFreezeInClips(
+	clips: AxcutClip[],
+	assetId: string,
+	atSec: number,
+	frozenSec: number,
+): AxcutClip[] {
+	if (frozenSec <= 0) return clips;
+	const index = clips.findIndex(
+		(clip) =>
+			clip.assetId === assetId &&
+			(clip.frozenSec ?? 0) === 0 &&
+			(clip.sourceEndSec ?? -1) > atSec + 0.001 &&
+			atSec > clip.sourceStartSec,
+	);
+	if (index < 0) return clips;
+	const clip = clips[index];
+	// `resequenceClips` keeps each clip's OWN timeline length, so the halves must not
+	// inherit the un-split clip's — that would double the timeline. Lengths here are
+	// derived from the new source windows; resequence then only relays them.
+	const beforeLen = atSec - clip.sourceStartSec;
+	const afterLen = (clip.sourceEndSec ?? 0) - atSec;
+	const before: AxcutClip = {
+		...clip,
+		id: `${clip.id}_fzA`,
+		sourceEndSec: atSec,
+		timelineEndSec: clip.timelineStartSec + beforeLen,
+	};
+	const freeze: AxcutClip = {
+		id: `${clip.id}_fz`,
+		assetId: clip.assetId,
+		sourceStartSec: atSec,
+		sourceEndSec: atSec,
+		timelineStartSec: 0,
+		timelineEndSec: frozenSec,
+		wordRefs: [],
+		origin: "user",
+		reason: "Inserted word — held frame",
+		frozenSec,
+	};
+	const after: AxcutClip | null =
+		afterLen > 0.001
+			? {
+					...clip,
+					id: `${clip.id}_fzB`,
+					sourceStartSec: atSec,
+					timelineStartSec: 0,
+					timelineEndSec: afterLen,
+				}
+			: null;
+	const replaced = after ? [before, freeze, after] : [before, freeze];
+	return resequenceClips([...clips.slice(0, index), ...replaced, ...clips.slice(index + 1)]);
+}
+
 export function subtractInterval(intervals: Interval[], cut: Interval): Interval[] {
 	const output: Interval[] = [];
 	for (const interval of intervals) {
@@ -171,7 +238,10 @@ export function resolvePlaybackSegments(
 	for (const clip of ordered) {
 		const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
 		if (sourceEnd <= clip.sourceStartSec) {
-			// Duration not probed yet — pass through as a single segment, unchanged.
+			// Either not probed yet, or a FREEZE clip (source window is the point it
+			// holds; `frozenSec` carries its real length). Both pass through as one
+			// segment at their timeline length — for a freeze that KEEPS the created
+			// pause in the compressed stream, which is the whole point.
 			const dur = clip.timelineEndSec - clip.timelineStartSec;
 			result.push({
 				...clip,

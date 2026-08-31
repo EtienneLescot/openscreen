@@ -84,6 +84,15 @@ function renderPane(words?: AxcutWord[], busyAssetIds: string[] = []) {
 
 afterEach(cleanup);
 
+describe("telling the user the gestures exist", () => {
+	it("shows the editing hint line and the ? help when a transcript is on screen", () => {
+		// The gestures are invisible until tried — the pane must name them itself.
+		const view = renderPane();
+		expect(view.getByText(/Double-click a word to correct it/)).toBeInTheDocument();
+		expect(view.getByRole("button", { name: "Help" })).toBeInTheDocument();
+	});
+});
+
 describe("correcting a word", () => {
 	it("opens an editing field on the word a double-click lands on", () => {
 		const view = renderPane();

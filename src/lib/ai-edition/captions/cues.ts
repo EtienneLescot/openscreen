@@ -161,6 +161,17 @@ export function sourceSpanToTimelineSpans(
 	const out: Array<{ startSec: number; endSec: number }> = [];
 	for (const clip of clips) {
 		if (clip.assetId !== assetId) continue;
+		// A FREEZE clip holds one source moment for created timeline time — an inserted
+		// word's pause. Its source window is that single point, so the overlap test below
+		// can never match it, and the line the pause exists for went DARK for its whole
+		// duration. A line covering the held moment covers the pause too.
+		if (clip.frozenSec !== undefined) {
+			const held = clip.sourceStartSec;
+			if (held >= startSec && held < endSec) {
+				out.push({ startSec: clip.timelineStartSec, endSec: clip.timelineEndSec });
+			}
+			continue;
+		}
 		const clipSourceEnd = clip.sourceEndSec ?? Number.POSITIVE_INFINITY;
 		const s = Math.max(startSec, clip.sourceStartSec);
 		const e = Math.min(endSec, clipSourceEnd);
@@ -170,7 +181,24 @@ export function sourceSpanToTimelineSpans(
 			endSec: clip.timelineStartSec + (e - clip.sourceStartSec),
 		});
 	}
-	return out;
+
+	// Coalesce what meets on the ruler. Splitting a clip to make room for an inserted word
+	// leaves the line straddling [before · freeze · after]: three spans back to back, each
+	// carrying the WHOLE line's text, so the caption played, blinked out over the pause,
+	// then played again from the top. They are one appearance. A line genuinely played
+	// twice — two clips over one media — does not touch on the ruler and stays two.
+	const EPSILON_SEC = 0.001;
+	const ordered = [...out].sort((a, b) => a.startSec - b.startSec);
+	const merged: Array<{ startSec: number; endSec: number }> = [];
+	for (const span of ordered) {
+		const last = merged[merged.length - 1];
+		if (last && span.startSec <= last.endSec + EPSILON_SEC) {
+			last.endSec = Math.max(last.endSec, span.endSec);
+			continue;
+		}
+		merged.push({ ...span });
+	}
+	return merged;
 }
 
 /**

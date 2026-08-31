@@ -403,7 +403,13 @@ export function segmentRawSpanSec(
 	rawClips: AxcutClip[],
 ): { startSec: number; endSec: number } {
 	const startSec = getRawVirtualStartTime(segment, rawClips);
-	const lenSec = (segment.sourceEndSec ?? segment.sourceStartSec) - segment.sourceStartSec;
+	// A freeze clip's source window is the point it holds — its RAW span is its created
+	// timeline time, not the (zero) source length, or the playhead could never be
+	// "inside" it and would skip the pause entirely.
+	const lenSec =
+		segment.frozenSec !== undefined
+			? segment.frozenSec
+			: (segment.sourceEndSec ?? segment.sourceStartSec) - segment.sourceStartSec;
 	return { startSec, endSec: startSec + lenSec };
 }
 
@@ -690,6 +696,20 @@ export function resolveNativePosition(
 
 	const seg = visibleSegments[index];
 	const segSourceEnd = seg.sourceEndSec ?? seg.sourceStartSec;
+	// Inside a freeze: the source clock does not advance. The whole point of the clip
+	// is created timeline time over one held frame — clamp the offset to zero rather
+	// than letting the raw-playhead delta (which DOES advance through the freeze) push
+	// the decoder past the held frame into content that belongs after the pause.
+	if (seg.frozenSec !== undefined) {
+		return {
+			clip: seg,
+			clipIndex: index,
+			sourceTimeSec: seg.sourceStartSec,
+		};
+	}
+	// No `clampToSegmentStart` any more: this branch used to snap the playhead to the
+	// next kept segment, and main now returns `positionUnderCut` before reaching here
+	// (issue #216), so the flag could never be true.
 	const unclamped = seg.sourceStartSec + (rawSec - spans[index].startSec);
 	const maxSource = Math.max(seg.sourceStartSec, segSourceEnd - NATIVE_EOF_MARGIN_SEC);
 	return {

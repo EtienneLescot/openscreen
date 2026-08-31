@@ -474,3 +474,94 @@ describe("clipWordId", () => {
 		expect(new Set(scopedIds).size).toBe(scopedIds.length);
 	});
 });
+
+// ─── Freeze clips in the pane ────────────────────────────────────
+// An inserted word SPLITS the clip it lands in — [before · freeze · after] — and the word
+// sits exactly on the split. Both the freeze and the half that starts there matched it, so
+// the pane showed the same word twice, in two blocks.
+
+describe("the section a freeze clip projects", () => {
+	const TRANSCRIPT: AxcutTranscript = {
+		assetId: "a1",
+		language: "fr",
+		segments: [
+			{ id: "s1", kind: "speech", startSec: 0, endSec: 4, text: "un deux", wordIds: ["w1", "w2"] },
+		],
+		words: [
+			{ id: "w1", segmentId: "s1", startSec: 0, endSec: 2, text: "un" },
+			{ id: "w2", segmentId: "s1", startSec: 2, endSec: 4, text: "deux" },
+			{ id: "synth_1", segmentId: "s1", startSec: 2, endSec: 2, text: "vraiment", source: "synth" },
+		],
+	};
+	const ASSET: AxcutAsset = {
+		id: "a1",
+		kind: "video",
+		label: "rec.mp4",
+		originalPath: "/r.mp4",
+		durationSec: 4,
+		cameraTrack: null,
+	};
+	const CLIPS: AxcutClip[] = [
+		{
+			id: "c_fzA",
+			assetId: "a1",
+			sourceStartSec: 0,
+			sourceEndSec: 2,
+			timelineStartSec: 0,
+			timelineEndSec: 2,
+			wordRefs: [],
+			origin: "user",
+			reason: "",
+		},
+		{
+			id: "c_fz",
+			assetId: "a1",
+			sourceStartSec: 2,
+			sourceEndSec: 2,
+			timelineStartSec: 2,
+			timelineEndSec: 2.5,
+			wordRefs: [],
+			origin: "user",
+			reason: "",
+			frozenSec: 0.5,
+		},
+		{
+			id: "c_fzB",
+			assetId: "a1",
+			sourceStartSec: 2,
+			sourceEndSec: 4,
+			timelineStartSec: 2.5,
+			timelineEndSec: 4.5,
+			wordRefs: [],
+			origin: "user",
+			reason: "",
+		},
+	];
+
+	it("shows the inserted word the freeze exists for", () => {
+		const sections = buildAggregatedSections(CLIPS, [TRANSCRIPT], [ASSET], []);
+		expect(sections[1].words.map((cw) => cw.word.text)).toEqual(["vraiment"]);
+	});
+
+	it("shows it exactly once across the whole pane", () => {
+		const sections = buildAggregatedSections(CLIPS, [TRANSCRIPT], [ASSET], []);
+		const everywhere = sections.flatMap((section) =>
+			section.words.filter((cw) => cw.word.id === "synth_1"),
+		);
+		expect(everywhere).toHaveLength(1);
+	});
+
+	it("leaves the spoken words where they were", () => {
+		const sections = buildAggregatedSections(CLIPS, [TRANSCRIPT], [ASSET], []);
+		expect(sections[0].words.map((cw) => cw.word.text)).toEqual(["un"]);
+		expect(sections[2].words.map((cw) => cw.word.text)).toEqual(["deux"]);
+	});
+
+	// The claim is scoped to freezes: with no freeze in the timeline, a word with no
+	// duration is shown by whichever clip its moment falls in, as before.
+	it("does not withhold an inserted word when no freeze claims it", () => {
+		const whole: AxcutClip[] = [{ ...CLIPS[0], id: "c1", sourceEndSec: 4, timelineEndSec: 4 }];
+		const sections = buildAggregatedSections(whole, [TRANSCRIPT], [ASSET], []);
+		expect(sections[0].words.map((cw) => cw.word.text)).toContain("vraiment");
+	});
+});

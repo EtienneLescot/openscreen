@@ -17,6 +17,7 @@ import {
 	replacePillSpan,
 	resolveNativePosition,
 	resolvePillIds,
+	segmentRawSpanSec,
 } from "./timelineMap";
 
 function clip(overrides: Partial<AxcutClip> & Pick<AxcutClip, "id" | "assetId">): AxcutClip {
@@ -803,5 +804,65 @@ describe("legacy groupId must never affect identity (regression: test 1)", () =>
 			() => "gen",
 		);
 		expect(out[0]).not.toHaveProperty("groupId");
+	});
+});
+
+// ─── Freeze clips ────────────────────────────────────────────────
+// The pause an inserted word creates. Its source window is the single point it holds, so
+// every reader that derives a length from `sourceEndSec - sourceStartSec` gets zero for it
+// — and zero is the one answer that makes the playhead skip the pause entirely.
+
+describe("a freeze clip", () => {
+	const clips = [
+		clip({ id: "a", assetId: "m", sourceStartSec: 0, sourceEndSec: 3 }),
+		clip({
+			id: "fz",
+			assetId: "m",
+			sourceStartSec: 3,
+			sourceEndSec: 3,
+			timelineStartSec: 3,
+			timelineEndSec: 3.5,
+			frozenSec: 0.5,
+		}),
+		clip({
+			id: "b",
+			assetId: "m",
+			sourceStartSec: 3,
+			sourceEndSec: 6,
+			timelineStartSec: 3.5,
+			timelineEndSec: 6.5,
+		}),
+	];
+
+	it("keeps its created time in the playback segments", () => {
+		// It carries no source range to compress, so a naive reader drops it and the pause
+		// vanishes from playback while the ruler still counts it.
+		const segments = resolvePlaybackSegments(clips, []);
+		const freeze = segments.find((segment) => segment.id === "fz");
+		expect(freeze).toBeDefined();
+		expect((freeze?.timelineEndSec ?? 0) - (freeze?.timelineStartSec ?? 0)).toBeCloseTo(0.5, 5);
+	});
+
+	it("spans its frozen time on the raw ruler, not its (zero) source length", () => {
+		const span = segmentRawSpanSec(clips[1], clips);
+		expect(span.endSec - span.startSec).toBeCloseTo(0.5, 5);
+	});
+
+	it("holds the source clock still while the playhead runs through it", () => {
+		// The raw playhead DOES advance through the pause. Letting that delta reach the
+		// decoder would push it past the held frame into the content that belongs after.
+		const segments = resolvePlaybackSegments(clips, []);
+		for (const rawSec of [3.05, 3.25, 3.45]) {
+			const position = resolveNativePosition(rawSec, segments, clips);
+			expect(position?.clip.id).toBe("fz");
+			expect(position?.sourceTimeSec).toBe(3);
+		}
+	});
+
+	it("hands the clip after the pause its own source moment again", () => {
+		const segments = resolvePlaybackSegments(clips, []);
+		const position = resolveNativePosition(4, segments, clips);
+		expect(position?.clip.id).toBe("b");
+		expect(position?.sourceTimeSec).toBeCloseTo(3.5, 5);
 	});
 });
