@@ -264,7 +264,7 @@
 	},
 	"transcript": {
 		"title": "Transcription actuelle",
-		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le marque comme ignoré (en rouge). Survolez un passage rouge pour le restaurer.",
+		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le coupe du film (en rouge). Double-cliquez sur un mot pour corriger son texte : les sous-titres suivent, le film ne bouge pas. Survolez un mot marqué pour le rétablir.",
 		"noClips": "Aucun clip pour l'instant",
 		"noTranscript": "Aucune transcription pour l'instant",
 		"whisperHint": "La transcription utilise Whisper en local — tout s'exécute sur votre ordinateur, aucune donnée ne quitte l'appareil.",
@@ -277,6 +277,10 @@
 		"restoreSilence": "Restaurer le silence ({{duration}} s)",
 		"trimSilence": "Couper le silence ({{duration}} s)",
 		"restoreWord": "Restaurer « {{word}} »",
+		"editWord": "Modifier « {{word}} »",
+		"correctedWord": "Corrigé — la transcription disait « {{original}} »",
+		"revertWord": "Rétablir « {{original}} »",
+		"blankedWord": "vidé",
 		"noAudio": "Ce média n'a pas de piste audio"
 	},
 	"captions": {

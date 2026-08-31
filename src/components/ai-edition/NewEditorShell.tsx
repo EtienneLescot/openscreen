@@ -13,6 +13,7 @@ import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
+import { setDocumentWordText } from "@/lib/ai-edition/document/transcript";
 import { isModalOpen } from "@/lib/ai-edition/modalGuard";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -604,6 +605,31 @@ export function NewEditorShell() {
 		[applyTimelineOp],
 	);
 
+	// transcript-pane → the word's own text. Unlike Backspace (which writes a trimRange and
+	// cuts the media), this writes only `transcript.words[].text`: the captions follow, the
+	// film is untouched. Queued on the SAME chain as the trims so correcting a word and
+	// cutting the next one cannot overwrite each other's save.
+	const handleSetWordText = useCallback(
+		(assetId: string, wordId: string, text: string) => {
+			void enqueueTimelineWrite(async () => {
+				// Read inside the chain: the previous save has resolved by now, so the store
+				// holds the document this edit has to be applied to.
+				const doc = useProjectStore.getState().document;
+				if (!doc) return;
+				try {
+					await saveDocument(setDocumentWordText(doc, assetId, wordId, text), { history: true });
+				} catch (err) {
+					// The word or its transcript vanished under the edit (a regeneration landed
+					// mid-typing). Nothing to retry — say so rather than dropping it silently.
+					toast.error(te("errors.wordEditFailed"), {
+						description: err instanceof Error ? err.message : String(err),
+					});
+				}
+			});
+		},
+		[enqueueTimelineWrite, saveDocument, te],
+	);
+
 	const handleSelectProject = useCallback(
 		async (id: string) => {
 			try {
@@ -1151,6 +1177,7 @@ export function NewEditorShell() {
 		onSeek: handleSeek,
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,
+		onSetWordText: handleSetWordText,
 		onTranscribe: handleTranscribe,
 		canTranscribe: hasAsset,
 		isTranscribing: transcriptGate.state === "pending",

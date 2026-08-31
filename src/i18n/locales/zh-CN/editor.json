@@ -20,7 +20,8 @@
 		"failedToSaveExport": "保存导出文件失败",
 		"failedToSaveExportedVideo": "保存导出的视频失败",
 		"failedToRevealInFolder": "在文件夹中显示时出错：{{error}}",
-		"previewCompositorUnavailable": "此设备无法使用预览"
+		"previewCompositorUnavailable": "此设备无法使用预览",
+		"wordEditFailed": "无法修改该词"
 	},
 	"export": {
 		"canceled": "导出已取消",

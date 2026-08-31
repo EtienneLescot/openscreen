@@ -264,7 +264,7 @@
 	},
 	"transcript": {
 		"title": "Trascrizione corrente",
-		"help": "Trascrizione aggregata di tutti i clip sulla timeline. Backspace / Canc su una parola o selezione la segna come saltata (in rosso). Passa sopra un tratto rosso per ripristinarlo.",
+		"help": "Trascrizione aggregata di tutti i clip sulla timeline. Backspace / Canc su una parola o selezione la taglia dal video (in rosso). Fai doppio clic su una parola per correggerne il testo: i sottotitoli la seguono, il video non cambia. Passa sopra una parola contrassegnata per ripristinarla.",
 		"noClips": "Ancora nessun clip",
 		"noTranscript": "Ancora nessuna trascrizione",
 		"whisperHint": "La trascrizione usa Whisper in locale: gira sul tuo computer, nessun dato lascia il dispositivo.",
@@ -277,6 +277,10 @@
 		"restoreSilence": "Ripristina silenzio ({{duration}} s)",
 		"trimSilence": "Taglia silenzio ({{duration}} s)",
 		"restoreWord": "Ripristina «{{word}}»",
+		"editWord": "Modifica «{{word}}»",
+		"correctedWord": "Corretta — la trascrizione diceva «{{original}}»",
+		"revertWord": "Ripristina «{{original}}»",
+		"blankedWord": "svuotata",
 		"noAudio": "Questo contenuto non ha una traccia audio"
 	},
 	"captions": {

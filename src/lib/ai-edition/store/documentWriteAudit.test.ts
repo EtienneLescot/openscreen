@@ -131,6 +131,9 @@ const DECLARED: WritePath[] = [
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleRenameProject", "save", "gesture"),
 	// Ctrl+S / File > Save.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleSave", "save", "gesture"),
+	// A word rewritten in the transcript pane. A correction, not a cut: it writes
+	// `transcript.words[].text` and leaves the timeline alone.
+	w("src/components/ai-edition/NewEditorShell.tsx", "handleSetWordText", "save", "gesture"),
 	// "Save" chosen on the way out of Ctrl+N and Ctrl+O.
 	w("src/components/ai-edition/NewEditorShell.tsx", "onKey", "save", "gesture"),
 	w("src/components/ai-edition/NewEditorShell.tsx", "onKey", "save", "gesture"),

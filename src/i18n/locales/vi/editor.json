@@ -20,7 +20,8 @@
 		"failedToSaveExport": "Không thể lưu bản xuất",
 		"failedToSaveExportedVideo": "Không thể lưu video đã xuất",
 		"failedToRevealInFolder": "Lỗi khi hiển thị trong thư mục: {{error}}",
-		"previewCompositorUnavailable": "Không thể xem trước trên máy này"
+		"previewCompositorUnavailable": "Không thể xem trước trên máy này",
+		"wordEditFailed": "Không thể thay đổi từ này"
 	},
 	"export": {
 		"canceled": "Đã hủy xuất",

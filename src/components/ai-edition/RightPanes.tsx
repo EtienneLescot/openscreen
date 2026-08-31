@@ -15,6 +15,7 @@ import {
 	MousePointerClick,
 	Sliders,
 	Trash2,
+	Undo2,
 } from "lucide-react";
 
 import {
@@ -704,6 +705,7 @@ export function TranscriptPane({
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
+	onSetWordText,
 	onTranscribe,
 	canTranscribe,
 	isTranscribing,
@@ -722,6 +724,10 @@ export function TranscriptPane({
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
+	/** Rewrite ONE word's text. Takes the bare `AxcutWord.id`, never the clip-scoped
+	 *  `ClipWord.id`: the transcript belongs to the asset, so a correction lands on the
+	 *  media and shows on every clip that plays it — which is the point. */
+	onSetWordText: (assetId: string, wordId: string, text: string) => void;
 	onTranscribe: () => void;
 	canTranscribe: boolean;
 	isTranscribing: boolean;
@@ -832,6 +838,7 @@ export function TranscriptPane({
 						onSeek={onSeek}
 						onAddTrimRange={onAddTrimRange}
 						onRemoveTrimRange={onRemoveTrimRange}
+						onSetWordText={onSetWordText}
 					/>
 				))}
 			</div>
@@ -859,6 +866,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
+	onSetWordText,
 }: {
 	index: number;
 	section: ClipSection;
@@ -867,6 +875,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
+	onSetWordText: (assetId: string, wordId: string, text: string) => void;
 }) {
 	const ts = useScopedT("settings");
 	const { clip, asset, words } = section;
@@ -1210,9 +1219,11 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 							key={cw.id}
 							cw={cw}
 							isCue={cw.id === cueWordId}
+							editable={!busy}
 							target={trimTarget}
 							onRestore={removeTrimRun}
 							onAddTrimRange={onAddTrimRange}
+							onSetWordText={onSetWordText}
 						/>
 					))}
 				</div>
@@ -1243,19 +1254,54 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 const TranscriptWord = memo(function TranscriptWord({
 	cw,
 	isCue,
+	editable,
 	target,
 	onRestore,
 	onAddTrimRange,
+	onSetWordText,
 }: {
 	cw: ClipWord;
 	isCue: boolean;
+	/** False while this clip's transcript is being regenerated — the words on screen are
+	 *  about to be replaced, so an edit typed into them would be thrown away. */
+	editable: boolean;
 	target: TrimTarget;
 	onRestore: (run: TrimRun) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
+	onSetWordText: (assetId: string, wordId: string, text: string) => void;
 }) {
 	const ts = useScopedT("settings");
 	const [hover, setHover] = useState(false);
+	// The text being typed, or null when the word is not under edit.
+	const [draft, setDraft] = useState<string | null>(null);
+	// Escape unmounts the field, and an abandoned field's blur must not commit what the
+	// user just walked away from.
+	const abandonedRef = useRef(false);
 	const removed = !cw.kept;
+	// `originalText` is only ever written by a user edit (see `document/transcript.ts`), so
+	// it is what tells a corrected word from a transcribed one.
+	const original = cw.word.originalText;
+	const corrected = original !== undefined;
+	const blanked = corrected && cw.word.text.trim().length === 0;
+
+	const startEditing = useCallback(() => {
+		if (!editable) return;
+		setDraft(cw.word.text);
+	}, [editable, cw.word.text]);
+
+	const commitDraft = useCallback(() => {
+		const next = (draft ?? "").trim();
+		setDraft(null);
+		if (next === cw.word.text) return;
+		onSetWordText(target.assetId, cw.word.id, next);
+	}, [draft, cw.word.text, cw.word.id, onSetWordText, target.assetId]);
+
+	const revert = useCallback(() => {
+		if (original === undefined) return;
+		// Writing the original back through the same path is what clears the provenance
+		// pair — there is no separate "unedit" operation that could fall out of step.
+		onSetWordText(target.assetId, cw.word.id, original);
+	}, [original, cw.word.id, onSetWordText, target.assetId]);
 
 	if (isSilenceWord(cw.word)) {
 		const durationSec = cw.word.endSec - cw.word.startSec;
@@ -1333,25 +1379,140 @@ const TranscriptWord = memo(function TranscriptWord({
 		);
 	}
 
+	// The inline editor. `contentEditable={false}` keeps the browser from treating it as
+	// part of the enclosing editable block, and every event it raises is stopped here rather
+	// than in the block handlers: Backspace inside the field has to type, not cut, and a
+	// click in it must not seek.
+	if (draft !== null) {
+		return (
+			<input
+				contentEditable={false}
+				data-word-id={cw.id}
+				data-word-editor="true"
+				value={draft}
+				// The field exists only because the user just double-clicked the word it
+				// replaces, so focus follows the gesture rather than stealing it.
+				autoFocus
+				aria-label={ts("transcript.editWord", { word: cw.word.text })}
+				onChange={(event) => setDraft(event.target.value)}
+				onFocus={(event) => event.currentTarget.select()}
+				onBlur={() => {
+					if (abandonedRef.current) {
+						abandonedRef.current = false;
+						return;
+					}
+					commitDraft();
+				}}
+				onKeyDown={(event) => {
+					event.stopPropagation();
+					if (event.key === "Enter") {
+						event.preventDefault();
+						commitDraft();
+					} else if (event.key === "Escape") {
+						event.preventDefault();
+						abandonedRef.current = true;
+						setDraft(null);
+					}
+				}}
+				onBeforeInput={(event) => event.stopPropagation()}
+				onPaste={(event) => event.stopPropagation()}
+				onPointerUp={(event) => event.stopPropagation()}
+				style={{
+					display: "inline",
+					// `ch` is the digit width, not the real glyph width, so this only
+					// approximates the word it replaces — the slack keeps it from clipping.
+					width: `${Math.max(draft.length, 3) + 2}ch`,
+					margin: 0,
+					padding: "0 2px",
+					border: 0,
+					borderBottom: "2px solid var(--accent)",
+					borderRadius: 0,
+					background: "var(--accent-soft)",
+					color: "var(--fg)",
+					font: "inherit",
+					outline: "none",
+				}}
+			/>
+		);
+	}
+
+	// A word the user emptied. It still owns a span of the media, so it keeps a place in
+	// the stream: rendered as its own (empty) text it would be a bare space — invisible,
+	// impossible to click, and therefore impossible to undo.
+	if (blanked) {
+		return (
+			<span
+				data-word-id={cw.id}
+				data-start-sec={cw.word.startSec}
+				data-end-sec={cw.word.endSec}
+				data-blanked="true"
+				style={{ display: "inline" }}
+				onMouseEnter={() => setHover(true)}
+				onMouseLeave={() => setHover(false)}
+				onDoubleClick={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					startEditing();
+				}}
+			>
+				<span
+					contentEditable={false}
+					title={ts("transcript.correctedWord", { original })}
+					style={{
+						display: "inline-flex",
+						alignItems: "center",
+						margin: "0 3px 2px 0",
+						padding: "1px 6px",
+						borderRadius: 999,
+						border: "1px dashed var(--border-hi)",
+						background: "var(--surface-2)",
+						color: "var(--muted)",
+						font: "500 11px/1.5 var(--font-mono)",
+						fontStyle: "italic",
+					}}
+				>
+					{ts("transcript.blankedWord")}
+				</span>
+				{hover ? (
+					<RevertWordButton label={ts("transcript.revertWord", { original })} onRevert={revert} />
+				) : null}{" "}
+			</span>
+		);
+	}
+
 	return (
 		<span
 			data-word-id={cw.id}
 			data-start-sec={cw.word.startSec}
 			data-end-sec={cw.word.endSec}
 			data-skip-id={cw.trimId ?? undefined}
+			data-corrected={corrected ? "true" : undefined}
 			data-cue={isCue ? "true" : undefined}
+			title={corrected ? ts("transcript.correctedWord", { original }) : undefined}
 			style={{
 				display: "inline",
-				color: removed ? "var(--danger)" : "var(--fg)",
+				// A cut word stays the loudest thing about itself: when a word is both cut and
+				// corrected, the strike-through wins and the correction mark steps aside.
+				color: removed ? "var(--danger)" : corrected ? "var(--accent)" : "var(--fg)",
 				fontWeight: removed ? 600 : 400,
-				textDecoration: removed ? "line-through" : "none",
-				textDecorationColor: removed ? "var(--danger)" : undefined,
+				textDecoration: removed ? "line-through" : corrected ? "underline" : "none",
+				textDecorationStyle: !removed && corrected ? "dotted" : undefined,
+				textDecorationThickness: !removed && corrected ? 2 : undefined,
+				textUnderlineOffset: !removed && corrected ? 3 : undefined,
+				textDecorationColor: removed ? "var(--danger)" : corrected ? "var(--accent)" : undefined,
 				opacity: removed ? 0.9 : 1,
 				borderBottom: isCue ? "2px solid var(--accent)" : "none",
 				paddingBottom: isCue ? 1 : 0,
 			}}
 			onMouseEnter={() => setHover(true)}
 			onMouseLeave={() => setHover(false)}
+			onDoubleClick={(e) => {
+				// Without this the browser selects the word inside the enclosing
+				// contentEditable; the field about to replace it does its own selecting.
+				e.preventDefault();
+				e.stopPropagation();
+				startEditing();
+			}}
 		>
 			{/* no filler chip. axcut renders every word the same way;
 			    the LLM is the only place that names a word a filler (via the
@@ -1394,9 +1555,49 @@ const TranscriptWord = memo(function TranscriptWord({
 					<Trash2 size={12} strokeWidth={1.9} aria-hidden="true" />
 				</button>
 			) : null}
+			{/* A cut word's bin already restores it — showing the revert beside it would put
+			    two undos for two different things one pixel apart. */}
+			{!removed && corrected && hover ? (
+				<RevertWordButton label={ts("transcript.revertWord", { original })} onRevert={revert} />
+			) : null}
 		</span>
 	);
 });
+
+/** Hover affordance on a corrected word: put the transcriber's own text back. Mirrors the
+ *  bin on a cut word — same size, same place, the accent rather than the danger colour,
+ *  since reverting a correction restores something instead of removing it. */
+function RevertWordButton({ label, onRevert }: { label: string; onRevert: () => void }) {
+	return (
+		<button
+			type="button"
+			contentEditable={false}
+			title={label}
+			aria-label={label}
+			onClick={(e) => {
+				e.stopPropagation();
+				onRevert();
+			}}
+			style={{
+				display: "inline-flex",
+				alignItems: "center",
+				justifyContent: "center",
+				width: 18,
+				height: 18,
+				marginLeft: 4,
+				padding: 0,
+				border: 0,
+				borderRadius: 4,
+				background: "var(--accent)",
+				color: "white",
+				cursor: "pointer",
+				verticalAlign: "middle",
+			}}
+		>
+			<Undo2 size={12} strokeWidth={1.9} aria-hidden="true" />
+		</button>
+	);
+}
 
 // ─── Caret / selection helpers ────────────────────────────────────
 // Ponytail port of axcut's findCollapsedDeletionWordId. The non-collapsed

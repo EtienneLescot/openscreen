@@ -270,7 +270,7 @@
 	},
 	"transcript": {
 		"title": "Current transcription",
-		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to mark it as skipped (red). Hover a red span to restore it.",
+		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to cut it out of the film (red). Double-click a word to correct its text — the captions follow, the film does not move. Hover a marked word to restore it.",
 		"noClips": "No clips yet",
 		"noTranscript": "No transcript yet",
 		"whisperHint": "Transcribe uses local Whisper — runs on your computer, no data leaves the device.",
@@ -283,6 +283,10 @@
 		"restoreSilence": "Restore silence ({{duration}}s)",
 		"trimSilence": "Trim silence ({{duration}}s)",
 		"restoreWord": "Restore \"{{word}}\"",
+		"editWord": "Edit \"{{word}}\"",
+		"correctedWord": "Corrected — the transcriber heard \"{{original}}\"",
+		"revertWord": "Restore \"{{original}}\"",
+		"blankedWord": "blanked",
 		"noAudio": "This media has no audio track"
 	},
 	"captions": {

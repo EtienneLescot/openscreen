@@ -264,7 +264,7 @@
 	},
 	"transcript": {
 		"title": "現在の文字起こし",
-		"help": "タイムライン上のすべてのクリップをまとめた文字起こしです。単語や選択範囲を Backspace / Delete でスキップ（赤色）にできます。赤い部分にカーソルを合わせると元に戻せます。",
+		"help": "タイムライン上のすべてのクリップをまとめた文字起こしです。単語や選択範囲を Backspace / Delete で映像から切り取れます（赤色）。単語をダブルクリックすると文字を修正できます。字幕は追従し、映像は変わりません。印の付いた単語にカーソルを合わせると元に戻せます。",
 		"noClips": "クリップがまだありません",
 		"noTranscript": "文字起こしがまだありません",
 		"whisperHint": "文字起こしはローカルの Whisper を使用します。お使いのパソコン上で実行され、データが端末外に出ることはありません。",
@@ -277,6 +277,10 @@
 		"restoreSilence": "無音を元に戻す（{{duration}} 秒）",
 		"trimSilence": "無音をトリム（{{duration}} 秒）",
 		"restoreWord": "「{{word}}」を元に戻す",
+		"editWord": "「{{word}}」を編集",
+		"correctedWord": "修正済み — 文字起こしでは「{{original}}」でした",
+		"revertWord": "「{{original}}」に戻す",
+		"blankedWord": "空欄",
 		"noAudio": "このメディアには音声トラックがありません"
 	},
 	"captions": {

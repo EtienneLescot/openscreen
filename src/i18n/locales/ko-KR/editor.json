@@ -20,7 +20,8 @@
 		"failedToSaveExport": "내보낸 파일 저장에 실패했습니다",
 		"failedToSaveExportedVideo": "내보낸 비디오 저장에 실패했습니다",
 		"failedToRevealInFolder": "폴더에서 파일 표시 오류: {{error}}",
-		"previewCompositorUnavailable": "이 컴퓨터에서는 미리보기를 사용할 수 없습니다"
+		"previewCompositorUnavailable": "이 컴퓨터에서는 미리보기를 사용할 수 없습니다",
+		"wordEditFailed": "이 단어를 변경할 수 없습니다"
 	},
 	"export": {
 		"canceled": "내보내기가 취소되었습니다",

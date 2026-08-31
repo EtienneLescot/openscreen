@@ -264,7 +264,7 @@
 	},
 	"transcript": {
 		"title": "Transcripción actual",
-		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la marca como omitida (en rojo). Pasa el cursor sobre un fragmento rojo para restaurarlo.",
+		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la corta del vídeo (en rojo). Haz doble clic en una palabra para corregir su texto: los subtítulos la siguen, el vídeo no cambia. Pasa el cursor sobre una palabra marcada para restaurarla.",
 		"noClips": "Aún no hay clips",
 		"noTranscript": "Aún no hay transcripción",
 		"whisperHint": "La transcripción usa Whisper local: se ejecuta en tu equipo y ningún dato sale del dispositivo.",
@@ -277,6 +277,10 @@
 		"restoreSilence": "Restaurar silencio ({{duration}} s)",
 		"trimSilence": "Recortar silencio ({{duration}} s)",
 		"restoreWord": "Restaurar «{{word}}»",
+		"editWord": "Editar «{{word}}»",
+		"correctedWord": "Corregida: la transcripción decía «{{original}}»",
+		"revertWord": "Restaurar «{{original}}»",
+		"blankedWord": "vaciada",
 		"noAudio": "Este medio no tiene pista de audio"
 	},
 	"captions": {
