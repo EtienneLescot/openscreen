@@ -264,7 +264,10 @@
 	},
 	"transcript": {
 		"title": "Transcrição atual",
-		"help": "Transcrição agregada de todos os clipes da linha do tempo. Backspace / Delete em uma palavra ou seleção a corta do vídeo (em vermelho). Clique duas vezes em uma palavra para corrigir o texto. Digite entre duas palavras para adicionar uma, em âmbar: ela vai para as legendas e não mexe no vídeo. Passe o mouse sobre uma palavra marcada para desfazer.",
+		"editingHint": "Clique duas vezes em uma palavra para corrigi-la, Backspace a corta do vídeo.",
+		"editingHintDev": "Clique duas vezes em uma palavra para corrigi-la, Backspace a corta do vídeo, digite entre duas palavras para adicionar uma.",
+		"help": "Transcrição agregada de todos os clipes da linha do tempo. Backspace / Delete em uma palavra ou seleção a corta do vídeo (em vermelho). Clique duas vezes em uma palavra para corrigir o texto. Passe o mouse sobre uma palavra marcada para desfazer.",
+		"helpInsert": "Digite entre duas palavras para adicionar uma, em âmbar: ela vai para as legendas e não mexe no vídeo.",
 		"noClips": "Nenhum clipe ainda",
 		"noTranscript": "Nenhuma transcrição ainda",
 		"whisperHint": "A transcrição usa o Whisper local — roda no seu computador, nenhum dado sai do dispositivo.",

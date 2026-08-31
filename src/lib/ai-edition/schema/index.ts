@@ -215,6 +215,14 @@ export const clipSchema = z
 		// that as the identity region {x:0,y:0,width:1,height:1} rather than
 		// storing the identity explicitly, so untouched clips stay lean.
 		cropRegion: clipCropRegionSchema.optional(),
+		// A FREEZE clip: holds the frame at `sourceStartSec` (source window is the
+		// zero-width point [sourceStartSec, sourceStartSec]) for `frozenSec` of
+		// TIMELINE time. The pause an inserted word creates so a future TTS voice has
+		// a slot to speak in — screen and webcam freeze together because both tracks
+		// are derived from the same asset source clock. Absent on every ordinary clip;
+		// `resolvePlaybackSegments`'s un-probed passthrough branch must not be confused
+		// with it (a frozen clip is pushed through unchanged too, see its comment).
+		frozenSec: z.number().positive().optional(),
 	})
 	.refine((data) => data.timelineEndSec >= data.timelineStartSec, {
 		message: "timelineEndSec must be greater than or equal to timelineStartSec",

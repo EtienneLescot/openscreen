@@ -1,4 +1,5 @@
 import type { AxcutDocument, AxcutTranscript, AxcutWord } from "../schema";
+import { insertFreezeInClips } from "./timeline";
 
 const CJK_EDGE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 const CLOSING_PUNCTUATION = /^[,.;:!?%。，、；：！？…）)\]}>》」』】〕]/u;
@@ -302,7 +303,15 @@ export function removeWord(transcript: AxcutTranscript, wordId: string): AxcutTr
 }
 
 /** {@link insertWord}, addressed by asset. Goes through `withTranscript` for the same
- *  reason {@link setDocumentWordText} does. */
+ *  reason {@link setDocumentWordText} does.
+ *
+ *  When the free silence the word can borrow is shorter than the text needs to be
+ *  read, the deficit becomes a FREEZE on the timeline (`insertFreezeInClips`): the clip
+ *  is split at the word's edge and a held-frame clip carries the missing time. The
+ *  timeline grows, everything downstream shifts, and the word has a real slot a
+ *  synthesized voice will later speak in. No document-layer gate on this: it is the
+ *  correct document semantics for an inserted word — the product decision of whether
+ *  the gesture exists at all lives in the transcript pane (`openInsertion`). */
 export function insertDocumentWord(
 	document: AxcutDocument,
 	assetId: string,
@@ -314,7 +323,28 @@ export function insertDocumentWord(
 	if (!transcript) {
 		throw new Error(`Cannot insert a word into asset "${assetId}": it has no transcript`);
 	}
-	return withTranscript(document, insertWord(transcript, anchorWordId, side, text));
+	const next = withTranscript(document, insertWord(transcript, anchorWordId, side, text));
+
+	// The word `insertWord` just added — the one synth id the old transcript lacked.
+	const inserted = next.transcripts
+		.find((t) => t.assetId === assetId)
+		?.words.find(
+			(word) => word.source === "synth" && !transcript.words.some((w) => w.id === word.id),
+		);
+	if (!inserted) return next;
+	const deficit = readingSeconds(inserted.text) - (inserted.endSec - inserted.startSec);
+	if (deficit <= 0.05) return next;
+	// The freeze continues the word's slot: after the word for "after" (silence, then
+	// held frame), before it for "before" (held frame, then silence) — one contiguous
+	// stretch of created time the future voice occupies.
+	const atSec = side === "after" ? inserted.endSec : inserted.startSec;
+	return {
+		...next,
+		timeline: {
+			...next.timeline,
+			clips: insertFreezeInClips(next.timeline.clips, assetId, atSec, deficit),
+		},
+	};
 }
 
 /** {@link removeWord}, addressed by asset and taking the whole set at once: a Backspace

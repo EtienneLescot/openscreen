@@ -650,3 +650,118 @@ describe("translated caption layout", () => {
 		);
 	});
 });
+
+// ─── Captions across an inserted word's pause ────────────────────
+// Inserting a word SPLITS the clip it lands in — [before · freeze · after] — and a caption
+// line straddling the split was ventilated once per half, each half carrying the whole
+// line. On screen: the caption played, blinked out for the pause, then played again from
+// the top — dark over the one moment the pause exists for.
+
+describe("a caption line over a freeze", () => {
+	/** `clip-1` split at 1.2s, with 0.5s of held frame carrying an inserted word. */
+	function splitDoc(): AxcutDocument {
+		const withInsert = transcript();
+		withInsert.segments[0] = {
+			...withInsert.segments[0],
+			text: "hello there really friend",
+			wordIds: ["w1", "w2", "synth_1", "w3"],
+		};
+		withInsert.words = [
+			...withInsert.words,
+			{
+				id: "synth_1",
+				segmentId: "seg_1",
+				startSec: 1.2,
+				endSec: 1.2,
+				text: "really",
+				source: "synth",
+			},
+		];
+		return doc({
+			transcripts: [withInsert],
+			timeline: {
+				...doc().timeline,
+				clips: [
+					{
+						id: "clip-1_fzA",
+						assetId: "asset-1",
+						sourceStartSec: 0,
+						sourceEndSec: 1.2,
+						timelineStartSec: 0,
+						timelineEndSec: 1.2,
+						wordRefs: [],
+						origin: "user",
+						reason: "",
+					},
+					{
+						id: "clip-1_fz",
+						assetId: "asset-1",
+						sourceStartSec: 1.2,
+						sourceEndSec: 1.2,
+						timelineStartSec: 1.2,
+						timelineEndSec: 1.7,
+						wordRefs: [],
+						origin: "user",
+						reason: "Inserted word — held frame",
+						frozenSec: 0.5,
+					},
+					{
+						id: "clip-1_fzB",
+						assetId: "asset-1",
+						sourceStartSec: 1.2,
+						sourceEndSec: 10,
+						timelineStartSec: 1.7,
+						timelineEndSec: 10.5,
+						wordRefs: [],
+						origin: "user",
+						reason: "",
+					},
+				],
+			},
+		});
+	}
+
+	it("plays the line once, straight through the pause", () => {
+		const cues = deriveCaptionCues(splitDoc(), ON, {});
+		const first = cues.filter((cue) => cue.text.includes("really"));
+		expect(first).toHaveLength(1);
+		// It starts before the freeze and is still up after it — no dark stretch.
+		expect(first[0].startMs).toBeLessThan(1200);
+		expect(first[0].endMs).toBeGreaterThan(1700);
+	});
+
+	it("still plays a line twice when one media is genuinely placed twice", () => {
+		// The spans do not touch on the ruler there, so the coalescing must leave them apart.
+		const twice = doc({
+			timeline: {
+				...doc().timeline,
+				clips: [
+					{
+						id: "clip-1",
+						assetId: "asset-1",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 0,
+						timelineEndSec: 10,
+						wordRefs: [],
+						origin: "user",
+						reason: "",
+					},
+					{
+						id: "clip-2",
+						assetId: "asset-1",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 20,
+						timelineEndSec: 30,
+						wordRefs: [],
+						origin: "user",
+						reason: "",
+					},
+				],
+			},
+		});
+		const cues = deriveCaptionCues(twice, ON, {});
+		expect(cues.filter((cue) => cue.text.includes("hello"))).toHaveLength(2);
+	});
+});

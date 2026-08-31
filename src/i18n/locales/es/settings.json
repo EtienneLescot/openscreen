@@ -264,7 +264,10 @@
 	},
 	"transcript": {
 		"title": "Transcripción actual",
-		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la corta del vídeo (en rojo). Haz doble clic en una palabra para corregir su texto. Escribe entre dos palabras para añadir una, en ámbar: llega a los subtítulos y no toca el vídeo. Pasa el cursor sobre una palabra marcada para deshacer.",
+		"editingHint": "Haz doble clic en una palabra para corregirla, Retroceso la corta del vídeo.",
+		"editingHintDev": "Haz doble clic en una palabra para corregirla, Retroceso la corta del vídeo, escribe entre dos palabras para añadir una.",
+		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la corta del vídeo (en rojo). Haz doble clic en una palabra para corregir su texto. Pasa el cursor sobre una palabra marcada para deshacer.",
+		"helpInsert": "Escribe entre dos palabras para añadir una, en ámbar: llega a los subtítulos y no toca el vídeo.",
 		"noClips": "Aún no hay clips",
 		"noTranscript": "Aún no hay transcripción",
 		"whisperHint": "La transcripción usa Whisper local: se ejecuta en tu equipo y ningún dato sale del dispositivo.",

@@ -264,7 +264,10 @@
 	},
 	"transcript": {
 		"title": "Geçerli döküm",
-		"help": "Zaman çizelgesindeki tüm kliplerin birleşik dökümü. Bir kelimede veya seçimde Backspace / Delete tuşu onu videodan keser (kırmızı). Bir kelimeye çift tıklayarak metnini düzeltebilirsiniz. İki kelimenin arasına yazarak kehribar renginde yeni bir kelime ekleyebilirsiniz: altyazılara girer, videoya dokunmaz. İşaretli bir kelimenin üzerine gelerek geri alabilirsiniz.",
+		"editingHint": "Bir kelimeye çift tıklayarak düzeltin, Backspace onu videodan keser.",
+		"editingHintDev": "Bir kelimeye çift tıklayarak düzeltin, Backspace onu videodan keser, iki kelimenin arasına yazarak yeni kelime ekleyin.",
+		"help": "Zaman çizelgesindeki tüm kliplerin birleşik dökümü. Bir kelimede veya seçimde Backspace / Delete tuşu onu videodan keser (kırmızı). Bir kelimeye çift tıklayarak metnini düzeltebilirsiniz. İşaretli bir kelimenin üzerine gelerek geri alabilirsiniz.",
+		"helpInsert": "İki kelimenin arasına yazarak kehribar renginde yeni bir kelime ekleyebilirsiniz: altyazılara girer, videoya dokunmaz.",
 		"noClips": "Henüz klip yok",
 		"noTranscript": "Henüz döküm yok",
 		"whisperHint": "Döküm yerel Whisper kullanır — bilgisayarınızda çalışır, hiçbir veri cihazdan çıkmaz.",

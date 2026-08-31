@@ -264,7 +264,10 @@
 	},
 	"transcript": {
 		"title": "Transcription actuelle",
-		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le coupe du film (en rouge). Double-cliquez sur un mot pour corriger son texte. Tapez entre deux mots pour en ajouter un, en ambre : il va dans les sous-titres et ne touche pas au film. Survolez un mot marqué pour annuler.",
+		"editingHint": "Double-cliquez sur un mot pour le corriger, Retour arrière le coupe du film.",
+		"editingHintDev": "Double-cliquez sur un mot pour le corriger, Retour arrière le coupe du film, tapez entre deux mots pour en ajouter un.",
+		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le coupe du film (en rouge). Double-cliquez sur un mot pour corriger son texte. Survolez un mot marqué pour annuler.",
+		"helpInsert": "Tapez entre deux mots pour en ajouter un, en ambre : il va dans les sous-titres et ne touche pas au film.",
 		"noClips": "Aucun clip pour l'instant",
 		"noTranscript": "Aucune transcription pour l'instant",
 		"whisperHint": "La transcription utilise Whisper en local — tout s'exécute sur votre ordinateur, aucune donnée ne quitte l'appareil.",

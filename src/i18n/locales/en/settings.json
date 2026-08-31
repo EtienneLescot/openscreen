@@ -270,7 +270,10 @@
 	},
 	"transcript": {
 		"title": "Current transcription",
-		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to cut it out of the film (red). Double-click a word to correct its text. Type between two words to add one, in amber: it reaches the captions and leaves the film alone. Hover a marked word to undo it.",
+		"editingHint": "Double-click a word to correct it, Backspace cuts it from the film.",
+		"editingHintDev": "Double-click a word to correct it, Backspace cuts it from the film, type between two words to add one.",
+		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to cut it out of the film (red). Double-click a word to correct its text. Hover a marked word to undo it.",
+		"helpInsert": "Type between two words to add one, in amber: it reaches the captions and leaves the film alone.",
 		"noClips": "No clips yet",
 		"noTranscript": "No transcript yet",
 		"whisperHint": "Transcribe uses local Whisper — runs on your computer, no data leaves the device.",

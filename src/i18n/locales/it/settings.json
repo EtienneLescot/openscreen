@@ -264,7 +264,10 @@
 	},
 	"transcript": {
 		"title": "Trascrizione corrente",
-		"help": "Trascrizione aggregata di tutti i clip sulla timeline. Backspace / Canc su una parola o selezione la taglia dal video (in rosso). Fai doppio clic su una parola per correggerne il testo. Scrivi tra due parole per aggiungerne una, in ambra: finisce nei sottotitoli e non tocca il video. Passa sopra una parola contrassegnata per annullare.",
+		"editingHint": "Fai doppio clic su una parola per correggerla, Backspace la taglia dal video.",
+		"editingHintDev": "Fai doppio clic su una parola per correggerla, Backspace la taglia dal video, scrivi tra due parole per aggiungerne una.",
+		"help": "Trascrizione aggregata di tutti i clip sulla timeline. Backspace / Canc su una parola o selezione la taglia dal video (in rosso). Fai doppio clic su una parola per correggerne il testo. Passa sopra una parola contrassegnata per annullare.",
+		"helpInsert": "Scrivi tra due parole per aggiungerne una, in ambra: finisce nei sottotitoli e non tocca il video.",
 		"noClips": "Ancora nessun clip",
 		"noTranscript": "Ancora nessuna trascrizione",
 		"whisperHint": "La trascrizione usa Whisper in locale: gira sul tuo computer, nessun dato lascia il dispositivo.",

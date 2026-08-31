@@ -134,6 +134,23 @@ describe("typing between two words", () => {
 		expect(view.field()).toHaveValue("v");
 	});
 
+	it("stays inert outside dev builds — the gesture waits for TTS", () => {
+		// An inserted word with no voice only borrows free silence, so the gesture ships
+		// dev-only (see openInsertion). Release builds must drop the keystroke silently,
+		// the same way they did before the feature existed.
+		vi.stubEnv("DEV", false);
+		try {
+			const view = renderPane();
+			caretBeforeWordAt(view.editor, 2);
+			type(view.editor, "v");
+			expect(view.field()).toBeNull();
+			expect(view.onInsertWord).not.toHaveBeenCalled();
+			expect(view.editor.textContent).not.toContain("v ");
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it("never writes the typed text into the block itself", () => {
 		// The whole reason inserts were blocked: a run of text with no word id behind it
 		// desynchronises the DOM from `words`.
