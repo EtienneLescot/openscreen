@@ -1461,8 +1461,9 @@ unsafe fn run_multi_inner(
     enc.send(ptr::null_mut())?;
     drain_encoder(ectx, octx, ostream, opkt)?;
 
-    // Récupération des jobs audio lancés pendant le parcours. Ce qui reste à attendre ici,
-    // c'est au plus le dernier clip : les précédents se sont recouverts avec l'encodage.
+    // Récupération des jobs audio lancés pendant le parcours. `spawn` en admet quatre avant
+    // d'en collecter un, donc il en reste au plus quatre à attendre ici — bornés par le plus
+    // lent, pas par leur somme ; tous les autres se sont recouverts avec l'encodage.
     let clip_pcm: Vec<Option<PlanarPcm>> = audio_jobs
         .into_results()
         .into_iter()
