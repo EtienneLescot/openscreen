@@ -85,6 +85,7 @@
 		"smartCutsNeedsTranscript": "Bir döküm gerekiyor",
 		"smartCutsNoAudio": "Bu medyada ses yok",
 		"smartCutsNoSpeech": "Konuşma algılanmadı",
-		"smartCutsFailed": "Metne dökme başarısız — Medya bölümünden yeniden deneyin"
+		"smartCutsFailed": "Metne dökme başarısız — Medya bölümünden yeniden deneyin",
+		"addedWord": "Eklenen kelime: \"{{word}}\" — arkasında ses yok"
 	}
 }

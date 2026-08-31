@@ -85,6 +85,7 @@
 		"smartCutsNeedsTranscript": "需要轉錄文字",
 		"smartCutsNoAudio": "此媒體沒有音訊",
 		"smartCutsNoSpeech": "未偵測到語音",
-		"smartCutsFailed": "轉錄失敗 — 請在「媒體」中重試"
+		"smartCutsFailed": "轉錄失敗 — 請在「媒體」中重試",
+		"addedWord": "已加入的字詞：「{{word}}」— 背後沒有聲音"
 	}
 }

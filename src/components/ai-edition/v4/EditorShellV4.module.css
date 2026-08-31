@@ -1643,6 +1643,41 @@
 	background: var(--danger-soft);
 	color: var(--danger);
 }
+
+/* Where the user has ADDED a word: text with no audio behind it. A thin amber tick
+   over the waveform, at the moment the word sits on, wide enough to hit and no wider
+   — the clip underneath still has to be draggable everywhere else. Amber is the
+   colour the transcript pane gives the same word, so the two read as one thing. */
+.tlClipInsert {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	z-index: 2;
+	width: 9px;
+	margin-left: -4px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	cursor: pointer;
+}
+.tlClipInsert::before {
+	content: "";
+	position: absolute;
+	left: 3px;
+	top: 4px;
+	bottom: 4px;
+	width: 3px;
+	border-radius: 2px;
+	background: var(--warn);
+	box-shadow: 0 0 0 1px color-mix(in srgb, #080a0d 45%, transparent);
+	transition: box-shadow var(--motion-fast) var(--ease);
+}
+.tlClipInsert:hover::before,
+.tlClipInsert:focus-visible::before {
+	box-shadow:
+		0 0 0 1px color-mix(in srgb, #080a0d 45%, transparent),
+		0 0 0 4px var(--warn-soft);
+}
 .tlDropHint {
 	position: absolute;
 	inset: 0;

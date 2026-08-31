@@ -85,6 +85,7 @@
 		"smartCutsNeedsTranscript": "Requiere una transcripción",
 		"smartCutsNoAudio": "Este medio no tiene audio",
 		"smartCutsNoSpeech": "No se detectó voz",
-		"smartCutsFailed": "La transcripción falló: reinténtala desde Medios"
+		"smartCutsFailed": "La transcripción falló: reinténtala desde Medios",
+		"addedWord": "Palabra añadida: «{{word}}» — sin audio detrás"
 	}
 }

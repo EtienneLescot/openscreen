@@ -85,6 +85,7 @@
 		"smartCutsNeedsTranscript": "Needs a transcript",
 		"smartCutsNoAudio": "This media has no audio",
 		"smartCutsNoSpeech": "No speech detected",
-		"smartCutsFailed": "Transcription failed — retry it from Media"
+		"smartCutsFailed": "Transcription failed — retry it from Media",
+		"addedWord": "Added word: \"{{word}}\" — no audio behind it"
 	}
 }

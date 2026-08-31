@@ -85,6 +85,7 @@
 		"smartCutsNeedsTranscript": "Requer uma transcrição",
 		"smartCutsNoAudio": "Esta mídia não tem áudio",
 		"smartCutsNoSpeech": "Nenhuma fala detectada",
-		"smartCutsFailed": "Falha na transcrição — tente de novo em Mídia"
+		"smartCutsFailed": "Falha na transcrição — tente de novo em Mídia",
+		"addedWord": "Palavra adicionada: \"{{word}}\" — sem áudio por trás"
 	}
 }

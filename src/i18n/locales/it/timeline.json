@@ -85,6 +85,7 @@
 		"smartCutsNeedsTranscript": "Richiede una trascrizione",
 		"smartCutsNoAudio": "Questo contenuto non ha audio",
 		"smartCutsNoSpeech": "Nessun parlato rilevato",
-		"smartCutsFailed": "Trascrizione non riuscita: riprova da Contenuti multimediali"
+		"smartCutsFailed": "Trascrizione non riuscita: riprova da Contenuti multimediali",
+		"addedWord": "Parola aggiunta: «{{word}}» — nessun audio dietro"
 	}
 }

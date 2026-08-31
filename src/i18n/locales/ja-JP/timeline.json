@@ -85,6 +85,7 @@
 		"smartCutsNeedsTranscript": "文字起こしが必要です",
 		"smartCutsNoAudio": "このメディアには音声がありません",
 		"smartCutsNoSpeech": "音声が検出されませんでした",
-		"smartCutsFailed": "文字起こしに失敗しました — メディアから再試行してください"
+		"smartCutsFailed": "文字起こしに失敗しました — メディアから再試行してください",
+		"addedWord": "追加した単語:「{{word}}」— 音声はありません"
 	}
 }

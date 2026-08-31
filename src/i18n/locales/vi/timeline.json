@@ -85,6 +85,7 @@
 		"smartCutsNeedsTranscript": "Cần có bản phiên âm",
 		"smartCutsNoAudio": "Media này không có âm thanh",
 		"smartCutsNoSpeech": "Không phát hiện giọng nói",
-		"smartCutsFailed": "Phiên âm thất bại — thử lại trong Media"
+		"smartCutsFailed": "Phiên âm thất bại — thử lại trong Media",
+		"addedWord": "Từ đã thêm: \"{{word}}\" — không có âm thanh phía sau"
 	}
 }

@@ -85,6 +85,7 @@
 		"smartCutsNeedsTranscript": "يتطلب نصًا منسوخًا",
 		"smartCutsNoAudio": "لا يحتوي هذا الملف على صوت",
 		"smartCutsNoSpeech": "لم يتم اكتشاف كلام",
-		"smartCutsFailed": "فشل النسخ — أعد المحاولة من قسم الوسائط"
+		"smartCutsFailed": "فشل النسخ — أعد المحاولة من قسم الوسائط",
+		"addedWord": "كلمة مضافة: \"{{word}}\" — لا صوت خلفها"
 	}
 }
