@@ -2152,6 +2152,62 @@ describe("buildSceneDescription.audioTracks", () => {
 		expect(entry.trimEndSec - entry.trimStartSec).toBeCloseTo(6, 6);
 	});
 
+	it("places a track after a speed region on the compressed clock", () => {
+		// The programme is time-stretched before the tracks are mixed onto it
+		// (`stretch_clip_pcm_by_speed` then `mix_external_tracks`), so raw 12 with
+		// raw 4..8 at 2x is output 10. Blind to speed the track landed at 12 —
+		// two seconds late, and later still the more the video is sped up.
+		const screen = makeAsset({ id: "scr", originalPath: "/screen.mp4", durationSec: 20 });
+		const doc = makeDoc({
+			assets: [screen, audioAsset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "scr",
+					sourceStartSec: 0,
+					sourceEndSec: 20,
+					timelineStartSec: 0,
+					timelineEndSec: 20,
+				}),
+			],
+			legacyEditor: { speedRegions: [{ id: "s1", startMs: 4000, endMs: 8000, speed: 2 }] },
+			audioTracks: [{ ...track, startMs: 12_000, endMs: 16_000, offsetMs: 0 }],
+		});
+		const [entry] = buildSceneDescription(doc).audioTracks;
+		expect(entry.startSec).toBeCloseTo(10, 6);
+		// ...and the track itself is NOT stretched: 4 raw seconds of audio stay 4
+		// seconds of source, whatever the video under it is doing.
+		expect(entry.trimEndSec - entry.trimStartSec).toBeCloseTo(4, 6);
+	});
+
+	it("does not shorten a track just because the video under it is sped up", () => {
+		// A speed region compresses the programme; it does not delete anything. The
+		// track still holds all its audio and still plays at 1x, so a 4s voiceover
+		// under a 2x region is still 4s of narration — measuring its length on the
+		// compressed clock silently cut it in half.
+		const screen = makeAsset({ id: "scr", originalPath: "/screen.mp4", durationSec: 20 });
+		const doc = makeDoc({
+			assets: [screen, audioAsset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "scr",
+					sourceStartSec: 0,
+					sourceEndSec: 20,
+					timelineStartSec: 0,
+					timelineEndSec: 20,
+				}),
+			],
+			legacyEditor: { speedRegions: [{ id: "s1", startMs: 2000, endMs: 10_000, speed: 2 }] },
+			audioTracks: [{ ...track, startMs: 4000, endMs: 8000, offsetMs: 0 }],
+		});
+		const [entry] = buildSceneDescription(doc).audioTracks;
+		expect(entry.trimEndSec - entry.trimStartSec).toBeCloseTo(4, 6);
+		// Its head still moves onto the compressed clock: raw 4 is 1s into a 2x
+		// stretch that began at raw 2, so output 3.
+		expect(entry.startSec).toBeCloseTo(3, 6);
+	});
+
 	it("drops a track whose asset has no resolvable path", () => {
 		const doc = makeDoc({ assets: [], audioTracks: [track] });
 		expect(buildSceneDescription(doc).audioTracks).toEqual([]);

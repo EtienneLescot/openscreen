@@ -31,6 +31,7 @@ import {
 import { createId } from "@/lib/ai-edition/document/ids";
 import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
 import {
+	type PlaybackSpeedRegion,
 	projectRawTimelineSecToPlayback,
 	resolvePlaybackSegments,
 } from "@/lib/ai-edition/document/timeline";
@@ -544,6 +545,17 @@ export function buildSceneDescription(
 	const projectedClips = document.timeline.clips.filter((clip) =>
 		clipAssetIsResolvable(clip, assetById),
 	);
+	// Speed regions on the RAW ruler. The programme these tracks mix onto has
+	// already been time-stretched by them (`stretch_clip_pcm_by_speed` runs before
+	// `mix_external_tracks`), so a projection blind to speed lands every track
+	// after a speed region at the wrong second. The tracks themselves are never
+	// stretched — a voiceover should not chipmunk because the video under it was
+	// sped up.
+	const rawSpeedRegions = (
+		((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as
+			| PlaybackSpeedRegion[]
+			| undefined) ?? []
+	).filter((r) => Number.isFinite(r.speed) && r.speed > 0);
 	const audioTracks = document.audioTracks.flatMap((track) => {
 		if (track.muted) return [];
 		const asset = assetById.get(track.assetId);
@@ -554,18 +566,29 @@ export function buildSceneDescription(
 			projectedClips,
 			document.timeline.trimRanges,
 			track.startMs / 1000,
+			rawSpeedRegions,
 		);
-		// Measure the span on the OUTPUT programme, not the raw ruler. A track
-		// sitting inside a trimmed stretch projects BOTH its ends onto the same
-		// boundary, so its output span is zero and it is dropped — where the raw
-		// span kept it alive and played it, in full, at the cut. A track that
-		// merely crosses a trim shortens by what the cut removed.
-		const endSec = projectRawTimelineSecToPlayback(
-			projectedClips,
-			document.timeline.trimRanges,
-			track.endMs / 1000,
-		);
-		const spanSec = endSec - startSec;
+		// Length is measured WITHOUT speed, position WITH it — the two do different
+		// things to a track and must not be conflated.
+		//
+		// A trim REMOVES timeline: a track inside removed time has nowhere left to
+		// be (zero length, dropped), and one crossing a cut loses what the cut took.
+		// A speed region only COMPRESSES: the track still holds all its audio and
+		// still plays at 1x, so speeding the video up must not quietly cut the
+		// narration short. It changes where the track STARTS, because the programme
+		// ahead of it got shorter, and nothing else.
+		const trimmedSpanSec =
+			projectRawTimelineSecToPlayback(
+				projectedClips,
+				document.timeline.trimRanges,
+				track.endMs / 1000,
+			) -
+			projectRawTimelineSecToPlayback(
+				projectedClips,
+				document.timeline.trimRanges,
+				track.startMs / 1000,
+			);
+		const spanSec = trimmedSpanSec;
 		if (spanSec <= 0) return [];
 		const base = {
 			path: asset.originalPath,
