@@ -28,6 +28,56 @@ import {
 	hasCompleteClipAnchor,
 } from "./timelineMap";
 
+/**
+ * Where an audio pill's own content stops: the LEFT edge cannot move before the point
+ * where the in-point would reach the file's start, the RIGHT edge not past where the
+ * played window would run off the file's end. Resizing is a crop, and a crop cannot
+ * crop past the tape — before these bounds the edges stretched into implicit silence
+ * (and a left-edge overrun silently extended the tail, since the out-point is derived
+ * as `offset + span`). Null while the duration is unknown: a failed probe must not
+ * freeze the pill.
+ */
+export function audioContentBounds(
+	offsetSec: number,
+	spanSec: number,
+	durationSec: number | null | undefined,
+	pillStartT: number,
+	pillEndT: number,
+): { minStartT: number; maxEndT: number } | null {
+	if (durationSec == null || !(durationSec > 0)) return null;
+	const minStartT = Math.max(0, pillStartT - Math.max(0, offsetSec));
+	const maxEndT = pillEndT + Math.max(0, durationSec - (offsetSec + spanSec));
+	return { minStartT, maxEndT };
+}
+
+/**
+ * The file's extent around an audio pill, as the lane can draw it: where the content
+ * still available on each side sits on the timeline ([startT, endT], clipped to the
+ * timeline's own bounds), and which source window that stretch shows. This is the
+ * "rest of the tape" a resize reveals — the pill is a window, this is what is behind
+ * its edges. Null when the duration is unknown or the pill already spans the whole
+ * file.
+ */
+export function audioGhostExtent(
+	offsetSec: number,
+	spanSec: number,
+	durationSec: number | null | undefined,
+	pillStartT: number,
+	pillEndT: number,
+	totalT: number,
+): { startT: number; endT: number; sourceStartSec: number; sourceEndSec: number } | null {
+	if (durationSec == null || !(durationSec > 0)) return null;
+	const startT = Math.max(0, pillStartT - Math.max(0, offsetSec));
+	const endT = Math.min(totalT, pillEndT + Math.max(0, durationSec - (offsetSec + spanSec)));
+	if (endT - startT <= pillEndT - pillStartT + 1e-6) return null;
+	return {
+		startT,
+		endT,
+		sourceStartSec: offsetSec - (pillStartT - startT),
+		sourceEndSec: offsetSec + (endT - pillStartT),
+	};
+}
+
 /** One fragment of one audio pill, resolved onto the output programme. */
 export interface AudioPlacement {
 	/** The pill the fragment belongs to — the id the ruler, the inspector and the agent

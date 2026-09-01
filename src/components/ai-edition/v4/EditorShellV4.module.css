@@ -1476,6 +1476,41 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+/* The rest of an audio pill's tape (audioGhostExtent): where its file's content still
+   sits around the pill. Dimmed and unclickable, below the pill (z-index 2 there), so
+   the pill reads as a window onto it — a resize now shows what it crops and where the
+   content stops before the edge's hard stop. */
+.lanePillGhost {
+	position: absolute;
+	top: 1px;
+	height: 22px;
+	min-width: 1px;
+	overflow: hidden;
+	border-radius: 6px;
+	border: 1px dashed color-mix(in oklch, var(--accent) 55%, transparent);
+	pointer-events: none;
+	z-index: 1;
+}
+.lanePillGhost .tlWave {
+	opacity: 0.4;
+}
+/* Crop readout pinned to the pointer while an audio pill's edge is being pulled —
+   in → out over the file's length. Rendered at the component root (see the JSX note
+   about the canvas transform). */
+.tlDragTip {
+	position: fixed;
+	z-index: 1200;
+	transform: translate(-50%, calc(-100% - 18px));
+	padding: 3px 8px;
+	border-radius: 6px;
+	border: 1px solid var(--border-hi);
+	background: var(--bg);
+	color: var(--fg);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	pointer-events: none;
+}
 .laneAnnotation {
 	border-color: var(--annotation);
 	background: var(--annotation-wash);

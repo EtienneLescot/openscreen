@@ -39,6 +39,7 @@ import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionS
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { audioContentBounds, audioGhostExtent } from "@/lib/ai-edition/timeline/audio-placement";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
@@ -692,17 +693,43 @@ export function V4Timeline({
 		[seekToClientX, tl, setCurrentTime, showLanes],
 	);
 
+	// What an in-flight drag of an AUDIO pill also needs to know: the edge being pulled
+	// (`mode`), and where the content stood when the gesture started — so the live
+	// preview can keep the ghost and the readout in step with the offset a "l" edge is
+	// trimming, and clamp the edges to the file's own bounds.
+	type AudioDragContext = {
+		originStartT: number;
+		originEndT: number;
+		offsetSec: number;
+		durationSec: number | undefined;
+	};
 	const [activePillDrag, setActivePillDrag] = useState<{
 		id: string;
 		kind: LanePill["kind"];
 		start: number;
 		end: number;
+		mode: "move" | "l" | "r";
+		audio?: AudioDragContext;
 	} | null>(null);
 	const activePillDragRef = useRef<{
 		id: string;
 		kind: LanePill["kind"];
 		start: number;
 		end: number;
+		mode: "move" | "l" | "r";
+		audio?: AudioDragContext;
+	} | null>(null);
+
+	// The crop readout while an audio edge is being pulled: where the played window now
+	// sits in the file, pinned to the pointer. Numbers only — the boundary states are
+	// self-evident (in 0:00.0 = the file's start) and localised copy would freeze this
+	// prototype into thirteen locale files.
+	const [audioDragTip, setAudioDragTip] = useState<{
+		x: number;
+		y: number;
+		inSec: number;
+		outSec: number;
+		durationSec: number;
 	} | null>(null);
 
 	// The one door for "this pill is the thing I mean", called by both the pointer and the
@@ -734,6 +761,18 @@ export function V4Timeline({
 			const r = el.getBoundingClientRect();
 			const startX = e.clientX;
 			const dur = pill.end - pill.start;
+			// Audio pills drag their own content, not just a span: remember where the
+			// window stood when the gesture began, so the edges can be stopped at the
+			// file's own bounds and the ghost/readout can follow a left-edge trim live.
+			const audioCtx: AudioDragContext | undefined =
+				pill.waveform && (pill.kind === "voiceover" || pill.kind === "music")
+					? {
+							originStartT: pill.start,
+							originEndT: pill.end,
+							offsetSec: pill.waveform.sourceStartSec,
+							durationSec: pill.waveform.assetDurationSec,
+						}
+					: undefined;
 			// A trim can span several clips; it's stored as one source-time entry per
 			// covered clip. `trimOwned` are the entry ids this drag controls — seeded
 			// from every row the grabbed (possibly already-coalesced) pill represents,
@@ -783,9 +822,27 @@ export function V4Timeline({
 				// trims its in-point (the media stays where it is in time), while moving the
 				// body carries the media with it. Every other kind holds a value over a span,
 				// so which edge you grabbed changes nothing about what it plays.
-				else if (pill.kind === "voiceover" || pill.kind === "music")
-					await tl.updateAudioSpan(pill.id, s * 1000, en * 1000, dragMode);
-				else {
+				else if (pill.kind === "voiceover" || pill.kind === "music") {
+					// The same content bounds as the live drag — apply is the last door, and
+					// clamping here too keeps a committed span from ever running past the
+					// file even if a future caller skips the drag machinery.
+					let as = s;
+					let ae = en;
+					if (pill.waveform) {
+						const bounds = audioContentBounds(
+							pill.waveform.sourceStartSec,
+							pill.end - pill.start,
+							pill.waveform.assetDurationSec,
+							pill.start,
+							pill.end,
+						);
+						if (bounds) {
+							if (dragMode === "l") as = Math.max(bounds.minStartT, as);
+							if (dragMode === "r") ae = Math.min(bounds.maxEndT, ae);
+						}
+					}
+					await tl.updateAudioSpan(pill.id, as * 1000, ae * 1000, dragMode);
+				} else {
 					// Trims are stored in source-time per asset but manipulated on the
 					// timeline like every other pill. Ventilate the new span across the
 					// clips it covers (one source range per clip) — the same primitive
@@ -820,12 +877,45 @@ export function V4Timeline({
 					ns = pill.start;
 					ne = Math.min(total, Math.max(pill.start + MIN_REGION_SEC, snap(pill.end + dxSec)));
 				}
-				const nextState = { id: pill.id, kind: pill.kind, start: ns, end: ne };
+				// A resize is a CROP of the file: the edges stop where its content stops,
+				// the same kind of wall a neighbouring pill already is. Before this, an
+				// edge stretched on into silence however far past the media it was pulled.
+				if (audioCtx && (dragMode === "l" || dragMode === "r")) {
+					const bounds = audioContentBounds(
+						audioCtx.offsetSec,
+						pill.end - pill.start,
+						audioCtx.durationSec,
+						pill.start,
+						pill.end,
+					);
+					if (bounds) {
+						if (dragMode === "l") ns = Math.max(bounds.minStartT, ns);
+						else ne = Math.min(bounds.maxEndT, ne);
+					}
+					// The readout answers "where am I in the file": the in-point a left-edge
+					// trim is moving, the out-point a right-edge pull is extending.
+					setAudioDragTip({
+						x: ev.clientX,
+						y: ev.clientY,
+						inSec: audioCtx.offsetSec + (ns - pill.start),
+						outSec: audioCtx.offsetSec + (ne - pill.start),
+						durationSec: audioCtx.durationSec ?? 0,
+					});
+				}
+				const nextState = {
+					id: pill.id,
+					kind: pill.kind,
+					start: ns,
+					end: ne,
+					mode: dragMode,
+					audio: audioCtx,
+				};
 				activePillDragRef.current = nextState;
 				setActivePillDrag(nextState);
 			};
 			const up = () => {
 				setSnapPct(null);
+				setAudioDragTip(null);
 				window.removeEventListener("pointermove", move);
 				window.removeEventListener("pointerup", up);
 				const finalDrag = activePillDragRef.current;
@@ -1310,6 +1400,44 @@ export function V4Timeline({
 					</span>
 				) : null}
 				{effectivePills.flatMap((p) => {
+					// An audio pill is a window onto its file; behind its edges, the rest of
+					// the tape — dimmed, unclickable, bounded by the file's own start and
+					// end. It is what makes a resize read as a crop: you SEE what is still
+					// available on each side before the edge stops. While a left edge is
+					// being pulled the in-point moves with it, so the ghost follows live.
+					const ghostDrag = activePillDrag?.id === p.id ? activePillDrag : null;
+					const ghost =
+						p.waveform && (p.kind === "voiceover" || p.kind === "music")
+							? audioGhostExtent(
+									ghostDrag?.audio && ghostDrag.mode === "l"
+										? ghostDrag.audio.offsetSec + (p.start - ghostDrag.audio.originStartT)
+										: (p.waveform.sourceStartSec ?? 0),
+									p.end - p.start,
+									p.waveform.assetDurationSec,
+									p.start,
+									p.end,
+									total,
+								)
+							: null;
+					const ghostEl =
+						ghost && p.waveform ? (
+							<div
+								key={`${p.id}__ghost`}
+								className={styles.lanePillGhost}
+								style={{
+									left: `${pctOf(ghost.startT)}%`,
+									width: `${pctOf(ghost.endT - ghost.startT)}%`,
+								}}
+							>
+								<ClipWaveform
+									videoUrl={p.waveform.url}
+									assetDurationSec={p.waveform.assetDurationSec}
+									sourceStartSec={ghost.sourceStartSec}
+									sourceEndSec={ghost.sourceEndSec}
+									gain={p.waveform.gain}
+								/>
+							</div>
+						) : null;
 					// Eager split preview: the instant a clip is grabbed, a pill that
 					// straddles the dragged clip's junction shows the same per-clip
 					// split it would resolve to on drop (via moveClip's reprojection),
@@ -1335,6 +1463,9 @@ export function V4Timeline({
 									const c = clipById.get(f.clipId);
 									if (!c) return [];
 									return [
+										// The ghost belongs to the WHOLE pill, so it goes with the
+										// leading fragment only.
+										i === 0 ? ghostEl : null,
 										renderOnePill({
 											pill: p,
 											key: `${p.id}__f${i}`,
@@ -1354,6 +1485,7 @@ export function V4Timeline({
 					}
 					const shift = regionPreviewShift(p.start);
 					return [
+						ghostEl,
 						renderOnePill({
 							pill: p,
 							key: p.id,
@@ -1374,6 +1506,16 @@ export function V4Timeline({
 
 	return (
 		<div className={styles.tl} ref={panelRef}>
+			{/* The crop readout while an audio pill's edge is being pulled (audioDragTip).
+			    Lives at the ROOT, not in the canvas: the canvas carries the zoom/pan
+			    transform, and a fixed-position child of a transformed element is fixed to
+			    that box, not the viewport. */}
+			{audioDragTip ? (
+				<div className={styles.tlDragTip} style={{ left: audioDragTip.x, top: audioDragTip.y }}>
+					{formatSec(audioDragTip.inSec)} → {formatSec(audioDragTip.outSec)}
+					{audioDragTip.durationSec > 0 ? ` / ${formatSec(audioDragTip.durationSec)}` : ""}
+				</div>
+			) : null}
 			<div className={styles.tlToolbar}>
 				{showLanes ? (
 					<div className={styles.tlTools} role="toolbar" aria-label={t("toolbar.timelineTools")}>
