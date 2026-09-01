@@ -133,6 +133,40 @@ struct ReadbackRing {
     pending: std::collections::VecDeque<PendingCopy>,
 }
 
+/// Cibles et pipelines de la conversion RGBA -> YUV420P sur le GPU.
+///
+/// Trois cibles R8Unorm plutot qu'une seule : Y est en pleine resolution et U/V
+/// en demie (4:2:0), et wgpu ne sait pas ecrire des attachements de tailles
+/// differentes dans une meme passe.
+struct YuvTargets {
+    /// Gardees en vie pour leurs vues ; seules les vues servent au rendu.
+    _y: wgpu::Texture,
+    _u: wgpu::Texture,
+    _v: wgpu::Texture,
+    y_view: wgpu::TextureView,
+    u_view: wgpu::TextureView,
+    v_view: wgpu::TextureView,
+    bind: wgpu::BindGroup,
+    pipe_y: wgpu::RenderPipeline,
+    pipe_u: wgpu::RenderPipeline,
+    pipe_v: wgpu::RenderPipeline,
+    /// Dimensions pour lesquelles tout ceci a ete construit : un resize doit
+    /// tout refaire, et comparer ici est moins fragile que de s'en souvenir.
+    w: u32,
+    h: u32,
+    /// `bytes_per_row` alignes a 256. En 1080p, Y passe de 1920 a 2048 et U/V de
+    /// 960 a 1024 : contrairement au RGBA (7680 = 30*256, deja aligne), les plans
+    /// PORTENT du padding, et le lecteur doit le retirer ligne a ligne.
+    bpr_y: u32,
+    bpr_uv: u32,
+    /// Offsets des trois plans dans le buffer de staging unique. Alignes a 256
+    /// (exigence de `copy_texture_to_buffer`), ce que la taille du plan Y
+    /// garantit deja puisque `bpr_y` l'est.
+    off_u: u64,
+    off_v: u64,
+    total: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Segmentation du sujet webcam
 // ---------------------------------------------------------------------------
@@ -219,6 +253,18 @@ pub struct Compositor {
     /// Ring de buffers de staging (cf. `ReadbackRing`). `RefCell` : les methodes
     /// publiques du compositeur sont `&self`, comme tout le reste de l'etat.
     readback: RefCell<ReadbackRing>,
+
+    /// Conversion RGBA -> Y/U/V sur le GPU, construite a la premiere demande.
+    ///
+    /// Paresseuse et non dans `new` pour une raison de contrat : la preview
+    /// n'en veut pas (elle rend du RGBA a un `<canvas>`) et la payer a chaque
+    /// construction de compositeur couterait trois textures et trois pipelines
+    /// a tout le monde pour le seul benefice de l'export.
+    yuv: RefCell<Option<YuvTargets>>,
+    /// Ring de staging DEDIEE aux plans YUV : ses buffers font 3,1 Mo la ou
+    /// ceux de `readback` en font 8,3, et melanger les deux tailles dans une
+    /// seule ring rendrait la reutilisation dependante de l'ordre des appels.
+    readback_yuv: RefCell<ReadbackRing>,
 
     // Etat pilote par live.rs (interior mutability : les methodes sont `&self`).
     live_params: RefCell<LiveParams>,
@@ -557,6 +603,13 @@ impl Compositor {
             free: vec![Self::make_staging(&gpu, readback_bpr, h)],
             pending: std::collections::VecDeque::new(),
         });
+        // Vide : les buffers YUV sont dimensionnes par `YuvTargets` (qui connait
+        // les trois `bytes_per_row` alignes) et alloues a la premiere relecture.
+        let readback_yuv = RefCell::new(ReadbackRing {
+            depth: 1,
+            free: Vec::new(),
+            pending: std::collections::VecDeque::new(),
+        });
 
         Ok(Compositor {
             gpu,
@@ -579,6 +632,8 @@ impl Compositor {
             accum_view,
             readback_bpr,
             readback,
+            yuv: RefCell::new(None),
+            readback_yuv,
             live_params: RefCell::new(LiveParams::default()),
             scene: RefCell::new(None),
             cursor: RefCell::new(None),
@@ -2873,6 +2928,281 @@ impl Compositor {
         while ring.free.len() < depth {
             let buf = Self::make_staging(&self.gpu, self.readback_bpr, self.render_h);
             ring.free.push(buf);
+        }
+        Ok(())
+    }
+
+    /// Construit (ou reconstruit apres resize) les cibles et pipelines YUV.
+    fn ensure_yuv(&self) -> Result<()> {
+        let (w, h) = (self.render_w, self.render_h);
+        if let Some(t) = self.yuv.borrow().as_ref() {
+            if t.w == w && t.h == h {
+                return Ok(());
+            }
+        }
+        // 4:2:0 : les plans de chrominance font la moitie, arrondie au superieur
+        // pour ne jamais perdre la derniere colonne/ligne d'une dimension impaire.
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+        let gpu = &self.gpu;
+
+        let mk = |label: &str, tw: u32, th: u32| {
+            gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        };
+        let y = mk("yuv-y", w, h);
+        let u = mk("yuv-u", cw, ch);
+        let v = mk("yuv-v", cw, ch);
+        let y_view = y.create_view(&wgpu::TextureViewDescriptor::default());
+        let u_view = u.create_view(&wgpu::TextureViewDescriptor::default());
+        let v_view = v.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("yuv"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("vk_shaders/yuv.wgsl").into()),
+        });
+        let bgl = gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("yuv-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        // Sampler LINEAIRE : c'est lui qui fait le sous-echantillonnage 2x2 des
+        // plans de chrominance. Avec un `Nearest` on prendrait un pixel sur
+        // quatre au lieu de leur moyenne, ce qui aliase visiblement les bords.
+        let samp = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("yuv-samp"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("yuv-bg"),
+            layout: &bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.rt_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&samp) },
+            ],
+        });
+        let layout = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("yuv-pl"),
+            bind_group_layouts: &[&bgl],
+            push_constant_ranges: &[],
+        });
+        let mk_pipe = |entry: &str, label: &str| {
+            gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_fullscreen"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::R8Unorm,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+
+        let bpr_y = w.div_ceil(256) * 256;
+        let bpr_uv = cw.div_ceil(256) * 256;
+        let size_y = u64::from(bpr_y) * u64::from(h);
+        let size_uv = u64::from(bpr_uv) * u64::from(ch);
+        let targets = YuvTargets {
+            _y: y,
+            _u: u,
+            _v: v,
+            y_view,
+            u_view,
+            v_view,
+            bind,
+            pipe_y: mk_pipe("fs_y", "yuv-y"),
+            pipe_u: mk_pipe("fs_u", "yuv-u"),
+            pipe_v: mk_pipe("fs_v", "yuv-v"),
+            w,
+            h,
+            bpr_y,
+            bpr_uv,
+            off_u: size_y,
+            off_v: size_y + size_uv,
+            total: size_y + 2 * size_uv,
+        };
+        // Les buffers de l'ancienne taille ne conviennent plus.
+        self.readback_yuv.borrow_mut().free.clear();
+        *self.yuv.borrow_mut() = Some(targets);
+        Ok(())
+    }
+
+    /// Pendant YUV de `readback_submit` : convertit le RT en Y/U/V sur le GPU,
+    /// copie les trois plans dans UN buffer de staging, et recolte la frame
+    /// precedente. Meme contrat de ring et de profondeur que la version RGBA.
+    ///
+    /// Rend les plans avec leur padding : `(w, h, buf)` ou `buf` contient Y a
+    /// l'offset 0 (stride `align256(w)`), puis U et V (stride `align256(w/2)`).
+    /// L'appelant recalcule ces strides depuis `w`/`h` — les depadder ici
+    /// couterait une recopie de plus pour rien, l'encodeur sachant lire un
+    /// `linesize`.
+    pub unsafe fn readback_submit_yuv(&self) -> Result<Option<(u32, u32, Vec<u8>)>> {
+        self.ensure_yuv()?;
+        let (w, h, cw, ch, bpr_y, bpr_uv, off_u, off_v, total) = {
+            let g = self.yuv.borrow();
+            let t = g.as_ref().expect("ensure_yuv");
+            (t.w, t.h, t.w.div_ceil(2), t.h.div_ceil(2), t.bpr_y, t.bpr_uv, t.off_u, t.off_v, t.total)
+        };
+
+        let buf = {
+            let mut ring = self.readback_yuv.borrow_mut();
+            match ring.free.pop() {
+                Some(b) => b,
+                None => self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("readback-yuv"),
+                    size: total,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }),
+            }
+        };
+
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("yuv-convert") });
+        {
+            let g = self.yuv.borrow();
+            let t = g.as_ref().expect("ensure_yuv");
+            for (view, pipe) in [
+                (&t.y_view, &t.pipe_y),
+                (&t.u_view, &t.pipe_u),
+                (&t.v_view, &t.pipe_v),
+            ] {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("yuv-plane"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            // Chaque passe reecrit chaque texel : `Load` ferait lire
+                            // une cible dont on va ecraser le contenu.
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(pipe);
+                pass.set_bind_group(0, &t.bind, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            for (tex, off, bpr, pw, ph) in [
+                (&t._y, 0u64, bpr_y, w, h),
+                (&t._u, off_u, bpr_uv, cw, ch),
+                (&t._v, off_v, bpr_uv, cw, ch),
+            ] {
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buf,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: off,
+                            bytes_per_row: Some(bpr),
+                            rows_per_image: Some(ph),
+                        },
+                    },
+                    wgpu::Extent3d { width: pw, height: ph, depth_or_array_layers: 1 },
+                );
+            }
+        }
+
+        let idx = self.gpu.context.submit(std::iter::once(encoder.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        {
+            let mut ring = self.readback_yuv.borrow_mut();
+            ring.pending.push_back(PendingCopy { buf, idx, rx, w, h, bpr: bpr_y });
+            if ring.pending.len() < ring.depth {
+                return Ok(None); // amorcage, comme la ring RGBA
+            }
+        }
+        self.readback_take_yuv()
+    }
+
+    /// Recolte la plus ancienne conversion en vol. Pendant de `readback_take`.
+    pub unsafe fn readback_take_yuv(&self) -> Result<Option<(u32, u32, Vec<u8>)>> {
+        let Some(p) = self.readback_yuv.borrow_mut().pending.pop_front() else {
+            return Ok(None);
+        };
+        self.gpu.device.poll(wgpu::Maintain::WaitForSubmissionIndex(p.idx));
+        p.rx
+            .recv()
+            .map_err(|_| anyhow::anyhow!("map_async channel (yuv)"))?
+            .map_err(|e| anyhow::anyhow!("map_async yuv: {e:?}"))?;
+        let slice = p.buf.slice(..);
+        let mapped = slice.get_mapped_range();
+        let out = mapped.to_vec();
+        drop(mapped);
+        p.buf.unmap();
+        self.readback_yuv.borrow_mut().free.push(p.buf);
+        Ok(Some((p.w, p.h, out)))
+    }
+
+    /// Profondeur de la ring YUV. Meme role et memes raisons que
+    /// `set_readback_depth` pour la ring RGBA.
+    pub fn set_readback_yuv_depth(&self, depth: usize) -> Result<()> {
+        let depth = depth.max(1);
+        // SAFETY : meme contrat que `set_readback_depth` — le drain ne touche que
+        // des buffers dont la soumission est terminee.
+        while unsafe { self.readback_take_yuv()? }.is_some() {}
+        let mut ring = self.readback_yuv.borrow_mut();
+        ring.depth = depth;
+        while ring.free.len() > depth {
+            ring.free.pop();
         }
         Ok(())
     }
