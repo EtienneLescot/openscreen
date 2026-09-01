@@ -64,3 +64,20 @@ fn fs_v(i: VsOut) -> @location(0) vec4<f32> {
     let v = (128.0 + 224.0 * (0.5 * c.r - 0.418688 * c.g - 0.081312 * c.b)) / 255.0;
     return vec4<f32>(v, 0.0, 0.0, 1.0);
 }
+
+// U ET V ENTRELACES, pour NV12. Meme mathematique et meme sous-echantillonnage
+// que `fs_u`/`fs_v` : seule la destination change, un unique plan `Rg8Unorm` au
+// lieu de deux plans `R8Unorm`.
+//
+// POURQUOI LES DEUX EXISTENT. `libopenh264` n'accepte que du YUV420P planaire
+// (verifie : ses `pix_fmts` sont yuv420p/yuvj420p), tandis que VAAPI encode
+// depuis du NV12. Le format n'est donc pas un gout mais une consequence de
+// l'encodeur qui va consommer la frame, et le compositeur doit savoir produire
+// les deux.
+@fragment
+fn fs_uv(i: VsOut) -> @location(0) vec4<f32> {
+    let c = textureSample(tex, samp, i.uv).rgb;
+    let u = (128.0 + 224.0 * (-0.168736 * c.r - 0.331264 * c.g + 0.5 * c.b)) / 255.0;
+    let v = (128.0 + 224.0 * (0.5 * c.r - 0.418688 * c.g - 0.081312 * c.b)) / 255.0;
+    return vec4<f32>(u, v, 0.0, 1.0);
+}
