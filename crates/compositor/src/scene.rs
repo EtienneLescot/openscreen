@@ -331,6 +331,18 @@ pub struct SceneZoomRegion {
     pub focus_mode: Option<String>,
     /// "iso" | "left" | "right" | null.
     pub rotation: Option<String>,
+    /// La région entière tombe sur une portion qu'un trim retire. Ses temps sont donc HORS de
+    /// la fenêtre source de `clip_index`, qui n'est là que pour l'adresser (le segment que la
+    /// coupe interrompt, cf. `cutAddressingSegmentIndex` côté TS).
+    ///
+    /// Conséquence de rendu : la région est jouée SÈCHE, pleine force sur `[start_sec, end_sec)`
+    /// et rien en dehors — ni fenêtre d'ease-in/ease-out, ni chaînage avec une région voisine.
+    /// C'est ce qui garde la coupe : un export ne compose jamais de frame à ces temps source,
+    /// alors qu'une enveloppe de transition, elle, déborderait sur les frames gardées d'à côté.
+    /// L'utilisateur qui pose la tête de lecture sur le trim voit l'effet ; le rendu, non.
+    /// `#[serde(default)]` : absent de tout payload sans trim sous un modificateur (issue #216).
+    #[serde(default)]
+    pub under_trim: bool,
 }
 
 /// Une zone de vitesse portée par le temps source d'un clip.
@@ -536,6 +548,13 @@ impl Scene {
     /// Copie de scène limitée aux régions du clip actif. `clipIndex` est l'identité fiable
     /// lorsque plusieurs clips réutilisent les mêmes temps source ; son absence retombe sur le
     /// chevauchement avec la fenêtre source pour accepter les anciens payloads.
+    ///
+    /// Les deux tests étaient jusqu'ici cumulés, ce que la phrase ci-dessus ne dit pas : le
+    /// chevauchement est le REPLI, pas une seconde condition. La différence n'apparaît que pour
+    /// une région hors fenêtre, et une seule l'est — celle qui vit sous un trim (`under_trim`,
+    /// cf. `SceneZoomRegion`). L'app en émet une par modificateur entièrement coupé, adressée au
+    /// segment que la coupe interrompt, pour que la tête de lecture posée sur le trim montre ce
+    /// qu'il y a dessous. Exiger le chevauchement l'aurait filtrée ici même.
     pub(crate) fn for_clip_window(
         &self,
         clip_index: usize,
@@ -544,7 +563,9 @@ impl Scene {
     ) -> Scene {
         let belongs = |region_clip_index: Option<usize>, start_sec: f64, end_sec: f64| {
             let overlaps_window = end_sec > source_start_sec && start_sec < source_end_sec;
-            overlaps_window && region_clip_index.map(|i| i == clip_index).unwrap_or(true)
+            region_clip_index
+                .map(|i| i == clip_index)
+                .unwrap_or(overlaps_window)
         };
         let mut scene = self.clone();
         scene.zoom_regions.retain(|region| {
@@ -807,17 +828,36 @@ mod annotation_tests {
 
     #[test]
     fn for_clip_window_keeps_only_the_annotations_of_the_composed_clip() {
-        // Même règle que les zoom/speed/camera regions : bon clip ET recouvrement de la fenêtre.
+        // Même règle que les zoom/speed/camera regions : `clipIndex` décide seul quand il est là.
+        // `under-trim` porte des temps hors fenêtre EXPRÈS (il vit sous une coupe) et doit donc
+        // survivre : le dessin est ensuite borné par `startSec`/`endSec`, jamais atteints par un
+        // export. Cf. issue #216.
         let json = scene_json(
             r##"[{"id":"keep","clipIndex":0,"startSec":1.0,"endSec":2.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0},
                  {"id":"other-clip","clipIndex":1,"startSec":1.0,"endSec":2.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0},
-                 {"id":"out-of-window","clipIndex":0,"startSec":50.0,"endSec":51.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0}]"##,
+                 {"id":"under-trim","clipIndex":0,"underTrim":true,"startSec":50.0,"endSec":51.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0}]"##,
         );
         let scene = Scene::from_json(&json).expect("parse");
         let filtered = scene.for_clip_window(0, 0.0, 10.0);
         assert_eq!(
             filtered.annotations.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
-            vec!["keep"]
+            vec!["keep", "under-trim"]
+        );
+    }
+
+    #[test]
+    fn for_clip_window_still_falls_back_to_window_overlap_without_a_clip_index() {
+        // Vieux payload : rien ne dit à quel clip la région appartient, le chevauchement de
+        // fenêtre reste la seule réponse disponible. C'est le REPLI, pas une seconde condition.
+        let json = scene_json(
+            r##"[{"id":"in-window","startSec":1.0,"endSec":2.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0},
+                 {"id":"out-of-window","startSec":50.0,"endSec":51.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0}]"##,
+        );
+        let scene = Scene::from_json(&json).expect("parse");
+        let filtered = scene.for_clip_window(0, 0.0, 10.0);
+        assert_eq!(
+            filtered.annotations.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            vec!["in-window"]
         );
     }
 }

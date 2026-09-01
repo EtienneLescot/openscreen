@@ -92,7 +92,10 @@ export function unplayableRegions(document: AxcutDocument): Array<{ kind: string
 			document.timeline.clips,
 			nextId,
 		);
-		const alive = new Set(projected.map((r) => r.id));
+		// `underTrim` entries are emitted so a playhead parked on the cut can show what is
+		// underneath (issue #216) — they are precisely the regions playback never emits, so
+		// they stay DEAD here. Dropping them keeps this oracle's question unchanged.
+		const alive = new Set(projected.filter((r) => !r.underTrim).map((r) => r.id));
 		for (const region of family.regions) {
 			// A zero-length span is stored and listed but can never play either.
 			if (!alive.has(region.id) || region.endMs <= region.startMs) {

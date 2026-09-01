@@ -121,14 +121,15 @@ describe("projectRegionsToSource", () => {
 		]);
 	});
 
-	it("drops a region a trim removes entirely rather than leaking it onto a later clip", () => {
+	it("keeps a fully-trimmed region on its own clip instead of leaking it onto a later one", () => {
 		// The reported bug: an effect fully UNDER a trim fired later instead of being ignored.
 		// Two clips of DIFFERENT assets whose source windows overlap numerically (c1: asset a
 		// [0,10] @ raw[0,10]; c2: asset b [0,10] @ raw[10,20]). A zoom anchored to c1 at source
 		// [3,5] is then fully trimmed away on c1 (trim removes a[2,8]; c2's asset b is
-		// untouched). It must VANISH — not reappear during c2, whose source window [0,10]
-		// numerically contains [3,5]. A clipIndex-less passthrough used to re-emit it with raw
-		// coords, and native's `belongs()` then matched it on c2 (any overlapping clip).
+		// untouched). It is kept so the playhead can be parked on the cut (issue #216), but it
+		// must stay ADDRESSED TO c1 — the clipIndex-less passthrough that used to re-emit it
+		// with raw coords let native's `belongs()` match it on c2, whose source window [0,10]
+		// numerically contains [3,5].
 		const c1 = clip({
 			id: "c1",
 			assetId: "a",
@@ -146,14 +147,42 @@ describe("projectRegionsToSource", () => {
 			timelineEndSec: 20,
 		});
 		const segments = resolvePlaybackSegments([c1, c2], [trim("a", 2, 8)]);
+		// segments: c1[0,2] (0), c1[8,10] (1), c2[0,10] (2).
+		const anchored = { ...region("r", 3, 5), clipId: "c1", sourceStartSec: 3, sourceEndSec: 5 };
+		expect(projectRegionsToSource([anchored], segments, [c1, c2], () => "x")).toEqual([
+			{ ...anchored, startMs: 3000, endMs: 5000, clipIndex: 0, underTrim: true },
+		]);
+	});
+
+	it("drops a fully-trimmed region whose clip has no kept segment left to address it", () => {
+		// Nothing of c1 survives, so there is no index that names it. Emitting one anyway is
+		// exactly the leak above: it would land on c2.
+		const c1 = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const c2 = clip({
+			id: "c2",
+			assetId: "b",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 10,
+			timelineEndSec: 20,
+		});
+		const segments = resolvePlaybackSegments([c1, c2], [trim("a", 0, 10)]);
 		const anchored = { ...region("r", 3, 5), clipId: "c1", sourceStartSec: 3, sourceEndSec: 5 };
 		expect(projectRegionsToSource([anchored], segments, [c1, c2], () => "x")).toEqual([]);
 	});
 
-	it("drops an unanchored region that a trim removes entirely", () => {
+	it("keeps an unanchored region a trim removes entirely, mapped through its raw clip", () => {
 		// The same class for an un-migrated (v1.7-imported) region that has only its RAW span:
-		// raw[4.5,5.5] sits inside the removed stretch a[4,6], so it maps to no kept segment
-		// and must be dropped — not passed through with its raw coords onto the native scene.
+		// raw[4.5,5.5] sits inside the removed stretch a[4,6]. It maps to no kept segment, so it
+		// is emitted once against the segment the cut interrupts (c1[0,4], index 0) on the source
+		// span its raw coordinates name — never passed through with raw coords and no clipIndex.
 		const c = clip({
 			id: "c1",
 			assetId: "a",
@@ -162,7 +191,52 @@ describe("projectRegionsToSource", () => {
 			timelineEndSec: 10,
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 4, 6)]);
-		expect(projectRegionsToSource([region("r", 4.5, 5.5)], segments, [c], () => "x")).toEqual([]);
+		expect(projectRegionsToSource([region("r", 4.5, 5.5)], segments, [c], () => "x")).toEqual([
+			{ id: "r", startMs: 4500, endMs: 5500, clipIndex: 0, underTrim: true },
+		]);
+	});
+
+	it("addresses a head trim to the clip's FIRST kept segment", () => {
+		// The cut opens the clip, so there is no segment before it; the first one is the only
+		// thing that can name it.
+		const c = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineEndSec: 10,
+		});
+		const segments = resolvePlaybackSegments([c], [trim("a", 0, 3)]);
+		const anchored = { ...region("r", 1, 2), clipId: "c1", sourceStartSec: 1, sourceEndSec: 2 };
+		expect(projectRegionsToSource([anchored], segments, [c], () => "x")).toEqual([
+			{ ...anchored, startMs: 1000, endMs: 2000, clipIndex: 0, underTrim: true },
+		]);
+	});
+
+	it("addresses a fully-trimmed region and the playhead over it to the SAME segment", () => {
+		// The agreement `for_clip_window` (scene.rs) depends on: it only keeps a region whose
+		// clipIndex equals the clip being composed. Two clips of the same asset so the choice is
+		// not trivially unique — c1 raw[0,10], c2 raw[10,20], the trim on c1's tail.
+		const c1 = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineEndSec: 10,
+		});
+		const c2 = clip({
+			id: "c2",
+			assetId: "a",
+			sourceStartSec: 20,
+			sourceEndSec: 30,
+			timelineStartSec: 10,
+			timelineEndSec: 20,
+		});
+		const segments = resolvePlaybackSegments([c1, c2], [trim("a", 6, 10)]);
+		const anchored = { ...region("r", 7, 9), clipId: "c1", sourceStartSec: 7, sourceEndSec: 9 };
+		const [projected] = projectRegionsToSource([anchored], segments, [c1, c2], () => "x");
+		// raw 8 is inside c1's removed tail; the region covering source [7,9] is that same cut.
+		expect(resolveNativePosition(8, segments, [c1, c2])?.clipIndex).toBe(projected.clipIndex);
 	});
 
 	// --- anchored path: the anchor is the SSOT, `startMs`/`endMs` are not consulted ---
@@ -341,7 +415,7 @@ describe("resolveNativePosition", () => {
 		});
 	});
 
-	it("snaps to the next kept segment when the playhead sits over a trimmed-out stretch", () => {
+	it("presents the removed frames themselves when the playhead sits over a trim", () => {
 		const c = clip({
 			id: "c1",
 			assetId: "a",
@@ -350,11 +424,44 @@ describe("resolveNativePosition", () => {
 			timelineEndSec: 10,
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 2, 4)]);
-		// raw 3 is inside the removed [2,4] stretch → resume at seg2's source start (4).
+		// raw 3 is inside the removed [2,4] stretch. The trim keeps its place on the ruler, so
+		// raw 3 IS source 3, and the decoder still holds it — only the kept window was narrowed.
+		// It used to answer seg2's first frame (source 4), which is not the frame the ruler
+		// points at, and would incrust any modifier under the cut on someone else's image (#216).
+		// The segment it borrows is the one the cut interrupts (seg1), so a modifier under that
+		// cut — addressed the same way — survives `belongs()`.
 		expect(resolveNativePosition(3, segments, [c])).toMatchObject({
-			clipIndex: 1,
-			sourceTimeSec: 4,
+			clipIndex: 0,
+			sourceTimeSec: 3,
 		});
+	});
+
+	it("presents a head trim's own frames rather than the clip's first kept one", () => {
+		const c = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineEndSec: 10,
+		});
+		const segments = resolvePlaybackSegments([c], [trim("a", 0, 3)]);
+		expect(resolveNativePosition(1, segments, [c])).toMatchObject({
+			clipIndex: 0,
+			sourceTimeSec: 1,
+		});
+	});
+
+	it("clamps to the last kept segment past the end of the ruler", () => {
+		const c = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineEndSec: 10,
+		});
+		const segments = resolvePlaybackSegments([c], [trim("a", 2, 4)]);
+		// No raw clip owns raw 99 — nothing to present, so the historical clamp stands.
+		expect(resolveNativePosition(99, segments, [c])).toMatchObject({ clipIndex: 1 });
 	});
 
 	it("returns null when there are no segments", () => {

@@ -33,6 +33,7 @@ import {
 	type GifSizePreset,
 } from "@/lib/exporter";
 import { calculateMp4ExportSettings, wouldUpscale } from "@/lib/exporter/mp4ExportSettings";
+import { outputFrameCount } from "@/lib/exporter/outputFrameCount";
 import { exportGifNative, exportMultiNative, useIsCpuCompositor } from "@/native";
 import type { CompositorClipInput } from "@/native/contracts";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
@@ -287,15 +288,17 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 			const clips = buildNativeClipList(document);
 			// GIF runs at its own frame rate, so the progress total has to use it.
 			const outFps = format === "gif" ? gifFrameRate : fps;
-			// Total frames the encoder will produce, known upfront from the timeline (sum of
-			// each clip's trimmed source duration) — the native side only reports frames
-			// AFTER encoding one (onNativeExportProgress), it doesn't know/send a total, so
-			// this is computed here to turn that raw count into a percentage.
-			const totalDurationSec = clips.reduce(
-				(sum, c) => sum + Math.max(0, c.sourceEndSec - c.sourceStartSec),
-				0,
-			);
-			const totalFrames = Math.max(1, Math.round(totalDurationSec * outFps));
+			// Total frames the encoder will produce, known upfront from the timeline — the
+			// native side only reports frames AFTER composing one (onNativeExportProgress),
+			// it doesn't know or send a total, so this is computed here to turn that raw
+			// count into a percentage.
+			//
+			// It has to count SPEED-ADJUSTED frames, not source seconds: a clip under a 1.25x
+			// region emits 80% of `duration * fps`, which is where the "frozen at ~80%" of
+			// OpenScreen#371 came from — the bar climbed to 80% and the export finished
+			// there. `outputFrameCount` mirrors the compositor's own span arithmetic.
+			const sceneDesc = buildSceneDescription(document);
+			const totalFrames = outputFrameCount(clips, sceneDesc.speedRegions, outFps);
 			const startedAt = Date.now();
 			const unsubscribeProgress = window.electronAPI?.onNativeExportProgress?.((frames) => {
 				const elapsedS = (Date.now() - startedAt) / 1000;
@@ -309,8 +312,6 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				});
 			});
 			try {
-				const sceneDesc = buildSceneDescription(document);
-
 				// The webcam background effect is applied by the compositor from the scene,
 				// so the clip list needs no pre-rendering pass.
 				const exportClips = clips;
