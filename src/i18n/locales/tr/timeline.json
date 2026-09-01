@@ -86,13 +86,16 @@
 		"smartCutsNeedsTranscript": "Bir döküm gerekiyor",
 		"smartCutsNoAudio": "Bu medyada ses yok",
 		"smartCutsNoSpeech": "Konuşma algılanmadı",
-		"smartCutsFailed": "Metne dökme başarısız — Medya bölümünden yeniden deneyin"
+		"smartCutsFailed": "Metne dökme başarısız — Medya bölümünden yeniden deneyin",
+		"addAudioTooltip": "Ses ekle"
 	},
 	"audio": {
 		"addVoiceover": "Seslendirme ekle",
+		"addVoiceoverHint": "Videonuzun üzerine anlatım kaydedin",
 		"subtitle": "Zaman çizelgesine seslendirme veya fon müziği katmanı yerleştirin",
 		"record": "Seslendirme kaydet",
 		"importFile": "Ses dosyası içe aktar",
+		"importFileHint": "Müzik veya ses dosyası içe aktarın",
 		"recording": "Kaydediliyor",
 		"stop": "Durdur",
 		"micDenied": "Mikrofon erişimi reddedildi",

@@ -1,4 +1,5 @@
 import {
+	AudioLines,
 	Clock,
 	Crosshair,
 	Loader2,
@@ -26,6 +27,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { fromFileUrl, toFileUrl } from "@/components/video-editor/projectPersistence";
 import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
@@ -524,6 +526,7 @@ export function V4Timeline({
 	const { settings, set: setSettings } = useEditorSettings();
 
 	const [autoEnhanceOpen, setAutoEnhanceOpen] = useState(false);
+	const [audioMenuOpen, setAudioMenuOpen] = useState(false);
 	const [autoBusy, setAutoBusy] = useState(false);
 	// The AI cut pass reads the transcript, and the transcript is produced in the
 	// background (see transcriptionStore). Until it is there, the entry says why
@@ -1522,142 +1525,205 @@ export function V4Timeline({
 		<div className={styles.tl} ref={panelRef}>
 			<div className={styles.tlToolbar}>
 				{showLanes ? (
-					<div className={styles.tlTools} role="toolbar" aria-label={t("toolbar.timelineTools")}>
-						<Popover open={autoEnhanceOpen} onOpenChange={setAutoEnhanceOpen}>
-							<PopoverTrigger asChild>
-								<button
-									type="button"
-									className={styles.tlToolBtn}
-									title={t("toolbar.autoEnhance")}
-									aria-label={t("toolbar.autoEnhance")}
-									disabled={autoBusy}
+					// Its own provider rather than leaning on the app root's: the toolbar
+					// is the only thing here that needs one, and every test that renders
+					// a timeline (directly or through the shell) would otherwise have to
+					// know to supply it. Nesting under the root provider is harmless.
+					<TooltipProvider>
+						<div className={styles.tlTools} role="toolbar" aria-label={t("toolbar.timelineTools")}>
+							<Popover open={autoEnhanceOpen} onOpenChange={setAutoEnhanceOpen}>
+								<Tooltip content={t("toolbar.autoEnhance")}>
+									<PopoverTrigger asChild>
+										<button
+											type="button"
+											className={styles.tlToolBtn}
+											aria-label={t("toolbar.autoEnhance")}
+											disabled={autoBusy}
+										>
+											{autoBusy ? (
+												<Loader2 className="animate-spin" size={15} />
+											) : (
+												<Wand2 size={15} />
+											)}
+										</button>
+									</PopoverTrigger>
+								</Tooltip>
+								<PopoverContent
+									align="start"
+									sideOffset={6}
+									animated={false}
+									className="w-auto border-0 bg-transparent p-0 shadow-none"
 								>
-									{autoBusy ? <Loader2 className="animate-spin" size={15} /> : <Wand2 size={15} />}
-								</button>
-							</PopoverTrigger>
-							<PopoverContent
-								align="start"
-								sideOffset={6}
-								animated={false}
-								className="w-auto border-0 bg-transparent p-0 shadow-none"
-							>
-								<div
-									className={styles.recMenu}
-									style={{ position: "relative", bottom: "auto", width: 244 }}
-								>
-									<button
-										type="button"
-										className={styles.recMenuRow}
-										onClick={() => void runAutoZooms()}
+									<div
+										className={styles.recMenu}
+										style={{ position: "relative", bottom: "auto", width: 244 }}
 									>
-										<ZoomIn size={15} style={{ flexShrink: 0 }} />
-										<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-											<span style={{ fontWeight: 600 }}>{t("toolbar.automaticZooms")}</span>
-											<span style={{ fontSize: 11, color: "var(--muted)" }}>
-												{t("toolbar.automaticZoomsHint")}
+										<button
+											type="button"
+											className={styles.recMenuRow}
+											onClick={() => void runAutoZooms()}
+										>
+											<ZoomIn size={15} style={{ flexShrink: 0 }} />
+											<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+												<span style={{ fontWeight: 600 }}>{t("toolbar.automaticZooms")}</span>
+												<span style={{ fontSize: 11, color: "var(--muted)" }}>
+													{t("toolbar.automaticZoomsHint")}
+												</span>
 											</span>
-										</span>
-									</button>
-									<button
-										type="button"
-										className={styles.recMenuRow}
-										onClick={runAiEnhance}
-										disabled={smartCutsBlocked}
-										title={transcriptGate.reason === "failed" ? transcriptGate.message : undefined}
-										style={smartCutsBlocked ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
-									>
-										{transcriptGate.state === "pending" ? (
-											<Loader2 size={15} className="animate-spin" style={{ flexShrink: 0 }} />
-										) : (
-											<Sparkles size={15} style={{ flexShrink: 0 }} />
-										)}
-										<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-											<span style={{ fontWeight: 600 }}>{t("toolbar.smartZoomsAndCuts")}</span>
-											<span style={{ fontSize: 11, color: "var(--muted)" }}>{smartCutsHint}</span>
-										</span>
-									</button>
-								</div>
-							</PopoverContent>
-						</Popover>
-						<span className={styles.tlToolSep} aria-hidden />
-						{tools.map((tool) => (
-							<Fragment key={tool.id}>
+										</button>
+										<button
+											type="button"
+											className={styles.recMenuRow}
+											onClick={runAiEnhance}
+											disabled={smartCutsBlocked}
+											title={
+												transcriptGate.reason === "failed" ? transcriptGate.message : undefined
+											}
+											style={
+												smartCutsBlocked ? { opacity: 0.55, cursor: "not-allowed" } : undefined
+											}
+										>
+											{transcriptGate.state === "pending" ? (
+												<Loader2 size={15} className="animate-spin" style={{ flexShrink: 0 }} />
+											) : (
+												<Sparkles size={15} style={{ flexShrink: 0 }} />
+											)}
+											<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+												<span style={{ fontWeight: 600 }}>{t("toolbar.smartZoomsAndCuts")}</span>
+												<span style={{ fontSize: 11, color: "var(--muted)" }}>{smartCutsHint}</span>
+											</span>
+										</button>
+									</div>
+								</PopoverContent>
+							</Popover>
+							<span className={styles.tlToolSep} aria-hidden />
+							{tools.map((tool) => (
+								<Fragment key={tool.id}>
+									<Tooltip content={tool.label}>
+										<button
+											type="button"
+											className={styles.tlToolBtn}
+											aria-label={tool.label}
+											onClick={() => {
+												// Read at CLICK time: a render-time value would be one zoom
+												// notch stale when the user zooms and immediately creates.
+												const dur = newRegionDurationSec();
+												if (tool.id === "speed") void tl.addSpeed(dur);
+												if (tool.id === "comment") void tl.addAnnotation(dur);
+												if (tool.id === "cut") void tl.addTrim(dur);
+											}}
+										>
+											{tool.icon}
+										</button>
+									</Tooltip>
+									{/* Add audio sits right after Add annotation (issue #350). */}
+									{/* One audio button, two ways in. A mic and a music note side by
+								    side both just said "audio" and left the user to guess which
+								    was which; a waveform is neutral between them, and the menu
+								    names the two paths outright. Mirrors the auto-enhance
+								    button's menu right next to it. */}
+									{tool.id === "comment" ? (
+										<Popover open={audioMenuOpen} onOpenChange={setAudioMenuOpen}>
+											<Tooltip content={t("toolbar.addAudioTooltip")}>
+												<PopoverTrigger asChild>
+													<button
+														type="button"
+														className={styles.tlToolBtn}
+														aria-label={t("toolbar.addAudioTooltip")}
+													>
+														<AudioLines size={15} />
+													</button>
+												</PopoverTrigger>
+											</Tooltip>
+											<PopoverContent
+												align="start"
+												sideOffset={6}
+												animated={false}
+												className="w-auto border-0 bg-transparent p-0 shadow-none"
+											>
+												<div
+													className={styles.recMenu}
+													style={{ position: "relative", bottom: "auto", width: 244 }}
+												>
+													<button
+														type="button"
+														className={styles.recMenuRow}
+														onClick={() => {
+															setAudioMenuOpen(false);
+															onAddVoiceover();
+														}}
+													>
+														<Mic size={15} style={{ flexShrink: 0 }} />
+														<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+															<span style={{ fontWeight: 600 }}>{t("audio.addVoiceover")}</span>
+															<span style={{ fontSize: 11, color: "var(--muted)" }}>
+																{t("audio.addVoiceoverHint")}
+															</span>
+														</span>
+													</button>
+													<button
+														type="button"
+														className={styles.recMenuRow}
+														onClick={() => {
+															setAudioMenuOpen(false);
+															void tl.addAudio();
+														}}
+													>
+														<Music size={15} style={{ flexShrink: 0 }} />
+														<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+															<span style={{ fontWeight: 600 }}>{ts("audioTrack.add")}</span>
+															<span style={{ fontSize: 11, color: "var(--muted)" }}>
+																{t("audio.importFileHint")}
+															</span>
+														</span>
+													</button>
+												</div>
+											</PopoverContent>
+										</Popover>
+									) : null}
+								</Fragment>
+							))}
+							<Tooltip content={t("buttons.addZoom")}>
 								<button
 									type="button"
 									className={styles.tlToolBtn}
-									title={tool.label}
-									aria-label={tool.label}
-									onClick={() => {
-										// Read at CLICK time: a render-time value would be one zoom
-										// notch stale when the user zooms and immediately creates.
-										const dur = newRegionDurationSec();
-										if (tool.id === "speed") void tl.addSpeed(dur);
-										if (tool.id === "comment") void tl.addAnnotation(dur);
-										if (tool.id === "cut") void tl.addTrim(dur);
-									}}
+									aria-label={t("buttons.addZoom")}
+									onClick={() => void tl.addZoom(newRegionDurationSec())}
 								>
-									{tool.icon}
+									<ZoomIn size={15} />
 								</button>
-								{/* Add audio sits right after Add annotation (issue #350). */}
-								{tool.id === "comment" ? (
-									<>
-										<button
-											type="button"
-											className={styles.tlToolBtn}
-											title={ts("audioTrack.add")}
-											aria-label={ts("audioTrack.add")}
-											onClick={() => void tl.addAudio()}
-										>
-											<Music size={15} />
-										</button>
-										<button
-											type="button"
-											className={styles.tlToolBtn}
-											title={t("audio.addVoiceover")}
-											aria-label={t("audio.addVoiceover")}
-											onClick={onAddVoiceover}
-										>
-											<Mic size={15} />
-										</button>
-									</>
-								) : null}
-							</Fragment>
-						))}
-						<button
-							type="button"
-							className={styles.tlToolBtn}
-							title={t("buttons.addZoom")}
-							aria-label={t("buttons.addZoom")}
-							onClick={() => void tl.addZoom(newRegionDurationSec())}
-						>
-							<ZoomIn size={15} />
-						</button>
-						<button
-							type="button"
-							className={styles.tlToolBtn}
-							aria-pressed={settings.autoFocusAll}
-							title={t(
-								settings.autoFocusAll ? "buttons.autoFocusAllOn" : "buttons.autoFocusAllOff",
-							)}
-							aria-label={t(
-								settings.autoFocusAll ? "buttons.autoFocusAllOn" : "buttons.autoFocusAllOff",
-							)}
-							onClick={() => void setSettings({ autoFocusAll: !settings.autoFocusAll })}
-						>
-							<Crosshair size={15} />
-						</button>
-						<button
-							type="button"
-							className={styles.tlToolBtn}
-							title={t("buttons.addCameraFullscreen")}
-							aria-label={t("buttons.addCameraFullscreen")}
-							disabled={!hasAnyCamera}
-							style={!hasAnyCamera ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
-							onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}
-						>
-							<Maximize2 size={15} />
-						</button>
-					</div>
+							</Tooltip>
+							<Tooltip
+								content={t(
+									settings.autoFocusAll ? "buttons.autoFocusAllOn" : "buttons.autoFocusAllOff",
+								)}
+							>
+								<button
+									type="button"
+									className={styles.tlToolBtn}
+									aria-pressed={settings.autoFocusAll}
+									aria-label={t(
+										settings.autoFocusAll ? "buttons.autoFocusAllOn" : "buttons.autoFocusAllOff",
+									)}
+									onClick={() => void setSettings({ autoFocusAll: !settings.autoFocusAll })}
+								>
+									<Crosshair size={15} />
+								</button>
+							</Tooltip>
+							<Tooltip content={t("buttons.addCameraFullscreen")}>
+								<button
+									type="button"
+									className={styles.tlToolBtn}
+									aria-label={t("buttons.addCameraFullscreen")}
+									disabled={!hasAnyCamera}
+									style={!hasAnyCamera ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
+									onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}
+								>
+									<Maximize2 size={15} />
+								</button>
+							</Tooltip>
+						</div>
+					</TooltipProvider>
 				) : (
 					// Media is an ARRANGING surface: add, remove, reorder. Nothing here
 					// plays or edits, so the transport, the scroll hints, the zoom nav and

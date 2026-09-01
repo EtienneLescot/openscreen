@@ -86,13 +86,16 @@
 		"smartCutsNeedsTranscript": "받아쓰기가 필요합니다",
 		"smartCutsNoAudio": "이 미디어에는 오디오가 없습니다",
 		"smartCutsNoSpeech": "음성이 감지되지 않음",
-		"smartCutsFailed": "받아쓰기에 실패했습니다 — 미디어에서 다시 시도하세요"
+		"smartCutsFailed": "받아쓰기에 실패했습니다 — 미디어에서 다시 시도하세요",
+		"addAudioTooltip": "오디오 추가"
 	},
 	"audio": {
 		"addVoiceover": "내레이션 추가",
+		"addVoiceoverHint": "영상 위에 내레이션을 녹음",
 		"subtitle": "타임라인에 내레이션 또는 배경 음악 레이어를 배치합니다",
 		"record": "내레이션 녹음",
 		"importFile": "오디오 파일 가져오기",
+		"importFileHint": "음악이나 오디오 파일 가져오기",
 		"recording": "녹음 중",
 		"stop": "중지",
 		"micDenied": "마이크 접근이 거부되었습니다",

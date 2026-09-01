@@ -86,13 +86,16 @@
 		"smartCutsNeedsTranscript": "Requer uma transcrição",
 		"smartCutsNoAudio": "Esta mídia não tem áudio",
 		"smartCutsNoSpeech": "Nenhuma fala detectada",
-		"smartCutsFailed": "Falha na transcrição — tente de novo em Mídia"
+		"smartCutsFailed": "Falha na transcrição — tente de novo em Mídia",
+		"addAudioTooltip": "Adicionar áudio"
 	},
 	"audio": {
 		"addVoiceover": "Adicionar narração",
+		"addVoiceoverHint": "Grave uma narração sobre o seu vídeo",
 		"subtitle": "Coloque uma camada de narração ou de música de fundo na linha do tempo",
 		"record": "Gravar narração",
 		"importFile": "Importar arquivo de áudio",
+		"importFileHint": "Importe música ou um arquivo de áudio",
 		"recording": "Gravando",
 		"stop": "Parar",
 		"micDenied": "Acesso ao microfone negado",

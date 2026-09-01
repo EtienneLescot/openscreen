@@ -86,13 +86,16 @@
 		"smartCutsNeedsTranscript": "Needs a transcript",
 		"smartCutsNoAudio": "This media has no audio",
 		"smartCutsNoSpeech": "No speech detected",
-		"smartCutsFailed": "Transcription failed — retry it from Media"
+		"smartCutsFailed": "Transcription failed — retry it from Media",
+		"addAudioTooltip": "Add audio"
 	},
 	"audio": {
 		"addVoiceover": "Add Voiceover",
+		"addVoiceoverHint": "Record narration over your video",
 		"subtitle": "Place a voiceover or background music layer on the timeline",
 		"record": "Record voiceover",
 		"importFile": "Import audio file",
+		"importFileHint": "Bring in music or an audio file",
 		"recording": "Recording",
 		"stop": "Stop",
 		"micDenied": "Microphone access was denied",

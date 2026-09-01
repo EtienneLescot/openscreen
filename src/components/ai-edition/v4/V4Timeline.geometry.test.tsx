@@ -211,14 +211,14 @@ describe("V4Timeline create-from-toolbar", () => {
 
 	it("scales the new region's duration with the zoom", () => {
 		const { tl } = renderTimeline();
-		fireEvent.click(screen.getByTitle("buttons.addZoom"));
+		fireEvent.click(screen.getByLabelText("buttons.addZoom"));
 		// 900px viewport / 1800 s = 0.5 px per second, so a 96px pill is 192 s.
 		expect(durationOf(tl)).toBeCloseTo(192, 3);
 
 		// Zoomed to the 50x ceiling the same 96px is worth 3.84 s: same pill on
 		// screen, a region 50x shorter.
 		zoomIn(40);
-		fireEvent.click(screen.getByTitle("buttons.addZoom"));
+		fireEvent.click(screen.getByLabelText("buttons.addZoom"));
 		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
 	});
 
@@ -230,7 +230,7 @@ describe("V4Timeline create-from-toolbar", () => {
 		const { tl } = renderTimeline();
 		const ruler = document.querySelector("[class*=tlRulerRow]") as HTMLElement;
 		wheelZoomOn(ruler, 40);
-		fireEvent.click(screen.getByTitle("buttons.addZoom"));
+		fireEvent.click(screen.getByLabelText("buttons.addZoom"));
 		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
 	});
 
@@ -253,7 +253,7 @@ describe("V4Timeline create-from-toolbar", () => {
 		// second; the region would be born unusable, so the duration floors.
 		const { tl } = renderTimeline([clip(0, 3)]);
 		zoomIn(40);
-		fireEvent.click(screen.getByTitle("buttons.addZoom"));
+		fireEvent.click(screen.getByLabelText("buttons.addZoom"));
 		expect(durationOf(tl)).toBeCloseTo(0.25, 3);
 	});
 
@@ -263,7 +263,7 @@ describe("V4Timeline create-from-toolbar", () => {
 	// so before it is clicked instead of looking like it worked.
 	it("disables Add Full Camera when no clip on the timeline has a camera", () => {
 		renderTimeline();
-		expect(screen.getByTitle("buttons.addCameraFullscreen")).toBeDisabled();
+		expect(screen.getByLabelText("buttons.addCameraFullscreen")).toBeDisabled();
 	});
 
 	it("enables Add Full Camera as soon as a clip's asset carries one", () => {
@@ -273,7 +273,7 @@ describe("V4Timeline create-from-toolbar", () => {
 				cameraTrack: { sourcePath: "/tmp/cam.webm", startMs: 0, offsetMs: 0, visible: true },
 			},
 		]);
-		expect(screen.getByTitle("buttons.addCameraFullscreen")).toBeEnabled();
+		expect(screen.getByLabelText("buttons.addCameraFullscreen")).toBeEnabled();
 	});
 
 	// The disabled button is only half the promise: an empty lane advertises the shortcut
@@ -417,14 +417,13 @@ describe("V4Timeline audio lane drag", () => {
 	// 900px / 1800s = 0.5 px per second, so +90px is +180s.
 	const secForPx = (px: number) => (px / VIEWPORT_PX) * TOTAL_SEC;
 
-	it("offers a voiceover button in the toolbar", () => {
-		// The audio lane's empty state is the only OTHER affordance for `V`, and it
-		// disappears the moment anything is in the lane — so after the first import
-		// the shortcut was undiscoverable.
+	it("offers both audio paths behind one toolbar button", () => {
+		// A mic and a music note side by side both just said "audio"; one button
+		// with a named menu is what tells a first-time user the two paths apart.
 		const onAddVoiceover = vi.fn();
 		renderAudio({}, { onAddVoiceover });
-		const button = screen.getByLabelText("audio.addVoiceover");
-		fireEvent.click(button);
+		fireEvent.click(screen.getByLabelText("toolbar.addAudioTooltip"));
+		fireEvent.click(screen.getByText("audio.addVoiceover"));
 		expect(onAddVoiceover).toHaveBeenCalledTimes(1);
 	});
 
