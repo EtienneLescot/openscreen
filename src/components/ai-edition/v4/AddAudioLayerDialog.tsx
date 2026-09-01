@@ -18,7 +18,7 @@ import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutAsset } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { probeAudioDuration } from "@/lib/ai-edition/timeline/duration";
-import { ModalShell } from "../Modals";
+import styles from "./EditorShellV4.module.css";
 
 const RECORDER_MIME_PREFERENCES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
 
@@ -58,6 +58,7 @@ export function AddAudioLayerDialog({
 	onRecordingStop: () => void;
 }) {
 	const t = useScopedT("timeline");
+	const tc = useScopedT("common");
 	const [busy, setBusy] = useState(false);
 	const [recording, setRecording] = useState(false);
 	const [elapsedSec, setElapsedSec] = useState(0);
@@ -69,6 +70,9 @@ export function AddAudioLayerDialog({
 	// Set when the user cancels (closes the dialog mid-take) — the stop handler
 	// then discards the blob instead of importing it as a layer.
 	const discardRef = useRef(false);
+	// Read by the Escape handler, which must not re-subscribe every time the
+	// elapsed-time state ticks.
+	const recordingRef = useRef(false);
 
 	// Reset whenever the dialog opens again — a cancelled recording must not
 	// leak its stream or timer into the next session.
@@ -76,6 +80,7 @@ export function AddAudioLayerDialog({
 		if (open) {
 			setBusy(false);
 			setRecording(false);
+			recordingRef.current = false;
 			setElapsedSec(0);
 		}
 		return () => {
@@ -120,6 +125,7 @@ export function AddAudioLayerDialog({
 		stopRecording();
 		onRecordingStop();
 		setRecording(false);
+		recordingRef.current = false;
 		setElapsedSec(0);
 	}, [stopRecording, onRecordingStop]);
 
@@ -175,6 +181,7 @@ export function AddAudioLayerDialog({
 				const discarded = discardRef.current;
 				discardRef.current = false;
 				setRecording(false);
+				recordingRef.current = false;
 				setElapsedSec(0);
 				onRecordingStop();
 				if (discarded) return;
@@ -204,6 +211,7 @@ export function AddAudioLayerDialog({
 			discardRef.current = false;
 			recorder.start(250);
 			setRecording(true);
+			recordingRef.current = true;
 			setElapsedSec(0);
 			onRecordingStart();
 			timerRef.current = setInterval(() => {
@@ -246,88 +254,80 @@ export function AddAudioLayerDialog({
 		}
 	}, [finishWithPath]);
 
-	const buttonStyle: React.CSSProperties = {
-		display: "flex",
-		alignItems: "center",
-		justifyContent: "center",
-		gap: 8,
-		padding: "10px 14px",
-		borderRadius: 10,
-		border: "1px solid var(--border)",
-		background: "var(--bg-2)",
-		color: "var(--fg-1)",
-		font: "600 13px var(--font-display)",
-		cursor: "pointer",
-	};
+	// Escape closes, the way it did when this was a modal — cancelling a take in
+	// progress rather than saving a half-recorded one.
+	useEffect(() => {
+		if (!open) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			if (recordingRef.current) cancelRecording();
+			onClose();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [open, cancelRecording, onClose]);
+
+	if (!open) return null;
 
 	return (
-		<ModalShell
-			open={open}
-			onClose={() => {
-				if (recording) cancelRecording();
-				onClose();
-			}}
-			title={t("audio.addVoiceover")}
-			subtitle={t("audio.subtitle")}
-		>
-			<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-				{recording ? (
-					<div
-						style={{
-							display: "flex",
-							flexDirection: "column",
-							alignItems: "center",
-							gap: 12,
-							padding: "18px 0 8px",
-						}}
+		// A toolbar, not a dialog: no backdrop, nothing dimmed, and the preview
+		// keeps playing behind it. `aria-live` so a screen reader hears the take
+		// start and stop without the focus trap a modal would impose.
+		<div className={styles.voiceoverBar} role="group" aria-label={t("audio.addVoiceover")}>
+			<span className={styles.voiceoverBarTitle}>
+				<strong>{t("audio.addVoiceover")}</strong>
+				<span>{recording ? t("audio.recordingHint") : t("audio.subtitle")}</span>
+			</span>
+			{recording ? (
+				<>
+					<span className={styles.voiceoverBarLive} aria-live="polite">
+						<span className={`${styles.voiceoverBarDot} animate-pulse`} />
+						{t("audio.recording")} {elapsedSec.toFixed(1)}s
+					</span>
+					<button
+						type="button"
+						onClick={stopRecording}
+						className={`${styles.voiceoverBarBtn} ${styles.voiceoverBarBtnDanger}`}
 					>
-						<span
-							style={{
-								display: "inline-flex",
-								alignItems: "center",
-								gap: 8,
-								color: "var(--danger)",
-								font: "600 13px var(--font-display)",
-							}}
-						>
-							<span
-								className="animate-pulse"
-								style={{
-									width: 10,
-									height: 10,
-									borderRadius: 999,
-									background: "var(--danger)",
-								}}
-							/>
-							{t("audio.recording")} {elapsedSec.toFixed(1)}s
-						</span>
-						<button
-							type="button"
-							onClick={stopRecording}
-							style={{ ...buttonStyle, borderColor: "var(--danger)", color: "var(--danger)" }}
-						>
-							<StopCircle size={16} />
-							{t("audio.stop")}
-						</button>
-					</div>
-				) : (
-					<>
-						<button type="button" onClick={() => void startRecording()} style={buttonStyle}>
-							<Mic size={16} />
-							{t("audio.record")}
-						</button>
-						<button
-							type="button"
-							onClick={() => void importFile()}
-							disabled={busy}
-							style={buttonStyle}
-						>
-							<Upload size={16} />
-							{t("audio.importFile")}
-						</button>
-					</>
-				)}
-			</div>
-		</ModalShell>
+						<StopCircle size={16} />
+						{t("audio.stop")}
+					</button>
+					<button
+						type="button"
+						onClick={() => {
+							cancelRecording();
+							onClose();
+						}}
+						className={styles.voiceoverBarBtn}
+					>
+						{tc("actions.cancel")}
+					</button>
+				</>
+			) : (
+				<>
+					<button
+						type="button"
+						onClick={() => void startRecording()}
+						className={styles.voiceoverBarBtn}
+					>
+						<Mic size={16} />
+						{t("audio.record")}
+					</button>
+					<button
+						type="button"
+						onClick={() => void importFile()}
+						disabled={busy}
+						className={styles.voiceoverBarBtn}
+					>
+						<Upload size={16} />
+						{t("audio.importFile")}
+					</button>
+					<button type="button" onClick={onClose} className={styles.voiceoverBarBtn}>
+						{tc("actions.close")}
+					</button>
+				</>
+			)}
+		</div>
 	);
 }

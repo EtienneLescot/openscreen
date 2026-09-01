@@ -97,6 +97,7 @@
 		"importFile": "오디오 파일 가져오기",
 		"importFileHint": "음악이나 오디오 파일 가져오기",
 		"recording": "녹음 중",
+		"recordingHint": "영상에 맞춰 말하세요 — 녹음하는 동안 재생됩니다",
 		"stop": "중지",
 		"micDenied": "마이크 접근이 거부되었습니다",
 		"recordingUnavailable": "여기에서는 녹음할 수 없습니다",

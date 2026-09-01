@@ -97,6 +97,7 @@
 		"importFile": "Import audio file",
 		"importFileHint": "Bring in music or an audio file",
 		"recording": "Recording",
+		"recordingHint": "Narrate along with the video — it plays while you record",
 		"stop": "Stop",
 		"micDenied": "Microphone access was denied",
 		"recordingUnavailable": "Recording is not available here",
