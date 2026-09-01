@@ -33,7 +33,7 @@ import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
-import { collapseTracksToPills } from "@/lib/ai-edition/document/audioTracks";
+import { collapseTracksToPills, packAudioTrackRows } from "@/lib/ai-edition/document/audioTracks";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutAudioTrack, AxcutClip } from "@/lib/ai-edition/schema";
@@ -135,6 +135,14 @@ const PILL_HANDLE_OUT_PX = PILL_HANDLE_PX + PILL_MOVE_GAP_PX;
 const PILL_CONTENT_MIN_PX = 34;
 /** Edge-snap radius while dragging a pill, in screen px. */
 const PILL_SNAP_PX = 8;
+// One audio pill's height, and the vertical step between stacked rows. The lane
+// grows by a row for each track that overlaps one already placed — see
+// `packAudioTrackRows`.
+const AUDIO_ROW_HEIGHT_PX = 26;
+const AUDIO_ROW_GAP_PX = 3;
+// Breathing room above the first row and below the last, so a pill never sits
+// flush against the lane's rounded edge.
+const AUDIO_LANE_PAD_PX = 3;
 // The size a newly created pill aims for (PILL_CREATE_PX) lives in
 // timeline/newRegionDuration, because the keyboard shortcuts create regions too
 // and they are handled in NewEditorShell, outside this component.
@@ -361,6 +369,8 @@ const AudioLanePill = memo(function AudioLanePill({
 	sourceEndSec,
 	spanSec,
 	loopWindowSec,
+	row,
+	rowHeight,
 	selected,
 	onStartDrag,
 	onSelect,
@@ -380,6 +390,10 @@ const AudioLanePill = memo(function AudioLanePill({
 	 *  together they say where the loop boundaries fall. */
 	spanSec: number;
 	loopWindowSec: number;
+	/** Which row of the audio lane this pill occupies, and how tall a row is —
+	 *  overlapping tracks are stacked rather than drawn on top of each other. */
+	row: number;
+	rowHeight: number;
 	selected: boolean;
 	onStartDrag: (e: ReactPointerEvent, track: AxcutAudioTrack, mode: "move" | "l" | "r") => void;
 	onSelect: (id: string) => void;
@@ -396,7 +410,13 @@ const AudioLanePill = memo(function AudioLanePill({
 			className={`${styles.lanePill} ${styles.laneAudio}${
 				selected ? ` ${styles.lanePillSel}` : ""
 			}`}
-			style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: 3 }}
+			style={{
+				left: `${leftPct}%`,
+				width: `${widthPct}%`,
+				minWidth: 3,
+				top: AUDIO_LANE_PAD_PX + row * rowHeight,
+				height: AUDIO_ROW_HEIGHT_PX,
+			}}
 			// Body drag moves the track; it also selects and stops the .tlTracks scrub.
 			onPointerDown={(e) => onStartDrag(e, track, "move")}
 			onKeyDown={(e) => {
@@ -909,6 +929,11 @@ export function V4Timeline({
 		trimEnd: number;
 	} | null>(null);
 	const audioDragRef = useRef<typeof audioDrag>(null);
+	// The user-visible tracks and their lane rows. Packed from the STORED spans,
+	// not the live drag geometry: a pill that changed rows halfway through a drag
+	// would jump out from under the pointer.
+	const audioPills = useMemo(() => collapseTracksToPills(tl.audioTracks), [tl.audioTracks]);
+	const audioRows = useMemo(() => packAudioTrackRows(audioPills), [audioPills]);
 
 	// Drag an audio track: "move" slides the head (both edges together), "l"/"r"
 	// trim the in/out points. The left edge moves the head AND the in-point so the
@@ -1838,7 +1863,18 @@ export function V4Timeline({
 								    lane — "Add audio" is a toolbar peer of the region tools now (and
 								    has a keyboard shortcut), so an empty lane advertises the shortcut
 								    that fills it rather than hiding until the first import. */}
-								<div className={`${styles.tlLane} ${styles.tlLaneAudio}`}>
+								<div
+									className={`${styles.tlLane} ${styles.tlLaneAudio}`}
+									// Grows a row per overlapping track, so three voiceovers over
+									// the same stretch are three legible pills rather than one
+									// pile nobody can aim at.
+									style={{
+										height:
+											audioRows.rowCount * AUDIO_ROW_HEIGHT_PX +
+											(audioRows.rowCount - 1) * AUDIO_ROW_GAP_PX +
+											AUDIO_LANE_PAD_PX * 2,
+									}}
+								>
 									{tl.audioTracks.length === 0 ? (
 										<span
 											className={styles.laneEmpty}
@@ -1850,7 +1886,7 @@ export function V4Timeline({
 										// One pill per user-visible track: the document stores one
 										// clip-anchored fragment per clip the track covers, and the
 										// lane must not show a split take as two pills.
-										collapseTracksToPills(tl.audioTracks).map((track) => {
+										audioPills.map((track) => {
 											const asset = tl.assets.find((a) => a.id === track.assetId);
 											const duration = asset?.durationSec ?? track.durationSec;
 											// While this track is being dragged, lay it out from the live
@@ -1872,6 +1908,8 @@ export function V4Timeline({
 													assetDurationSec={duration}
 													leftPct={pctOf(start)}
 													widthPct={pctOf(widthSec)}
+													row={audioRows.rowOf.get(track.id) ?? 0}
+													rowHeight={AUDIO_ROW_HEIGHT_PX + AUDIO_ROW_GAP_PX}
 													spanSec={widthSec}
 													loopWindowSec={Math.max(0, (duration || 0) - trimStart)}
 													sourceStartSec={trimStart}

@@ -199,3 +199,40 @@ export function resolveFadeSecs(
 	const scale = Math.max(0, spanSec) / total;
 	return { fadeInSec: fadeInSec * scale, fadeOutSec: fadeOutSec * scale };
 }
+
+/**
+ * Assign each track a ROW in the audio lane, so two tracks that overlap in time
+ * never sit on top of each other.
+ *
+ * Greedy first-fit over tracks in start order: a track takes the topmost row
+ * whose last occupant has already finished, and opens a new row only when every
+ * existing one is still busy. Tracks that do not overlap therefore keep sharing
+ * one row — the lane stays a single line for the common case, and grows only as
+ * far as the actual overlap demands.
+ *
+ * Stacking is the whole point: a lane that draws every track at the same height
+ * turns three voiceovers into one illegible pile where the user cannot tell
+ * which pill they are about to drag.
+ *
+ * Returns the row index per track id, plus how many rows the lane needs.
+ */
+export function packAudioTrackRows(tracks: Array<{ id: string; startMs: number; endMs: number }>): {
+	rowOf: Map<string, number>;
+	rowCount: number;
+} {
+	const ordered = [...tracks].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+	// The end of the last track placed in each row, in the same index order.
+	const rowEnds: number[] = [];
+	const rowOf = new Map<string, number>();
+	for (const track of ordered) {
+		let row = rowEnds.findIndex((end) => end <= track.startMs);
+		if (row === -1) {
+			row = rowEnds.length;
+			rowEnds.push(track.endMs);
+		} else {
+			rowEnds[row] = track.endMs;
+		}
+		rowOf.set(track.id, row);
+	}
+	return { rowOf, rowCount: Math.max(1, rowEnds.length) };
+}

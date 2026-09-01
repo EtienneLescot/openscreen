@@ -372,9 +372,14 @@ describe("V4Timeline audio lane drag", () => {
 		origin: "user" as const,
 	});
 
+	function renderAudioTracks(tracks: Array<ReturnType<typeof makeTrack>>) {
+		return renderAudio({}, {}, tracks);
+	}
+
 	function renderAudio(
 		trackOverrides: Partial<ReturnType<typeof makeTrack>> = {},
 		props: { onAddVoiceover?: () => void } = {},
+		tracks?: Array<ReturnType<typeof makeTrack>>,
 	) {
 		const placeAudioTrack = vi.fn(
 			async (_id: string, _span: { startMs: number; endMs: number; offsetMs?: number }) => {
@@ -393,7 +398,7 @@ describe("V4Timeline audio lane drag", () => {
 			selection: null,
 			multiSelection: [],
 			clipSelection: null,
-			audioTracks: [{ ...makeTrack(), ...trackOverrides }],
+			audioTracks: tracks ?? [{ ...makeTrack(), ...trackOverrides }],
 			selectedAudioTrackId: null,
 			selectAudioTrack,
 			placeAudioTrack,
@@ -403,7 +408,7 @@ describe("V4Timeline audio lane drag", () => {
 			updateAnnotationSpan: vi.fn(async () => undefined),
 			addZoom: vi.fn(async () => undefined),
 		};
-		render(
+		const { container } = render(
 			<ShortcutsProvider>
 				<V4Timeline
 					tl={tl as unknown as ReturnType<typeof useTimeline>}
@@ -417,7 +422,16 @@ describe("V4Timeline audio lane drag", () => {
 				/>
 			</ShortcutsProvider>,
 		);
-		return { pill: screen.getByTitle("vo"), placeAudioTrack, selectAudioTrack };
+		// `pill` is a getter: the multi-track cases render no "vo" pill, and an
+		// eager lookup would throw before their own assertions ran.
+		return {
+			get pill() {
+				return screen.getByTitle("vo");
+			},
+			container,
+			placeAudioTrack,
+			selectAudioTrack,
+		};
 	}
 
 	// 900px / 1800s = 0.5 px per second, so +90px is +180s.
@@ -455,6 +469,30 @@ describe("V4Timeline audio lane drag", () => {
 	it("draws no loop marks when the track fits inside its source", () => {
 		const { pill } = renderAudio({ loop: true });
 		expect(pill.querySelectorAll('[data-testid="audio-loop-mark"]')).toHaveLength(0);
+	});
+
+	it("stacks overlapping tracks on separate rows", () => {
+		// Three takes over the same stretch used to draw at the same height, one
+		// hiding the next — you could not tell which pill you were about to drag.
+		const { container } = renderAudioTracks([
+			{ ...makeTrack(), id: "a", label: "a", startMs: 0, endMs: 60_000 },
+			{ ...makeTrack(), id: "b", label: "b", startMs: 10_000, endMs: 70_000 },
+			{ ...makeTrack(), id: "c", label: "c", startMs: 20_000, endMs: 80_000 },
+		]);
+		const tops = ["a", "b", "c"].map((l) => (screen.getByTitle(l) as HTMLElement).style.top);
+		expect(new Set(tops).size).toBe(3);
+		// ...and the lane grew to hold them rather than clipping.
+		const lane = container.querySelector('[class*="tlLaneAudio"]') as HTMLElement;
+		expect(Number.parseInt(lane.style.height, 10)).toBeGreaterThan(60);
+	});
+
+	it("keeps non-overlapping tracks on one row", () => {
+		renderAudioTracks([
+			{ ...makeTrack(), id: "a", label: "a", startMs: 0, endMs: 10_000 },
+			{ ...makeTrack(), id: "b", label: "b", startMs: 20_000, endMs: 30_000 },
+		]);
+		const tops = ["a", "b"].map((l) => (screen.getByTitle(l) as HTMLElement).style.top);
+		expect(new Set(tops).size).toBe(1);
 	});
 
 	it("selects the track on pointer-down before any movement", () => {
