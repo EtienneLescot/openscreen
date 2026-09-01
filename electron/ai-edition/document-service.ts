@@ -78,6 +78,15 @@ function isSupportedVideoPath(filePath: string): boolean {
 // Imported audio (issue #350). Decoding is handled downstream by the same
 // WebCodecs / ffmpeg paths that read a video's audio track, so this list is the
 // container formats decodeAudioData and the compositor can open.
+// What may be filed as an AUDIO asset. Deliberately WIDER than the import
+// picker's list in `electron/ipc/handlers.ts`: this gate runs when the caller
+// has already declared `kind: "audio"`, so it only has to reject files that
+// could not carry audio at all, whereas the picker has to guess from the
+// extension alone and must not offer a video as audio.
+//
+// `.webm` is exactly that difference. An in-editor voiceover take is written by
+// MediaRecorder as webm/opus — the same extension a screen recording uses — so
+// the picker rightly refuses it while this gate must accept it.
 const SUPPORTED_AUDIO_EXTENSIONS = new Set([
 	".mp3",
 	".wav",
@@ -85,7 +94,9 @@ const SUPPORTED_AUDIO_EXTENSIONS = new Set([
 	".aac",
 	".flac",
 	".ogg",
+	".oga",
 	".opus",
+	".webm",
 ]);
 
 function isSupportedAudioPath(filePath: string): boolean {

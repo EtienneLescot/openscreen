@@ -975,6 +975,10 @@ export function V4Timeline({
 						.placeAudioTrack(fin.id, {
 							startMs: Math.round(fin.start * 1000),
 							endMs: Math.round((fin.start + Math.max(0, fin.trimEnd - fin.trimStart)) * 1000),
+							// Carries the left-edge trim: without it the head moved but the
+							// source kept playing from the same point, so dragging the edge
+							// in just slid the audio along instead of cutting its head off.
+							offsetMs: Math.round(fin.trimStart * 1000),
 						})
 						.finally(() => {
 							if (audioDragRef.current === fin) {

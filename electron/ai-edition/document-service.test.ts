@@ -314,6 +314,21 @@ describe("DocumentService", () => {
 			).rejects.toBeInstanceOf(ProjectFileError);
 		});
 
+		it("accepts a recorded .webm take as audio", async () => {
+			// MediaRecorder writes a voiceover as webm/opus — the same extension a
+			// screen recording uses. The caller has already declared the kind here,
+			// so this gate must take it; only the import PICKER, which has nothing
+			// but the extension to go on, still refuses .webm as audio.
+			const doc = await service.createProject("P");
+			const next = await service.addAsset(doc.project.id, {
+				path: "/tmp/voiceover-2026.webm",
+				kind: "audio",
+			});
+			expect(next.assets.at(-1)).toMatchObject({ kind: "audio" });
+			// ...and it must not have claimed the primary (video-only) slot.
+			expect(next.project.primaryAssetId).toBeUndefined();
+		});
+
 		it("accepts a video extension under the default kind but not as audio", async () => {
 			const doc = await service.createProject("P");
 			// The same extension routing works in reverse: an .mp3 is fine as audio

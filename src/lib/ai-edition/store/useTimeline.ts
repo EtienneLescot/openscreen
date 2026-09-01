@@ -1349,7 +1349,7 @@ export function useTimeline() {
 	// track's own — `anchorAudioTrackFragments` re-derives each fragment's
 	// advance from the new geometry.
 	const placeAudioTrack = useCallback(
-		async (trackId: string, span: { startMs: number; endMs: number }) => {
+		async (trackId: string, span: { startMs: number; endMs: number; offsetMs?: number }) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			const others = doc.audioTracks.filter((t) => trackGroupId(t) !== trackId);
@@ -1361,6 +1361,12 @@ export function useTimeline() {
 				...pill,
 				startMs: Math.max(0, Math.round(span.startMs)),
 				endMs: Math.max(Math.round(span.startMs) + 1, Math.round(span.endMs)),
+				// A left-edge drag is a trim IN: the head moves right and the same
+				// amount is skipped in the source, so the audio under the pill stays
+				// put instead of sliding with it. Omitted by a plain move, which
+				// keeps the offset it already had.
+				offsetMs:
+					span.offsetMs === undefined ? pill.offsetMs : Math.max(0, Math.round(span.offsetMs)),
 			};
 			const fragments = anchorAudioTrackFragments(moved, doc.timeline.clips, () =>
 				createId("audio"),
