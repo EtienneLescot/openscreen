@@ -74,6 +74,10 @@ interface SeekTarget {
  * handlers that need it. The store write cadence is unchanged — `currentTimeSec`
  * is still the source of truth, still updated every frame.
  */
+// Stable empty list: a fresh `[]` each render would churn the preview's audio
+// element set on every playhead tick.
+const NO_AUDIO_TRACKS: AxcutAudioTrack[] = [];
+
 function NativePlaybackSync({
 	visibleClips,
 	clips,
@@ -801,14 +805,20 @@ export function NewEditorShell() {
 		setVoiceoverFlow({ maxDurationSec: Math.max(0.5, total - playhead) });
 	}, []);
 
+	// Silences the timeline's own audio tracks for the duration of a take — see
+	// where it is passed to the preview.
+	const [voiceoverRecording, setVoiceoverRecording] = useState(false);
+
 	const handleVoiceoverRecordingStart = useCallback(() => {
 		// Re-capture: the user may have scrubbed between opening the dialog and
 		// hitting Record, and playback starts from wherever the playhead is now.
 		voiceoverStartSecRef.current = useProjectStore.getState().currentTimeSec;
+		setVoiceoverRecording(true);
 		if (videoElement?.paused) void videoElement.play().catch(() => undefined);
 	}, [videoElement]);
 
 	const handleVoiceoverRecordingStop = useCallback(() => {
+		setVoiceoverRecording(false);
 		videoElement?.pause();
 	}, [videoElement]);
 
@@ -1367,7 +1377,12 @@ export function NewEditorShell() {
 									// Imported audio tracks (issue #350). `videoSources` already
 									// resolves a URL for every asset (audio included), so it doubles as
 									// the audio source list; VirtualPreview looks each track up by assetId.
-									audioTracks={tl.audioTracks}
+									// Nothing already on the timeline plays while a take is being
+									// recorded. On speakers it bleeds straight into the microphone
+									// and lands in the new take; even on headphones, narrating over
+									// an earlier voiceover is not what the button offers. The video
+									// itself keeps playing — that is what the user is narrating to.
+									audioTracks={voiceoverRecording ? NO_AUDIO_TRACKS : tl.audioTracks}
 									audioSources={videoSources}
 									clips={clips}
 									zoomRegions={tl.zoomRegions}
@@ -1521,7 +1536,12 @@ export function NewEditorShell() {
 			<AddAudioLayerDialog
 				open={voiceoverFlow !== null}
 				maxDurationSec={voiceoverFlow?.maxDurationSec ?? 0}
-				onClose={() => setVoiceoverFlow(null)}
+				onClose={() => {
+					// Belt and braces: the recorder's own stop handler clears this, but a
+					// flow that ends any other way must not leave the timeline muted.
+					setVoiceoverRecording(false);
+					setVoiceoverFlow(null);
+				}}
 				onComplete={(assetId, durationSec) => {
 					void handleVoiceoverReady(assetId, durationSec);
 				}}

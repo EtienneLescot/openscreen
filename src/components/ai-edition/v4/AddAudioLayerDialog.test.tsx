@@ -85,6 +85,16 @@ describe("AddAudioLayerDialog", () => {
 		await vi.waitFor(() => expect(props.onRecordingStart).toHaveBeenCalledTimes(1));
 	});
 
+	it("reports the end of a take, which is what un-mutes the timeline", async () => {
+		// The shell silences the existing audio tracks between these two callbacks,
+		// so a stop that never reported would leave the timeline mute for good.
+		const { props } = renderDialog();
+		fireEvent.click(screen.getByText("audio.record"));
+		await vi.waitFor(() => expect(FakeRecorder.instances).toHaveLength(1));
+		fireEvent.click(screen.getByText("audio.stop"));
+		expect(props.onRecordingStop).toHaveBeenCalledTimes(1);
+	});
+
 	it("stops the recorder when the dialog is torn down mid-take", async () => {
 		const { unmount, props } = renderDialog();
 		fireEvent.click(screen.getByText("audio.record"));
