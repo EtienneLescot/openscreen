@@ -986,6 +986,7 @@ name = "openscreen-compositor"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "ash",
  "bindgen",
  "block",
  "cc",
@@ -1000,6 +1001,7 @@ dependencies = [
  "serde",
  "serde_json",
  "wgpu",
+ "wgpu-hal",
  "windows",
 ]
 

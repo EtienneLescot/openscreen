@@ -24,6 +24,16 @@ segmentation = ["dep:ort", "dep:ndarray"]
 
 [dependencies]
 anyhow.workspace = true
+[target.'cfg(target_os = "linux")'.dependencies]
+# Acces Vulkan brut, UNIQUEMENT pour ouvrir le device avec les extensions de
+# memoire externe (cf. `d3d_linux::open_device_with_dmabuf_export`). Les versions
+# sont celles que wgpu 24 tire deja : en prendre d'autres ferait cohabiter deux
+# bindings pour un meme `VkDevice`.
+wgpu.workspace = true
+pollster.workspace = true
+cosmic-text.workspace = true
+ash = "0.38"
+wgpu-hal = { version = "24", features = ["vulkan"] }
 ort = { workspace = true, optional = true }
 ndarray = { workspace = true, optional = true }
 serde.workspace = true
@@ -59,7 +69,3 @@ core-foundation = "0.9"
 
 # Linux : wgpu (Vulkan) pour le rendu, pollster pour block_on les ops wgpu,
 # cosmic-text pour la rastérisation du texte (remplace DirectWrite/CoreText).
-[target.'cfg(target_os = "linux")'.dependencies]
-wgpu.workspace = true
-pollster.workspace = true
-cosmic-text.workspace = true
