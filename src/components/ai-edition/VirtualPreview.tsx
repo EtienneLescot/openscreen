@@ -511,7 +511,6 @@ export function VirtualPreview({
 	// audio track's head raw→output every frame (see the audio-track loop), and
 	// must see the live trims, not the set captured when the loop was created.
 	const trimRangesRef = useRef(trimRanges);
-	trimRangesRef.current = trimRanges;
 	// Trim-narrowed (`resolvePlaybackSegments`) — used ONLY to detect "has the <video>'s own
 	// currentTime drifted into a trim" and where to jump it back out to. Everything ELSE in
 	// this component (`clips`/`clipsRef` above, virtualTimeSec, zoom/speed region lookups,
@@ -543,7 +542,16 @@ export function VirtualPreview({
 	// re-creating the loop. `audioTrackElsRef` maps a PILL id to its mounted <audio>
 	// element (registered by the ref callback on render).
 	const audioPillsRef = useRef(audioPills);
-	audioPillsRef.current = audioPills;
+	// `trimRangesRef` and `audioPillsRef` are written from this post-commit effect,
+	// NOT during render: React can abandon an interrupted render, and a ref mutated in
+	// one leaves the long-lived rAF reading trims/placements from a document state that
+	// never committed — heard as an imported track seeking or playing at the wrong point
+	// for the frames until the next commit. (The file's older refs keep their render-time
+	// convention; these two are this feature's own additions.)
+	useEffect(() => {
+		trimRangesRef.current = trimRanges;
+		audioPillsRef.current = audioPills;
+	}, [trimRanges, audioPills]);
 	const audioTrackElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
 	const registerAudioTrackEl = useCallback((trackId: string, element: HTMLAudioElement | null) => {
 		if (element) audioTrackElsRef.current.set(trackId, element);
@@ -633,7 +641,12 @@ export function VirtualPreview({
 				// the jitter. A started element already plays at the right rate from the
 				// right offset, so it free-runs in sync; this wide leash just catches the
 				// jumps. BGM/voiceover tolerates it; frame-tight sync is the video's job.
-				const leashSec = !el.paused && target.shouldPlay ? 0.3 : 0.025;
+				//
+				// While the primary video is SEEKING (a scrub, or the jump it makes over a
+				// trim), the wide leash is suspended: the video's clock is parked at the
+				// jump and a free-running bed drifts past the resume point for up to the
+				// leash, then yanks back — the audible smear at a cut edge.
+				const leashSec = !v.seeking && !el.paused && target.shouldPlay ? 0.3 : 0.025;
 				if (Math.abs(el.currentTime - target.targetTimeSec) > leashSec) {
 					try {
 						el.currentTime = target.targetTimeSec;
@@ -641,7 +654,18 @@ export function VirtualPreview({
 						// media metadata not ready yet
 					}
 				}
-				if (!v.paused && target.shouldPlay && el.paused) {
+				// Start only once the seek above has landed (or was not needed). A seek
+				// issued before the element's metadata is in is silently DROPPED by the
+				// element, and playing then starts from wherever it sits — for a fresh
+				// element, the file's very beginning: a track replayed from its start.
+				// Assigning currentTime is reflected synchronously, so the distance check
+				// is exact on the frame the seek sticks, and false while one is pending.
+				if (
+					!v.paused &&
+					target.shouldPlay &&
+					el.paused &&
+					Math.abs(el.currentTime - target.targetTimeSec) <= leashSec
+				) {
 					// Resume a context suspended by autoplay policy, exactly as the primary
 					// loop does above — otherwise a region that starts while the primary
 					// element is silent (its span is over, or a recording with no separate
