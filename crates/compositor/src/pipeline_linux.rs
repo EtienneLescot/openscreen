@@ -325,12 +325,18 @@ impl VideoEncoder {
 
     /// Envoie une frame deja en YUV420P, convertie par le GPU.
     ///
-    /// Remplace `send_rgba` sur le chemin d'export : plus de `sws_scale`, et le
-    /// buffer relu fait 3,1 Mo au lieu de 8,3 en 1080p. Le seul travail CPU qui
-    /// reste est de retirer le padding des trois plans — `copy_texture_to_buffer`
-    /// aligne chaque `bytes_per_row` sur 256, donc en 1080p Y arrive en 2048 pour
-    /// 1920 utiles et U/V en 1024 pour 960.
-    pub unsafe fn depad_into(
+    /// Recopie le buffer relu dans une AVFrame du pool. Les deux ont la MEME
+    /// disposition (`alloc_padded_yuv_frame`), donc c'est un seul bloc contigu :
+    /// pas de reformatage, juste un transfert hors de la memoire mappee avant que
+    /// la ring ne recycle le slot.
+    ///
+    /// C'EST UNE COPIE, ET ELLE RESTE. La supprimer voudrait dire encoder
+    /// directement depuis le buffer de staging, donc le maintenir mappe pendant
+    /// que le worker travaille, a travers une frontiere de thread. Le gain est le
+    /// meme ~0,30 ms/frame que ce memcpy coute deja ; le prix serait un slot wgpu
+    /// dont la duree de vie depend de l'encodeur. Pas le bon echange tant que ce
+    /// n'est pas ce thread-ci le goulot.
+    pub unsafe fn copy_into(
         dst_frame: *mut AVFrame,
         planes: &[u8],
         rw: i32,
@@ -338,42 +344,25 @@ impl VideoEncoder {
         enc_w: i32,
         enc_h: i32,
     ) -> Result<()> {
-        use crate::ffi::*;
         // Les DEUX bornes comptent. La verification de taille seule laisserait
-        // passer un buffer assez gros mais de mauvaise geometrie : les strides
-        // seraient recalcules depuis rw/rh et l'image sortirait silencieusement
-        // decalee, ce qui est bien plus difficile a diagnostiquer qu'un echec.
+        // passer un buffer assez gros mais de mauvaise geometrie : la disposition
+        // serait recalculee depuis rw/rh et l'image sortirait silencieusement
+        // decalee, bien plus difficile a diagnostiquer qu'un echec franc.
         if rw != enc_w || rh != enc_h {
-            bail!("depad_into {rw}x{rh} != encodeur {enc_w}x{enc_h}");
+            bail!("copy_into {rw}x{rh} != encodeur {enc_w}x{enc_h}");
         }
-        let (w, h) = (rw as usize, rh as usize);
-        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
-        let bpr_y = w.div_ceil(256) * 256;
-        let bpr_uv = cw.div_ceil(256) * 256;
-        let off_u = bpr_y * h;
-        let off_v = off_u + bpr_uv * ch;
-        if planes.len() < off_v + bpr_uv * ch {
-            bail!("plans YUV tronques : {} octets", planes.len());
+        let lay = YuvLayout::for_size(rw, rh);
+        if planes.len() < lay.total {
+            bail!("plans YUV tronques : {} octets pour {}", planes.len(), lay.total);
         }
-
-        averr(av_frame_make_writable(dst_frame), "make_writable")?;
-        // Ligne a ligne parce que les deux strides different : celui du GPU est
-        // aligne a 256, celui de l'AVFrame a ce que ffmpeg a choisi.
-        for (plane, src_off, src_stride, pw, ph) in [
-            (0usize, 0usize, bpr_y, w, h),
-            (1, off_u, bpr_uv, cw, ch),
-            (2, off_v, bpr_uv, cw, ch),
-        ] {
-            let dst = (*dst_frame).data[plane];
-            let dst_stride = (*dst_frame).linesize[plane] as usize;
-            for y in 0..ph {
-                std::ptr::copy_nonoverlapping(
-                    planes.as_ptr().add(src_off + y * src_stride),
-                    dst.add(y * dst_stride),
-                    pw,
-                );
-            }
-        }
+        // Pas de `av_frame_make_writable` : la frame vient du pool, elle n'est
+        // jamais partagee, et son refcount est retombe a 1 des le retour
+        // d'`avcodec_send_frame`. L'appeler ici serait au mieux un no-op, au pire
+        // — si le buffer portait `AV_BUFFER_FLAG_READONLY` — une reallocation et
+        // une copie de plus.
+        debug_assert_eq!((*dst_frame).linesize[0] as usize, lay.bpr_y);
+        debug_assert_eq!((*dst_frame).linesize[1] as usize, lay.bpr_uv);
+        std::ptr::copy_nonoverlapping(planes.as_ptr(), (*dst_frame).data[0], lay.total);
         Ok(())
     }
 
@@ -414,6 +403,71 @@ unsafe fn alloc_sw_frame(pix_fmt: crate::ffi::AVPixelFormat::Type, w: i32, h: i3
         crate::ffi::av_frame_free(&mut frame);
         bail!("av_frame_get_buffer {w}x{h} pix_fmt={pix_fmt}");
     }
+    Ok(frame)
+}
+
+/// Geometrie du buffer relu : strides alignes a 256 (ce que
+/// `copy_texture_to_buffer` impose) et offsets des trois plans dans l'allocation
+/// unique. Calculee a UN SEUL endroit, parce que le producteur (le compositeur)
+/// et le consommateur (l'AVFrame du pool) doivent s'accorder a l'octet pres.
+#[derive(Clone, Copy)]
+struct YuvLayout {
+    bpr_y: usize,
+    bpr_uv: usize,
+    off_u: usize,
+    off_v: usize,
+    total: usize,
+}
+
+impl YuvLayout {
+    fn for_size(w: i32, h: i32) -> YuvLayout {
+        let (w, h) = (w as usize, h as usize);
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+        let bpr_y = w.div_ceil(256) * 256;
+        let bpr_uv = cw.div_ceil(256) * 256;
+        let off_u = bpr_y * h;
+        let off_v = off_u + bpr_uv * ch;
+        YuvLayout { bpr_y, bpr_uv, off_u, off_v, total: off_v + bpr_uv * ch }
+    }
+}
+
+/// Alloue une AVFrame YUV420P dont les `linesize` sont EXACTEMENT les strides du
+/// buffer relu, et dont les trois plans se suivent dans une seule allocation,
+/// dans le meme ordre.
+///
+/// POURQUOI PAS `av_frame_get_buffer`. Il choisit ses propres strides — 1920 et
+/// 960 en 1080p — la ou le GPU impose 2048 et 1024. Recopier de l'un vers
+/// l'autre demandait 3240 petits memcpy decales par frame (~0,67 ms) ; avec une
+/// disposition identique des deux cotes, la meme donnee se recopie d'un seul
+/// bloc contigu (~0,30 ms). libopenh264 lit `linesize[i]` et `data[i]` tels
+/// quels et se moque qu'un plan soit sur-stride.
+///
+/// LA FRAME RESTE REFCOMPTEE (`av_buffer_alloc`). Sans `buf[0]`, `av_frame_ref`
+/// a l'interieur d'`avcodec_send_frame` prend la branche « donnee non
+/// refcomptee » et REFAIT une allocation plus une copie complete — a l'interieur
+/// de l'encodeur, donc precisement la ou on ne penserait pas a la chercher.
+unsafe fn alloc_padded_yuv_frame(w: i32, h: i32) -> Result<*mut AVFrame> {
+    let lay = YuvLayout::for_size(w, h);
+    let mut frame = crate::ffi::av_frame_alloc();
+    if frame.is_null() {
+        bail!("av_frame_alloc (pool)");
+    }
+    (*frame).format = crate::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
+    (*frame).width = w;
+    (*frame).height = h;
+    let buf = crate::ffi::av_buffer_alloc(lay.total);
+    if buf.is_null() {
+        crate::ffi::av_frame_free(&mut frame);
+        bail!("av_buffer_alloc {} octets", lay.total);
+    }
+    let base = (*buf).data;
+    (*frame).buf[0] = buf;
+    (*frame).data[0] = base;
+    (*frame).data[1] = base.add(lay.off_u);
+    (*frame).data[2] = base.add(lay.off_v);
+    (*frame).linesize[0] = lay.bpr_y as i32;
+    (*frame).linesize[1] = lay.bpr_uv as i32;
+    (*frame).linesize[2] = lay.bpr_uv as i32;
     Ok(frame)
 }
 
@@ -530,9 +584,7 @@ impl EncodeWorker {
         let (full_tx, full_rx) = std::sync::mpsc::channel::<EncJob>();
         let (empty_tx, empty_rx) = std::sync::mpsc::channel::<FreeFrame>();
         for _ in 0..depth.max(2) {
-            let f = unsafe {
-                alloc_sw_frame(crate::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P, enc.w, enc.h)?
-            };
+            let f = unsafe { alloc_padded_yuv_frame(enc.w, enc.h)? };
             empty_tx
                 .send(FreeFrame(f))
                 .map_err(|_| anyhow::anyhow!("pool d'encodage: canal ferme a l'amorcage"))?;
@@ -754,7 +806,7 @@ pub fn run_composited_multi(
                 let frame = worker.take_free()?;
                 let mut filled = false;
                 comp.readback_submit_yuv(|rw, rh, planes| {
-                    VideoEncoder::depad_into(
+                    VideoEncoder::copy_into(
                         frame,
                         planes,
                         rw as i32,
@@ -815,7 +867,7 @@ pub fn run_composited_multi(
             let frame = worker.take_free()?;
             let mut filled = false;
             let got = comp.readback_take_yuv_with(|rw, rh, planes| {
-                VideoEncoder::depad_into(
+                VideoEncoder::copy_into(
                     frame,
                     planes,
                     rw as i32,
