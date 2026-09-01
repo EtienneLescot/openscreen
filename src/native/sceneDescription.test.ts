@@ -735,6 +735,36 @@ describe("buildSceneDescription.cameraFullscreenRegions", () => {
 			{ startSec: 200, endSec: 202, clipIndex: 1 },
 		]);
 	});
+
+	it("keeps a region a trim removes entirely, marked underTrim", () => {
+		// Same rule as zoom and annotations (issue #216): addressed by the segment the cut
+		// interrupts (seg1, source [0,2] → clipIndex 0) instead of dropped. Full Camera needs
+		// no extra gate native-side — its envelope is already contained in [startSec, endSec].
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a", originalPath: "/a.mp4" })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "a", startSec: 2, endSec: 8, reason: "", origin: "user" },
+				],
+			},
+			legacyEditor: {
+				cameraFullscreenRegions: [{ id: "cf1", startMs: 3000, endMs: 5000 }],
+			},
+		});
+		expect(buildSceneDescription(doc).cameraFullscreenRegions).toEqual([
+			{ startSec: 3, endSec: 5, clipIndex: 0, underTrim: true },
+		]);
+	});
 });
 
 // --- speedRegions -----------------------------------------------------------
@@ -1741,6 +1771,74 @@ describe("buildSceneDescription.annotations", () => {
 	it("is empty when the document has no annotations", () => {
 		const scene = buildSceneDescription(docWithAnnotations([]));
 		expect(scene.annotations).toEqual([]);
+	});
+
+	it("keeps an annotation a trim removes entirely, marked underTrim", () => {
+		// The symptom issue #216 opens on. The trim removes source [2,8]; the annotation at
+		// raw [3,5] falls entirely inside it, so it reaches native addressed by the segment
+		// the cut interrupts (seg1, source [0,2] → clipIndex 0) rather than being dropped.
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a1", originalPath: "/tmp/a1.mp4", durationSec: 10 })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a1",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "a1", startSec: 2, endSec: 8, reason: "", origin: "user" },
+				],
+			},
+			annotations: [
+				{
+					id: "ann1",
+					startMs: 3000,
+					endMs: 5000,
+					type: "text",
+					content: "",
+					textContent: "Hello",
+					position: { x: 25, y: 50 },
+					size: { width: 40, height: 10 },
+					style,
+					zIndex: 0,
+				},
+			],
+		});
+		const scene = buildSceneDescription(doc);
+		expect(scene.annotations).toHaveLength(1);
+		expect(scene.annotations[0]).toMatchObject({
+			id: "ann1",
+			startSec: 3,
+			endSec: 5,
+			clipIndex: 0,
+			underTrim: true,
+		});
+	});
+
+	it("omits underTrim entirely when no trim sits under the annotation", () => {
+		// Not `false`: a payload with nothing cut under it stays byte-for-byte what it was.
+		const scene = buildSceneDescription(
+			docWithAnnotations([
+				{
+					id: "ann1",
+					startMs: 1000,
+					endMs: 3000,
+					type: "text",
+					content: "",
+					textContent: "Hello",
+					position: { x: 25, y: 50 },
+					size: { width: 40, height: 10 },
+					style,
+					zIndex: 0,
+				},
+			]),
+		);
+		expect(scene.annotations[0]).not.toHaveProperty("underTrim");
 	});
 });
 
