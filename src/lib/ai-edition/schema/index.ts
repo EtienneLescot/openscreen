@@ -800,16 +800,6 @@ export const createProjectInputSchema = z.object({
 	title: z.string().trim().min(1).default("Untitled Project"),
 });
 
-export const addAssetInputSchema = z.object({
-	path: z.string().trim().min(1),
-	label: z.string().trim().optional(),
-});
-
-export const chatInputSchema = z.object({
-	sessionId: z.string().trim().min(1).optional(),
-	message: z.string().trim().min(1),
-});
-
 // Every code whisper.cpp's multilingual model can resolve, plus "auto" for
 // detection. Codes and order mirror whisper.cpp's own `g_lang` table
 // (`src/whisper.cpp`, verified against the tag `nix/whisper-stt.nix` pins —
@@ -945,8 +935,6 @@ export type AxcutLegacyEditor = z.infer<typeof legacyEditorSchema>;
 export type AxcutDocument = z.infer<typeof documentSchema>;
 export type AxcutDocumentInput = z.input<typeof documentSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectInputSchema>;
-export type AddAssetInput = z.infer<typeof addAssetInputSchema>;
-export type ChatInput = z.infer<typeof chatInputSchema>;
 export type TranscriptLanguageCode = z.infer<typeof transcriptLanguageSchema>;
 /** A real whisper.cpp language code — `TranscriptLanguageCode` minus the "auto" detection sentinel. */
 export type WhisperLanguageCode = Exclude<TranscriptLanguageCode, "auto">;
