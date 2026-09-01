@@ -3080,7 +3080,10 @@ impl Compositor {
     /// L'appelant recalcule ces strides depuis `w`/`h` — les depadder ici
     /// couterait une recopie de plus pour rien, l'encodeur sachant lire un
     /// `linesize`.
-    pub unsafe fn readback_submit_yuv(&self) -> Result<Option<(u32, u32, Vec<u8>)>> {
+    pub unsafe fn readback_submit_yuv<F>(&self, f: F) -> Result<bool>
+    where
+        F: FnMut(u32, u32, &[u8]) -> Result<()>,
+    {
         self.ensure_yuv()?;
         let (w, h, cw, ch, bpr_y, bpr_uv, off_u, off_v, total) = {
             let g = self.yuv.borrow();
@@ -3167,29 +3170,50 @@ impl Compositor {
             let mut ring = self.readback_yuv.borrow_mut();
             ring.pending.push_back(PendingCopy { buf, idx, rx, w, h, bpr: bpr_y });
             if ring.pending.len() < ring.depth {
-                return Ok(None); // amorcage, comme la ring RGBA
+                return Ok(false); // amorcage, comme la ring RGBA
             }
         }
-        self.readback_take_yuv()
+        self.readback_take_yuv_with(f)
     }
 
-    /// Recolte la plus ancienne conversion en vol. Pendant de `readback_take`.
-    pub unsafe fn readback_take_yuv(&self) -> Result<Option<(u32, u32, Vec<u8>)>> {
+    /// Recolte la plus ancienne conversion en vol et la PRESENTE au lecteur sans
+    /// la copier : `f` recoit la vue mappee telle quelle, lignes paddees a 256
+    /// comprises. Rend `false` si la ring est vide. Pendant de `readback_take`.
+    ///
+    /// POURQUOI UNE CLOSURE, ET PAS UN `Vec` RENDU. La version precedente faisait
+    /// `mapped.to_vec()` — 3,3 Mo alloues, copies puis liberes par frame, soit
+    /// 11,9 Go de va-et-vient sur un export de 3600 frames — dans le seul but que
+    /// la donnee survive a l'`unmap`. Or l'appelant la recopie immediatement dans
+    /// l'AVFrame de l'encodeur : la copie intermediaire ne servait que la
+    /// signature. Avec une closure, le lecteur travaille dans la fenetre ou le
+    /// buffer est mappe et il n'y a plus qu'une seule copie sur le chemin.
+    ///
+    /// LE SLOT EST RENDU MEME SI `f` ECHOUE. Autrement une erreur d'encodage
+    /// laisserait le buffer mappe et hors de la ring : la frame suivante en
+    /// allouerait un neuf, et ainsi de suite jusqu'a epuisement de la memoire
+    /// mappable — un mode de panne bien pire que l'erreur d'origine.
+    pub unsafe fn readback_take_yuv_with<F>(&self, mut f: F) -> Result<bool>
+    where
+        F: FnMut(u32, u32, &[u8]) -> Result<()>,
+    {
         let Some(p) = self.readback_yuv.borrow_mut().pending.pop_front() else {
-            return Ok(None);
+            return Ok(false);
         };
         self.gpu.device.poll(wgpu::Maintain::WaitForSubmissionIndex(p.idx));
         p.rx
             .recv()
             .map_err(|_| anyhow::anyhow!("map_async channel (yuv)"))?
             .map_err(|e| anyhow::anyhow!("map_async yuv: {e:?}"))?;
-        let slice = p.buf.slice(..);
-        let mapped = slice.get_mapped_range();
-        let out = mapped.to_vec();
-        drop(mapped);
+        // `mapped` et `slice` meurent a la fin du bloc : `unmap` ne peut donc pas
+        // etre appele pendant qu'une vue est encore accessible (wgpu l'assert).
+        let r = {
+            let slice = p.buf.slice(..);
+            let mapped = slice.get_mapped_range();
+            f(p.w, p.h, &mapped)
+        };
         p.buf.unmap();
         self.readback_yuv.borrow_mut().free.push(p.buf);
-        Ok(Some((p.w, p.h, out)))
+        r.map(|()| true)
     }
 
     /// Profondeur de la ring YUV. Meme role et memes raisons que
@@ -3198,7 +3222,7 @@ impl Compositor {
         let depth = depth.max(1);
         // SAFETY : meme contrat que `set_readback_depth` — le drain ne touche que
         // des buffers dont la soumission est terminee.
-        while unsafe { self.readback_take_yuv()? }.is_some() {}
+        while unsafe { self.readback_take_yuv_with(|_, _, _| Ok(()))? } {}
         let mut ring = self.readback_yuv.borrow_mut();
         ring.depth = depth;
         while ring.free.len() > depth {
