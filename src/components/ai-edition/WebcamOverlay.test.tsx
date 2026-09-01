@@ -74,6 +74,7 @@ function makeDocument(): AxcutDocument {
 		},
 		annotations: [],
 		zoomRanges: [],
+		cursorMotionRegions: [],
 		legacyEditor: null,
 	};
 }

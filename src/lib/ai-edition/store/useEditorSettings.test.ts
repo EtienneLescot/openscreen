@@ -74,6 +74,7 @@ const docA: AxcutDocument = {
 	},
 	annotations: [],
 	zoomRanges: [],
+	cursorMotionRegions: [],
 	legacyEditor: null,
 };
 
