@@ -737,10 +737,12 @@ pub fn run_composited_multi(
     let t0 = std::time::Instant::now();
 
     let enc = VideoEncoder::open(&params.codec, out_w as i32, out_h as i32, out_fps, bit_rate)?;
-    // Le contexte de l'encodeur n'est PAS recopie ici. Une variable `ectx`
-    // partagee serait un `Sync` officieux : `VideoEncoder` est `Send` et
-    // volontairement pas `Sync`, et un `*mut AVCodecContext` copie efface
-    // exactement cette distinction au moment ou l'encodage part sur un thread.
+    // ALIAS LU UNIQUEMENT AVANT LE DEMARRAGE DU WORKER. Il ne sert qu'a decrire
+    // le flux au muxer, juste en dessous ; passe `EncodeWorker::spawn`, le
+    // contexte appartient au thread d'encodage et cette variable ne doit plus
+    // etre touchee. S'en resservir apres serait un `Sync` officieux :
+    // `VideoEncoder` est `Send` et volontairement pas `Sync`, et un
+    // `*mut AVCodecContext` recopie efface exactement cette distinction.
     let ectx = enc.ctx;
 
     let mut screen_decs: HashMap<String, Decoder> = HashMap::new();
