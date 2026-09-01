@@ -796,8 +796,6 @@ export function NewEditorShell() {
 	}, []);
 
 	const pasteRegion = useCallback(async () => {
-		const doc = useProjectStore.getState().document;
-		if (!doc) return;
 		const { pasteClipboard } = await import("@/lib/ai-edition/store/regionClipboard");
 		const snapshot = pasteClipboard();
 		if (!snapshot) return;
@@ -814,68 +812,80 @@ export function NewEditorShell() {
 		const { anchorRegionsWithDerivedMs } = await import("@/lib/ai-edition/timeline/timelineMap");
 		const { createId } = await import("@/lib/ai-edition/document/ids");
 
-		// Land it at the playhead, keeping the copied length.
-		const timeMs = Math.round(useProjectStore.getState().currentTimeSec * 1000);
-		const src = snapshot.region as { startMs: number; endMs: number };
-		const prefix = snapshot.kind === "annotation" ? "ann" : snapshot.kind;
-		const pasted = {
-			...snapshot.region,
-			id: createId(prefix),
-			startMs: timeMs,
-			endMs: timeMs + (Number(src.endMs) - Number(src.startMs)),
-		};
-		// Anchor to the clip(s) it covers, exactly like every add* does. Pasting
-		// used to store a bare startMs/endMs, so the region survived until the
-		// first clip reorder or trim and then drifted off its content — see
-		// technical-documentation/architecture/timeline-model.md.
-		const anchored = anchorRegionsWithDerivedMs(
-			[pasted as unknown as { id: string; startMs: number; endMs: number }],
-			doc.timeline.clips,
-			() => createId(prefix),
-		);
+		// The document and the playhead are read INSIDE the enqueue chain, not before
+		// the imports above: those are awaits, and an edit completing during one would
+		// otherwise be overwritten by the spread of the stale snapshot below — the same
+		// read-modify-write race `handleDropAsset` queues against.
+		await enqueueTimelineWrite(async () => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const timeMs = Math.round(useProjectStore.getState().currentTimeSec * 1000);
+			const src = snapshot.region as { startMs: number; endMs: number };
+			const prefix = snapshot.kind === "annotation" ? "ann" : snapshot.kind;
+			const pasted = {
+				...snapshot.region,
+				id: createId(prefix),
+				startMs: timeMs,
+				endMs: timeMs + (Number(src.endMs) - Number(src.startMs)),
+			};
+			// Anchor to the clip(s) it covers, exactly like every add* does. Pasting
+			// used to store a bare startMs/endMs, so the region survived until the
+			// first clip reorder or trim and then drifted off its content — see
+			// technical-documentation/architecture/timeline-model.md.
+			const anchored = anchorRegionsWithDerivedMs(
+				[pasted as unknown as { id: string; startMs: number; endMs: number }],
+				doc.timeline.clips,
+				() => createId(prefix),
+			);
 
-		if (snapshot.kind === "zoom") {
-			await saveDocument(
-				{
-					...doc,
-					zoomRanges: [...doc.zoomRanges, ...anchored] as typeof doc.zoomRanges,
-				},
-				{ history: true },
-			);
-		} else if (snapshot.kind === "audio") {
-			await saveDocument(
-				{
-					...doc,
-					audioRanges: [...doc.audioRanges, ...anchored] as typeof doc.audioRanges,
-				},
-				{ history: true },
-			);
-		} else if (snapshot.kind === "annotation") {
-			await saveDocument(
-				{
-					...doc,
-					annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
-				},
-				{ history: true },
-			);
-		} else {
-			// speed and cameraFullscreen are both plain spans on legacyEditor.
-			const key = snapshot.kind === "speed" ? "speedRegions" : "cameraFullscreenRegions";
-			const legacy = (doc.legacyEditor as Record<string, unknown>) ?? {};
-			const prev = (legacy[key] as unknown[]) ?? [];
-			await saveDocument(
-				{
-					...doc,
-					legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
-				},
-				{ history: true },
-			);
-		}
-		toast.success("Region pasted");
+			// saveDocument resolves false (rather than rejecting) when the write fails —
+			// the failure is already reported by the store, so the only job left is to
+			// not claim a paste that did not land.
+			let saved = false;
+			if (snapshot.kind === "zoom") {
+				saved = await saveDocument(
+					{
+						...doc,
+						zoomRanges: [...doc.zoomRanges, ...anchored] as typeof doc.zoomRanges,
+					},
+					{ history: true },
+				);
+			} else if (snapshot.kind === "audio") {
+				saved = await saveDocument(
+					{
+						...doc,
+						audioRanges: [...doc.audioRanges, ...anchored] as typeof doc.audioRanges,
+					},
+					{ history: true },
+				);
+			} else if (snapshot.kind === "annotation") {
+				saved = await saveDocument(
+					{
+						...doc,
+						annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
+					},
+					{ history: true },
+				);
+			} else {
+				// speed and cameraFullscreen are both plain spans on legacyEditor.
+				const key = snapshot.kind === "speed" ? "speedRegions" : "cameraFullscreenRegions";
+				const legacy = (doc.legacyEditor as Record<string, unknown>) ?? {};
+				const prev = (legacy[key] as unknown[]) ?? [];
+				saved = await saveDocument(
+					{
+						...doc,
+						legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
+					},
+					{ history: true },
+				);
+			}
+			if (!saved) return;
+			toast.success("Region pasted");
+		});
 		// `tl` belongs here now that the trim branch calls tl.addTrim: useTimeline
 		// returns a fresh object each render, so memoizing on saveDocument alone
 		// would paste through a callback holding a stale document.
-	}, [saveDocument, tl]);
+	}, [enqueueTimelineWrite, saveDocument, tl]);
 
 	// Copy the SELECTED pill. Reads the same arrays the lanes render, so what gets
 	// copied is what the user is looking at — the old version dug into the raw

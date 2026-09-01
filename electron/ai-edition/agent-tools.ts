@@ -1990,7 +1990,23 @@ export function executeAgentTool(
 				if (refusal) return failure(refusal);
 			}
 			const audioPill = new Set(resolvePillIds(document.audioRanges, audioId));
-			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
+			// The span must come from the coalesced pill, not from `existing`: that is ONE
+			// fragment of a pill that may cross clip boundaries, while replacePillSpan below
+			// removes every fragment under the pill and rebuilds only the span it is handed —
+			// a gain/kind-only edit passing the fragment's span would shrink the pill and
+			// silently drop the audio on the other clips.
+			const existingPill = coalesceRegionsForRuler(document.audioRanges).find((pill) =>
+				pill.ids.includes(audioId),
+			);
+			if (!existingPill) return failure(`Unknown audio region: ${audioId}`);
+			const { startMs, endMs } = resolveSpanMs(
+				{
+					startMs: Math.round(existingPill.start * 1000),
+					endMs: Math.round(existingPill.end * 1000),
+				},
+				parsed.data.startSec,
+				parsed.data.endSec,
+			);
 			// The payload patch hits EVERY fragment under the pill before the span is
 			// replaced: kind, offset and gain are all part of the region identity, so
 			// patching one fragment of a ventilated region would split it into two pills.

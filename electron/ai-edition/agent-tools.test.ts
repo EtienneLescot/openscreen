@@ -2202,6 +2202,30 @@ describe("addAudio / setAudio", () => {
 		expect(result.ok).toBe(false);
 	});
 
+	it("setAudio keeps a cross-clip pill whole when only gain or lane changes", () => {
+		// `existing` is ONE fragment; replacePillSpan removes every fragment under the
+		// pill and rebuilds only the span it is handed, so a gain-only edit used to
+		// shrink the pill to that fragment — deleting the audio on the other clip.
+		const placed = executeAgentTool(
+			withAudioAsset(),
+			"addAudio",
+			JSON.stringify({ audioAssetId: "audio_1", startSec: 20, endSec: 40 }),
+		);
+		expect((placed.document as AxcutDocument).audioRanges).toHaveLength(2);
+		const id = JSON.parse(placed.resultJson).audioId;
+		const result = executeAgentTool(
+			placed.document as AxcutDocument,
+			"setAudio",
+			JSON.stringify({ audioId: id, gainDb: -6 }),
+		);
+		const ranges = (result.document as AxcutDocument).audioRanges;
+		expect(result.ok).toBe(true);
+		expect(ranges).toHaveLength(2);
+		expect(Math.min(...ranges.map((r) => r.startMs))).toBe(20_000);
+		expect(Math.max(...ranges.map((r) => r.endMs))).toBe(40_000);
+		expect(ranges.every((r) => r.gainDb === -6)).toBe(true);
+	});
+
 	it("removeModifier deletes an audio region by id, like every other kind", () => {
 		const placed = executeAgentTool(
 			withAudioAsset(),
