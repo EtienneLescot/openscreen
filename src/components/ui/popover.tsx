@@ -9,9 +9,18 @@ function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root
 	return <PopoverPrimitive.Root data-slot="popover" {...props} />;
 }
 
-function PopoverTrigger({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Trigger>) {
-	return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />;
-}
+// forwardRef, like the Dialog parts: on React 18 a plain function component
+// cannot receive a ref, so anything that wraps this trigger with its own
+// `asChild` — a Tooltip around a popover button, say — fails to anchor and
+// warns. The primitive underneath has always forwarded; only this wrapper
+// swallowed it.
+const PopoverTrigger = React.forwardRef<
+	React.ComponentRef<typeof PopoverPrimitive.Trigger>,
+	React.ComponentProps<typeof PopoverPrimitive.Trigger>
+>(({ ...props }, ref) => (
+	<PopoverPrimitive.Trigger ref={ref} data-slot="popover-trigger" {...props} />
+));
+PopoverTrigger.displayName = "PopoverTrigger";
 
 function PopoverContent({
 	className,

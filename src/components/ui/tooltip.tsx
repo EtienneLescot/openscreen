@@ -46,25 +46,27 @@ function TooltipContent({
 	);
 }
 
-function Tooltip({
-	children,
-	content,
-	side,
-	className,
-}: {
-	children: React.ReactNode;
-	content: React.ReactNode;
-	side?: "top" | "right" | "bottom" | "left";
-	className?: string;
-}) {
-	return (
-		<TooltipRoot>
-			<TooltipTrigger asChild>{children}</TooltipTrigger>
-			<TooltipContent side={side} className={className}>
-				{content}
-			</TooltipContent>
-		</TooltipRoot>
-	);
-}
+// forwardRef for the same reason as PopoverTrigger above: this is a convenience
+// wrapper people nest inside other `asChild` triggers, and on React 18 a plain
+// function component silently drops the ref it is handed.
+const Tooltip = React.forwardRef<
+	React.ComponentRef<typeof TooltipTrigger>,
+	{
+		children: React.ReactNode;
+		content: React.ReactNode;
+		side?: "top" | "right" | "bottom" | "left";
+		className?: string;
+	}
+>(({ children, content, side, className }, ref) => (
+	<TooltipRoot>
+		<TooltipTrigger ref={ref} asChild>
+			{children}
+		</TooltipTrigger>
+		<TooltipContent side={side} className={className}>
+			{content}
+		</TooltipContent>
+	</TooltipRoot>
+));
+Tooltip.displayName = "Tooltip";
 
 export { Tooltip, TooltipContent, TooltipProvider, TooltipRoot, TooltipTrigger };

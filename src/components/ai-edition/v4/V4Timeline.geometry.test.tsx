@@ -16,7 +16,9 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.f
 // The audio lane's pill renders a ClipWaveform; no decode in this geometry suite.
 vi.mock("@/hooks/useAudioPeaks", () => ({ useAudioPeaks: () => null }));
 
+import { ShortcutsProvider } from "@/contexts/ShortcutsContext";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { DEFAULT_SHORTCUTS, formatBinding } from "@/lib/shortcuts";
 import { V4Timeline } from "./V4Timeline";
 
 beforeAll(() => {
@@ -100,18 +102,20 @@ function renderTimeline(
 		}),
 	};
 	render(
-		<V4Timeline
-			// Only the members the lanes and the clip row read are mocked; the prop
-			// stays typed as the real API rather than widened to `any` (AGENTS.md).
-			tl={tl as unknown as ReturnType<typeof useTimeline>}
-			setCurrentTime={vi.fn()}
-			playing={false}
-			onTogglePlay={vi.fn()}
-			onPrevClip={vi.fn()}
-			onNextClip={vi.fn()}
-			onEditClip={vi.fn()}
-			onAddVoiceover={vi.fn()}
-		/>,
+		<ShortcutsProvider>
+			<V4Timeline
+				// Only the members the lanes and the clip row read are mocked; the prop
+				// stays typed as the real API rather than widened to `any` (AGENTS.md).
+				tl={tl as unknown as ReturnType<typeof useTimeline>}
+				setCurrentTime={vi.fn()}
+				playing={false}
+				onTogglePlay={vi.fn()}
+				onPrevClip={vi.fn()}
+				onNextClip={vi.fn()}
+				onEditClip={vi.fn()}
+				onAddVoiceover={vi.fn()}
+			/>
+		</ShortcutsProvider>,
 	);
 	return {
 		pill: screen.getByTitle("toolbar.newAnnotation"),
@@ -400,16 +404,18 @@ describe("V4Timeline audio lane drag", () => {
 			addZoom: vi.fn(async () => undefined),
 		};
 		render(
-			<V4Timeline
-				tl={tl as unknown as ReturnType<typeof useTimeline>}
-				setCurrentTime={vi.fn()}
-				playing={false}
-				onTogglePlay={vi.fn()}
-				onPrevClip={vi.fn()}
-				onNextClip={vi.fn()}
-				onEditClip={vi.fn()}
-				onAddVoiceover={props.onAddVoiceover ?? vi.fn()}
-			/>,
+			<ShortcutsProvider>
+				<V4Timeline
+					tl={tl as unknown as ReturnType<typeof useTimeline>}
+					setCurrentTime={vi.fn()}
+					playing={false}
+					onTogglePlay={vi.fn()}
+					onPrevClip={vi.fn()}
+					onNextClip={vi.fn()}
+					onEditClip={vi.fn()}
+					onAddVoiceover={props.onAddVoiceover ?? vi.fn()}
+				/>
+			</ShortcutsProvider>,
 		);
 		return { pill: screen.getByTitle("vo"), placeAudioTrack, selectAudioTrack };
 	}
@@ -425,6 +431,18 @@ describe("V4Timeline audio lane drag", () => {
 		fireEvent.click(screen.getByLabelText("toolbar.addAudioTooltip"));
 		fireEvent.click(screen.getByText("audio.addVoiceover"));
 		expect(onAddVoiceover).toHaveBeenCalledTimes(1);
+	});
+
+	it("teaches the key that does the same thing", () => {
+		// Read off the live bindings rather than hardcoded here, so a rebind in the
+		// shortcuts dialog moves the menu with it instead of teaching a stale key.
+		renderAudio();
+		fireEvent.click(screen.getByLabelText("toolbar.addAudioTooltip"));
+		const keys = Array.from(document.querySelectorAll("kbd"), (k) => k.textContent);
+		expect(keys).toEqual([
+			formatBinding(DEFAULT_SHORTCUTS.addVoiceover, false),
+			formatBinding(DEFAULT_SHORTCUTS.addAudio, false),
+		]);
 	});
 
 	it("marks where a looping track starts its file over", () => {
