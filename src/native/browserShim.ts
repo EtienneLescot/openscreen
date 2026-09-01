@@ -186,7 +186,7 @@ function createShimBridgeClient() {
 			updatedAt: string;
 			primaryAssetId?: string;
 		};
-		assets: Array<{ id: string; kind: "video"; label: string; originalPath: string }>;
+		assets: Array<{ id: string; kind: "video" | "audio"; label: string; originalPath: string }>;
 		[key: string]: unknown;
 	};
 	const projectsStorageKey = "browser-shim-projects-v2";
@@ -386,6 +386,7 @@ function createShimBridgeClient() {
 					},
 					annotations: [],
 					zoomRanges: [],
+					audioRanges: [],
 					legacyEditor: null,
 				};
 				documentsByProject[doc.project.id] = doc;
@@ -407,20 +408,27 @@ function createShimBridgeClient() {
 				saveProjectsState();
 				return Promise.resolve({ success: true });
 			},
-			addAsset: (projectId: string, path: string, label?: string) => {
+			addAsset: (projectId: string, path: string, label?: string, kind?: "video" | "audio") => {
 				const doc = documentsByProject[projectId];
 				if (!doc) return Promise.resolve({ assetId: "", document: null });
 				const assetId = `asset_${Math.random().toString(36).slice(2, 10)}`;
+				const assetKind = kind ?? "video";
 				const asset = {
 					id: assetId,
-					kind: "video" as const,
+					kind: assetKind,
 					label: label || path.split(/[\\/]/).pop() || "Recording",
 					originalPath: path,
 				};
+				// Mirror the main-process rule: an audio import never claims the empty
+				// primary slot (see document-service.addAsset).
+				const claimsPrimary = assetKind !== "audio" && !doc.project.primaryAssetId;
 				const next: ShimDocument = {
 					...doc,
 					assets: [...doc.assets, asset],
-					project: { ...doc.project, primaryAssetId: doc.project.primaryAssetId ?? assetId },
+					project: {
+						...doc.project,
+						primaryAssetId: claimsPrimary ? assetId : doc.project.primaryAssetId,
+					},
 				};
 				documentsByProject[projectId] = next;
 				saveProjectsState();

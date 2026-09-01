@@ -15,9 +15,9 @@ import { createId } from "./ids";
 
 /** The region families a delete can target by id. Shared with the store so "which kinds
  *  exist" has exactly one definition. `trim` is a source-time cut; the rest are pill-merged
- *  effects (zoom / speed / annotation / camera-fullscreen). Clips are removed via
+ *  effects (zoom / speed / annotation / camera-fullscreen / audio). Clips are removed via
  *  {@link removeClip}, not here — deleting a clip reflows the whole timeline. */
-export type RegionKind = "zoom" | "trim" | "annotation" | "speed" | "cameraFullscreen";
+export type RegionKind = "zoom" | "trim" | "annotation" | "speed" | "cameraFullscreen" | "audio";
 
 /** Length a clip is given before its media has been probed. Lives here, in the pure
  *  document layer, because that layer decides which clips are still waiting for a real
@@ -202,6 +202,189 @@ export function resolvePlaybackSegments(
 	return result;
 }
 
+/**
+ * Project a RAW/document-timeline second (the ruler where trims still occupy their space)
+ * onto the trim-COMPRESSED output programme — the concatenation of the kept segments that
+ * {@link resolvePlaybackSegments} produces and that `audio::mix_external_tracks` overlays on.
+ *
+ * Built from the SAME kept intervals as `resolvePlaybackSegments` (trims subtracted per clip
+ * via `subtractInterval`, then concatenated with a shared output cursor), so it agrees with the
+ * assembled programme in the two cases a naïve "raw − Σ trimmed-before" got wrong: OVERLAPPING
+ * trims (set subtraction counts the union once, not each trim) and RAW GAPS between clips (the
+ * cursor only advances on kept content, so a gap is removed just as the programme removes it).
+ *
+ * `output(T)` = how much kept content precedes `T`. A `T` inside a trimmed span (or an inter-clip
+ * gap) collapses to the output edge of the kept content just before it; a `T` past the last kept
+ * frame carries its raw overhang through unchanged, so a project with no clips is the identity and
+ * a track parked past the programme stays past it (the mixer then skips it). EXACT for trims; like
+ * the rest of the audio-track export path it does not model speed regions, which stay an approximation.
+ *
+ * Issue #350: imported audio tracks store their head in RAW seconds (seeded from the playhead),
+ * but the export mixes onto the compressed programme — passing the raw head through verbatim
+ * delayed every track by the total trim duration ahead of it. The preview already lands them
+ * correctly because its playhead jumps across trims; this makes the render agree.
+ */
+export interface AnchoredSpeedRegion {
+	startMs: number;
+	endMs: number;
+	speed: number;
+	clipId?: string;
+	sourceStartSec?: number;
+	sourceEndSec?: number;
+}
+
+/** A speed region's window in ONE clip's source seconds, or null when it does not touch it.
+ *  Anchored regions read their anchor (the source of truth since v5); a pre-v5 region with
+ *  only a ruler cache is shifted into source time through the clip's own offset, which is
+ *  identity inside a raw clip. Either way the window is clamped to the clip. */
+function speedSpanInClipSource(
+	region: AnchoredSpeedRegion,
+	clip: AxcutClip,
+	clipSourceEnd: number,
+): { startSec: number; endSec: number; speed: number } | null {
+	let startSec: number;
+	let endSec: number;
+	if (region.clipId != null && region.sourceStartSec != null && region.sourceEndSec != null) {
+		if (region.clipId !== clip.id) return null;
+		startSec = region.sourceStartSec;
+		endSec = region.sourceEndSec;
+	} else if (region.clipId != null) {
+		return null;
+	} else {
+		const shift = clip.sourceStartSec - clip.timelineStartSec;
+		startSec = region.startMs / 1000 + shift;
+		endSec = region.endMs / 1000 + shift;
+	}
+	const s = Math.max(startSec, clip.sourceStartSec);
+	const e = Math.min(endSec, clipSourceEnd);
+	if (!(e > s) || !(region.speed > 0)) return null;
+	return { startSec: s, endSec: e, speed: region.speed };
+}
+
+/** How much OUTPUT time the source span `[a, b]` of one clip occupies, i.e. the integral of
+ *  `1 / speed` over it. Outside every speed span the factor is 1, so a project with no speed
+ *  regions gets `b - a` and the whole projection collapses to the trim-only one. */
+function outputLengthOfSourceSpan(
+	a: number,
+	b: number,
+	spans: Array<{ startSec: number; endSec: number; speed: number }>,
+): number {
+	if (!(b > a)) return 0;
+	let out = 0;
+	let cursor = a;
+	for (const span of spans) {
+		if (span.endSec <= cursor) continue;
+		if (span.startSec >= b) break;
+		const s = Math.max(span.startSec, cursor);
+		const e = Math.min(span.endSec, b);
+		if (s > cursor) out += s - cursor;
+		if (e > s) out += (e - s) / span.speed;
+		cursor = e;
+	}
+	if (cursor < b) out += b - cursor;
+	return out;
+}
+
+/**
+ * Project a RAW/document-timeline second (the ruler where trims still occupy their space and
+ * a 2× stretch still spans its full width) onto the OUTPUT programme — the concatenation of
+ * kept segments, speed applied, that {@link resolvePlaybackSegments} + the compositor produce
+ * and that `audio::mix_external_tracks` overlays on.
+ *
+ * Built from the SAME kept intervals as `resolvePlaybackSegments` (trims subtracted per clip
+ * via `subtractInterval`, then concatenated with a shared output cursor), so it agrees with the
+ * assembled programme in the two cases a naïve "raw − Σ trimmed-before" got wrong: OVERLAPPING
+ * trims (set subtraction counts the union once, not each trim) and RAW GAPS between clips (the
+ * cursor only advances on kept content, so a gap is removed just as the programme removes it).
+ * Speed is then integrated over each kept interval, which is what makes an audio region laid
+ * after a 2× stretch land where the picture actually is instead of half a stretch late.
+ *
+ * `output(T)` = how much output content precedes `T`. A `T` inside a trimmed span (or an
+ * inter-clip gap) collapses to the output edge of the kept content just before it; a `T` past
+ * the last kept frame carries its raw overhang through unchanged, so a project with no clips is
+ * the identity and a region parked past the programme stays past it (the mixer then skips it).
+ *
+ * Issue #350: audio regions are authored on the RAW ruler like every other region, but the
+ * export mixes onto the compressed programme — passing the raw head through verbatim delayed
+ * every region by the total trim duration ahead of it. The preview lands them correctly because
+ * its playhead jumps across trims; this makes the render agree, and both now agree on speed too.
+ */
+export function projectRawTimelineSecToPlayback(
+	clips: AxcutClip[],
+	trimRanges: AxcutTrimRange[],
+	speedRegions: AnchoredSpeedRegion[],
+	rawSec: number,
+): number {
+	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
+	let outCursor = 0; // output length of the content walked so far
+	let lastRawEnd = 0; // raw end of the last kept segment, for the trailing overhang
+	let landed: number | null = null; // output(rawSec), once it falls in/before a kept segment
+
+	// Each kept segment with BOTH coordinates: where it sits on the raw ruler, and the source
+	// window it covers — speed is authored in source time, so the integral needs the latter.
+	const keptSegments = (
+		clip: AxcutClip,
+	): Array<{ rawStart: number; rawDur: number; srcStart: number; srcEnd: number }> => {
+		const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+		if (sourceEnd <= clip.sourceStartSec) {
+			// Duration not probed yet — the whole raw clip passes through unnarrowed, matching
+			// `resolvePlaybackSegments`' own pass-through branch. No source window means no
+			// speed integral either; the segment counts at 1×.
+			const rawDur = clip.timelineEndSec - clip.timelineStartSec;
+			return [
+				{
+					rawStart: clip.timelineStartSec,
+					rawDur,
+					srcStart: clip.sourceStartSec,
+					srcEnd: clip.sourceStartSec,
+				},
+			];
+		}
+		let ivs: Interval[] = [{ startSec: clip.sourceStartSec, endSec: sourceEnd }];
+		for (const trim of trimRanges) {
+			if (!trimAppliesToClip(trim, clip)) continue;
+			ivs = subtractInterval(ivs, { startSec: trim.startSec, endSec: trim.endSec });
+		}
+		// Source time `s` sits at `timelineStartSec + (s − sourceStartSec)` on the raw ruler.
+		return ivs.map((iv) => ({
+			rawStart: clip.timelineStartSec + (iv.startSec - clip.sourceStartSec),
+			rawDur: iv.endSec - iv.startSec,
+			srcStart: iv.startSec,
+			srcEnd: iv.endSec,
+		}));
+	};
+
+	for (const clip of ordered) {
+		const clipSourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+		const spans = speedRegions
+			.map((r) => speedSpanInClipSource(r, clip, clipSourceEnd))
+			.filter((v): v is { startSec: number; endSec: number; speed: number } => v !== null)
+			.sort((a, b) => a.startSec - b.startSec);
+		for (const seg of keptSegments(clip)) {
+			if (seg.rawDur <= 0) continue;
+			const rawEnd = seg.rawStart + seg.rawDur;
+			const hasSource = seg.srcEnd > seg.srcStart;
+			if (landed === null && rawSec < rawEnd) {
+				// `rawSec` is inside this segment, or before it in a trimmed/gap region (then
+				// `withinRaw` clamps to 0 → the output edge just before the gap).
+				const withinRaw = Math.min(Math.max(rawSec - seg.rawStart, 0), seg.rawDur);
+				landed =
+					outCursor +
+					(hasSource
+						? outputLengthOfSourceSpan(seg.srcStart, seg.srcStart + withinRaw, spans)
+						: withinRaw);
+			}
+			outCursor += hasSource
+				? outputLengthOfSourceSpan(seg.srcStart, seg.srcEnd, spans)
+				: seg.rawDur;
+			lastRawEnd = rawEnd;
+		}
+	}
+	// Past every kept frame: programme end plus whatever raw time hangs off the end (identity when
+	// there are no clips at all). A value ≥ programme length just means the mixer skips the region.
+	return landed ?? outCursor + Math.max(0, rawSec - lastRawEnd);
+}
+
 export function invertIntervals(intervals: Interval[], durationSec: number): Interval[] {
 	const cuts: Interval[] = [];
 	let cursor = 0;
@@ -259,6 +442,14 @@ function mapAllRegionCollections(
 			document.annotations as unknown as StoredRegion[],
 			"ann",
 		) as unknown as AxcutDocument["annotations"],
+		// Audio regions ride the same anchor machinery as zoom/annotation — that is the
+		// whole point of storing them as regions rather than as free-floating tracks, and
+		// it is what makes a bed survive a clip reorder instead of playing over whatever
+		// slid underneath it.
+		audioRanges: fn(
+			document.audioRanges as unknown as StoredRegion[],
+			"audio",
+		) as unknown as AxcutDocument["audioRanges"],
 		legacyEditor:
 			legacy && (speedRegions || cameraFullscreenRegions)
 				? {
@@ -870,6 +1061,24 @@ export function setClipSourceRange(
  * clicked and kept cutting on the other side. Speed / camera-fullscreen live under
  * `legacyEditor`. An id that matches nothing is a no-op. Pure.
  */
+/**
+ * Drop `kind: "audio"` assets nothing references any more.
+ *
+ * An imported audio file is only ever reachable through its regions — audio is filtered
+ * out of every clip list, so it never becomes a clip — which means deleting the last
+ * region that plays it orphans the asset: still in `document.assets`, invisible in every
+ * asset list, and re-exported on every save. Video assets are deliberately NOT collected
+ * here: a clip-less video asset is still shown in the media panel and is the user's to
+ * remove.
+ *
+ * Pure and idempotent, so it is safe to run after any audio-region delete.
+ */
+export function dropOrphanedAudioAssets(document: AxcutDocument): AxcutDocument {
+	const referenced = new Set(document.audioRanges.map((r) => r.audioAssetId));
+	const assets = document.assets.filter((a) => a.kind !== "audio" || referenced.has(a.id));
+	return assets.length === document.assets.length ? document : { ...document, assets };
+}
+
 export function removeRegion(document: AxcutDocument, kind: RegionKind, id: string): AxcutDocument {
 	switch (kind) {
 		case "zoom":
@@ -879,6 +1088,11 @@ export function removeRegion(document: AxcutDocument, kind: RegionKind, id: stri
 			};
 		case "annotation":
 			return { ...document, annotations: dropPillById(document.annotations, id) };
+		case "audio":
+			return dropOrphanedAudioAssets({
+				...document,
+				audioRanges: dropPillById(document.audioRanges, id) as AxcutDocument["audioRanges"],
+			});
 		case "trim":
 			return {
 				...document,
@@ -929,6 +1143,11 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 	const oldClips = document.timeline.clips;
 	const arr = oldClips.filter((c) => c.id !== clipId);
 	if (arr.length === oldClips.length) return document;
+	// Deleting a clip drops the regions anchored to it (`rederiveRegionMs` resolves their
+	// anchor to null), so the last audio region playing an imported file can disappear
+	// here rather than through `removeRegion` — and its asset would be left behind,
+	// invisible in every list and re-serialised on every save. Same collection, run at
+	// the other door.
 	const newClips = resequenceClips(arr);
 	const next: AxcutDocument = {
 		...document,
@@ -964,11 +1183,13 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 	// a transient wipe deleting everything), which is why the empty case is handled
 	// here rather than left to it.
 	if (newClips.length === 0) {
-		return mapAllRegionCollections(next, (regions) =>
-			regions.filter((region) => !(hasCompleteClipAnchor(region) && region.clipId === clipId)),
+		return dropOrphanedAudioAssets(
+			mapAllRegionCollections(next, (regions) =>
+				regions.filter((region) => !(hasCompleteClipAnchor(region) && region.clipId === clipId)),
+			),
 		);
 	}
-	return rederiveRegionMs(next, newClips);
+	return dropOrphanedAudioAssets(rederiveRegionMs(next, newClips));
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {

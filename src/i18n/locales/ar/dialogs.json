@@ -79,11 +79,13 @@
 		"saveGif": "حفظ GIF المصدر",
 		"saveVideo": "حفظ الفيديو المصدر",
 		"selectVideo": "حدد ملف فيديو",
+		"selectAudio": "اختر ملف صوت",
 		"saveProject": "حفظ مشروع OpenScreen",
 		"openProject": "فتح مشروع OpenScreen",
 		"gifImage": "صورة GIF",
 		"mp4Video": "فيديو MP4",
 		"videoFiles": "ملفات فيديو",
+		"audioFiles": "ملفات الصوت",
 		"openscreenProject": "مشروع OpenScreen",
 		"allFiles": "جميع الملفات"
 	}

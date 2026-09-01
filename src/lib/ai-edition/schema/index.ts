@@ -150,7 +150,12 @@ export const assetTranscriptionFailureSchema = z.object({
 
 export const assetSchema = z.object({
 	id: z.string().min(1),
-	kind: z.literal("video"),
+	// Widened from a `"video"` literal when external-audio import landed (issue
+	// #350). An imported voiceover / BGM / SFX file carries no video stream, so it
+	// needs its own kind; every document written before this only ever held
+	// `"video"`, which still validates, so the widening is additive (no
+	// schemaVersion bump — same rule as `transcriptionFailure` below).
+	kind: z.enum(["video", "audio"]).default("video"),
 	label: z.string().min(1),
 	originalPath: z.string().min(1),
 	proxyPath: z.string().optional(),
@@ -471,6 +476,56 @@ export const zoomRegionSchema = endGteStart(
 	"startMs",
 );
 
+// Audio regions (issue #350) — an imported voiceover / music bed laid over the
+// programme. A FIRST-CLASS REGION, on the same v5 clip anchor as zoom, annotation
+// and speed: `{clipId, sourceStartSec, sourceEndSec}` is the source of truth and
+// `startMs`/`endMs` the derived ruler cache, so a region travels with its clip
+// through reorder, trim and delete instead of sitting still while the content
+// slides underneath it. Everything the universal region rules give the other kinds
+// — merge, repel, one pill per run, whole-pill delete/copy — it gets for free.
+//
+// Two departures from the other kinds, both forced by audio being CONTINUOUS MEDIA
+// rather than a value held over a span:
+//
+//   • `audioAssetId`, not `assetId`. `assetId` is in `NON_IDENTITY_FIELDS`
+//     (timelineMap) because for a TRIM it says where the cut lives; for an audio
+//     region the file IS what the region is, and two beds from different files that
+//     happen to touch must never merge into one pill. Naming the field outside that
+//     list is what makes identity read it. See timeline-model.md.
+//
+//   • `offsetSec` is the in-point of the PILL, not of each fragment. Ventilation
+//     copies the payload verbatim, so every fragment of one pill carries the same
+//     value — which is exactly what keeps them merging. The per-fragment advance
+//     (fragment 2 must start the file where fragment 1 stopped, or a bed audibly
+//     restarts at every cut) is derived at render time by
+//     `placeAudioRegions` (timeline/audio-placement.ts), the single projection the
+//     preview and the export both read.
+//
+// The played window is `[offsetSec, offsetSec + <the pill's own output length>]`:
+// the span on the ruler IS the out-point, so there is no second `trimEndSec` field
+// to drift out of agreement with it.
+export const audioRegionSchema = endGteStart(
+	z.object({
+		id: z.string().min(1),
+		startMs: z.number().nonnegative(),
+		endMs: z.number().nonnegative(),
+		...clipAnchorShape,
+		// The `kind: "audio"` asset this region plays.
+		audioAssetId: z.string().min(1),
+		// Which lane the region lives on. Identity-bearing, and that is the point:
+		// regions of DIFFERENT kinds never merge and never repel, so a voiceover can
+		// sit over a music bed. One lane for both would make the repel rule forbid
+		// exactly the arrangement the feature exists for.
+		kind: z.enum(["voiceover", "music"]).default("music"),
+		// In-point into the audio file, in source seconds.
+		offsetSec: z.number().nonnegative().default(0),
+		gainDb: z.number().default(0),
+		origin: z.enum(["system", "agent", "user"]).default("user"),
+	}),
+	"endMs",
+	"startMs",
+);
+
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time
 // by the existing pipeline (see technical-documentation/architecture/document-model.md).
@@ -503,6 +558,11 @@ const documentSchemaShape = z.object({
 	}),
 	annotations: z.array(annotationRegionSchema).default([]),
 	zoomRanges: z.array(zoomRegionSchema).default([]),
+	// Imported audio regions (issue #350) — clip-anchored like `zoomRanges` and
+	// `annotations` above, and walked by the same `mapAllRegionCollections`.
+	// Defaulted so every document written before this loads unchanged; an older
+	// build simply strips the key on save, so no schemaVersion bump is needed.
+	audioRanges: z.array(audioRegionSchema).default([]),
 	legacyEditor: legacyEditorSchema.nullable().default(null),
 });
 
@@ -803,6 +863,10 @@ export const createProjectInputSchema = z.object({
 export const addAssetInputSchema = z.object({
 	path: z.string().trim().min(1),
 	label: z.string().trim().optional(),
+	// "audio" imports an external voiceover / BGM / SFX file (issue #350); it has
+	// no video stream and never becomes the project's primary asset. Defaults to
+	// "video" so every existing caller keeps its current behaviour.
+	kind: z.enum(["video", "audio"]).default("video"),
 	autoTranscribe: z.boolean().default(true),
 });
 
@@ -942,6 +1006,8 @@ export type AxcutTimelineOperation = z.infer<typeof timelineOperationSchema>;
 export type AxcutAnnotationRegion = z.infer<typeof annotationRegionSchema>;
 export type AxcutZoomRegion = z.infer<typeof zoomRegionSchema>;
 export type AxcutCameraTrack = z.infer<typeof cameraTrackSchema>;
+export type AxcutAudioRegion = z.infer<typeof audioRegionSchema>;
+export type AxcutAudioKind = AxcutAudioRegion["kind"];
 export type AxcutLegacyEditor = z.infer<typeof legacyEditorSchema>;
 export type AxcutDocument = z.infer<typeof documentSchema>;
 export type AxcutDocumentInput = z.input<typeof documentSchema>;
@@ -977,10 +1043,40 @@ export function createEmptyDocument(
 		},
 		annotations: [],
 		zoomRanges: [],
+		audioRanges: [],
 		legacyEditor: null,
 	});
 }
 
 export function ensureDocument(value: unknown): AxcutDocument {
 	return documentSchema.parse(value);
+}
+
+/**
+ * Build an UNANCHORED audio region for a freshly imported file (issue #350).
+ * `startMs`/`endMs` are the RAW ruler span the caller wants — the playhead for the
+ * head, plus the file's own length for the tail — and the clip anchor is left off
+ * on purpose: the caller runs the result through `anchorRegionsWithDerivedMs`,
+ * which is the one place that decides which clip(s) a span lands on. Parsed through
+ * the schema so gain / offset / origin defaults are applied in a single place.
+ */
+export function createAudioRegion(input: {
+	audioAssetId: string;
+	startMs: number;
+	endMs: number;
+	kind?: AxcutAudioKind;
+	offsetSec?: number;
+	gainDb?: number;
+	origin?: AxcutAudioRegion["origin"];
+}): AxcutAudioRegion {
+	return audioRegionSchema.parse({
+		id: createId("audio"),
+		audioAssetId: input.audioAssetId,
+		startMs: Math.max(0, input.startMs),
+		endMs: Math.max(Math.max(0, input.startMs), input.endMs),
+		kind: input.kind ?? "music",
+		offsetSec: input.offsetSec ?? 0,
+		gainDb: input.gainDb ?? 0,
+		origin: input.origin ?? "user",
+	});
 }

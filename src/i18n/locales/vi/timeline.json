@@ -15,8 +15,10 @@
 		"pressZoom": "Nhấn Z để thêm thu phóng",
 		"pressTrim": "Nhấn T để thêm cắt",
 		"pressAnnotation": "Nhấn A để thêm chú thích",
+		"pressAudio": "Nhấn M để thêm nhạc",
 		"pressSpeed": "Nhấn S để thêm tốc độ",
-		"pressCameraFullscreen": "Nhấn C để thêm một đoạn Camera Toàn màn hình"
+		"pressCameraFullscreen": "Nhấn C để thêm một đoạn Camera Toàn màn hình",
+		"pressVoiceover": "Nhấn V để thêm lời thuyết minh"
 	},
 	"labels": {
 		"pan": "Xoay",

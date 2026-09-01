@@ -4,11 +4,13 @@
 // (a reasonable default for the user to then resize).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { createId } from "../document/ids";
 import {
+	dropOrphanedAudioAssets,
 	duplicateClip as duplicateClipInDocument,
 	moveClip as moveClipInDocument,
 	PLACEHOLDER_DURATION_SEC,
@@ -19,11 +21,17 @@ import {
 	resequenceClips,
 	setClipSourceRange,
 } from "../document/timeline";
-import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
+import {
+	type AxcutAudioKind,
+	type AxcutClipCropRegion,
+	type AxcutDocument,
+	createAudioRegion,
+} from "../schema";
 import { hasAnyClipWithCamera } from "../timeline/camera";
-import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
+import { probeAudioDuration, probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
 	anchorRegionsWithDerivedMs,
+	coalesceRegionsForRuler,
 	dropPillsByIds,
 	replacePillSpan,
 	resolvePillIds,
@@ -105,6 +113,11 @@ export function useTimeline() {
 	// the Delete key operates on.
 	const [multiSelection, setMultiSelection] = useState<RegionHandle[]>([]);
 	const [clipSelection, setClipSelection] = useState<string | null>(null);
+	// Audio regions carry NO separate selection state (issue #350). They are regions, so
+	// they ride `selection` / `multiSelection` with every other pill — which is what makes
+	// Delete, copy/paste and shift-click multi-select work on them without a line of
+	// audio-specific code in any of those paths.
+	const addAudioAsset = useProjectStore((s) => s.addAudioAsset);
 	// Pre-drag snapshots for the two optimistic paths (zoom focus, annotations), so a
 	// failed commit can put the document back instead of leaving an edit on screen that
 	// was never written.
@@ -204,6 +217,56 @@ export function useTimeline() {
 								: {}),
 						};
 					}),
+				},
+				{ history: false },
+			);
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [document]);
+
+	// Backfill the real duration of imported audio assets (issue #350), the audio
+	// counterpart of the dimension backfill above. `addAudioAsset` probes once at
+	// import; a transient failure (timeout, a file still being written) would
+	// otherwise leave `durationSec` at 0 forever, and the waveform and the "how long is
+	// this file?" answer the inspector shows both read it. Re-probe on load — once per
+	// asset per session, success or not — with `history: false` so the fix is not an undo
+	// step. The REGION's span is unaffected either way: it comes from the anchor, never
+	// from the file's length, so a pill is always drawn at its real width.
+	const probedAudioAssetIdsRef = useRef<Set<string>>(new Set());
+	useEffect(() => {
+		if (!document) return;
+		const usedAssetIds = new Set(document.audioRanges.map((r) => r.audioAssetId));
+		const missing = document.assets.filter(
+			(a) =>
+				a.kind === "audio" &&
+				a.originalPath &&
+				usedAssetIds.has(a.id) &&
+				!(a.durationSec && a.durationSec > 0) &&
+				!probedAudioAssetIdsRef.current.has(a.id),
+		);
+		if (missing.length === 0) return;
+		// Mark every candidate BEFORE the first await. Marking each only as its turn
+		// came meant a document change that re-entered this effect while asset #1 was
+		// still awaiting found #2+ unmarked and probed them a second time.
+		for (const a of missing) probedAudioAssetIdsRef.current.add(a.id);
+		let cancelled = false;
+		void (async () => {
+			const probed: Record<string, number> = {};
+			for (const a of missing) {
+				const durationSec = await probeAudioDuration(toFileUrl(a.originalPath));
+				if (durationSec != null && durationSec > 0) probed[a.id] = durationSec;
+			}
+			if (cancelled || Object.keys(probed).length === 0) return;
+			const current = useProjectStore.getState().document;
+			if (!current) return;
+			await useProjectStore.getState().saveDocument(
+				{
+					...current,
+					assets: current.assets.map((a) =>
+						probed[a.id] ? { ...a, durationSec: probed[a.id] } : a,
+					),
 				},
 				{ history: false },
 			);
@@ -847,6 +910,7 @@ export function useTimeline() {
 			const cameraFullscreenIds = new Set(
 				handles.filter((h) => h.kind === "cameraFullscreen").map((h) => h.id),
 			);
+			const audioIds = new Set(handles.filter((h) => h.kind === "audio").map((h) => h.id));
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 			const prevSpeed = dropPillsByIds(
 				(legacy.speedRegions as Array<{ id: string; startMs: number; endMs: number }>) ?? [],
@@ -861,6 +925,7 @@ export function useTimeline() {
 				...document,
 				zoomRanges: dropPillsByIds(document.zoomRanges, zoomIds) as AxcutDocument["zoomRanges"],
 				annotations: dropPillsByIds(document.annotations, annotationIds),
+				audioRanges: dropPillsByIds(document.audioRanges, audioIds) as AxcutDocument["audioRanges"],
 				timeline: {
 					...document.timeline,
 					// Whole-pill delete, same as the zoom/annotation lines above — a trim grown
@@ -877,7 +942,9 @@ export function useTimeline() {
 						? { ...legacy, speedRegions: prevSpeed, cameraFullscreenRegions: prevCameraFullscreen }
 						: document.legacyEditor,
 			};
-			if (!(await saveDocument(next, { history: true }))) return;
+			// The last region playing an imported file is also the last thing referencing its
+			// asset — collect it in the same write, exactly as the single-region delete does.
+			if (!(await saveDocument(dropOrphanedAudioAssets(next), { history: true }))) return;
 			setSelection(null);
 			setMultiSelection([]);
 		},
@@ -1173,9 +1240,153 @@ export function useTimeline() {
 			}>) ?? [])
 		: [];
 
+	// --- Audio regions (issue #350) ---------------------------------------------
+	// Regions, not tracks: every op below goes through the same anchor/pill helpers as
+	// zoom and annotation, which is what buys reorder/trim survival, whole-pill delete
+	// and copy-paste without a single audio-specific branch in those paths.
+
+	// Place a region for an already-imported audio asset, head at the playhead, spanning
+	// the file's own length (so the pill covers what it actually has to play). Anchored
+	// on the way in, like every other add.
+	const addAudioRegion = useCallback(
+		async (
+			assetId: string,
+			opts?: { kind?: AxcutAudioKind; startSec?: number; durationSec?: number },
+		): Promise<string | null> => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return null;
+			const asset = doc.assets.find((a) => a.id === assetId);
+			if (!asset || asset.kind !== "audio") return null;
+			const startMs = Math.round((opts?.startSec ?? playheadSec()) * 1000);
+			// The asset's probed duration is the natural length; fall back to the shared
+			// default when the probe has not landed yet, so the pill is never zero-width.
+			const durationSec = opts?.durationSec ?? asset.durationSec ?? DEFAULT_NEW_REGION_SEC;
+			const anchored = anchorRegionsWithDerivedMs(
+				[
+					createAudioRegion({
+						audioAssetId: assetId,
+						startMs,
+						endMs: startMs + Math.max(1, Math.round(durationSec * 1000)),
+						kind: opts?.kind ?? "music",
+					}),
+				],
+				doc.timeline.clips,
+				() => createId("audio"),
+			);
+			const next: AxcutDocument = {
+				...doc,
+				audioRanges: [...doc.audioRanges, ...anchored] as AxcutDocument["audioRanges"],
+			};
+			if (!(await saveDocument(next, { history: true }))) return null;
+			const newId = anchored[0]?.id ?? null;
+			if (newId) {
+				// Select it so the inspector opens on the thing the user just created —
+				// same affordance as addAnnotation, and through the SAME selection state.
+				setClipSelection(null);
+				setMultiSelection([{ kind: "audio", id: newId }]);
+				setSelection({ kind: "audio", id: newId });
+			}
+			return newId;
+		},
+		[saveDocument],
+	);
+
+	// Import an audio file and drop it on the timeline (issue #350). Lives here — not in
+	// the timeline toolbar — so the toolbar buttons and the keyboard shortcut (both call
+	// through `tl`) share one path.
+	const addAudio = useCallback(
+		async (kind: AxcutAudioKind = "music") => {
+			try {
+				// Inside the try so a rejected picker (an IPC failure, not a cancel) still reaches
+				// the localized toast instead of surfacing as an unhandled rejection. A cancel
+				// resolves with `success: false` and is a silent early return, not an error.
+				const picker = await window.electronAPI?.openAudioFilePicker?.();
+				if (!picker?.success || !picker.path) return;
+				const label = picker.name || picker.path.split(/[\\/]/).pop() || "Audio";
+				const asset = await addAudioAsset(picker.path, label);
+				if (!asset) return;
+				await addAudioRegion(asset.id, { kind });
+			} catch (err) {
+				toast.error(ts("audioTrack.importFailed"), {
+					description: err instanceof Error ? err.message : String(err),
+				});
+			}
+		},
+		[addAudioAsset, addAudioRegion, ts],
+	);
+
+	// Drag/resize on the ruler. `mode` is what separates the two gestures an audio pill
+	// has and a zoom pill does not: moving the body carries the media with it (the file
+	// keeps playing from the same in-point), while dragging the LEFT edge trims the
+	// in-point and leaves the media where it sits in time — the standard NLE behaviour,
+	// and the only one under which the audio you hear at a given second does not change
+	// when you shorten the head.
+	const updateAudioSpan = useCallback(
+		async (id: string, startMs: number, endMs: number, mode: "move" | "l" | "r" = "move") => {
+			// Read the store, not the render closure: a slider commit fired right after a drag
+			// otherwise rebuilds from the same pre-edit document and silently drops one of them.
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const s = finiteMs(startMs);
+			const e = finiteMs(endMs);
+			const before = coalesceRegionsForRuler(doc.audioRanges).find((p) => p.ids.includes(id));
+			let audioRanges = replacePillSpan(
+				doc.audioRanges,
+				id,
+				Math.min(s, e),
+				Math.max(s, e),
+				doc.timeline.clips,
+				() => createId("audio"),
+			) as AxcutDocument["audioRanges"];
+			if (mode === "l" && before) {
+				// Measure the shift on the CLAMPED result, not on what was requested: the repel
+				// rule may have stopped the edge at a neighbour, and an offset advanced by the
+				// requested delta would then desynchronise the pill from its own waveform.
+				//
+				// `replacePillSpan` keeps the leading id, so that is what identifies the SAME
+				// pill afterwards — finding it by position would pick the wrong one the moment
+				// the timeline holds more than one audio pill.
+				const leadId = before.ids[0];
+				const after = coalesceRegionsForRuler(audioRanges).find((p) => p.ids.includes(leadId));
+				const movedSec = after ? after.start - before.start : 0;
+				if (after && movedSec !== 0) {
+					const nextOffset = Math.max(0, before.member.offsetSec + movedSec);
+					const under = new Set(after.ids);
+					audioRanges = audioRanges.map((r) =>
+						under.has(r.id) ? { ...r, offsetSec: nextOffset } : r,
+					) as AxcutDocument["audioRanges"];
+				}
+			}
+			await saveDocument({ ...doc, audioRanges }, { history: true });
+		},
+		[saveDocument],
+	);
+
+	// Payload edits (gain, kind) hit every fragment under the pill, exactly like
+	// updateZoomDepth — a region ventilated across a clip boundary is 2+ rows that must
+	// not disagree, or the merge rule visibly splits the pill in half.
+	const updateAudioRegion = useCallback(
+		async (id: string, patch: { gainDb?: number; kind?: AxcutAudioKind; offsetSec?: number }) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const next: AxcutDocument = {
+				...doc,
+				audioRanges: patchPillById(
+					doc.audioRanges,
+					id,
+					patch as Partial<AxcutDocument["audioRanges"][number]>,
+				) as AxcutDocument["audioRanges"],
+			};
+			await saveDocument(next, { history: true });
+		},
+		[saveDocument],
+	);
+
 	return {
 		zoomRegions: document?.zoomRanges ?? [],
 		trimRanges: document?.timeline.trimRanges ?? [],
+		audioRegions: document?.audioRanges ?? [],
+		audioAssets: (document?.assets ?? []).filter((a) => a.kind === "audio"),
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
 		speedRegions,
 		cameraFullscreenRegions,
@@ -1193,6 +1404,10 @@ export function useTimeline() {
 		addCameraFullscreen,
 		removeRegion,
 		removeRegions,
+		addAudio,
+		addAudioRegion,
+		updateAudioSpan,
+		updateAudioRegion,
 		selectRegion,
 		clearSelection,
 		applyClipEdit,

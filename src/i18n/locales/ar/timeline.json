@@ -15,8 +15,10 @@
 		"pressZoom": "اضغط Z لإضافة تكبير",
 		"pressTrim": "اضغط T لإضافة قص",
 		"pressAnnotation": "اضغط A لإضافة شرح",
+		"pressAudio": "اضغط M لإضافة موسيقى",
 		"pressSpeed": "اضغط S لإضافة سرعة",
-		"pressCameraFullscreen": "اضغط C لإضافة مقطع كاميرا كاملة الشاشة"
+		"pressCameraFullscreen": "اضغط C لإضافة مقطع كاميرا كاملة الشاشة",
+		"pressVoiceover": "اضغط V لإضافة تعليق صوتي"
 	},
 	"labels": {
 		"pan": "تحريك",

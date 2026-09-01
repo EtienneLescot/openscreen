@@ -91,6 +91,7 @@ function makeDoc(
 		},
 		annotations: overrides.annotations ?? [],
 		zoomRanges: overrides.zoomRanges ?? [],
+		audioRanges: overrides.audioRanges ?? [],
 		legacyEditor: overrides.legacyEditor ?? null,
 	};
 }
@@ -1988,5 +1989,191 @@ describe("buildSceneDescription.captions", () => {
 		// The text colour is independently chosen via ColorField (hex); the background is the
 		// only piece that goes through the opacity-combining path.
 		expect(text?.color).toBe("#ffffff");
+	});
+});
+
+// --- imported audio (issue #350) -------------------------------------------
+describe("buildSceneDescription.audioTracks", () => {
+	const audioAsset = makeAsset({
+		id: "aud",
+		kind: "audio",
+		originalPath: "/music.mp3",
+		durationSec: 30,
+	});
+	const screen = makeAsset({ id: "scr", originalPath: "/screen.mp4", durationSec: 20 });
+	const screenClip = makeClip({
+		id: "c1",
+		assetId: "scr",
+		sourceStartSec: 0,
+		sourceEndSec: 20,
+		timelineStartSec: 0,
+		timelineEndSec: 20,
+	});
+	/** A region anchored to `screenClip`, playing `[offsetSec, offsetSec + span]` of the file. */
+	const region = (over: Record<string, unknown> = {}) => ({
+		id: "audio_1",
+		startMs: 5000,
+		endMs: 15_000,
+		clipId: "c1",
+		sourceStartSec: 5,
+		sourceEndSec: 15,
+		audioAssetId: "aud",
+		kind: "music" as const,
+		offsetSec: 2,
+		gainDb: -3,
+		origin: "user" as const,
+		...over,
+	});
+
+	it("maps a region to the mix list with its resolved path and window", () => {
+		const doc = makeDoc({
+			assets: [screen, audioAsset],
+			clips: [screenClip],
+			audioRanges: [region()],
+		});
+		expect(buildSceneDescription(doc).audioTracks).toEqual([
+			{
+				path: "/music.mp3",
+				startSec: 5,
+				gainDb: -3,
+				// The span IS the out-point: 10s of ruler from an in-point of 2s.
+				trimStartSec: 2,
+				trimEndSec: 12,
+			},
+		]);
+	});
+
+	it("clamps the window to the asset's real duration", () => {
+		// A 20s span starting 15s into a 30s file wants to read to 35s. The compositor
+		// preallocates its decode window from trimEndSec, so an unclamped value is a promise
+		// the mixer cannot keep; the tail is silence, not an over-long read.
+		const doc = makeDoc({
+			assets: [screen, audioAsset],
+			clips: [screenClip],
+			audioRanges: [
+				region({ startMs: 0, endMs: 20_000, sourceStartSec: 0, sourceEndSec: 20, offsetSec: 15 }),
+			],
+		});
+		expect(buildSceneDescription(doc).audioTracks[0]?.trimEndSec).toBe(30);
+	});
+
+	it("projects the head onto the trim-compressed programme (issue #350)", () => {
+		// An interior cut removes raw [2,4] (2s). The region's raw head is 5; on the compressed
+		// programme that is 3. Passing 5 through verbatim was the bug — the region played 2s
+		// late in the render while the preview, whose playhead jumps the cut, had it on time.
+		const doc = makeDoc({
+			assets: [screen, audioAsset],
+			clips: [screenClip],
+			timeline: {
+				trimRanges: [
+					{
+						id: "t1",
+						assetId: "scr",
+						clipId: "c1",
+						startSec: 2,
+						endSec: 4,
+						reason: "",
+						origin: "user",
+					},
+				],
+			},
+			audioRanges: [region()],
+		});
+		expect(buildSceneDescription(doc).audioTracks[0]?.startSec).toBeCloseTo(3, 6);
+	});
+
+	it("pulls a region earlier by what a speed region ahead of it removed", () => {
+		// A 2x stretch over raw [0,4] turns 4s of picture into 2s of programme, so a region
+		// whose head is at raw 5 lands at output 3. The media itself still plays at 1x.
+		const doc = makeDoc({
+			assets: [screen, audioAsset],
+			clips: [screenClip],
+			audioRanges: [region()],
+			legacyEditor: {
+				speedRegions: [
+					{
+						id: "sp1",
+						startMs: 0,
+						endMs: 4000,
+						speed: 2,
+						clipId: "c1",
+						sourceStartSec: 0,
+						sourceEndSec: 4,
+					},
+				],
+			},
+		});
+		expect(buildSceneDescription(doc).audioTracks[0]?.startSec).toBeCloseTo(3, 6);
+	});
+
+	it("emits one entry per fragment, each starting the file where the last one stopped", () => {
+		// One pill drawn across two clips is two stored fragments. Handing both the pill's own
+		// offsetSec would restart the bed at the cut; each fragment must advance by the output
+		// length of the one before it.
+		const screenB = makeAsset({ id: "scr2", originalPath: "/screen2.mp4", durationSec: 20 });
+		const clipB = makeClip({
+			id: "c2",
+			assetId: "scr2",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 20,
+			timelineEndSec: 30,
+		});
+		const doc = makeDoc({
+			assets: [screen, screenB, audioAsset],
+			clips: [screenClip, clipB],
+			audioRanges: [
+				region({
+					id: "audio_1",
+					startMs: 15_000,
+					endMs: 20_000,
+					sourceStartSec: 15,
+					sourceEndSec: 20,
+				}),
+				region({
+					id: "audio_2",
+					startMs: 20_000,
+					endMs: 26_000,
+					clipId: "c2",
+					sourceStartSec: 0,
+					sourceEndSec: 6,
+				}),
+			],
+		});
+		const tracks = buildSceneDescription(doc).audioTracks;
+		expect(tracks).toHaveLength(2);
+		expect(tracks[0]).toMatchObject({ startSec: 15, trimStartSec: 2, trimEndSec: 7 });
+		// Continues at 7, not back at 2 — this is the "bed restarts at every cut" defect.
+		expect(tracks[1]).toMatchObject({ startSec: 20, trimStartSec: 7, trimEndSec: 13 });
+	});
+
+	it("keeps a region whose asset duration was never probed", () => {
+		// A failed probe leaves `durationSec` at 0, which is UNKNOWN, not "zero seconds".
+		// `??` only catches null, so clamping the window to 0 collapsed it and dropped the
+		// region from the export entirely — on the one file whose length we could not read.
+		const unprobed = makeAsset({
+			id: "aud",
+			kind: "audio",
+			originalPath: "/music.mp3",
+			durationSec: 0,
+		});
+		const doc = makeDoc({
+			assets: [screen, unprobed],
+			clips: [screenClip],
+			audioRanges: [region()],
+		});
+		expect(buildSceneDescription(doc).audioTracks).toEqual([
+			{ path: "/music.mp3", startSec: 5, gainDb: -3, trimStartSec: 2, trimEndSec: 12 },
+		]);
+	});
+
+	it("drops a region whose asset has no resolvable path", () => {
+		const doc = makeDoc({ assets: [screen], clips: [screenClip], audioRanges: [region()] });
+		expect(buildSceneDescription(doc).audioTracks).toEqual([]);
+	});
+
+	it("is empty for a project with no imported audio", () => {
+		const doc = makeDoc({ assets: [screen], clips: [screenClip] });
+		expect(buildSceneDescription(doc).audioTracks).toEqual([]);
 	});
 });

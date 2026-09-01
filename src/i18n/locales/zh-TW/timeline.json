@@ -15,8 +15,10 @@
 		"pressZoom": "按 Z 新增縮放",
 		"pressTrim": "按 T 新增剪輯",
 		"pressAnnotation": "按 A 新增標註",
+		"pressAudio": "按 M 新增音樂",
 		"pressSpeed": "按 S 新增速度",
-		"pressCameraFullscreen": "按 C 新增一個全螢幕攝影機片段"
+		"pressCameraFullscreen": "按 C 新增一個全螢幕攝影機片段",
+		"pressVoiceover": "按 V 新增旁白"
 	},
 	"labels": {
 		"pan": "平移",

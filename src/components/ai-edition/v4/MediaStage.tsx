@@ -73,7 +73,10 @@ export function MediaStage({
 		[locale, t],
 	);
 
-	const assets = document?.assets ?? [];
+	// Video only — this stage arranges clips. Imported audio (issue #350) is a
+	// timeline overlay added from the timeline toolbar, not a clip, so it never
+	// appears in this list.
+	const assets = (document?.assets ?? []).filter((a) => a.kind !== "audio");
 	const filtered = useMemo(
 		() =>
 			assets.filter((a) => {

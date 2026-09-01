@@ -138,6 +138,7 @@ const DECLARED: WritePath[] = [
 	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
 	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
 	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
+	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
 	// The window is closing and the user answered "save".
 	w("src/components/ai-edition/NewEditorShell.tsx", "unsubSaveBeforeClose", "save", "gesture"),
 
@@ -168,6 +169,9 @@ const DECLARED: WritePath[] = [
 	// Linking the camera track found next to a newly added asset. Part of the
 	// import, not an edit of its own.
 	w("src/lib/ai-edition/store/projectStore.ts", "addAsset", "save", "automatic"),
+	// Folding an imported audio file's probed duration onto its asset (issue #350).
+	// Part of the import, like the camera link above — not an edit of its own.
+	w("src/lib/ai-edition/store/projectStore.ts", "addAudioAsset", "save", "automatic"),
 	// THE round-3 fix. This is the shape that defeated round 2: a store action that
 	// writes on someone else's behalf. It forwards now, so its callers decide.
 	w("src/lib/ai-edition/store/projectStore.ts", "replaceTimeline", "save", "forwarded"),
@@ -217,6 +221,7 @@ const DECLARED: WritePath[] = [
 	// where they used to be two writes that overwrote each other.
 	w("src/lib/ai-edition/store/useTimeline.ts", "applyClipEdit", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addAnnotation", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "addAudioRegion", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addCameraFullscreen", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addSpeed", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addTrim", "save", "gesture"),
@@ -244,6 +249,11 @@ const DECLARED: WritePath[] = [
 	// The live halves of the two drags.
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAnnotationLive", "set", "automatic"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAnnotationSpan", "save", "gesture"),
+	// Imported audio (issue #350). Each is a direct user edit — drag/trim the pill, or
+	// change its level/lane — one undo step apiece. There is no audio-specific DELETE row:
+	// an audio pill is deleted by `removeRegion`/`removeRegions` like every other kind.
+	w("src/lib/ai-edition/store/useTimeline.ts", "updateAudioRegion", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "updateAudioSpan", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateCameraFullscreenSpan", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateSpeedSpan", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateSpeedValue", "save", "gesture"),
@@ -255,6 +265,9 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateZoomSpan", "save", "gesture"),
 	// Source-dimension backfill for assets a migration left unprobed. On load, for
 	// every project, whether or not the user touches anything.
+	w("src/lib/ai-edition/store/useTimeline.ts", "useTimeline", "save", "automatic"),
+	// Audio-duration backfill (issue #350) — the same on-load, un-asked-for probe
+	// for imported audio assets whose duration didn't stamp at import.
 	w("src/lib/ai-edition/store/useTimeline.ts", "useTimeline", "save", "automatic"),
 ];
 

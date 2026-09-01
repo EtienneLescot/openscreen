@@ -207,3 +207,171 @@ describe("VirtualPreview playback across a clip boundary", () => {
 		expect(video.pauseCalls).toHaveLength(0);
 	});
 });
+
+// Issue #350 — imported audio tracks follow the RAW virtual playhead. The
+// decision math is unit-tested in VirtualPreview.audio.test.ts; here we prove the
+// rAF loop applies it to the mounted <audio> element (seek + play/pause).
+function driveAudioEl(el: HTMLAudioElement) {
+	let currentTime = 0;
+	let paused = true;
+	Object.defineProperty(el, "currentTime", {
+		configurable: true,
+		get: () => currentTime,
+		set: (next: number) => {
+			currentTime = next;
+		},
+	});
+	Object.defineProperty(el, "paused", { configurable: true, get: () => paused });
+	Object.defineProperty(el, "duration", { configurable: true, get: () => 10 });
+	el.play = vi.fn(() => {
+		paused = false;
+		return Promise.resolve();
+	});
+	el.pause = vi.fn(() => {
+		paused = true;
+	});
+	return {
+		get currentTime() {
+			return currentTime;
+		},
+	};
+}
+
+describe("VirtualPreview imported audio tracks", () => {
+	// Playing the file from 1s, over ruler 2..4 → occupies output 2..4 on source 1..3.
+	// The element is keyed by the PILL id, which for a single-fragment region is its own id.
+	const track = {
+		id: "trk",
+		startMs: 2000,
+		endMs: 4000,
+		clipId: "c1",
+		sourceStartSec: 2,
+		sourceEndSec: 4,
+		audioAssetId: "aud",
+		kind: "music" as const,
+		offsetSec: 1,
+		gainDb: 0,
+		origin: "user" as const,
+	};
+
+	function mountWithAudio() {
+		const sources: VideoSource[] = [{ id: "a1", src: "file:///tmp/a1.mp4", label: "a1" }];
+		const audioSources: VideoSource[] = [{ id: "aud", src: "file:///tmp/vo.mp3", label: "vo" }];
+		const { container } = render(
+			<VirtualPreview
+				videoSources={sources}
+				audioRegions={[track]}
+				audioSources={audioSources}
+				clips={[clip("c1", "a1", 0, 10, 0)]}
+				onTimeChange={vi.fn()}
+			/>,
+		);
+		const videoEl = container.querySelector("video");
+		if (!videoEl) throw new Error("no <video>");
+		const video = driveVideo(videoEl as HTMLVideoElement);
+		act(() => fireEvent.loadedMetadata(videoEl));
+		const audioEl = container.querySelector<HTMLAudioElement>(
+			'[data-testid="preview-audio-track-trk"]',
+		);
+		if (!audioEl) throw new Error("no track <audio>");
+		return { video, audioEl, audio: driveAudioEl(audioEl) };
+	}
+
+	it("mounts one <audio> per track with the asset's URL", () => {
+		const { audioEl } = mountWithAudio();
+		expect(audioEl.getAttribute("src")).toBe("file:///tmp/vo.mp3");
+	});
+
+	it("plays inside the window at the trim-offset source time, pauses outside", () => {
+		const { video, audioEl, audio } = mountWithAudio();
+		video.play();
+		// virtualTime lands one tick after the video seek, and the audio loop reads
+		// last frame's virtualTime, so two ticks settle the decision.
+		video.seekTo(3); // virtual 3 → 1s into the 2..4 span
+		tick();
+		tick();
+		expect(audioEl.play).toHaveBeenCalled();
+		expect(audio.currentTime).toBeCloseTo(2, 1); // trimStart 1 + 1s in
+
+		video.seekTo(5); // virtual 5 → past the window end (4)
+		tick();
+		tick();
+		expect(audioEl.pause).toHaveBeenCalled();
+	});
+});
+
+// Issue #350 — a track boosted past 0 dB must sound boosted in the preview too, not just
+// in the export. `element.volume` caps at 1, so the boost has to ride a WebAudio gain node.
+// jsdom has no WebAudio, so install a minimal fake context and watch the nodes it mints.
+class FakeAudioNode {
+	connect = vi.fn();
+	disconnect = vi.fn();
+}
+class FakeGainNode extends FakeAudioNode {
+	gain = { value: 1 };
+}
+let createdGains: FakeGainNode[] = [];
+class FakeAudioContext {
+	state = "running";
+	destination = new FakeAudioNode();
+	resume = vi.fn(() => Promise.resolve());
+	close = vi.fn(() => Promise.resolve());
+	createMediaElementSource = vi.fn(() => new FakeAudioNode());
+	createGain = vi.fn(() => {
+		const node = new FakeGainNode();
+		createdGains.push(node);
+		return node;
+	});
+}
+
+describe("VirtualPreview imported audio track boost", () => {
+	beforeEach(() => {
+		createdGains = [];
+		vi.stubGlobal("AudioContext", FakeAudioContext);
+	});
+
+	// +6.0206 dB is exactly ×2 in linear gain — a boost `element.volume` (max 1) could never
+	// reach. The graph mints the output gain first, then one gain per track, so the track's
+	// node is the last one created.
+	const boosted = {
+		id: "trk",
+		startMs: 2000,
+		endMs: 4000,
+		clipId: "c1",
+		sourceStartSec: 2,
+		sourceEndSec: 4,
+		audioAssetId: "aud",
+		kind: "music" as const,
+		offsetSec: 1,
+		gainDb: 6.0206,
+		origin: "user" as const,
+	};
+
+	it("drives a per-track gain node past unity instead of capping element.volume", () => {
+		const sources: VideoSource[] = [{ id: "a1", src: "file:///tmp/a1.mp4", label: "a1" }];
+		const audioSources: VideoSource[] = [{ id: "aud", src: "file:///tmp/vo.mp3", label: "vo" }];
+		const { container } = render(
+			<VirtualPreview
+				videoSources={sources}
+				audioRegions={[boosted]}
+				audioSources={audioSources}
+				clips={[clip("c1", "a1", 0, 10, 0)]}
+				onTimeChange={vi.fn()}
+			/>,
+		);
+		const videoEl = container.querySelector("video");
+		if (!videoEl) throw new Error("no <video>");
+		driveVideo(videoEl as HTMLVideoElement);
+		act(() => fireEvent.loadedMetadata(videoEl));
+		const audioEl = container.querySelector<HTMLAudioElement>(
+			'[data-testid="preview-audio-track-trk"]',
+		);
+		if (!audioEl) throw new Error("no track <audio>");
+		driveAudioEl(audioEl);
+
+		tick(); // let the rAF stamp the live gain onto the node
+		const trackGain = createdGains.at(-1);
+		expect(trackGain?.gain.value).toBeCloseTo(2, 3); // boosted, NOT clamped to 1
+		expect(audioEl.volume).toBe(1); // volume left at unity so it doesn't double-attenuate
+	});
+});

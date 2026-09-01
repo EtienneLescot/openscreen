@@ -4,10 +4,23 @@ import {
 	DEFAULT_CROP_REGION,
 	MAX_NATIVE_PLAYBACK_RATE,
 } from "@/components/video-editor/types";
-import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
-import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import {
+	projectRawTimelineSecToPlayback,
+	resolvePlaybackSegments,
+} from "@/lib/ai-edition/document/timeline";
+import type {
+	AxcutAudioRegion,
+	AxcutClip,
+	AxcutTrimRange,
+	AxcutZoomRegion,
+} from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import {
+	type AudioPlacement,
+	placeAudioRegions,
+	resolveAudioPlayback,
+} from "@/lib/ai-edition/timeline/audio-placement";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
@@ -112,6 +125,13 @@ function findNextClipByTimelineOrder(
 
 interface VirtualPreviewProps {
 	videoSources: VideoSource[];
+	/** Imported audio regions to mix over the video (issue #350), and the file URLs
+	 *  their assets resolve to (keyed by assetId in `id`). Both default to empty, so
+	 *  a project with no imported audio behaves exactly as before. The regions are
+	 *  projected onto the output programme HERE, through the same
+	 *  `placeAudioRegions` the export reads, so the preview cannot drift from it. */
+	audioRegions?: AxcutAudioRegion[];
+	audioSources?: VideoSource[];
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
@@ -156,6 +176,8 @@ interface VirtualPreviewProps {
 
 export function VirtualPreview({
 	videoSources,
+	audioRegions = [],
+	audioSources = [],
 	clips,
 	zoomRegions = [],
 	speedRegions = [],
@@ -206,6 +228,11 @@ export function VirtualPreview({
 	const audioContextRef = useRef<AudioContext | null>(null);
 	const audioContextCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const audioSourceNodesRef = useRef(new WeakMap<HTMLAudioElement, MediaElementAudioSourceNode>());
+	// Per-track gain nodes for imported audio (issue #350). Keyed by track id so the rAF
+	// can set each track's level live (a boost past 0 dB, which `element.volume` can't do —
+	// same reason the primary/supplemental sum through a gain node). The graph effect owns
+	// their lifecycle; the map is cleared and rebuilt whenever the routing is torn down.
+	const audioTrackGainNodesRef = useRef<Map<string, GainNode>>(new Map());
 	const audioGraphRef = useRef<PreviewAudioGraph | null>(null);
 	const videoFrameRef = useRef<HTMLDivElement | null>(null);
 
@@ -272,10 +299,55 @@ export function VirtualPreview({
 		};
 	}, [activeSource?.filePath]);
 
+	// Audio regions → what actually plays, one entry per fragment on the OUTPUT clock.
+	// This is the same call `buildSceneDescription` makes for the export, so the preview
+	// and the render agree on placement, on the in-point of every fragment, and on what a
+	// trim or a speed region ahead of a region does to it.
+	//
+	// `speedRegions` is typed without the v5 anchor fields, but the stored objects carry
+	// them; `AnchoredSpeedRegion` reads them when present and falls back to the ruler
+	// cache when not, so passing the array straight through is correct either way.
+	const audioPlacements = useMemo(
+		() => placeAudioRegions(audioRegions, clips, trimRanges, speedRegions),
+		[audioRegions, clips, trimRanges, speedRegions],
+	);
+
+	// One <audio> element per PILL, not per fragment: a region ventilated across a cut is
+	// still one continuous piece of media to the listener, and mounting an element per
+	// fragment would re-buffer the file at every clip boundary.
+	const audioPills = useMemo(() => {
+		const byPill = new Map<
+			string,
+			{ audioAssetId: string; gainDb: number; placements: AudioPlacement[] }
+		>();
+		for (const placement of audioPlacements) {
+			const entry = byPill.get(placement.pillId);
+			if (entry) entry.placements.push(placement);
+			else
+				byPill.set(placement.pillId, {
+					audioAssetId: placement.audioAssetId,
+					gainDb: placement.gainDb,
+					placements: [placement],
+				});
+		}
+		return [...byPill.entries()].map(([pillId, v]) => ({ pillId, ...v }));
+	}, [audioPlacements]);
+
+	// Which imported-audio elements are actually mounted (a pill is rendered only once its
+	// asset URL resolves — see the JSX). Re-routing the graph is keyed on this set, NOT on
+	// the gains: a level change is applied live on the existing node by the rAF, so it must
+	// not tear the graph down. Joined ids change only on a real mount/unmount.
+	const mountedAudioTrackKey = audioPills
+		.filter((pill) => audioSources.some((source) => source.id === pill.audioAssetId))
+		.map((pill) => pill.pillId)
+		.join(",");
+
 	// Sum the audio elements into one gain node so the output trim can boost past 0 dB,
 	// which `element.volume` cannot do. The primary media element carries track 1; on macOS
 	// the existing IPC helper extracts track 2 (normally the microphone) so both are audible
-	// instead of Chromium silently choosing one.
+	// instead of Chromium silently choosing one. Imported tracks (issue #350) join the same
+	// graph through a per-track gain node so their boost survives the preview too.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mountedAudioTrackKey is the trigger for re-routing tracks; the elements are read from the ref.
 	useEffect(() => {
 		if (!primaryAudioEl || !audioProbeComplete) return;
 		if (supplementalAudioSrc && !supplementalAudioEl) return;
@@ -322,14 +394,48 @@ export function VirtualPreview({
 				// preview outright rather than degrade it.
 			}
 		}
+		// Imported tracks (issue #350): each mounted element gets source → per-track gain →
+		// the output gain, so the effective level is trackGain × outputGain — the same order
+		// the exporter mixes in (mix_external_tracks applies the track gain, finish_audio the
+		// output gain). The rAF sets each node's value; created here at unity as a safe default.
+		const trackGainNodes: GainNode[] = [];
+		audioTrackGainNodesRef.current = new Map();
+		for (const [trackId, element] of audioTrackElsRef.current) {
+			try {
+				let source = audioSourceNodesRef.current.get(element);
+				if (!source) {
+					source = graph.context.createMediaElementSource(element);
+					audioSourceNodesRef.current.set(element, source);
+				}
+				source.disconnect();
+				const trackGain = graph.context.createGain();
+				source.connect(trackGain);
+				trackGain.connect(graph.gain);
+				audioTrackGainNodesRef.current.set(trackId, trackGain);
+				connectedSources.push(source);
+				trackGainNodes.push(trackGain);
+			} catch {
+				// Same rationale as the primary/supplemental loop: routing THIS track failed, so
+				// leave the rest connected. The rAF falls back to `element.volume` for a track
+				// with no gain node (capped at 0 dB, but audible).
+			}
+		}
 		audioGraphRef.current = graph;
 		applyPreviewAudioSettings(graph, elements, audioGainDbRef.current);
 		return () => {
 			audioGraphRef.current = null;
 			for (const source of connectedSources) source.disconnect();
+			for (const trackGain of trackGainNodes) trackGain.disconnect();
+			audioTrackGainNodesRef.current = new Map();
 			graph.gain.disconnect();
 		};
-	}, [primaryAudioEl, supplementalAudioEl, supplementalAudioSrc, audioProbeComplete]);
+	}, [
+		primaryAudioEl,
+		supplementalAudioEl,
+		supplementalAudioSrc,
+		audioProbeComplete,
+		mountedAudioTrackKey,
+	]);
 
 	// Keep one AudioContext for the component. Closing and recreating it on an effect rerun
 	// permanently silences an HTMLAudioElement because createMediaElementSource may only be
@@ -352,6 +458,7 @@ export function VirtualPreview({
 				const context = audioContextRef.current;
 				audioContextRef.current = null;
 				audioSourceNodesRef.current = new WeakMap();
+				audioTrackGainNodesRef.current = new Map();
 				if (context) void context.close();
 			}, 0);
 		};
@@ -400,6 +507,11 @@ export function VirtualPreview({
 	// mutation.
 	const clipsRef = useRef(clips);
 	clipsRef.current = clips;
+	// Same reason as `clipsRef`: the rAF projects the playhead and each imported
+	// audio track's head raw→output every frame (see the audio-track loop), and
+	// must see the live trims, not the set captured when the loop was created.
+	const trimRangesRef = useRef(trimRanges);
+	trimRangesRef.current = trimRanges;
 	// Trim-narrowed (`resolvePlaybackSegments`) — used ONLY to detect "has the <video>'s own
 	// currentTime drifted into a trim" and where to jump it back out to. Everything ELSE in
 	// this component (`clips`/`clipsRef` above, virtualTimeSec, zoom/speed region lookups,
@@ -426,6 +538,17 @@ export function VirtualPreview({
 	virtualDurationSecRef.current = virtualDurationSec;
 	const speedRegionsRef = useRef(speedRegions);
 	speedRegionsRef.current = speedRegions;
+	// Imported audio (issue #350): the rAF reads these through refs, same as everything
+	// else it touches, so a region added/edited mid-playback is picked up without
+	// re-creating the loop. `audioTrackElsRef` maps a PILL id to its mounted <audio>
+	// element (registered by the ref callback on render).
+	const audioPillsRef = useRef(audioPills);
+	audioPillsRef.current = audioPills;
+	const audioTrackElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+	const registerAudioTrackEl = useCallback((trackId: string, element: HTMLAudioElement | null) => {
+		if (element) audioTrackElsRef.current.set(trackId, element);
+		else audioTrackElsRef.current.delete(trackId);
+	}, []);
 	// Same reasoning as `clipsRef` above, for the one thing the rAF calls rather than reads:
 	// `seekToVirtualTime` is a `useCallback` whose deps include `clips`, so it takes a new
 	// identity on every clip mutation — a REORDER included. The rAF below is deliberately
@@ -469,6 +592,67 @@ export function VirtualPreview({
 					if (playback) void playback.catch(() => undefined);
 				} else if ((v.paused || !target.shouldPlay) && !audio.paused) {
 					audio.pause();
+				}
+			}
+			// Imported audio (issue #350): project the playhead raw→output ONCE, then ask
+			// `resolveAudioPlayback` — the same module the export's mix list comes from —
+			// where each pill's element should be and whether it should be running. Level
+			// rides a per-pill gain node when the WebAudio graph is up (which CAN boost past
+			// 0 dB, with the output node applying the global gain on top, matching the
+			// export); `.volume` is the fallback, and there a boost caps at 0 dB.
+			const globalGain = audioGainScalar(audioGainDbRef.current);
+			const outputTimeSec = projectRawTimelineSecToPlayback(
+				clipsRef.current,
+				trimRangesRef.current,
+				speedRegionsRef.current,
+				virtualTimeSecRef.current,
+			);
+			for (const pill of audioPillsRef.current) {
+				const el = audioTrackElsRef.current.get(pill.pillId);
+				if (!el) continue;
+				const target = resolveAudioPlayback(pill.placements, outputTimeSec);
+				// Imported audio plays at its natural 1× rate, NOT the video's. The export
+				// sums it into the programme at 1× — speed regions stretch clip PCM only,
+				// never an imported file — so following `v.playbackRate` would pitch a
+				// voiceover up under a 2× region and finish it early, diverging from export.
+				// The region's PLACEMENT still follows the speed change; only its pitch does not.
+				if (el.playbackRate !== 1) el.playbackRate = 1;
+				const trackGainNode = audioTrackGainNodesRef.current.get(pill.pillId);
+				if (trackGainNode) {
+					trackGainNode.gain.value = audioGainScalar(pill.gainDb);
+					if (el.volume !== 1) el.volume = 1;
+				} else {
+					el.volume = Math.min(1, audioGainScalar(pill.gainDb) * globalGain);
+				}
+				// Only re-seek on a real discontinuity (a scrub, a trim jump, a first
+				// play), NOT on the sub-frame drift of normal playback. The primary audio
+				// can afford a 25 ms leash because it syncs to the <video>'s own
+				// authoritative clock; imported audio syncs to `virtualTimeSec`, which is
+				// DERIVED from that clock each frame and so is slightly noisy — at a 25 ms
+				// leash it re-seeks most frames, and each seek briefly stalls the element:
+				// the jitter. A started element already plays at the right rate from the
+				// right offset, so it free-runs in sync; this wide leash just catches the
+				// jumps. BGM/voiceover tolerates it; frame-tight sync is the video's job.
+				const leashSec = !el.paused && target.shouldPlay ? 0.3 : 0.025;
+				if (Math.abs(el.currentTime - target.targetTimeSec) > leashSec) {
+					try {
+						el.currentTime = target.targetTimeSec;
+					} catch {
+						// media metadata not ready yet
+					}
+				}
+				if (!v.paused && target.shouldPlay && el.paused) {
+					// Resume a context suspended by autoplay policy, exactly as the primary
+					// loop does above — otherwise a region that starts while the primary
+					// element is silent (its span is over, or a recording with no separate
+					// audio element) routes into a suspended context and plays nothing.
+					if (audioGraphRef.current?.context.state === "suspended") {
+						void audioGraphRef.current.context.resume();
+					}
+					const playback = el.play();
+					if (playback) void playback.catch(() => undefined);
+				} else if ((v.paused || !target.shouldPlay) && !el.paused) {
+					el.pause();
 				}
 			}
 			// Publish this frame's live position/rate for other media elements
@@ -1146,6 +1330,23 @@ export function VirtualPreview({
 								data-testid="preview-audio-supplemental"
 							/>
 						) : null}
+						{/* Imported audio (issue #350). One element per PILL, kept in sync by the
+						    rAF loop above via audioTrackElsRef. A pill whose asset URL isn't
+						    resolved yet is skipped rather than mounted src-less. */}
+						{audioPills.map((pill) => {
+							const src = audioSources.find((s) => s.id === pill.audioAssetId)?.src;
+							if (!src) return null;
+							return (
+								<audio
+									key={`audio-track:${pill.pillId}`}
+									ref={(element) => registerAudioTrackEl(pill.pillId, element)}
+									src={src}
+									preload="metadata"
+									aria-hidden="true"
+									data-testid={`preview-audio-track-${pill.pillId}`}
+								/>
+							);
+						})}
 						{/* Plus d'overlay ici du tout. « Loading preview… » reflétait l'état du
 						    <video> CACHÉ (source horloge/audio), pas la preview RÉELLE — le canvas
 						    natif, qui montre déjà une image valide pendant que le <video> re-seek.

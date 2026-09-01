@@ -13,6 +13,7 @@ import {
 	normalizeIntervals,
 	planTimelineReplacement,
 	primaryAssetDuration,
+	projectRawTimelineSecToPlayback,
 	rederiveRegionMs,
 	removeClip,
 	removeRegion,
@@ -57,6 +58,7 @@ function makeDoc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 		},
 		annotations: [],
 		zoomRanges: [],
+		audioRanges: [],
 		legacyEditor: null,
 		...overrides,
 	};
@@ -837,6 +839,236 @@ describe("resolvePlaybackSegments", () => {
 				"clip_2_seg2",
 			]);
 		});
+	});
+});
+
+describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", () => {
+	// One 10s clip, an interior trim removing raw 2..4 (2s). Output programme is 8s long.
+	const clip = makeClip({
+		sourceStartSec: 0,
+		sourceEndSec: 10,
+		timelineStartSec: 0,
+		timelineEndSec: 10,
+	});
+	const trim = makeTrim({ startSec: 2, endSec: 4 });
+
+	it("is the identity when there are no trims", () => {
+		expect(projectRawTimelineSecToPlayback([clip], [], [], 6)).toBeCloseTo(6, 6);
+	});
+
+	it("pulls a raw position after a cut earlier by the removed duration", () => {
+		// Raw 6 sits 2s past the 2s cut → output 4. This is the exact bug: the track was
+		// landing at 6 (delayed by the trim) instead of 4.
+		expect(projectRawTimelineSecToPlayback([clip], [trim], [], 6)).toBeCloseTo(4, 6);
+	});
+
+	it("is unaffected for a position before the cut", () => {
+		expect(projectRawTimelineSecToPlayback([clip], [trim], [], 1)).toBeCloseTo(1, 6);
+	});
+
+	it("collapses a position inside the trimmed gap to the end of the kept content before it", () => {
+		// Raw 3 is inside the removed 2..4 span → the next audible sample is at output 2.
+		expect(projectRawTimelineSecToPlayback([clip], [trim], [], 3)).toBeCloseTo(2, 6);
+	});
+
+	it("counts overlapping trims once (union, not sum)", () => {
+		// Trims [2,5] and [3,4] — the second nested in the first — remove 3s total, not 4.
+		// Raw 6 → output 3. The old per-trim accumulation double-counted and returned 2.
+		const trims = [
+			makeTrim({ id: "t1", startSec: 2, endSec: 5 }),
+			makeTrim({ id: "t2", startSec: 3, endSec: 4 }),
+		];
+		expect(projectRawTimelineSecToPlayback([clip], trims, [], 6)).toBeCloseTo(3, 6);
+	});
+
+	it("removes a raw gap between clips (concatenated, like the programme)", () => {
+		// Clip A ends at raw 10; clip B starts at raw 15 — a 5s gap with no content. The
+		// programme concatenates B straight after A, so raw 20 (5s into B) → output 15, NOT 20.
+		const clipA = makeClip({
+			id: "clip_a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const clipB = makeClip({
+			id: "clip_b",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 15,
+			timelineEndSec: 25,
+		});
+		expect(projectRawTimelineSecToPlayback([clipA, clipB], [], [], 20)).toBeCloseTo(15, 6);
+	});
+
+	it("compresses a position after a 2x stretch by what the picture lost", () => {
+		// A 2x region over raw 2..6 turns 4s of source into 2s of programme, so raw 8 —
+		// which is 2s past the stretch — lands at output 6, not 8. Without this an audio
+		// region placed after a sped-up stretch played 2s late in the export.
+		const speed = [
+			{ startMs: 2000, endMs: 6000, speed: 2, clipId: clip.id, sourceStartSec: 2, sourceEndSec: 6 },
+		];
+		expect(projectRawTimelineSecToPlayback([clip], [], speed, 8)).toBeCloseTo(6, 6);
+	});
+
+	it("stretches a position after a 0.5x region by what the picture gained", () => {
+		const speed = [
+			{
+				startMs: 2000,
+				endMs: 6000,
+				speed: 0.5,
+				clipId: clip.id,
+				sourceStartSec: 2,
+				sourceEndSec: 6,
+			},
+		];
+		// 4s of source becomes 8s of programme, so raw 8 lands at output 12.
+		expect(projectRawTimelineSecToPlayback([clip], [], speed, 8)).toBeCloseTo(12, 6);
+	});
+
+	it("integrates speed only over the part of the region the playhead has passed", () => {
+		const speed = [
+			{ startMs: 2000, endMs: 6000, speed: 2, clipId: clip.id, sourceStartSec: 2, sourceEndSec: 6 },
+		];
+		// Raw 4 is halfway through the stretch: 2s at 1x + 2s at 2x = output 3.
+		expect(projectRawTimelineSecToPlayback([clip], [], speed, 4)).toBeCloseTo(3, 6);
+	});
+
+	it("ignores a speed region anchored to a different clip", () => {
+		const speed = [
+			{
+				startMs: 2000,
+				endMs: 6000,
+				speed: 2,
+				clipId: "someone_else",
+				sourceStartSec: 2,
+				sourceEndSec: 6,
+			},
+		];
+		expect(projectRawTimelineSecToPlayback([clip], [], speed, 8)).toBeCloseTo(8, 6);
+	});
+
+	it("applies trims and speed together, in that order", () => {
+		// Cut raw 2..4, then run raw 4..8 at 2x. Raw 9 → 2s kept at 1x, then 4s of source
+		// at 2x (=2s), then 1s at 1x = output 5.
+		const speed = [
+			{ startMs: 4000, endMs: 8000, speed: 2, clipId: clip.id, sourceStartSec: 4, sourceEndSec: 8 },
+		];
+		expect(projectRawTimelineSecToPlayback([clip], [trim], speed, 9)).toBeCloseTo(5, 6);
+	});
+
+	it("sums cuts across multiple clips", () => {
+		const clipA = makeClip({
+			id: "clip_a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const clipB = makeClip({
+			id: "clip_b",
+			sourceStartSec: 10,
+			sourceEndSec: 20,
+			timelineStartSec: 10,
+			timelineEndSec: 20,
+		});
+		// Remove 1s from clip A (raw 5..6) and 2s from clip B (raw 12..14) → 3s total.
+		const trims = [
+			makeTrim({ id: "t1", startSec: 5, endSec: 6 }),
+			makeTrim({ id: "t2", startSec: 12, endSec: 14 }),
+		];
+		// Raw 18 is past both cuts (3s removed) → output 15.
+		expect(projectRawTimelineSecToPlayback([clipA, clipB], trims, [], 18)).toBeCloseTo(15, 6);
+	});
+});
+
+describe("removeClip and orphaned audio assets", () => {
+	it("collects an audio asset whose last region went with the deleted clip", () => {
+		// Deleting a clip drops the regions anchored to it without going through
+		// `removeRegion`, so the collection has to run here too or the asset is left
+		// behind: invisible in every list, and re-serialised on every save.
+		const clip = makeClip({
+			id: "clip_a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const doc = makeDoc({
+			assets: [
+				{
+					id: "audio_1",
+					kind: "audio",
+					label: "bed.mp3",
+					originalPath: "/bed.mp3",
+					cameraTrack: null,
+				},
+			],
+			timeline: { ...makeDoc().timeline, clips: [clip] },
+			audioRanges: [
+				{
+					id: "audio_r1",
+					startMs: 0,
+					endMs: 5000,
+					clipId: "clip_a",
+					sourceStartSec: 0,
+					sourceEndSec: 5,
+					audioAssetId: "audio_1",
+					kind: "music",
+					offsetSec: 0,
+					gainDb: 0,
+					origin: "user",
+				},
+			],
+		});
+		const after = removeClip(doc, "clip_a");
+		expect(after.audioRanges).toEqual([]);
+		expect(after.assets.some((a) => a.id === "audio_1")).toBe(false);
+	});
+
+	it("keeps the asset while another region still plays it", () => {
+		const clipA = makeClip({
+			id: "clip_a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const clipB = makeClip({
+			id: "clip_b",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 10,
+			timelineEndSec: 20,
+		});
+		const audioRegion = (id: string, clipId: string) => ({
+			id,
+			startMs: 0,
+			endMs: 5000,
+			clipId,
+			sourceStartSec: 0,
+			sourceEndSec: 5,
+			audioAssetId: "audio_1",
+			kind: "music" as const,
+			offsetSec: 0,
+			gainDb: 0,
+			origin: "user" as const,
+		});
+		const doc = makeDoc({
+			assets: [
+				{
+					id: "audio_1",
+					kind: "audio",
+					label: "bed.mp3",
+					originalPath: "/bed.mp3",
+					cameraTrack: null,
+				},
+			],
+			timeline: { ...makeDoc().timeline, clips: [clipA, clipB] },
+			audioRanges: [audioRegion("a1", "clip_a"), audioRegion("a2", "clip_b")],
+		});
+		const after = removeClip(doc, "clip_a");
+		expect(after.assets.some((a) => a.id === "audio_1")).toBe(true);
 	});
 });
 

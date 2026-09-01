@@ -1496,6 +1496,43 @@
 	border-color: #a855f7;
 	background: rgba(168, 85, 247, 0.14);
 }
+/* Imported audio (issue #350). Two distinct hues so a voiceover reads apart from a
+   music bed at a glance, both apart from the effect pills, and both taller than a
+   lane pill so the waveform inside is legible. */
+.laneVoiceover {
+	border-color: #f59e0b;
+	background: rgba(245, 158, 11, 0.16);
+	height: 30px;
+	top: 1px;
+	cursor: pointer;
+}
+.laneVoiceover:active {
+	cursor: pointer;
+}
+.laneAudio {
+	border-color: #14b8a6;
+	background: rgba(20, 184, 166, 0.16);
+	height: 30px;
+	top: 1px;
+	cursor: pointer;
+}
+.laneAudio:active {
+	cursor: pointer;
+}
+/* The label rides above the waveform (which is inset:0 behind it). */
+.laneAudioLabel {
+	position: relative;
+	z-index: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+}
+/* The audio lane is taller than the effect lanes to give the waveform room. */
+.tlLaneAudio {
+	height: 32px;
+}
 .tlClips {
 	position: relative;
 	/* NOT a flex row. Clips are absolutely positioned by percentage of the

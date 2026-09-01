@@ -327,5 +327,15 @@
 		"outputGain": "Nível de saída",
 		"reset": "Redefinir áudio",
 		"help": "Ajuste o nível de saída do áudio. Ele se aplica da mesma forma na prévia e na exportação."
+	},
+	"audioTrack": {
+		"add": "Adicionar música",
+		"addVoiceover": "Adicionar narração",
+		"defaultLabel": "Áudio",
+		"importFailed": "Não foi possível adicionar o áudio",
+		"lane": "Faixa",
+		"music": "Música",
+		"remove": "Excluir áudio",
+		"voiceover": "Narração"
 	}
 }

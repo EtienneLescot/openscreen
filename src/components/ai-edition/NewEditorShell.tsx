@@ -327,7 +327,12 @@ export function NewEditorShell() {
 		};
 	}, [promptUnsaved, saveDocument]);
 
-	const videoSources = useMemo(() => {
+	// Every asset with a resolvable URL, split below. It is deliberately NOT handed to
+	// anything as-is: `videoSources` reaching a consumer that treats its entries as
+	// footage is how an imported mp3 became a timeline clip (an audio-only project has no
+	// `primaryAssetId`, and both `handleLoadedMetadata` and `replaceTimeline` fall back to
+	// `assets[0]`, which the preview had already mounted as a <video>).
+	const mediaSources = useMemo(() => {
 		if (!document) return [];
 		return document.assets.map((asset) => ({
 			id: asset.id,
@@ -340,8 +345,20 @@ export function NewEditorShell() {
 				? asset.originalPath
 				: toFileUrl(asset.originalPath),
 			label: asset.label,
+			kind: asset.kind,
 		}));
 	}, [document]);
+
+	/** Footage only — what the preview decodes and what a clip can be made of. */
+	const videoSources = useMemo(
+		() => mediaSources.filter((source) => source.kind !== "audio").map(({ kind: _k, ...s }) => s),
+		[mediaSources],
+	);
+	/** Imported audio only — resolved per region by `audioAssetId` in VirtualPreview. */
+	const audioSources = useMemo(
+		() => mediaSources.filter((source) => source.kind === "audio").map(({ kind: _k, ...s }) => s),
+		[mediaSources],
+	);
 
 	const handleLoadedMetadata = useCallback(
 		(durationSec: number, assetId: string) => {
@@ -427,7 +444,15 @@ export function NewEditorShell() {
 	const handleDropAsset = useCallback(
 		(assetId: string) =>
 			enqueueTimelineWrite(() => {
-				const at = useProjectStore.getState().document?.timeline.clips.length ?? 0;
+				const doc = useProjectStore.getState().document;
+				// An audio asset has no video, so it must never become a clip (issue #350) —
+				// it goes on an audio lane as a region. Adding it "to the timeline" is a
+				// no-op when it is already placed, so the same file can't stack up copies.
+				if (doc?.assets.find((a) => a.id === assetId)?.kind === "audio") {
+					if (doc.audioRanges.some((r) => r.audioAssetId === assetId)) return Promise.resolve();
+					return tl.addAudioRegion(assetId).then(() => undefined);
+				}
+				const at = doc?.timeline.clips.length ?? 0;
 				return tl.insertClipAt(assetId, at);
 			}).catch((error) => {
 				toast.error(te("mediaStage.couldNotAddAsset"), {
@@ -771,8 +796,6 @@ export function NewEditorShell() {
 	}, []);
 
 	const pasteRegion = useCallback(async () => {
-		const doc = useProjectStore.getState().document;
-		if (!doc) return;
 		const { pasteClipboard } = await import("@/lib/ai-edition/store/regionClipboard");
 		const snapshot = pasteClipboard();
 		if (!snapshot) return;
@@ -789,60 +812,80 @@ export function NewEditorShell() {
 		const { anchorRegionsWithDerivedMs } = await import("@/lib/ai-edition/timeline/timelineMap");
 		const { createId } = await import("@/lib/ai-edition/document/ids");
 
-		// Land it at the playhead, keeping the copied length.
-		const timeMs = Math.round(useProjectStore.getState().currentTimeSec * 1000);
-		const src = snapshot.region as { startMs: number; endMs: number };
-		const prefix = snapshot.kind === "annotation" ? "ann" : snapshot.kind;
-		const pasted = {
-			...snapshot.region,
-			id: createId(prefix),
-			startMs: timeMs,
-			endMs: timeMs + (Number(src.endMs) - Number(src.startMs)),
-		};
-		// Anchor to the clip(s) it covers, exactly like every add* does. Pasting
-		// used to store a bare startMs/endMs, so the region survived until the
-		// first clip reorder or trim and then drifted off its content — see
-		// technical-documentation/architecture/timeline-model.md.
-		const anchored = anchorRegionsWithDerivedMs(
-			[pasted as unknown as { id: string; startMs: number; endMs: number }],
-			doc.timeline.clips,
-			() => createId(prefix),
-		);
+		// The document and the playhead are read INSIDE the enqueue chain, not before
+		// the imports above: those are awaits, and an edit completing during one would
+		// otherwise be overwritten by the spread of the stale snapshot below — the same
+		// read-modify-write race `handleDropAsset` queues against.
+		await enqueueTimelineWrite(async () => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const timeMs = Math.round(useProjectStore.getState().currentTimeSec * 1000);
+			const src = snapshot.region as { startMs: number; endMs: number };
+			const prefix = snapshot.kind === "annotation" ? "ann" : snapshot.kind;
+			const pasted = {
+				...snapshot.region,
+				id: createId(prefix),
+				startMs: timeMs,
+				endMs: timeMs + (Number(src.endMs) - Number(src.startMs)),
+			};
+			// Anchor to the clip(s) it covers, exactly like every add* does. Pasting
+			// used to store a bare startMs/endMs, so the region survived until the
+			// first clip reorder or trim and then drifted off its content — see
+			// technical-documentation/architecture/timeline-model.md.
+			const anchored = anchorRegionsWithDerivedMs(
+				[pasted as unknown as { id: string; startMs: number; endMs: number }],
+				doc.timeline.clips,
+				() => createId(prefix),
+			);
 
-		if (snapshot.kind === "zoom") {
-			await saveDocument(
-				{
-					...doc,
-					zoomRanges: [...doc.zoomRanges, ...anchored] as typeof doc.zoomRanges,
-				},
-				{ history: true },
-			);
-		} else if (snapshot.kind === "annotation") {
-			await saveDocument(
-				{
-					...doc,
-					annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
-				},
-				{ history: true },
-			);
-		} else {
-			// speed and cameraFullscreen are both plain spans on legacyEditor.
-			const key = snapshot.kind === "speed" ? "speedRegions" : "cameraFullscreenRegions";
-			const legacy = (doc.legacyEditor as Record<string, unknown>) ?? {};
-			const prev = (legacy[key] as unknown[]) ?? [];
-			await saveDocument(
-				{
-					...doc,
-					legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
-				},
-				{ history: true },
-			);
-		}
-		toast.success("Region pasted");
+			// saveDocument resolves false (rather than rejecting) when the write fails —
+			// the failure is already reported by the store, so the only job left is to
+			// not claim a paste that did not land.
+			let saved = false;
+			if (snapshot.kind === "zoom") {
+				saved = await saveDocument(
+					{
+						...doc,
+						zoomRanges: [...doc.zoomRanges, ...anchored] as typeof doc.zoomRanges,
+					},
+					{ history: true },
+				);
+			} else if (snapshot.kind === "audio") {
+				saved = await saveDocument(
+					{
+						...doc,
+						audioRanges: [...doc.audioRanges, ...anchored] as typeof doc.audioRanges,
+					},
+					{ history: true },
+				);
+			} else if (snapshot.kind === "annotation") {
+				saved = await saveDocument(
+					{
+						...doc,
+						annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
+					},
+					{ history: true },
+				);
+			} else {
+				// speed and cameraFullscreen are both plain spans on legacyEditor.
+				const key = snapshot.kind === "speed" ? "speedRegions" : "cameraFullscreenRegions";
+				const legacy = (doc.legacyEditor as Record<string, unknown>) ?? {};
+				const prev = (legacy[key] as unknown[]) ?? [];
+				saved = await saveDocument(
+					{
+						...doc,
+						legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
+					},
+					{ history: true },
+				);
+			}
+			if (!saved) return;
+			toast.success("Region pasted");
+		});
 		// `tl` belongs here now that the trim branch calls tl.addTrim: useTimeline
 		// returns a fresh object each render, so memoizing on saveDocument alone
 		// would paste through a callback holding a stale document.
-	}, [saveDocument, tl]);
+	}, [enqueueTimelineWrite, saveDocument, tl]);
 
 	// Copy the SELECTED pill. Reads the same arrays the lanes render, so what gets
 	// copied is what the user is looking at — the old version dug into the raw
@@ -877,7 +920,9 @@ export function NewEditorShell() {
 					? tl.annotationRegions
 					: sel.kind === "speed"
 						? tl.speedRegions
-						: tl.cameraFullscreenRegions;
+						: sel.kind === "audio"
+							? tl.audioRegions
+							: tl.cameraFullscreenRegions;
 		const region = (source as Array<{ id: string }>).find((r) => r.id === sel.id);
 		if (!region) return;
 		copyRegion({ kind: sel.kind, region: region as unknown as Record<string, unknown> });
@@ -1030,6 +1075,19 @@ export function NewEditorShell() {
 			if (matchesShortcut(e, shortcuts.addAnnotation, isMac)) {
 				e.preventDefault();
 				void tl.addAnnotation(newRegionDurationSec());
+				return;
+			}
+			// Unlike their neighbours these open a file picker rather than dropping a region
+			// at the playhead: the file's own length is the span, so there is nothing to size
+			// and they take no duration (issue #350). Two bindings for two lanes.
+			if (matchesShortcut(e, shortcuts.addAudio, isMac)) {
+				e.preventDefault();
+				void tl.addAudio("music");
+				return;
+			}
+			if (matchesShortcut(e, shortcuts.addVoiceover, isMac)) {
+				e.preventDefault();
+				void tl.addAudio("voiceover");
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addSpeed, isMac)) {
@@ -1235,6 +1293,12 @@ export function NewEditorShell() {
 									hasProject={hasProject}
 									hasAsset={hasAsset}
 									videoSources={videoSources}
+									// Imported audio (issue #350), resolved per region by `audioAssetId`.
+									// A separate list from `videoSources`, not the same one: an audio asset
+									// among the footage is one the preview mounts as a <video> and the
+									// timeline turns into a clip.
+									audioRegions={tl.audioRegions}
+									audioSources={audioSources}
 									clips={clips}
 									zoomRegions={tl.zoomRegions}
 									speedRegions={tl.speedRegions}

@@ -79,6 +79,16 @@
 		"outputGain": "Output level",
 		"reset": "Reset audio"
 	},
+	"audioTrack": {
+		"add": "Add music",
+		"addVoiceover": "Add voiceover",
+		"defaultLabel": "Audio",
+		"importFailed": "Could not add audio",
+		"lane": "Lane",
+		"music": "Music",
+		"remove": "Delete audio",
+		"voiceover": "Voiceover"
+	},
 	"effects": {
 		"title": "Composition",
 		"blurBg": "Blur BG",

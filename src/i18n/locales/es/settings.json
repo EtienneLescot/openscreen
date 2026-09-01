@@ -327,5 +327,15 @@
 		"outputGain": "Ajuste de salida",
 		"reset": "Restablecer audio",
 		"help": "Ajusta el nivel de salida del audio. Se aplica igual en la vista previa y en la exportación."
+	},
+	"audioTrack": {
+		"add": "Añadir música",
+		"addVoiceover": "Añadir voz en off",
+		"defaultLabel": "Audio",
+		"importFailed": "No se pudo añadir el audio",
+		"lane": "Pista",
+		"music": "Música",
+		"remove": "Eliminar audio",
+		"voiceover": "Voz en off"
 	}
 }

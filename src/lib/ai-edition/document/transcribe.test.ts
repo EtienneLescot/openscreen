@@ -49,6 +49,7 @@ function makeDoc(): AxcutDocument {
 		},
 		annotations: [],
 		zoomRanges: [],
+		audioRanges: [],
 		legacyEditor: null,
 	};
 }
