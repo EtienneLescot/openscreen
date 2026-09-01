@@ -30,9 +30,13 @@ import {
 } from "@/lib/ai-edition/captions";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
-import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
+import {
+	type AnchoredSpeedRegion,
+	resolvePlaybackSegments,
+} from "@/lib/ai-edition/document/timeline";
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
+import { placeAudioRegions } from "@/lib/ai-edition/timeline/audio-placement";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
@@ -412,6 +416,31 @@ export interface SceneDescription {
 		gainDb: number;
 	};
 	/**
+	 * Imported audio (issue #350), mixed over the assembled programme by
+	 * `audio::mix_external_tracks`. ONE ENTRY PER FRAGMENT, not per pill: a region the
+	 * user drew across a cut is stored as one fragment per clip, and each gets its own
+	 * mixer entry with its own window into the file.
+	 *
+	 * Every field is resolved by `placeAudioRegions` (timeline/audio-placement.ts), which
+	 * the preview reads too — the two cannot drift. `startSec` is the head on the OUTPUT
+	 * programme: the fragment's raw ruler position projected through the trims AND the
+	 * speed regions, so a cut or a 2× stretch ahead of it pulls it earlier by exactly what
+	 * the picture lost. `trimStartSec`/`trimEndSec` window the file; they are always
+	 * concrete (the compositor preallocates its decode window from them) and clamped to
+	 * the asset's real duration.
+	 *
+	 * The media itself always plays at 1×: a speed region stretches CLIP pcm, never an
+	 * imported file — a voiceover pitched up under a 2× stretch is not what anyone means
+	 * by speeding up a screen recording.
+	 */
+	audioTracks: Array<{
+		path: string;
+		startSec: number;
+		gainDb: number;
+		trimStartSec: number;
+		trimEndSec: number;
+	}>;
+	/**
 	 * Per-clip screen crop (fractions of the frame), or null for the identity
 	 * (full-frame) crop. One entry per clip in the same order as `clips`, so a
 	 * clip that owns its own cropRegion is rendered with that crop and a clip
@@ -487,6 +516,56 @@ export function buildSceneDescription(
 	const settings = getEditorSettings(document);
 
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
+	// Audio regions (issue #350) → the compositor's mix list, one entry per FRAGMENT.
+	// `placeAudioRegions` is the single projection the preview reads too, so what the
+	// editor plays and what `mix_external_tracks` writes cannot drift: it walks each
+	// pill's fragments left to right on the OUTPUT clock, advancing the in-point by the
+	// output length of each, which is what stops a bed restarting at every cut.
+	//
+	// Project onto the SAME clips the programme is assembled from. `resolveVisibleClips`
+	// (below) drops clips whose asset has no resolvable `originalPath`; walking the full
+	// `document.timeline.clips` would count a relinked-away clip the programme does not,
+	// landing every following region past the real programme end.
+	const projectedClips = document.timeline.clips.filter(
+		(clip) => assetById.get(clip.assetId)?.originalPath,
+	);
+	const audioSpeedRegions =
+		((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as
+			| AnchoredSpeedRegion[]
+			| undefined) ?? [];
+	const audioTracks = placeAudioRegions(
+		document.audioRanges,
+		projectedClips,
+		document.timeline.trimRanges,
+		audioSpeedRegions,
+	).flatMap((placement) => {
+		const asset = assetById.get(placement.audioAssetId);
+		// A region whose asset or path is missing is dropped rather than sent path-less.
+		if (!asset?.originalPath) return [];
+		// The compositor preallocates its decode window from `trimEndSec`, so it must be
+		// concrete — and it must not run past the file, or the decode window is a promise
+		// the mixer cannot keep.
+		//
+		// Non-positive is UNKNOWN, not "zero seconds long". A failed probe leaves
+		// `durationSec` at 0 (which is why `useTimeline` re-probes on load), and `??` only
+		// catches null: clamping to 0 collapsed the window and dropped the region from the
+		// export entirely — silently, on the one file whose length we could not read.
+		const knownDuration =
+			asset.durationSec != null && asset.durationSec > 0 ? asset.durationSec : null;
+		const fileEnd = knownDuration ?? placement.sourceOutSec;
+		const trimStartSec = Math.min(placement.sourceInSec, fileEnd);
+		const trimEndSec = Math.min(placement.sourceOutSec, fileEnd);
+		if (!(trimEndSec > trimStartSec)) return [];
+		return [
+			{
+				path: asset.originalPath,
+				startSec: placement.outputStartSec,
+				gainDb: placement.gainDb,
+				trimStartSec,
+				trimEndSec,
+			},
+		];
+	});
 	const visibleClips = resolveVisibleClips(document);
 	const clips: CompositorClipInput[] = visibleClips.flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);
@@ -821,6 +900,7 @@ export function buildSceneDescription(
 		audio: {
 			gainDb: settings.audioGainDb,
 		},
+		audioTracks,
 		background: parseWallpaper(settings.wallpaper),
 		zoomRegions: projectedZoomRegions.map((region) => ({
 			id: region.id,

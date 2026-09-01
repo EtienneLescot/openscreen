@@ -42,7 +42,6 @@
 		"step1Title": "1. Add Trim",
 		"step1DescriptionBefore": "Press ",
 		"step1DescriptionAfter": " or click the scissors icon to mark a section for removal.",
-
 		"step2Title": "2. Adjust",
 		"step2Description": "Drag the edges of the red region to cover exactly what you want to cut out."
 	},
@@ -80,11 +79,13 @@
 		"saveGif": "Save Exported GIF",
 		"saveVideo": "Save Exported Video",
 		"selectVideo": "Select Video File",
+		"selectAudio": "Select Audio File",
 		"saveProject": "Save OpenScreen Project",
 		"openProject": "Open OpenScreen Project",
 		"gifImage": "GIF Image",
 		"mp4Video": "MP4 Video",
 		"videoFiles": "Video Files",
+		"audioFiles": "Audio Files",
 		"openscreenProject": "OpenScreen Project",
 		"allFiles": "All Files"
 	}

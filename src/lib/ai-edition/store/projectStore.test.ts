@@ -16,6 +16,17 @@ const toastMocks = vi.hoisted(() => ({
 	error: vi.fn(),
 }));
 
+// Stub only the audio duration probe (issue #350): mounting a real <audio> in
+// jsdom never fires loadedmetadata, so an unmocked probe would block on its
+// timeout. Everything else in the module (probeVideoDimensions) stays real so
+// the video-import tests above are untouched.
+const durationMocks = vi.hoisted(() => ({ probeAudioDuration: vi.fn() }));
+
+vi.mock("../timeline/duration", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../timeline/duration")>()),
+	probeAudioDuration: durationMocks.probeAudioDuration,
+}));
+
 vi.mock("@/native/client", () => ({
 	nativeBridgeClient: {
 		aiEdition: {
@@ -62,6 +73,7 @@ const sampleDoc = {
 	},
 	annotations: [],
 	zoomRanges: [],
+	audioRanges: [],
 	legacyEditor: null,
 };
 
@@ -72,6 +84,7 @@ describe("useProjectStore", () => {
 			mock.mockReset();
 		}
 		toastMocks.error.mockReset();
+		durationMocks.probeAudioDuration.mockReset();
 		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
 		(window as any).electronAPI = { findRecordingCamera: vi.fn() };
 	});
@@ -297,6 +310,113 @@ describe("useProjectStore", () => {
 		expect(toastMocks.error).toHaveBeenCalledTimes(1);
 		expect(toastMocks.error.mock.calls[0][0]).toContain("video.mp4");
 	});
+
+	// Issue #350 — external audio import.
+	it("addAudioAsset passes kind 'audio', skips the camera lookup, and returns the asset", async () => {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		durationMocks.probeAudioDuration.mockResolvedValue(null);
+		const audioDoc = {
+			...sampleDoc,
+			assets: [
+				{ id: "audio_asset", kind: "audio", label: "voiceover.mp3", originalPath: "/tmp/vo.mp3" },
+			],
+		};
+		bridgeMocks.addAsset.mockResolvedValue({ assetId: "audio_asset", document: audioDoc });
+
+		const asset = await useProjectStore.getState().addAudioAsset("/tmp/vo.mp3");
+
+		expect(asset?.id).toBe("audio_asset");
+		expect(asset?.kind).toBe("audio");
+		// The bridge must be told this is an audio import (4th arg).
+		expect(bridgeMocks.addAsset).toHaveBeenCalledWith(
+			"proj_test",
+			"/tmp/vo.mp3",
+			undefined,
+			"audio",
+		);
+		// Audio has no camera sidecar — the lookup that addAsset does must not run.
+		expect(vi.mocked(window.electronAPI.findRecordingCamera)).not.toHaveBeenCalled();
+		// Probe returned null, so nothing to stamp: no extra save.
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+	});
+
+	it("addAudioAsset stamps the probed duration onto the asset", async () => {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		durationMocks.probeAudioDuration.mockResolvedValue(8.25);
+		const audioDoc = {
+			...sampleDoc,
+			assets: [
+				{ id: "audio_asset", kind: "audio", label: "bgm.wav", originalPath: "/tmp/bgm.wav" },
+			],
+		};
+		bridgeMocks.addAsset.mockResolvedValue({ assetId: "audio_asset", document: audioDoc });
+		bridgeMocks.save.mockImplementation((document: unknown) =>
+			Promise.resolve({ success: true, document }),
+		);
+
+		const asset = await useProjectStore.getState().addAudioAsset("/tmp/bgm.wav");
+
+		expect(asset?.durationSec).toBe(8.25);
+		expect(bridgeMocks.save).toHaveBeenCalledTimes(1);
+		expect(useProjectStore.getState().document?.assets[0]?.durationSec).toBe(8.25);
+	});
+
+	it("keeps an edit made while the duration probe was in flight", async () => {
+		// The probe is a real await, and `superseded()` does not cover an ordinary edit:
+		// the write epoch is bumped only by undo / redo / project switch. Building the
+		// duration patch from the pre-await snapshot therefore overwrote whatever the user
+		// did meanwhile — silently, and only on a slow probe.
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		const audioDoc = {
+			...sampleDoc,
+			assets: [
+				{ id: "audio_asset", kind: "audio", label: "bgm.wav", originalPath: "/tmp/bgm.wav" },
+			],
+		};
+		bridgeMocks.addAsset.mockResolvedValue({ assetId: "audio_asset", document: audioDoc });
+		bridgeMocks.save.mockImplementation((document: unknown) =>
+			Promise.resolve({ success: true, document }),
+		);
+		// The user retitles the project while the probe is pending.
+		durationMocks.probeAudioDuration.mockImplementation(async () => {
+			const current = useProjectStore.getState().document;
+			if (current) {
+				useProjectStore.setState({
+					document: { ...current, project: { ...current.project, title: "Renamed" } },
+				});
+			}
+			return 8.25;
+		});
+
+		await useProjectStore.getState().addAudioAsset("/tmp/bgm.wav");
+
+		const after = useProjectStore.getState().document;
+		expect(after?.project.title).toBe("Renamed");
+		expect(after?.assets.find((a) => a.id === "audio_asset")?.durationSec).toBe(8.25);
+	});
+
+	// Placement + selection for imported audio tracks (issue #350).
+	// Placing the region is `useTimeline.addAudioRegion`'s job now, not the store's: the
+	// region model and the pill selection both live there, so the store's audio surface is
+	// down to importing the asset (covered above). See useTimeline.test.ts.
 
 	// The save boundary. Every write in the app funnels through `saveDocument`, and
 	// almost every caller `void`s it from a click handler, so what this function does

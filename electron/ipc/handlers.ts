@@ -186,6 +186,32 @@ function hasAllowedImportVideoExtension(filePath: string): boolean {
 	return ALLOWED_IMPORT_VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
+// Imported audio (issue #350). Kept separate from the video set so the two
+// pickers stay honest — an audio picker must not approve a video path and vice
+// versa. Mirrors SUPPORTED_AUDIO_EXTENSIONS in the document service.
+const ALLOWED_IMPORT_AUDIO_EXTENSIONS = new Set([
+	".mp3",
+	".wav",
+	".m4a",
+	".aac",
+	".flac",
+	".ogg",
+	".opus",
+]);
+
+function hasAllowedImportAudioExtension(filePath: string): boolean {
+	return ALLOWED_IMPORT_AUDIO_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+// Video OR audio. The type-specific pickers stay honest (see the audio set's
+// comment), but the generic media READS — peaks, binary, file-info, chunk — serve
+// whichever kind the document points at, so they must accept both. Gating them on
+// video alone dropped every imported audio path once `approvedPaths` was empty
+// (a project reopen), and the waveform was lost for good (issue #350).
+function hasAllowedImportMediaExtension(filePath: string): boolean {
+	return hasAllowedImportVideoExtension(filePath) || hasAllowedImportAudioExtension(filePath);
+}
+
 function runProcess(
 	command: string,
 	args: string[],
@@ -282,8 +308,13 @@ async function prepareSupplementalPreviewAudioTrack(videoPath: string) {
 	return { success: true, path: pathToFileURL(outputPath).toString() };
 }
 
-async function approveReadableVideoPath(
-	filePath?: string | null,
+// Shared core behind the media path approvers. `hasAllowedExtension` is the ONLY
+// thing that differs between video and audio imports, so it is the single knob:
+// an already-approved path passes regardless, otherwise the extension gate,
+// optional trusted-dir confinement, and a stat check decide whether to approve.
+async function approveReadableMediaPath(
+	filePath: string | null | undefined,
+	hasAllowedExtension: (p: string) => boolean,
 	trustedDirs?: string[],
 ): Promise<string | null> {
 	const normalizedPath = normalizeVideoSourcePath(filePath);
@@ -295,7 +326,7 @@ async function approveReadableVideoPath(
 		return normalizedPath;
 	}
 
-	if (!hasAllowedImportVideoExtension(normalizedPath)) {
+	if (!hasAllowedExtension(normalizedPath)) {
 		return null;
 	}
 
@@ -320,6 +351,29 @@ async function approveReadableVideoPath(
 
 	approveFilePath(normalizedPath);
 	return normalizedPath;
+}
+
+function approveReadableVideoPath(
+	filePath?: string | null,
+	trustedDirs?: string[],
+): Promise<string | null> {
+	return approveReadableMediaPath(filePath, hasAllowedImportVideoExtension, trustedDirs);
+}
+
+function approveReadableAudioPath(
+	filePath?: string | null,
+	trustedDirs?: string[],
+): Promise<string | null> {
+	return approveReadableMediaPath(filePath, hasAllowedImportAudioExtension, trustedDirs);
+}
+
+// For the generic media reads that accept either kind — NOT for the pickers,
+// which must stay type-specific (see `hasAllowedImportMediaExtension`).
+function approveReadableAvPath(
+	filePath?: string | null,
+	trustedDirs?: string[],
+): Promise<string | null> {
+	return approveReadableMediaPath(filePath, hasAllowedImportMediaExtension, trustedDirs);
 }
 
 function resolveRecordingOutputPath(fileName: string): string {
@@ -3590,6 +3644,8 @@ export function registerIpcHandlers(
 		}
 	});
 
+	// The media tab imports VIDEO (it arranges clips). Audio is imported from the
+	// timeline toolbar instead (issue #350) — see `open-audio-file-picker` below.
 	ipcMain.handle("open-video-file-picker", async () => {
 		try {
 			const dialogOptions = buildDialogOptions(
@@ -3636,6 +3692,55 @@ export function registerIpcHandlers(
 		}
 	});
 
+	// Import an external audio file (voiceover / BGM / SFX) — issue #350. Driven by
+	// the timeline's "Add audio" tool: audio is a timeline overlay (like an
+	// annotation), not a media-tab clip, so it has its own audio-only picker and the
+	// renderer adds it as a kind:"audio" asset + track at the playhead.
+	ipcMain.handle("open-audio-file-picker", async () => {
+		try {
+			const dialogOptions = buildDialogOptions(
+				{
+					title: mainT("dialogs", "fileDialogs.selectAudio"),
+					defaultPath: RECORDINGS_DIR,
+					filters: [
+						{
+							name: mainT("dialogs", "fileDialogs.audioFiles"),
+							extensions: ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"],
+						},
+						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
+					],
+					properties: ["openFile"],
+				},
+				getMainWindow(),
+			);
+			const result = await dialog.showOpenDialog(dialogOptions);
+
+			if (result.canceled || result.filePaths.length === 0) {
+				return { success: false, canceled: true };
+			}
+
+			const normalizedPath = await approveReadableAudioPath(result.filePaths[0]);
+			if (!normalizedPath) {
+				return {
+					success: false,
+					message: "Selected file is not a supported readable audio file",
+				};
+			}
+
+			return {
+				success: true,
+				path: normalizedPath,
+			};
+		} catch (error) {
+			console.error("Failed to open audio file picker:", error);
+			return {
+				success: false,
+				message: "Failed to open audio file picker",
+				error: String(error),
+			};
+		}
+	});
+
 	ipcMain.handle("reveal-in-folder", async (_, filePath: string) => {
 		try {
 			// showItemInFolder returns nothing, it throws on error
@@ -3661,7 +3766,7 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("read-binary-file", async (_, filePath: string) => {
 		try {
-			const normalizedPath = await approveReadableVideoPath(filePath);
+			const normalizedPath = await approveReadableAvPath(filePath);
 			if (!normalizedPath) {
 				return {
 					success: false,
@@ -3691,7 +3796,7 @@ export function registerIpcHandlers(
 	// recording above that can never be loaded whole — see read-file-chunk).
 	ipcMain.handle("get-readable-file-info", async (_, filePath: string) => {
 		try {
-			const normalizedPath = await approveReadableVideoPath(filePath);
+			const normalizedPath = await approveReadableAvPath(filePath);
 			if (!normalizedPath) {
 				return {
 					success: false,
@@ -3727,7 +3832,7 @@ export function registerIpcHandlers(
 		async (_, filePath: string, durationSec: number): Promise<AudioPeaksResult> => {
 			try {
 				// Same approval gate as every other read of a renderer-supplied path.
-				const normalizedPath = await approveReadableVideoPath(filePath);
+				const normalizedPath = await approveReadableAvPath(filePath);
 				if (!normalizedPath) {
 					return { success: false, message: "File path is not approved" };
 				}
@@ -3751,7 +3856,7 @@ export function registerIpcHandlers(
 	// do (2 GiB cap) and a 16 GB machine cannot hold for multi-GB recordings.
 	ipcMain.handle("read-file-chunk", async (_, filePath: string, offset: number, length: number) => {
 		try {
-			const normalizedPath = await approveReadableVideoPath(filePath);
+			const normalizedPath = await approveReadableAvPath(filePath);
 			if (!normalizedPath) {
 				return {
 					success: false,

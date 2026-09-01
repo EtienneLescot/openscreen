@@ -327,5 +327,15 @@
 		"outputGain": "出力レベル",
 		"reset": "オーディオをリセット",
 		"help": "音声の出力レベルを調整します。プレビューと書き出しで同じように適用されます。"
+	},
+	"audioTrack": {
+		"add": "音楽を追加",
+		"addVoiceover": "ナレーションを追加",
+		"defaultLabel": "オーディオ",
+		"importFailed": "オーディオを追加できませんでした",
+		"lane": "レーン",
+		"music": "音楽",
+		"remove": "オーディオを削除",
+		"voiceover": "ナレーション"
 	}
 }

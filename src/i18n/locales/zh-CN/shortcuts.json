@@ -20,6 +20,8 @@
 		"addTrim": "添加剪辑",
 		"addSpeed": "添加速度",
 		"addAnnotation": "添加标注",
+		"addAudio": "添加音乐",
+		"addVoiceover": "添加旁白",
 		"addKeyframe": "添加关键帧",
 		"addCameraFullscreen": "添加全屏摄像头",
 		"deleteSelected": "删除所选",

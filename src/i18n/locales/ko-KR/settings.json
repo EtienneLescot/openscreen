@@ -327,5 +327,15 @@
 		"outputGain": "출력 레벨",
 		"reset": "오디오 재설정",
 		"help": "오디오 출력 레벨을 조정합니다. 미리보기와 내보내기에 동일하게 적용됩니다."
+	},
+	"audioTrack": {
+		"add": "음악 추가",
+		"addVoiceover": "내레이션 추가",
+		"defaultLabel": "오디오",
+		"importFailed": "오디오를 추가할 수 없습니다",
+		"lane": "레인",
+		"music": "음악",
+		"remove": "오디오 삭제",
+		"voiceover": "내레이션"
 	}
 }

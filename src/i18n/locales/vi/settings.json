@@ -327,5 +327,15 @@
 		"outputGain": "Mức đầu ra",
 		"reset": "Đặt lại âm thanh",
 		"help": "Điều chỉnh mức đầu ra của âm thanh. Nó được áp dụng giống hệt nhau trong bản xem trước và khi xuất."
+	},
+	"audioTrack": {
+		"add": "Thêm nhạc",
+		"addVoiceover": "Thêm lời thuyết minh",
+		"defaultLabel": "Âm thanh",
+		"importFailed": "Không thể thêm âm thanh",
+		"lane": "Rãnh",
+		"music": "Nhạc",
+		"remove": "Xóa âm thanh",
+		"voiceover": "Lời thuyết minh"
 	}
 }

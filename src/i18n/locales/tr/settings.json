@@ -327,5 +327,15 @@
 		"outputGain": "Çıkış seviyesi",
 		"reset": "Sesi sıfırla",
 		"help": "Ses çıkış seviyesini ayarlayın. Önizlemede ve dışa aktarmada aynı şekilde uygulanır."
+	},
+	"audioTrack": {
+		"add": "Müzik ekle",
+		"addVoiceover": "Seslendirme ekle",
+		"defaultLabel": "Ses",
+		"importFailed": "Ses eklenemedi",
+		"lane": "Kanal",
+		"music": "Müzik",
+		"remove": "Sesi sil",
+		"voiceover": "Seslendirme"
 	}
 }

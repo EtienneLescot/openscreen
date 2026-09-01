@@ -327,5 +327,15 @@
 		"outputGain": "输出电平",
 		"reset": "重置音频",
 		"help": "调整音频输出电平。它在预览和导出中的效果完全一致。"
+	},
+	"audioTrack": {
+		"add": "添加音乐",
+		"addVoiceover": "添加旁白",
+		"defaultLabel": "音频",
+		"importFailed": "无法添加音频",
+		"lane": "轨道",
+		"music": "音乐",
+		"remove": "删除音频",
+		"voiceover": "旁白"
 	}
 }

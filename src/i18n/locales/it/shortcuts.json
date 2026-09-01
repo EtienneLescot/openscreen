@@ -20,6 +20,8 @@
 		"addTrim": "Aggiungi taglio",
 		"addSpeed": "Aggiungi velocità",
 		"addAnnotation": "Aggiungi annotazione",
+		"addAudio": "Aggiungi musica",
+		"addVoiceover": "Aggiungi voce fuori campo",
 		"addKeyframe": "Aggiungi fotogramma chiave",
 		"addCameraFullscreen": "Aggiungi Camera a schermo intero",
 		"deleteSelected": "Elimina selezionato",

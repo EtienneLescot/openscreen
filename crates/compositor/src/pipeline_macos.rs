@@ -30,7 +30,7 @@
 //! décodeurs, symétrique.
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, finish_audio,
+    assemble_concatenated_pcm, build_audio_concat_plan, finish_audio, mix_external_tracks,
     AacEncoder, PlanarPcm,
 };
 use crate::audio_jobs::{decode_and_stretch_clip_audio, ClipAudioJobs};
@@ -1078,6 +1078,11 @@ pub fn run_composited_multi(
     // raconte avoir déjà coûté une fois.
     let scene = comp.scene_snapshot();
     let audio_settings = scene.as_ref().map(|scene| scene.audio).unwrap_or_default();
+    // Imported audio tracks (issue #350), cloned out of the borrowed scene.
+    let audio_tracks = scene
+        .as_ref()
+        .map(|scene| scene.audio_tracks.clone())
+        .unwrap_or_default();
     frames = unsafe {
         crate::timeline_walk::walk_composited_timeline(
             clips,
@@ -1146,7 +1151,10 @@ pub fn run_composited_multi(
         let declared_audio: Vec<bool> = clips.iter().map(|clip| clip.has_audio).collect();
         let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
         audio_encoder.encode(
-            &finish_audio(assemble_concatenated_pcm(&clip_pcm, &plan), audio_settings),
+            &finish_audio(
+                mix_external_tracks(assemble_concatenated_pcm(&clip_pcm, &plan), &audio_tracks),
+                audio_settings,
+            ),
             octx,
         )?;
 

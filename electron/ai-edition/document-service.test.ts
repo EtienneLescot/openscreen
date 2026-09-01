@@ -280,6 +280,48 @@ describe("DocumentService", () => {
 			expect(after.project.primaryAssetId).toBe(first.project.primaryAssetId);
 			expect(after.assets).toHaveLength(2);
 		});
+
+		// Issue #350 — external audio import (voiceover / BGM / SFX).
+		it("appends an audio asset without claiming the primary slot", async () => {
+			const doc = await service.createProject("P");
+			const updated = await service.addAsset(doc.project.id, {
+				path: "/tmp/voiceover.mp3",
+				kind: "audio",
+			});
+			expect(updated.assets).toHaveLength(1);
+			expect(updated.assets[0]?.kind).toBe("audio");
+			// An audio-only file must never become the project's primary asset, even
+			// when it is the first file added to an otherwise-empty project.
+			expect(updated.project.primaryAssetId).toBeUndefined();
+		});
+
+		it("keeps the existing video primary when an audio track is added", async () => {
+			const doc = await service.createProject("P");
+			const withVideo = await service.addAsset(doc.project.id, { path: "/tmp/screen.mp4" });
+			const primary = withVideo.project.primaryAssetId;
+			const withAudio = await service.addAsset(doc.project.id, {
+				path: "/tmp/bgm.wav",
+				kind: "audio",
+			});
+			expect(withAudio.project.primaryAssetId).toBe(primary);
+			expect(withAudio.assets).toHaveLength(2);
+		});
+
+		it("rejects unsupported audio extensions", async () => {
+			const doc = await service.createProject("P");
+			await expect(
+				service.addAsset(doc.project.id, { path: "/tmp/clip.mp4", kind: "audio" }),
+			).rejects.toBeInstanceOf(ProjectFileError);
+		});
+
+		it("accepts a video extension under the default kind but not as audio", async () => {
+			const doc = await service.createProject("P");
+			// The same extension routing works in reverse: an .mp3 is fine as audio
+			// but rejected as video (covered above), and an .mp4 is the opposite.
+			await expect(
+				service.addAsset(doc.project.id, { path: "/tmp/a.mp3", kind: "audio" }),
+			).resolves.toBeDefined();
+		});
 	});
 
 	describe("removeAsset", () => {
@@ -361,6 +403,51 @@ describe("DocumentService", () => {
 			expect(primaryId).toBeTruthy();
 			const after = await service.removeAsset(doc.project.id, primaryId ?? "");
 			expect(after.project.primaryAssetId).toBe(b.assets[1]?.id);
+		});
+
+		// Issue #350 — an audio overlay can never be primary.
+		it("passes primary to the next VIDEO asset, never to an audio asset", async () => {
+			const doc = await service.createProject("P");
+			const video = await service.addAsset(doc.project.id, { path: "/tmp/screen.mp4" });
+			await service.addAsset(doc.project.id, { path: "/tmp/music.mp3", kind: "audio" });
+			const primaryId = video.project.primaryAssetId;
+			expect(primaryId).toBeTruthy();
+			// Removing the only video leaves just the audio asset; primary must clear,
+			// not fall to the audio one.
+			const after = await service.removeAsset(doc.project.id, primaryId ?? "");
+			expect(after.project.primaryAssetId).toBeUndefined();
+			expect(after.assets).toHaveLength(1);
+			expect(after.assets[0]?.kind).toBe("audio");
+		});
+
+		it("drops audio regions that played a removed audio asset", async () => {
+			const doc = await service.createProject("P");
+			await service.addAsset(doc.project.id, { path: "/tmp/screen.mp4" });
+			const withAudio = await service.addAsset(doc.project.id, {
+				path: "/tmp/music.mp3",
+				kind: "audio",
+			});
+			const audioId = withAudio.assets.find((a) => a.kind === "audio")?.id ?? "";
+			expect(audioId).toBeTruthy();
+			const withTrack = await service.saveProject({
+				...withAudio,
+				audioRanges: [
+					{
+						id: "audio_1",
+						startMs: 0,
+						endMs: 10_000,
+						audioAssetId: audioId,
+						kind: "music",
+						offsetSec: 0,
+						gainDb: 0,
+						origin: "user",
+					},
+				],
+			});
+			expect(withTrack.audioRanges).toHaveLength(1);
+			const after = await service.removeAsset(doc.project.id, audioId);
+			expect(after.audioRanges).toEqual([]);
+			expect(after.assets.some((a) => a.id === audioId)).toBe(false);
 		});
 
 		it("resequences other assets and rederives their anchored regions", async () => {

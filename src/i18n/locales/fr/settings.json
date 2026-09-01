@@ -327,5 +327,15 @@
 		"outputGain": "Niveau de sortie",
 		"reset": "Réinitialiser l’audio",
 		"help": "Ajustez le niveau de sortie audio. Il s’applique à l’identique dans l’aperçu et à l’export."
+	},
+	"audioTrack": {
+		"add": "Ajouter une musique",
+		"addVoiceover": "Ajouter une voix off",
+		"defaultLabel": "Audio",
+		"importFailed": "Impossible d’ajouter l’audio",
+		"lane": "Piste",
+		"music": "Musique",
+		"remove": "Supprimer l’audio",
+		"voiceover": "Voix off"
 	}
 }

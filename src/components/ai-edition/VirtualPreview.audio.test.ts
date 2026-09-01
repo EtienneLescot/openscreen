@@ -1,3 +1,7 @@
+// Where an imported region actually plays now lives in
+// `timeline/audio-placement.ts` — the one projection the preview and the export share —
+// and is covered by `audio-placement.test.ts`. What remains here is the preview's own
+// audio graph.
 import { describe, expect, it } from "vitest";
 import {
 	applyPreviewAudioSettings,

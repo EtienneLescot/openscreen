@@ -4,6 +4,8 @@ import {
 	Loader2,
 	Maximize2,
 	MessageSquare,
+	Mic,
+	Music,
 	Pencil,
 	Scissors,
 	Sparkles,
@@ -13,6 +15,7 @@ import {
 	ZoomIn,
 } from "lucide-react";
 import {
+	Fragment,
 	memo,
 	type PointerEvent as ReactPointerEvent,
 	useCallback,
@@ -23,7 +26,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { fromFileUrl } from "@/components/video-editor/projectPersistence";
+import { fromFileUrl, toFileUrl } from "@/components/video-editor/projectPersistence";
 import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
@@ -337,12 +340,26 @@ const ClipWaveform = memo(function ClipWaveform({
 
 interface LanePill {
 	id: string;
-	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen";
+	/** Two audio kinds, one region family: `voiceover` and `music` render on their own
+	 *  lanes and never merge or repel each other (their kind is part of the region
+	 *  identity), but both address the document as `RegionKind` "audio". A single lane
+	 *  would make the repel rule forbid a voiceover over a music bed — the arrangement
+	 *  the feature exists for. */
+	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen" | "voiceover" | "music";
 	start: number;
 	end: number;
 	label: string;
 	/** Underlying row ids this pill represents — >1 for a coalesced trim group. */
 	sourceIds: string[];
+	/** Audio pills draw the file's waveform inside the box, windowed to what the pill
+	 *  actually plays. Absent on every other kind, which has no media to show. */
+	waveform?: {
+		url: string | undefined;
+		assetDurationSec: number | undefined;
+		sourceStartSec: number;
+		sourceEndSec: number;
+		gain: number;
+	};
 }
 
 export function V4Timeline({
@@ -509,6 +526,37 @@ export function V4Timeline({
 		label: `${(p.member.customScale ?? ZOOM_DEPTH_SCALES[p.member.depth]).toFixed(2)}×`,
 		sourceIds: p.ids,
 	}));
+	// Audio pills (issue #350) — the same universal merge rule as every lane above, with
+	// the file, the kind, the in-point and the gain all part of the identity, so two beds
+	// from different files (or at different levels) never collapse into one pill.
+	const audioPills = (kind: "voiceover" | "music"): LanePill[] =>
+		coalesceRegionsForRuler(tl.audioRegions.filter((r) => r.kind === kind)).map((p) => {
+			const asset = tl.audioAssets.find((a) => a.id === p.member.audioAssetId);
+			return {
+				id: p.ids[0],
+				kind,
+				start: p.start,
+				end: p.end,
+				label: asset?.label ?? ts("audioTrack.defaultLabel"),
+				sourceIds: p.ids,
+				waveform: {
+					url: asset ? toFileUrl(asset.originalPath) : undefined,
+					assetDurationSec: asset?.durationSec,
+					// The window the pill plays: its in-point, for as long as the pill is.
+					// Approximate across a ventilated pill (each fragment advances the real
+					// in-point), and deliberately so — the waveform is an aid to placement,
+					// not the projection the mixer reads.
+					sourceStartSec: p.member.offsetSec,
+					sourceEndSec: p.member.offsetSec + (p.end - p.start),
+					// Track gain AND the project output gain — `finish_audio` applies both and
+					// clamps, so scaling by the track gain alone under-reads a boosted output.
+					gain: audioGainScalar(p.member.gainDb) * audioGainScalar(settings.audioGainDb),
+				},
+			};
+		});
+	const voiceoverPills = audioPills("voiceover");
+	const musicPills = audioPills("music");
+
 	// trims: content-free (no per-instance text/settings), so touching rows —
 	// inevitable once a trim is ventilated across a clip boundary — are
 	// coalesced into one pill. This is what makes growing a trim across a
@@ -657,16 +705,23 @@ export function V4Timeline({
 		end: number;
 	} | null>(null);
 
-	// Drag a lane pill to move it (mode "move", keeps duration) or resize one
-	// edge (mode "l"/"r"). Zoom/speed/annotation are timeline-ms; trims map
-	// back to source-seconds through their carrying clip.
+	// The one door for "this pill is the thing I mean", called by both the pointer and the
+	// keyboard. Voiceover and music are two LANES of one region family: the document knows
+	// them as "audio" and the payload's own `kind` tells the lanes apart, so selection,
+	// Delete, copy/paste and multi-select all key off the document kind and need no
+	// audio-specific branch of their own. Mapping it HERE rather than in the drag is what
+	// makes that true of the keyboard path too.
 	const selectPill = useCallback(
 		(pill: LanePill, additive: boolean) => {
-			tl.selectRegion(pill.kind, pill.id, { additive });
+			const regionKind = pill.kind === "voiceover" || pill.kind === "music" ? "audio" : pill.kind;
+			tl.selectRegion(regionKind, pill.id, { additive });
 		},
 		[tl],
 	);
 
+	// Drag a lane pill to move it (mode "move", keeps duration) or resize one
+	// edge (mode "l"/"r"). Zoom/speed/annotation are timeline-ms; trims map
+	// back to source-seconds through their carrying clip.
 	const startPillDrag = useCallback(
 		(e: ReactPointerEvent, pill: LanePill, dragMode: "move" | "l" | "r") => {
 			e.preventDefault();
@@ -724,6 +779,12 @@ export function V4Timeline({
 					await tl.updateAnnotationSpan(pill.id, s * 1000, en * 1000);
 				else if (pill.kind === "cameraFullscreen")
 					await tl.updateCameraFullscreenSpan(pill.id, s * 1000, en * 1000);
+				// `dragMode` matters here and nowhere else: dragging an audio pill's LEFT edge
+				// trims its in-point (the media stays where it is in time), while moving the
+				// body carries the media with it. Every other kind holds a value over a span,
+				// so which edge you grabbed changes nothing about what it plays.
+				else if (pill.kind === "voiceover" || pill.kind === "music")
+					await tl.updateAudioSpan(pill.id, s * 1000, en * 1000, dragMode);
 				else {
 					// Trims are stored in source-time per asset but manipulated on the
 					// timeline like every other pill. Ventilate the new span across the
@@ -908,7 +969,11 @@ export function V4Timeline({
 					? styles.laneTrim
 					: kind === "cameraFullscreen"
 						? styles.laneCameraFullscreen
-						: styles.laneZoom;
+						: kind === "voiceover"
+							? styles.laneVoiceover
+							: kind === "music"
+								? styles.laneAudio
+								: styles.laneZoom;
 	const pillIcon = (kind: LanePill["kind"]) =>
 		kind === "annotation" ? (
 			<MessageSquare size={11} />
@@ -918,6 +983,10 @@ export function V4Timeline({
 			<Scissors size={11} />
 		) : kind === "cameraFullscreen" ? (
 			<Maximize2 size={11} />
+		) : kind === "voiceover" ? (
+			<Mic size={11} />
+		) : kind === "music" ? (
+			<Music size={11} />
 		) : (
 			<ZoomIn size={11} />
 		);
@@ -1185,6 +1254,17 @@ export function V4Timeline({
 				}
 				title={p.label}
 			>
+				{/* `.tlWave` is inset:0, so it paints behind the label here exactly as it does
+				    inside a clip. Only audio pills carry one. */}
+				{p.waveform ? (
+					<ClipWaveform
+						videoUrl={p.waveform.url}
+						assetDurationSec={p.waveform.assetDurationSec}
+						sourceStartSec={p.waveform.sourceStartSec}
+						sourceEndSec={p.waveform.sourceEndSec}
+						gain={p.waveform.gain}
+					/>
+				) : null}
 				{seg.interactive ? (
 					<span
 						className={styles.lanePillHandle}
@@ -1355,23 +1435,48 @@ export function V4Timeline({
 						</Popover>
 						<span className={styles.tlToolSep} aria-hidden />
 						{tools.map((tool) => (
-							<button
-								type="button"
-								key={tool.id}
-								className={styles.tlToolBtn}
-								title={tool.label}
-								aria-label={tool.label}
-								onClick={() => {
-									// Read at CLICK time: a render-time value would be one zoom
-									// notch stale when the user zooms and immediately creates.
-									const dur = newRegionDurationSec();
-									if (tool.id === "speed") void tl.addSpeed(dur);
-									if (tool.id === "comment") void tl.addAnnotation(dur);
-									if (tool.id === "cut") void tl.addTrim(dur);
-								}}
-							>
-								{tool.icon}
-							</button>
+							<Fragment key={tool.id}>
+								<button
+									type="button"
+									className={styles.tlToolBtn}
+									title={tool.label}
+									aria-label={tool.label}
+									onClick={() => {
+										// Read at CLICK time: a render-time value would be one zoom
+										// notch stale when the user zooms and immediately creates.
+										const dur = newRegionDurationSec();
+										if (tool.id === "speed") void tl.addSpeed(dur);
+										if (tool.id === "comment") void tl.addAnnotation(dur);
+										if (tool.id === "cut") void tl.addTrim(dur);
+									}}
+								>
+									{tool.icon}
+								</button>
+								{/* Add voiceover / Add music sit right after Add annotation (issue #350).
+								    Two buttons because they land on two lanes; both open the same picker. */}
+								{tool.id === "comment" ? (
+									<>
+										<button
+											type="button"
+											className={styles.tlToolBtn}
+											title={ts("audioTrack.addVoiceover")}
+											aria-label={ts("audioTrack.addVoiceover")}
+											onClick={() => void tl.addAudio("voiceover")}
+										>
+											<Mic size={15} />
+										</button>
+										<button
+											type="button"
+											className={styles.tlToolBtn}
+											title={ts("audioTrack.add")}
+											aria-label={ts("audioTrack.add")}
+											onClick={() => void tl.addAudio("music")}
+										>
+											<Music size={15} />
+										</button>
+									</>
+								) : null}
+							</Fragment>
 						))}
 						<button
 							type="button"
@@ -1506,6 +1611,16 @@ export function V4Timeline({
 										cameraFullscreenPills,
 										hasAnyCamera ? t("hints.pressCameraFullscreen") : ts("layout.noWebcam"),
 									)}
+								</div>
+								{/* Imported audio (issue #350). Two lanes, one per kind, always shown like
+								    every other lane — an empty lane advertises the shortcut that fills it.
+								    Voiceover and music are separate lanes so one can sit over the other:
+								    same-lane pills of different identities repel, across lanes they do not. */}
+								<div className={`${styles.tlLane} ${styles.tlLaneAudio}`}>
+									{renderPills(voiceoverPills, t("hints.pressVoiceover"))}
+								</div>
+								<div className={`${styles.tlLane} ${styles.tlLaneAudio}`}>
+									{renderPills(musicPills, t("hints.pressAudio"))}
 								</div>
 							</>
 						) : null}

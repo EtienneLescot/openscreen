@@ -15,8 +15,10 @@
 		"pressZoom": "Z를 눌러 줌 추가",
 		"pressTrim": "T를 눌러 트림 추가",
 		"pressAnnotation": "A를 눌러 주석 추가",
+		"pressAudio": "M 키를 눌러 음악 추가",
 		"pressSpeed": "S를 눌러 속도 추가",
-		"pressCameraFullscreen": "C를 눌러 전체 화면 카메라 구간을 추가하세요"
+		"pressCameraFullscreen": "C를 눌러 전체 화면 카메라 구간을 추가하세요",
+		"pressVoiceover": "V 키를 눌러 내레이션 추가"
 	},
 	"labels": {
 		"pan": "이동",

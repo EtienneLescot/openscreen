@@ -20,6 +20,7 @@ const probeVideoDurationMock = vi.hoisted(() => vi.fn());
 const probeVideoDimensionsMock = vi.hoisted(() =>
 	vi.fn().mockResolvedValue({ width: 1920, height: 1080 }),
 );
+const probeAudioDurationMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const toastErrorMock = vi.hoisted(() => vi.fn());
 
 vi.mock("sonner", () => ({ toast: { error: toastErrorMock } }));
@@ -30,6 +31,7 @@ vi.mock("../timeline/duration", async (importOriginal) => {
 		...actual,
 		probeVideoDuration: probeVideoDurationMock,
 		probeVideoDimensions: probeVideoDimensionsMock,
+		probeAudioDuration: probeAudioDurationMock,
 	};
 });
 
@@ -110,6 +112,7 @@ const sampleDoc: AxcutDocument = {
 	},
 	annotations: [],
 	zoomRanges: [],
+	audioRanges: [],
 	legacyEditor: null,
 };
 
@@ -1283,5 +1286,289 @@ describe("useTimeline drag snapshots", () => {
 			expect(undo()).toBe(true);
 		});
 		expect(useProjectStore.getState().document?.annotations[0].content).toBe("before");
+	});
+});
+
+// Issue #350 — audio regions. The hook routes them through the same anchor/pill helpers
+// as every other kind (unit-tested in timelineMap / audio-placement); these cover the
+// wiring: asset lookup, playhead placement, the pill-wide payload patch, and undo.
+describe("useTimeline audio regions", () => {
+	const audioDoc: AxcutDocument = {
+		...sampleDoc,
+		assets: [
+			...sampleDoc.assets,
+			{
+				id: "audio_1",
+				kind: "audio",
+				label: "voiceover.mp3",
+				originalPath: "/tmp/vo.mp3",
+				durationSec: 30,
+				cameraTrack: null,
+			},
+		],
+	};
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		clearHistory();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		probeAudioDurationMock.mockReset();
+		probeAudioDurationMock.mockResolvedValue(null);
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: audioDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+			currentTimeSec: 4,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("addAudioRegion places an anchored region at the playhead and selects it", async () => {
+		const { result } = renderTimeline();
+		let id: string | null = null;
+		await act(async () => {
+			id = await result.current.addAudioRegion("audio_1", { kind: "voiceover" });
+		});
+		const regions = useProjectStore.getState().document?.audioRanges ?? [];
+		expect(regions).toHaveLength(1);
+		expect(id).toBe(regions[0]?.id);
+		expect(regions[0]).toMatchObject({
+			audioAssetId: "audio_1",
+			kind: "voiceover",
+			startMs: 4000,
+			offsetSec: 0,
+		});
+		// Anchored on the way in, like every other add — this is what makes it survive a
+		// reorder instead of sitting still while the content slides underneath it.
+		expect(regions[0]?.clipId).toBeTruthy();
+		// And selected through the ORDINARY region selection, which is what gives it
+		// Delete, copy/paste and shift-click multi-select for free.
+		expect(result.current.selection).toEqual({ kind: "audio", id });
+	});
+
+	it("addAudioRegion refuses a non-audio (or unknown) asset", async () => {
+		const { result } = renderTimeline();
+		let videoId: string | null = "x";
+		let missingId: string | null = "x";
+		await act(async () => {
+			videoId = await result.current.addAudioRegion("asset_1"); // a video asset
+			missingId = await result.current.addAudioRegion("nope");
+		});
+		expect(videoId).toBeNull();
+		expect(missingId).toBeNull();
+		expect(useProjectStore.getState().document?.audioRanges).toEqual([]);
+	});
+
+	it("updateAudioRegion patches the payload and is one undo step", async () => {
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioRegion("audio_1")) ?? "";
+		});
+		await act(async () => {
+			await result.current.updateAudioRegion(id, { gainDb: -6 });
+		});
+		expect(useProjectStore.getState().document?.audioRanges[0]?.gainDb).toBe(-6);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.audioRanges[0]?.gainDb).toBe(0);
+	});
+
+	it("a left-edge resize trims the in-point instead of moving what plays there", async () => {
+		// The one gesture an audio pill has that a zoom pill does not. Dragging the head
+		// right by 1s must skip 1s of file, so the sound at a given second is unchanged.
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioRegion("audio_1", { startSec: 2 })) ?? "";
+		});
+		const endMs = useProjectStore.getState().document?.audioRanges[0]?.endMs ?? 0;
+		await act(async () => {
+			await result.current.updateAudioSpan(id, 3000, endMs, "l");
+		});
+		expect(useProjectStore.getState().document?.audioRanges[0]?.offsetSec).toBeCloseTo(1, 3);
+	});
+
+	it("a left-edge resize moves the in-point of the pill it grabbed, not the first one", async () => {
+		// The offset shift is measured on the CLAMPED result, which has to be found by the
+		// pill's own leading id: matching by position picks the first pill on the lane, so a
+		// second bed's resize silently re-pointed the first one.
+		const { result } = renderTimeline();
+		let first = "";
+		let second = "";
+		await act(async () => {
+			first = (await result.current.addAudioRegion("audio_1", { startSec: 0 })) ?? "";
+		});
+		// Shrink it out of the way — two pills of different identities may not overlap
+		// (rule 2), so the second one needs somewhere to land.
+		await act(async () => {
+			await result.current.updateAudioSpan(first, 0, 2000, "move");
+		});
+		await act(async () => {
+			second = (await result.current.addAudioRegion("audio_1", { startSec: 5 })) ?? "";
+		});
+		const endMs =
+			useProjectStore.getState().document?.audioRanges.find((r) => r.id === second)?.endMs ?? 0;
+		await act(async () => {
+			await result.current.updateAudioSpan(second, 6000, endMs, "l");
+		});
+		const doc = useProjectStore.getState().document;
+		expect(doc?.audioRanges.find((r) => r.id === first)?.offsetSec).toBe(0);
+		expect(doc?.audioRanges.find((r) => r.id === second)?.offsetSec).toBeCloseTo(1, 3);
+	});
+
+	it("a body move leaves the in-point alone", async () => {
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioRegion("audio_1", { startSec: 2 })) ?? "";
+		});
+		const before = useProjectStore.getState().document?.audioRanges[0];
+		const span = (before?.endMs ?? 0) - (before?.startMs ?? 0);
+		await act(async () => {
+			await result.current.updateAudioSpan(id, 3000, 3000 + span, "move");
+		});
+		expect(useProjectStore.getState().document?.audioRanges[0]?.offsetSec).toBe(0);
+	});
+
+	it("removeRegion deletes the region and collects its orphaned asset", async () => {
+		// There is no audio-specific delete path any more: this is the generic one every
+		// pill uses, which is the point. The asset is only reachable through its regions,
+		// so the last delete must take it with it.
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioRegion("audio_1")) ?? "";
+		});
+		await act(async () => {
+			await result.current.removeRegion("audio", id);
+		});
+		const doc = useProjectStore.getState().document;
+		expect(doc?.audioRanges).toEqual([]);
+		expect(doc?.assets.some((a) => a.id === "audio_1")).toBe(false);
+	});
+
+	// #350: the toolbar buttons and the M / V shortcuts all call `tl.addAudio`, which opens
+	// the OS file picker and hands the result to the store's import. Spy on that import so
+	// these assert the wiring (picker → import), not the import itself.
+	it("addAudio imports the picked file, and is a no-op when the picker is cancelled", async () => {
+		const importSpy = vi.fn().mockResolvedValue(null);
+		useProjectStore.setState({ addAudioAsset: importSpy });
+		const pickerMock = vi.fn();
+		Object.defineProperty(window, "electronAPI", {
+			configurable: true,
+			value: { openAudioFilePicker: pickerMock },
+		});
+		const { result } = renderTimeline();
+
+		// Cancelled picker -> nothing imported.
+		pickerMock.mockResolvedValueOnce({ success: false });
+		await act(async () => {
+			await result.current.addAudio();
+		});
+		expect(importSpy).not.toHaveBeenCalled();
+
+		// Picked a file -> imported with its path and display name.
+		pickerMock.mockResolvedValueOnce({ success: true, path: "/tmp/bgm.mp3", name: "bgm.mp3" });
+		await act(async () => {
+			await result.current.addAudio();
+		});
+		expect(importSpy).toHaveBeenCalledWith("/tmp/bgm.mp3", "bgm.mp3");
+	});
+
+	it("addAudio places the imported asset on the lane it was asked for", async () => {
+		useProjectStore.setState({
+			addAudioAsset: vi.fn().mockImplementation(async () => {
+				// The real import commits the asset before the region is placed.
+				useProjectStore.setState({ document: audioDoc });
+				return audioDoc.assets.find((a) => a.id === "audio_1");
+			}),
+		});
+		Object.defineProperty(window, "electronAPI", {
+			configurable: true,
+			value: {
+				openAudioFilePicker: vi
+					.fn()
+					.mockResolvedValue({ success: true, path: "/tmp/vo.mp3", name: "vo.mp3" }),
+			},
+		});
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addAudio("voiceover");
+		});
+		expect(useProjectStore.getState().document?.audioRanges[0]?.kind).toBe("voiceover");
+	});
+
+	it("addAudio toasts when the file picker itself rejects", async () => {
+		toastErrorMock.mockClear();
+		const importSpy = vi.fn();
+		useProjectStore.setState({ addAudioAsset: importSpy });
+		Object.defineProperty(window, "electronAPI", {
+			configurable: true,
+			value: { openAudioFilePicker: vi.fn().mockRejectedValueOnce(new Error("ipc down")) },
+		});
+		const { result } = renderTimeline();
+
+		await act(async () => {
+			await result.current.addAudio();
+		});
+		// A picker rejection reaches the localized toast, not an unhandled rejection, and never
+		// attempts an import.
+		expect(importSpy).not.toHaveBeenCalled();
+		expect(toastErrorMock).toHaveBeenCalledTimes(1);
+	});
+
+	// #350 regression: a failed import-time probe leaves durationSec at 0, which makes the
+	// waveform and the "how long is this file?" answer wrong. The on-load backfill
+	// re-probes and stamps the real duration onto the asset.
+	it("backfills a missing audio duration on load", async () => {
+		probeAudioDurationMock.mockResolvedValue(12.5);
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: {
+				...sampleDoc,
+				assets: [
+					...sampleDoc.assets,
+					{
+						id: "audio_2",
+						kind: "audio",
+						label: "bgm.mp3",
+						originalPath: "/tmp/bgm.mp3",
+						cameraTrack: null,
+					},
+				],
+				audioRanges: [
+					{
+						id: "audio_r2",
+						startMs: 0,
+						endMs: 5000,
+						audioAssetId: "audio_2",
+						kind: "music",
+						offsetSec: 0,
+						gainDb: 0,
+						origin: "user",
+					},
+				],
+			},
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		renderTimeline();
+		await waitFor(() => {
+			const doc = useProjectStore.getState().document;
+			expect(doc?.assets.find((a) => a.id === "audio_2")?.durationSec).toBe(12.5);
+		});
+		expect(probeAudioDurationMock).toHaveBeenCalledTimes(1);
 	});
 });

@@ -533,7 +533,7 @@ export type NativeBridgeRequest =
 	| {
 			domain: "aiEdition";
 			action: "document.addAsset";
-			payload: { projectId: string; path: string; label?: string };
+			payload: { projectId: string; path: string; label?: string; kind?: "video" | "audio" };
 			requestId?: string;
 	  }
 	| {

@@ -1,47 +1,47 @@
-// Probe a video file's actual duration by mounting a hidden <video> and
-// waiting for loadedmetadata. Used by the timeline store to size
-// freshly-inserted clips at the real source duration, so the user sees
-// the correct clip width immediately on drop instead of the placeholder.
-//
-// Falls back to null on error / timeout / non-finite duration. Caller
-// decides whether to fall back to a placeholder (60s) or surface an error.
-//
-// ponytail: probe via DOM <video> rather than the existing VirtualPreview.
-// We need this BEFORE the clip is on the timeline (so insertClipAt can
-// size it correctly), but VirtualPreview only mounts once a clip exists.
-// A throwaway <video> is the cleanest no-extra-component solution.
-
 const DEFAULT_TIMEOUT_MS = 5000;
 
-export function probeVideoDuration(
+// The duration probe: mount a hidden media element and wait for loadedmetadata.
+// Falls back to null on error / timeout / non-finite duration; the caller decides
+// whether to use a placeholder (60s) or surface an error.
+//
+// One function for both <video> and <audio> — only the tag differs, and every
+// property touched (preload, style, onloadedmetadata, onerror, duration,
+// removeAttribute, load, src) lives on HTMLMediaElement, which both are. Sharing
+// it keeps a fix to the settle/cleanup/timeout logic from drifting between the two.
+//
+// ponytail: probe via a throwaway DOM element rather than VirtualPreview, which
+// only mounts once a clip exists — we need the duration BEFORE that, so
+// insertClipAt can size the clip correctly on drop.
+function probeMediaDuration(
+	tag: "video" | "audio",
 	src: string,
-	timeoutMs: number = DEFAULT_TIMEOUT_MS,
+	timeoutMs: number,
 ): Promise<number | null> {
 	return new Promise((resolve) => {
 		if (typeof document === "undefined" || !src) {
 			resolve(null);
 			return;
 		}
-		const video = document.createElement("video");
-		video.preload = "metadata";
-		video.style.position = "absolute";
-		video.style.width = "1px";
-		video.style.height = "1px";
-		video.style.opacity = "0";
-		video.style.pointerEvents = "none";
-		video.style.left = "-9999px";
+		const el = document.createElement(tag);
+		el.preload = "metadata";
+		el.style.position = "absolute";
+		el.style.width = "1px";
+		el.style.height = "1px";
+		el.style.opacity = "0";
+		el.style.pointerEvents = "none";
+		el.style.left = "-9999px";
 		let settled = false;
 		const cleanup = () => {
-			video.onloadedmetadata = null;
-			video.onerror = null;
+			el.onloadedmetadata = null;
+			el.onerror = null;
 			clearTimeout(timer);
 			try {
-				video.removeAttribute("src");
-				video.load();
+				el.removeAttribute("src");
+				el.load();
 			} catch {
 				// ignore — browser may refuse if already detached
 			}
-			if (video.parentNode) video.parentNode.removeChild(video);
+			if (el.parentNode) el.parentNode.removeChild(el);
 		};
 		const settle = (value: number | null) => {
 			if (settled) return;
@@ -50,16 +50,35 @@ export function probeVideoDuration(
 			resolve(value);
 		};
 		const timer = setTimeout(() => settle(null), timeoutMs);
-		video.onloadedmetadata = () => {
-			const d = video.duration;
+		el.onloadedmetadata = () => {
+			const d = el.duration;
 			settle(Number.isFinite(d) && d > 0 ? d : null);
 		};
-		video.onerror = () => settle(null);
-		// ponytail: append to body so some browsers (Firefox) actually fire
-		// loadedmetadata for fully-detached <video> elements.
-		document.body.appendChild(video);
-		video.src = src;
+		el.onerror = () => settle(null);
+		// Append to body so some browsers (Firefox) actually fire loadedmetadata
+		// for a fully-detached media element.
+		document.body.appendChild(el);
+		el.src = src;
 	});
+}
+
+/** Duration of a video file, to size a freshly-inserted clip at its real length. */
+export function probeVideoDuration(
+	src: string,
+	timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<number | null> {
+	return probeMediaDuration("video", src, timeoutMs);
+}
+
+/**
+ * Duration of an imported audio file (issue #350) — the audio counterpart of
+ * `probeVideoDuration`, used to size a voiceover / BGM / SFX track pill on add.
+ */
+export function probeAudioDuration(
+	src: string,
+	timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<number | null> {
+	return probeMediaDuration("audio", src, timeoutMs);
 }
 
 /** Native pixel dimensions, same probe shape as `probeVideoDuration` (separate DOM element —

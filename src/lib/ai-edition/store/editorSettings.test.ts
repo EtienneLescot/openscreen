@@ -29,6 +29,7 @@ const baseDoc: AxcutDocument = {
 	},
 	annotations: [],
 	zoomRanges: [],
+	audioRanges: [],
 	transcripts: [],
 	transcript: null,
 	legacyEditor: null,

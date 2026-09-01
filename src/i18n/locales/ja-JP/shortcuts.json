@@ -20,6 +20,8 @@
 		"addTrim": "トリムを追加",
 		"addSpeed": "速度を追加",
 		"addAnnotation": "注釈を追加",
+		"addAudio": "音楽を追加",
+		"addVoiceover": "ナレーションを追加",
 		"addKeyframe": "キーフレームを追加",
 		"addCameraFullscreen": "フルスクリーンカメラを追加",
 		"deleteSelected": "選択を削除",
