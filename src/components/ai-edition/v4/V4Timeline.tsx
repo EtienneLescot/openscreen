@@ -31,6 +31,7 @@ import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { fromFileUrl, toFileUrl } from "@/components/video-editor/projectPersistence";
 import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
+import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
 import { collapseTracksToPills } from "@/lib/ai-edition/document/audioTracks";
 import { createId } from "@/lib/ai-edition/document/ids";
@@ -59,6 +60,7 @@ import {
 	type AutoZoomSuggestion,
 	buildAutoZoomSuggestionsForClips,
 } from "@/lib/ai-edition/timeline/zoom-suggestions";
+import { formatBinding } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native/client";
 import { TransportBar } from "../TransportBar";
 import type { VideoSource } from "../VirtualPreview";
@@ -485,6 +487,9 @@ export function V4Timeline({
 	onAddVoiceover: () => void;
 }) {
 	const t = useScopedT("timeline");
+	// The live bindings, not the defaults: these keys are remappable, and a menu
+	// that taught the wrong one would be worse than teaching none.
+	const { shortcuts, isMac } = useShortcuts();
 	// The camera lane borrows the Layout pane's "No Webcam" wording when there is no
 	// camera to grow, so the two surfaces say the same thing about the same project.
 	const ts = useScopedT("settings");
@@ -1660,6 +1665,9 @@ export function V4Timeline({
 																{t("audio.addVoiceoverHint")}
 															</span>
 														</span>
+														<kbd className={styles.recMenuKey}>
+															{formatBinding(shortcuts.addVoiceover, isMac)}
+														</kbd>
 													</button>
 													<button
 														type="button"
@@ -1676,6 +1684,9 @@ export function V4Timeline({
 																{t("audio.importFileHint")}
 															</span>
 														</span>
+														<kbd className={styles.recMenuKey}>
+															{formatBinding(shortcuts.addAudio, isMac)}
+														</kbd>
 													</button>
 												</div>
 											</PopoverContent>

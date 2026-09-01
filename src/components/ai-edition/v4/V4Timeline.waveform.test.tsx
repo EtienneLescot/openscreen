@@ -54,6 +54,7 @@ vi.mock("@/lib/ai-edition/store/useEditorSettings", () => ({
 	}),
 }));
 
+import { ShortcutsProvider } from "@/contexts/ShortcutsContext";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { V4Timeline } from "./V4Timeline";
 
@@ -125,17 +126,19 @@ function renderBars(atGainDb: number): string[] {
 		addZoom: vi.fn(async () => undefined),
 	};
 	const view = render(
-		<V4Timeline
-			tl={tl as unknown as ReturnType<typeof useTimeline>}
-			videoSources={[{ id: "a1", src: "file:///tmp/rec.mp4", label: "rec" }]}
-			setCurrentTime={vi.fn()}
-			playing={false}
-			onTogglePlay={vi.fn()}
-			onPrevClip={vi.fn()}
-			onNextClip={vi.fn()}
-			onEditClip={vi.fn()}
-			onAddVoiceover={vi.fn()}
-		/>,
+		<ShortcutsProvider>
+			<V4Timeline
+				tl={tl as unknown as ReturnType<typeof useTimeline>}
+				videoSources={[{ id: "a1", src: "file:///tmp/rec.mp4", label: "rec" }]}
+				setCurrentTime={vi.fn()}
+				playing={false}
+				onTogglePlay={vi.fn()}
+				onPrevClip={vi.fn()}
+				onNextClip={vi.fn()}
+				onEditClip={vi.fn()}
+				onAddVoiceover={vi.fn()}
+			/>
+		</ShortcutsProvider>,
 	);
 	const bars = Array.from(
 		document.querySelectorAll<HTMLElement>('[class*="tlWave"] span'),
