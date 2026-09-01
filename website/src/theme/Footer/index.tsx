@@ -35,6 +35,7 @@ export default function Footer(): ReactNode {
 						<div className={styles.colLinks}>
 							<Link href="https://github.com/getopenscreen/openscreen">GitHub</Link>
 							<Link href="https://github.com/getopenscreen/openscreen/releases">Releases</Link>
+							<Link to="/blog">Blog</Link>
 						</div>
 					</div>
 
