@@ -8,11 +8,18 @@ name: CI
 # #169 — 30k+ lines of deletion and refactor — merged into release/1.8.0 with
 # every one of those jobs skipped, because a release branch matched neither
 # pattern. A release branch is the LAST place to run a build unguarded.
+#
+# feat/imported-audio is the current one (issue #350 and its follow-ups). It was
+# added the same day #543 spent two commits with ZERO of the twelve jobs below:
+# its base had been pointed at another topic branch to stack it, which matches no
+# pattern here, so lint, typecheck, tests, build, Rust and Swift all silently sat
+# out. Nothing warns you — the PR page shows the checks that DO run (nix, Discord,
+# CodeRabbit) and reads as green.
 on:
   pull_request:
-    branches: [main, feat/ai-edition, "release/**"]
+    branches: [main, feat/ai-edition, feat/imported-audio, "release/**"]
   push:
-    branches: [main, feat/ai-edition, "release/**"]
+    branches: [main, feat/ai-edition, feat/imported-audio, "release/**"]
 
 jobs:
   lint:
