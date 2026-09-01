@@ -3,9 +3,10 @@
 //! tout le run, deux lectures seulement. Rien dans la boucle ne peut fausser le fps.
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_audio,
-    stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
+    assemble_concatenated_pcm, build_audio_concat_plan, finish_audio,
+    AacEncoder, PlanarPcm,
 };
+use crate::audio_jobs::{decode_and_stretch_clip_audio, ClipAudioJobs};
 use crate::compositor::{Compositor, OUT_H, OUT_W};
 use crate::config::Cfg;
 use crate::cpu_frames::CpuFrames;
@@ -1390,8 +1391,7 @@ unsafe fn run_multi_inner(
 
     let opkt = av_packet_alloc();
     let mut clip_frame_counts = vec![0u64; clips.len()];
-    let mut clip_pcm: Vec<Option<PlanarPcm>> =
-        std::iter::repeat_with(|| None).take(clips.len()).collect();
+    let mut audio_jobs: ClipAudioJobs<Option<PlanarPcm>> = ClipAudioJobs::new(clips.len());
     let t0 = Instant::now();
 
     let frames = walk_composited_timeline(
@@ -1431,23 +1431,24 @@ unsafe fn run_multi_inner(
             clip_frame_counts[clip_index] = frames_in_clip;
             let clip = &clips[clip_index];
             if clip.has_audio && frames_in_clip > 0 {
-                match decode_clip_audio(&clip.screen, clip.source_start_sec, source_end_sec) {
-                    Ok(Some(pcm)) => {
-                        clip_pcm[clip_index] = Some(stretch_clip_pcm_by_speed(
-                            &pcm,
-                            speed_segments,
-                            out_fps as f64,
-                        ));
-                    }
-                    Ok(None) => eprintln!(
-                        "[pipeline] warning: clip #{} déclaré audio mais sans flux décodable; silence conservé",
+                // L'audio d'un clip ne dépend que de ce clip : le décoder et l'étirer ici,
+                // sur le thread de rendu, immobilisait la barre d'export pour toute sa durée
+                // — rien n'appelle `progress()` entre deux clips. Le travail part sur un
+                // thread et se recouvre avec la composition du clip suivant ; les résultats
+                // sont récupérés après le parcours, rangés par index de clip.
+                let path = clip.screen.clone();
+                let source_start_sec = clip.source_start_sec;
+                let segments = speed_segments.to_vec();
+                audio_jobs.spawn(clip_index, move || {
+                    decode_and_stretch_clip_audio(
                         clip_index,
-                    ),
-                    Err(error) => eprintln!(
-                        "[pipeline] warning: décodage audio du clip #{} échoué ({error:#}); silence conservé",
-                        clip_index,
-                    ),
-                }
+                        &path,
+                        source_start_sec,
+                        source_end_sec,
+                        &segments,
+                        out_fps as f64,
+                    )
+                });
             }
             Ok(())
         },
@@ -1459,6 +1460,15 @@ unsafe fn run_multi_inner(
 
     enc.send(ptr::null_mut())?;
     drain_encoder(ectx, octx, ostream, opkt)?;
+
+    // Récupération des jobs audio lancés pendant le parcours. `spawn` en admet quatre avant
+    // d'en collecter un, donc il en reste au plus quatre à attendre ici — bornés par le plus
+    // lent, pas par leur somme ; tous les autres se sont recouverts avec l'encodage.
+    let clip_pcm: Vec<Option<PlanarPcm>> = audio_jobs
+        .into_results()
+        .into_iter()
+        .map(|slot| slot.flatten())
+        .collect();
 
     let declared_audio: Vec<bool> = clips.iter().map(|clip| clip.has_audio).collect();
     let audio_plan = build_audio_concat_plan(

@@ -28,6 +28,7 @@
 //! — c'est précisément ce qui rend le port Metal possible (cf. PR #162).
 
 pub mod audio;
+pub mod audio_jobs;
 pub mod config;
 pub mod cursor;
 pub mod ffi;

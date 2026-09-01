@@ -77,20 +77,38 @@ and **one** encoder + muxer pair:
   the target after the corrected pass (see
   [Audio](native-compositor.md#audio)).
 
-- **The stretch is not overlapped with the encode.** Decode and stretch
-  run inside `walk_composited_timeline`'s `on_clip_end` callback
-  (`pipeline.rs`), which fires once per clip *after* that clip's frames
-  have been composed and submitted to the encoder, on the same thread —
-  so the stretch time is added to the export wall, not hidden behind it.
-  `progress()` counts composed frames as they are handed to the encoder,
-  and nothing calls it during the audio phase, so a long clip parks the
-  export at whatever percentage its last frame reported. (The encoder's
-  own flush comes later still, after the timeline walk.) That reporting
-  gap is why the `atempo` path matters so much here: WSOLA is
-  O(grain × radius) per rendered sample, which on a long clip meant
-  minutes of an apparently frozen export. Reporting progress across the
-  audio phase would fix the symptom rather than the cost, and is tracked
-  separately.
+- **The stretch runs beside the encode, not inside it.**
+  `walk_composited_timeline`'s `on_clip_end` callback fires once per clip,
+  after that clip's frames have been composed and submitted to the
+  encoder. It used to decode and stretch that clip's audio right there,
+  on the render thread; since a clip's audio depends on nothing but that
+  clip, it now hands the work to `ClipAudioJobs`
+  ([`audio_jobs.rs`](../../crates/compositor/src/audio_jobs.rs), at most
+  four in flight) and the walk carries straight on to the next clip. The
+  results are collected after the walk, indexed by clip. `spawn` admits
+  four before it collects one, so what is left to wait for at the end is up
+  to four jobs — bounded by the slowest of them, not by their sum. Dropping
+  the collection joins them rather than detaching, so an export that fails
+  between the walk and the collection does not leave decoders running.
+
+  This matters for reporting as much as for wall time. `progress()`
+  counts composed frames as they are handed to the encoder and nothing
+  calls it during the audio phase, so while that work sat on the render
+  thread the bar parked at whatever percentage the clip's last frame
+  reported — for minutes, back when WSOLA was O(grain × radius) per
+  rendered sample. That is the reporting half of "frozen at ~80%"; the
+  cost half was the move to `atempo`.
+
+- **The progress total is speed-adjusted.** The native side reports a raw
+  running count of composed frames and never a total, so the percentage
+  is computed in the renderer
+  ([`outputFrameCount`](../../src/lib/exporter/outputFrameCount.ts)). It
+  has to mirror `speed_segments_for_window`, because a clip under a 1.25×
+  region emits `duration × fps / 1.25` frames: counting source seconds
+  instead made the bar stop at exactly 80% and the export finish there —
+  the number in the title of the bug. The two sides share one fixture
+  table, asserted by `outputFrameCount.test.ts` and by
+  `speed_segments_match_the_exporter_frame_totals`.
 
 - **Output** honours the timeline's selected aspect ratio
   (`resolveAspectRatioValue` over `getEditorSettings(document).aspectRatio` —
