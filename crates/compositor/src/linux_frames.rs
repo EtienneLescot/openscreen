@@ -35,13 +35,22 @@ use crate::ffi::{
 /// genere pas les `SWS_*`, ce sont des macros).
 const SWS_POINT: i32 = 0x10;
 
-/// Une frame decodee presentee au compositor sous forme de deux textures wgpu :
-/// plane Y (`R8Unorm`, `w x h`) et plane UV entrelacee (`Rg8Unorm`,
-/// `(w/2) x (h/2)`). Equivalent NV12-split de la `ID3D11Texture2D` NV12 (D3D11)
-/// / du CVPixelBuffer (macOS).
+/// Une frame decodee presentee au compositor sous forme de TROIS textures wgpu
+/// `R8Unorm` : Y en `w x h`, U et V en `(w/2) x (h/2)`. Pendant Linux de la
+/// `ID3D11Texture2D` NV12 (D3D11) / du CVPixelBuffer (macOS), qui eux portent un
+/// plan de chroma entrelace parce que leur decodeur materiel le rend ainsi.
+///
+/// POURQUOI TROIS PLANS ET PAS UN UV ENTRELACE. Le decodeur software rend du
+/// YUV420P, ou U et V sont DEJA deux plans distincts. Les entrelacer en NV12
+/// demandait un `sws_scale` CPU par frame et par flux — deux fois par frame de
+/// sortie sur une scene avec webcam — pour produire une disposition que le GPU
+/// echantillonne tout aussi bien en deux textures. Les uploader tels quels
+/// supprime cette conversion sans changer un pixel : c'etait un entrelacement,
+/// pas un reechantillonnage.
 pub(crate) struct VkFrameTex {
     pub y: wgpu::Texture,
-    pub uv: wgpu::Texture,
+    pub u: wgpu::Texture,
+    pub v: wgpu::Texture,
     pub width: u32,
     pub height: u32,
 }
@@ -107,24 +116,34 @@ impl CpuFrames {
         if w <= 0 || h <= 0 {
             bail!("frame decodee sans dimensions ({w}x{h})");
         }
-        self.ensure_sws(w, h, (*src).format)?;
-        self.ensure_nv12(w, h)?;
         self.ensure_textures(w as u32, h as u32)?;
 
-        let converted = sws_scale(
-            self.sws,
-            (*src).data.as_ptr() as *const *const u8,
-            (*src).linesize.as_ptr(),
-            0,
-            h,
-            (*self.nv12).data.as_ptr(),
-            (*self.nv12).linesize.as_ptr(),
-        );
-        if converted <= 0 {
-            bail!("sws_scale a converti {converted} lignes");
+        // CHEMIN RAPIDE : le decodeur rend deja du YUV420P (c'est le cas de tout
+        // h264 4:2:0, donc de tout ce que cette app enregistre), et c'est
+        // exactement la disposition que les trois textures attendent. Rien a
+        // convertir : on uploade les plans du decodeur tels quels.
+        if (*src).format == AVPixelFormat::AV_PIX_FMT_YUV420P as i32 {
+            self.upload_planes(src)?;
+        } else {
+            // REPLI : format exotique (4:2:2, 10 bits, un import quelconque).
+            // `sws_scale` ramene en YUV420P — pas en NV12 : la cible n'a plus de
+            // plan entrelace — et on uploade le resultat par le meme chemin.
+            self.ensure_sws(w, h, (*src).format)?;
+            self.ensure_nv12(w, h)?;
+            let converted = sws_scale(
+                self.sws,
+                (*src).data.as_ptr() as *const *const u8,
+                (*src).linesize.as_ptr(),
+                0,
+                h,
+                (*self.nv12).data.as_ptr(),
+                (*self.nv12).linesize.as_ptr(),
+            );
+            if converted <= 0 {
+                bail!("sws_scale a converti {converted} lignes");
+            }
+            self.upload_planes(self.nv12)?;
         }
-
-        self.upload()?;
         self.attach_carrier(w, h)?;
         // Contrat lu par le compositor : sentinel + timestamps recopies (sinon la
         // timeline se croit a t=0).
@@ -148,14 +167,14 @@ impl CpuFrames {
             src_fmt as AVPixelFormat::Type,
             w,
             h,
-            AVPixelFormat::AV_PIX_FMT_NV12,
+            AVPixelFormat::AV_PIX_FMT_YUV420P,
             SWS_POINT,
             ptr::null_mut(),
             ptr::null_mut(),
             ptr::null(),
         );
         if self.sws.is_null() {
-            bail!("sws_getContext {w}x{h} fmt {src_fmt} -> NV12");
+            bail!("sws_getContext {w}x{h} fmt {src_fmt} -> YUV420P");
         }
         self.sws_key = key;
         Ok(())
@@ -164,14 +183,14 @@ impl CpuFrames {
     unsafe fn ensure_nv12(&mut self, w: i32, h: i32) -> Result<()> {
         if (*self.nv12).width == w
             && (*self.nv12).height == h
-            && (*self.nv12).format == AVPixelFormat::AV_PIX_FMT_NV12 as i32
+            && (*self.nv12).format == AVPixelFormat::AV_PIX_FMT_YUV420P as i32
         {
             return Ok(());
         }
         av_frame_unref(self.nv12);
         (*self.nv12).width = w;
         (*self.nv12).height = h;
-        (*self.nv12).format = AVPixelFormat::AV_PIX_FMT_NV12 as i32;
+        (*self.nv12).format = AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
         if av_frame_get_buffer(self.nv12, 32) < 0 {
             bail!("av_frame_get_buffer NV12 {w}x{h}");
         }
@@ -202,23 +221,28 @@ impl CpuFrames {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let uv = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("nv12-uv"),
-            size: wgpu::Extent3d {
-                width: dims.0 / 2,
-                height: dims.1 / 2,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        let mut chroma = |label| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: dims.0 / 2,
+                    height: dims.1 / 2,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let u = chroma("yuv420p-u");
+        let v = chroma("yuv420p-v");
         self.tex = Some(Box::new(VkFrameTex {
             y,
-            uv,
+            u,
+            v,
             width: dims.0,
             height: dims.1,
         }));
@@ -229,53 +253,44 @@ impl CpuFrames {
     /// Upload du NV12 swscale dans les deux textures wgpu. `linesize[0]/[1]` sont
     /// les strides memoire (paddes SIMD par swscale), passes tels quels a
     /// `bytes_per_row`.
-    unsafe fn upload(&mut self) -> Result<()> {
+    /// Uploade les trois plans YUV420P de `f` dans les trois textures. `f` est
+    /// soit la frame du decodeur (chemin rapide), soit la sortie de swscale
+    /// (repli) : la disposition est la meme, seule la provenance change.
+    unsafe fn upload_planes(&mut self, f: *mut AVFrame) -> Result<()> {
         let tex = match self.tex.as_ref() {
             Some(t) => t,
             None => bail!("upload avant ensure_textures"),
         };
-        let y_stride = (*self.nv12).linesize[0] as usize;
-        let uv_stride = (*self.nv12).linesize[1] as usize;
-        let y_size = y_stride * tex.height as usize;
-        let uv_size = uv_stride * tex.height.div_ceil(2) as usize;
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex.y,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            std::slice::from_raw_parts((*self.nv12).data[0], y_size),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(y_stride as u32),
-                rows_per_image: Some(tex.height),
-            },
-            wgpu::Extent3d {
-                width: tex.width,
-                height: tex.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex.uv,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            std::slice::from_raw_parts((*self.nv12).data[1], uv_size),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(uv_stride as u32),
-                rows_per_image: Some(tex.height / 2),
-            },
-            wgpu::Extent3d {
-                width: tex.width / 2,
-                height: tex.height / 2,
-                depth_or_array_layers: 1,
-            },
-        );
+        let (cw, chh) = (tex.width / 2, tex.height / 2);
+        for (plane, texture, pw, ph) in [
+            (0usize, &tex.y, tex.width, tex.height),
+            (1, &tex.u, cw, chh),
+            (2, &tex.v, cw, chh),
+        ] {
+            let stride = (*f).linesize[plane] as usize;
+            if stride == 0 || (*f).data[plane].is_null() {
+                bail!("plan YUV {plane} absent (linesize={stride})");
+            }
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                std::slice::from_raw_parts((*f).data[plane], stride * ph as usize),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride as u32),
+                    rows_per_image: Some(ph),
+                },
+                wgpu::Extent3d {
+                    width: pw,
+                    height: ph,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         Ok(())
     }
 
@@ -292,7 +307,8 @@ impl CpuFrames {
         }
         (*self.present).data[0] = pack_carrier(Box::new(VkFrameTex {
             y: tex.y.clone(),
-            uv: tex.uv.clone(),
+            u: tex.u.clone(),
+            v: tex.v.clone(),
             width: tex.width,
             height: tex.height,
         }));
@@ -322,14 +338,16 @@ pub(crate) unsafe fn carrier_dims(frame: *const AVFrame) -> (u32, u32) {
 /// depuis le carrier `frame.data[0]`. Appele par `compositor_linux`.
 pub(crate) unsafe fn nv12_planes(
     frame: *const AVFrame,
-) -> Result<(wgpu::TextureView, wgpu::TextureView)> {
+) -> Result<(wgpu::TextureView, wgpu::TextureView, wgpu::TextureView)> {
     if (*frame).data[0].is_null() {
         bail!("nv12_planes: carrier nul dans data[0]");
     }
     let tex = unpack_carrier((*frame).data[0]);
+    let d = wgpu::TextureViewDescriptor::default();
     Ok((
-        tex.y.create_view(&wgpu::TextureViewDescriptor::default()),
-        tex.uv.create_view(&wgpu::TextureViewDescriptor::default()),
+        tex.y.create_view(&d),
+        tex.u.create_view(&d),
+        tex.v.create_view(&d),
     ))
 }
 
