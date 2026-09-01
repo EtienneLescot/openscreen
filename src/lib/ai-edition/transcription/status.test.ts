@@ -270,6 +270,7 @@ describe("transcriptRelevantAssetIds", () => {
 				})),
 				gaps: [],
 				trimRanges: [],
+				insertRanges: [],
 				muteRanges: [],
 				speedRanges: [],
 				captionRanges: [],

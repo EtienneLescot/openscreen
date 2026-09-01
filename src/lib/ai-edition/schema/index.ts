@@ -269,6 +269,34 @@ export const trimRangeSchema = endGteStart(
 	"startSec",
 );
 
+/**
+ * Time the film does NOT have: the pause an added word needs so a synthesized voice will
+ * have somewhere to speak. The film holds the frame at `atSec` for `durationSec`, screen
+ * and webcam together, and everything after it shifts.
+ *
+ * The exact inverse of a trim, and stored the same way and for the same reason. The first
+ * attempt created CLIPS for this; every other writer of `timeline.clips` — the duration
+ * probe, the recording import, resequencing — is entitled to disagree with a clip it did
+ * not make, and they did: a project came back split twice, both pauses gone, and the words
+ * they belonged to with them. A region is the shape this timeline already carries safely.
+ *
+ * `wordId` is what makes it derived-in-spirit while stored in fact: `document/transcript.ts`
+ * is the only writer, it creates the range with the word and drops it with the word, and
+ * `insertRangesMatchWords` is the invariant a test holds it to. Nothing else may write one.
+ */
+export const insertRangeSchema = z.object({
+	id: z.string().min(1),
+	assetId: z.string().min(1),
+	/** Source moment the film holds on. */
+	atSec: z.number().nonnegative(),
+	/** Timeline time created. Always positive — a pause of zero is simply not stored. */
+	durationSec: z.number().positive(),
+	/** The transcript word this pause exists for. */
+	wordId: z.string().min(1),
+	reason: z.string().default(""),
+	origin: z.enum(["system", "agent", "user"]),
+});
+
 export const timelineSchema = z.preprocess(
 	// Back-compat: the field was renamed skipRanges → trimRanges. Old persisted
 	// documents (disk + browser-shim localStorage) still carry `skipRanges`;
@@ -286,6 +314,10 @@ export const timelineSchema = z.preprocess(
 		clips: z.array(clipSchema).default([]),
 		gaps: z.array(gapSchema).default([]),
 		trimRanges: z.array(trimRangeSchema).default([]),
+		// Additive, like every optional field before it: absent on every document written
+		// before this, so no schema bump — an older build simply drops the key on save, and
+		// the words it belonged to keep their text and lose only their pause.
+		insertRanges: z.array(insertRangeSchema).default([]),
 		muteRanges: z.array(rangeSchema).default([]),
 		speedRanges: z.array(rangeSchema).default([]),
 		captionRanges: z.array(rangeSchema).default([]),
@@ -514,6 +546,7 @@ const documentSchemaShape = z.object({
 		clips: [],
 		gaps: [],
 		trimRanges: [],
+		insertRanges: [],
 		muteRanges: [],
 		speedRanges: [],
 		captionRanges: [],
@@ -954,6 +987,7 @@ export type AxcutClip = z.infer<typeof clipSchema>;
 export type AxcutClipCropRegion = z.infer<typeof clipCropRegionSchema>;
 export type AxcutGap = z.infer<typeof gapSchema>;
 export type AxcutTrimRange = z.infer<typeof trimRangeSchema>;
+export type AxcutInsertRange = z.infer<typeof insertRangeSchema>;
 export type AxcutTimeline = z.infer<typeof timelineSchema>;
 export type AxcutTimelineOperation = z.infer<typeof timelineOperationSchema>;
 export type AxcutAnnotationRegion = z.infer<typeof annotationRegionSchema>;

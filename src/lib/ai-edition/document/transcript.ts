@@ -1,4 +1,5 @@
-import type { AxcutDocument, AxcutTranscript, AxcutWord } from "../schema";
+import type { AxcutDocument, AxcutInsertRange, AxcutTranscript, AxcutWord } from "../schema";
+import { createId } from "./ids";
 
 const CJK_EDGE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 const CLOSING_PUNCTUATION = /^[,.;:!?%。，、；：！？…）)\]}>》」』】〕]/u;
@@ -144,7 +145,12 @@ export function setDocumentWordText(
 	if (!transcript) {
 		throw new Error(`Cannot edit a word of asset "${assetId}": it has no transcript`);
 	}
-	return withTranscript(document, setWordText(transcript, wordId, text));
+	// Rewriting an added word changes how long it takes to read, so its pause is resized
+	// here too — the one writer, whatever the edit was.
+	return withInsertRangesForWords(
+		withTranscript(document, setWordText(transcript, wordId, text)),
+		assetId,
+	);
 }
 
 /** Where a new word goes relative to the word the caret was resting on. */
@@ -301,8 +307,112 @@ export function removeWord(transcript: AxcutTranscript, wordId: string): AxcutTr
 	};
 }
 
+/**
+ * How much created time an added word still needs, on top of the silence it borrowed.
+ *
+ * Zero when the pause it landed in was already long enough — an added word between two
+ * sentences costs the film nothing.
+ */
+function pauseDeficitSec(word: AxcutWord): number {
+	const borrowed = word.endSec - word.startSec;
+	return Math.max(0, readingSeconds(word.text) - borrowed);
+}
+
+/** Below this, a pause is not worth a record — a few milliseconds of held frame is a
+ *  stutter, not a slot to speak in. */
+const MIN_PAUSE_SEC = 0.05;
+
+/**
+ * Bring the document's insert ranges back in line with its words.
+ *
+ * The ranges are STORED, so something has to keep them true; this is that something, and
+ * it is the only writer. Called after every word write, it adds the pause an added word
+ * needs, resizes one whose text changed length, and drops the ones whose word is gone —
+ * so no caller has to remember any of the three. `insertRangesMatchWords` is the same rule
+ * read back, for a test to hold this to.
+ */
+function withInsertRangesForWords(document: AxcutDocument, assetId: string): AxcutDocument {
+	const transcript = document.transcripts.find((t) => t.assetId === assetId);
+	const words = transcript?.words ?? [];
+	const wanted = new Map<string, number>();
+	for (const word of words) {
+		if (word.source !== "synth") continue;
+		const deficit = pauseDeficitSec(word);
+		if (deficit >= MIN_PAUSE_SEC) wanted.set(word.id, deficit);
+	}
+
+	const existing = document.timeline.insertRanges;
+	const kept: AxcutInsertRange[] = [];
+	const seen = new Set<string>();
+	for (const range of existing) {
+		// Ranges for OTHER assets are none of this call's business.
+		if (range.assetId !== assetId) {
+			kept.push(range);
+			continue;
+		}
+		const durationSec = wanted.get(range.wordId);
+		if (durationSec === undefined) continue; // its word is gone, or needs no pause now
+		seen.add(range.wordId);
+		const word = words.find((w) => w.id === range.wordId);
+		const atSec = word?.endSec ?? range.atSec;
+		kept.push(
+			durationSec === range.durationSec && atSec === range.atSec
+				? range
+				: { ...range, atSec, durationSec },
+		);
+	}
+	for (const [wordId, durationSec] of wanted) {
+		if (seen.has(wordId)) continue;
+		const word = words.find((w) => w.id === wordId);
+		if (!word) continue;
+		kept.push({
+			id: createId("insert"),
+			assetId,
+			atSec: word.endSec,
+			durationSec,
+			wordId,
+			reason: `Held frame for the added word "${word.text}".`,
+			origin: "user",
+		});
+	}
+
+	if (kept.length === existing.length && kept.every((range, i) => range === existing[i])) {
+		return document;
+	}
+	return { ...document, timeline: { ...document.timeline, insertRanges: kept } };
+}
+
+/**
+ * The invariant {@link withInsertRangesForWords} maintains, read back: every stored pause
+ * belongs to an added word that still needs one, sits where that word ends, and lasts what
+ * its text needs. Exported for the test that holds the writer to it.
+ */
+export function insertRangesMatchWords(document: AxcutDocument): boolean {
+	const byAsset = new Map(document.transcripts.map((t) => [t.assetId, t]));
+	const expected = new Set<string>();
+	for (const transcript of document.transcripts) {
+		for (const word of transcript.words) {
+			if (word.source === "synth" && pauseDeficitSec(word) >= MIN_PAUSE_SEC) {
+				expected.add(`${transcript.assetId}::${word.id}`);
+			}
+		}
+	}
+	const seen = new Set<string>();
+	for (const range of document.timeline.insertRanges) {
+		const key = `${range.assetId}::${range.wordId}`;
+		if (!expected.has(key) || seen.has(key)) return false;
+		seen.add(key);
+		const word = byAsset.get(range.assetId)?.words.find((w) => w.id === range.wordId);
+		if (!word) return false;
+		if (range.atSec !== word.endSec) return false;
+		if (Math.abs(range.durationSec - pauseDeficitSec(word)) > 1e-9) return false;
+	}
+	return seen.size === expected.size;
+}
+
 /** {@link insertWord}, addressed by asset. Goes through `withTranscript` for the same
- *  reason {@link setDocumentWordText} does. */
+ *  reason {@link setDocumentWordText} does, and leaves behind the pause the new word
+ *  needs — see {@link withInsertRangesForWords}. */
 export function insertDocumentWord(
 	document: AxcutDocument,
 	assetId: string,
@@ -314,7 +424,10 @@ export function insertDocumentWord(
 	if (!transcript) {
 		throw new Error(`Cannot insert a word into asset "${assetId}": it has no transcript`);
 	}
-	return withTranscript(document, insertWord(transcript, anchorWordId, side, text));
+	return withInsertRangesForWords(
+		withTranscript(document, insertWord(transcript, anchorWordId, side, text)),
+		assetId,
+	);
 }
 
 /** {@link removeWord}, addressed by asset and taking the whole set at once: a Backspace
@@ -329,9 +442,12 @@ export function removeDocumentWords(
 	if (!transcript) {
 		throw new Error(`Cannot remove a word from asset "${assetId}": it has no transcript`);
 	}
-	return withTranscript(
-		document,
-		wordIds.reduce((acc, wordId) => removeWord(acc, wordId), transcript),
+	return withInsertRangesForWords(
+		withTranscript(
+			document,
+			wordIds.reduce((acc, wordId) => removeWord(acc, wordId), transcript),
+		),
+		assetId,
 	);
 }
 

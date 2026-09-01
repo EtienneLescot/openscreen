@@ -29,6 +29,7 @@ function doc(title: string): AxcutDocument {
 			clips: [],
 			gaps: [],
 			trimRanges: [],
+			insertRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],

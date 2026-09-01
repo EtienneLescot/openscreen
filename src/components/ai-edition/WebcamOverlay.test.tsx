@@ -68,6 +68,7 @@ function makeDocument(): AxcutDocument {
 			clips: [CLIP_WITH_CAMERA, CLIP_WITHOUT_CAMERA],
 			gaps: [],
 			trimRanges: [],
+			insertRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],

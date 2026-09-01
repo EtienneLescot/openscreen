@@ -51,6 +51,7 @@ function makeDoc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 			clips: [],
 			gaps: [],
 			trimRanges: [],
+			insertRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],
@@ -210,6 +211,7 @@ describe("timeline pure functions", () => {
 					],
 					gaps: [],
 					trimRanges: [makeTrim({ id: "trim_1", startSec: 12, endSec: 17 })],
+					insertRanges: [],
 					muteRanges: [],
 					speedRanges: [],
 					captionRanges: [],
@@ -307,6 +309,7 @@ describe("timeline pure functions", () => {
 					clips: [],
 					gaps: [],
 					trimRanges: [makeTrim({ id: "trim_other", assetId: "asset_2", startSec: 1, endSec: 2 })],
+					insertRanges: [],
 					muteRanges: [],
 					speedRanges: [],
 					captionRanges: [],
@@ -408,6 +411,7 @@ describe("timeline pure functions", () => {
 					],
 					gaps: [],
 					trimRanges: [],
+					insertRanges: [],
 					muteRanges: [],
 					speedRanges: [],
 					captionRanges: [],
@@ -533,6 +537,7 @@ describe("timeline pure functions", () => {
 					],
 					gaps: [],
 					trimRanges: [makeTrim({ id: "trim_1", startSec: 12, endSec: 17 })],
+					insertRanges: [],
 					muteRanges: [],
 					speedRanges: [],
 					captionRanges: [],
@@ -609,6 +614,7 @@ describe("timeline pure functions", () => {
 					trimRanges: [
 						{ id: "s1", assetId: "asset_1", startSec: 10, endSec: 20, origin: "user", reason: "" },
 					],
+					insertRanges: [],
 					muteRanges: [],
 					speedRanges: [],
 					captionRanges: [],
@@ -646,6 +652,7 @@ describe("timeline pure functions", () => {
 					],
 					gaps: [],
 					trimRanges: [],
+					insertRanges: [],
 					muteRanges: [],
 					speedRanges: [],
 					captionRanges: [],
@@ -877,6 +884,7 @@ describe("duplicateClip / moveClip", () => {
 				...makeDoc().timeline,
 				clips: [makeClip({ id: "clip_a", sourceStartSec: 0, sourceEndSec: 10 })],
 				trimRanges: [makeTrim({ id: "t1", clipId: "clip_a", startSec: 2, endSec: 4 })],
+				insertRanges: [],
 			},
 		});
 		const next = duplicateClip(doc, "clip_a");
@@ -1230,6 +1238,7 @@ describe("removeRegion — the one shared region-delete mutator", () => {
 			timeline: {
 				...makeDoc().timeline,
 				trimRanges: [makeTrim({ id: "trim_1" }), makeTrim({ id: "trim_2" })],
+				insertRanges: [],
 			},
 		});
 		const next = removeRegion(doc, "trim", "trim_1");
