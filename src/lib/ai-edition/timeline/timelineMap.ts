@@ -307,12 +307,28 @@ export function dropPillsByIds<T extends { id: string; startMs: number; endMs: n
 
 /**
  * Move/resize the pill containing `id`, obeying both rules: the requested span is first
- * CLAMPED against pills of a different identity (rule 2 — they act as walls and never
- * move), then the pill's regions are replaced by fragments re-anchored to the clamped
- * span, carrying the pill's payload. Crossing a clip boundary re-splits into one fragment
- * per clip; coming back inside one clip collapses again; and neighbours of the same
- * identity simply merge on display (rule 1). No provenance is consulted anywhere.
+ * CLAMPED against neighbouring pills that share its lane and identity differs (rule 2 —
+ * they act as walls and never move; for audio, the lane is the region kind, see
+ * `shareLane`), then the pill's regions are replaced by fragments re-anchored to the
+ * clamped span, carrying the pill's payload. Crossing a clip boundary re-splits into one
+ * fragment per clip; coming back inside one clip collapses again; and neighbours of the
+ * same identity simply merge on display (rule 1). No provenance is consulted anywhere.
  */
+function shareLane(a: unknown, b: unknown): boolean {
+	const left = a as { audioAssetId?: unknown; kind?: unknown } | null;
+	const right = b as { audioAssetId?: unknown; kind?: unknown } | null;
+	const leftAudio = left?.audioAssetId !== undefined;
+	const rightAudio = right?.audioAssetId !== undefined;
+	// Audio is the one collection drawn on several lanes (`voiceover` | `music`): a bed
+	// under a voiceover is the very reason the lanes exist, so a pill of a different kind
+	// is not a wall — unscoped, the clamp made the two lanes behave as one and a voice
+	// could never be dragged under its music. Same-kind pills still repel: they draw on
+	// the same lane, where an overlap would visually stack them. Every other collection
+	// is single-lane, so for them nothing changes.
+	if (leftAudio || rightAudio) return leftAudio && rightAudio && left?.kind === right?.kind;
+	return true;
+}
+
 export function replacePillSpan<T extends { id: string; startMs: number; endMs: number }>(
 	regions: T[],
 	id: string,
@@ -330,7 +346,7 @@ export function replacePillSpan<T extends { id: string; startMs: number; endMs: 
 		{ start: Math.min(startMs, endMs) / 1000, end: Math.max(startMs, endMs) / 1000 },
 		pill.identity,
 		pills
-			.filter((p) => p !== pill)
+			.filter((p) => p !== pill && shareLane(pill.member, p.member))
 			.map((p) => ({ id: p.ids[0], start: p.start, end: p.end, identity: p.identity })),
 	);
 

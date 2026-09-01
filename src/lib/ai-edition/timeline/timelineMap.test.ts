@@ -767,6 +767,89 @@ describe("pills wired to the universal rules", () => {
 		expect(slow?.startMs).toBe(10000);
 		expect(slow?.endMs).toBe(15000);
 	});
+
+	it("lets a voiceover resize straight under a music pill (different audio lanes)", () => {
+		const regions = [
+			...anchorRegionsWithDerivedMs(
+				[
+					{
+						id: "bed",
+						startMs: 10_000,
+						endMs: 20_000,
+						audioAssetId: "a_music",
+						kind: "music",
+						offsetSec: 0,
+						gainDb: 0,
+					},
+				],
+				clips,
+				ids(),
+			),
+			...anchorRegionsWithDerivedMs(
+				[
+					{
+						id: "vo",
+						startMs: 0,
+						endMs: 5000,
+						audioAssetId: "a_vo",
+						kind: "voiceover",
+						offsetSec: 0,
+						gainDb: 0,
+					},
+				],
+				clips,
+				ids(),
+			),
+		];
+		// Stretch the voiceover to 12s, straight through the bed: the two audio lanes
+		// exist so a voice can sit over music, so a different-kind pill is not a wall —
+		// unscoped, this clamp made the voice stop at 10s and the lanes pointless.
+		const out = replacePillSpan(regions, "vo", 0, 12_000, clips, ids());
+		const pills = coalesceRegionsForRuler(out);
+		expect(pills.find((p) => p.ids.includes("vo"))?.end).toBe(12);
+		// the bed is neither moved nor trimmed
+		expect(pills.find((p) => p.ids.includes("bed"))?.start).toBe(10);
+		expect(pills.find((p) => p.ids.includes("bed"))?.end).toBe(20);
+	});
+
+	it("still clamps a resize at a pill of the same audio kind (same lane)", () => {
+		const regions = [
+			...anchorRegionsWithDerivedMs(
+				[
+					{
+						id: "bed",
+						startMs: 10_000,
+						endMs: 20_000,
+						audioAssetId: "a_music",
+						kind: "music",
+						offsetSec: 0,
+						gainDb: 0,
+					},
+				],
+				clips,
+				ids(),
+			),
+			...anchorRegionsWithDerivedMs(
+				[
+					{
+						id: "bed2",
+						startMs: 0,
+						endMs: 5000,
+						audioAssetId: "b_music",
+						kind: "music",
+						offsetSec: 3,
+						gainDb: 0,
+					},
+				],
+				clips,
+				ids(),
+			),
+		];
+		// Two beds draw on the same lane, where an overlap would visually stack them:
+		// the magnet still applies (second file, so the identities differ).
+		const out = replacePillSpan(regions, "bed2", 0, 13_000, clips, ids());
+		expect(coalesceRegionsForRuler(out).find((p) => p.ids.includes("bed2"))?.end).toBe(10);
+	});
 });
 
 describe("legacy groupId must never affect identity (regression: test 1)", () => {
