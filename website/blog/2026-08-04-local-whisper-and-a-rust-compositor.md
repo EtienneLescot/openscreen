@@ -36,7 +36,7 @@ Export at 1080p60 with full effects ran at roughly 8 fps. The same project now r
 
 It is one GPU-resident chain with no CPU readback between stages:
 
-```
+```text
 demux -> hardware decode -> GPU composite -> RGB to NV12 -> hardware encode -> MP4 mux
 ```
 
@@ -58,7 +58,7 @@ There is a CPU backend too, software render and decode, picked automatically whe
 
 Profiling the first working Metal export showed 74% of wall time in decode. The compositor was at 0.2 ms/frame. The hardware decoder pays a fixed per-frame latency, and OpenScreen's own capture writes Constrained Baseline H.264, which software decodes in a few hundred microseconds.
 
-So the decoder is picked by profile now. Baseline goes to software, which came out 2.4x faster end to end on the test export (182 fps against 76). High, HEVC and 4K go to VideoToolbox, where the arbitration flips the other way.
+So the decoder is picked by profile now. Baseline goes to software, which came out 2.4x faster end-to-end on the test export (182 fps against 76). High, HEVC and 4K go to VideoToolbox, where the arbitration flips the other way.
 
 ## Still open
 
