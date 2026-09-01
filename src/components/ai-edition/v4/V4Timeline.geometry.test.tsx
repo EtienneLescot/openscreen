@@ -483,6 +483,15 @@ describe("V4Timeline audio lane drag", () => {
 		expect(selectRegion).toHaveBeenCalledWith("audio", "aud_1", { additive: false });
 	});
 
+	it("selects as an ORDINARY region from the keyboard too", () => {
+		// The lane->document kind mapping lives in `selectPill`, which the pointer and the
+		// keyboard both call. Putting it in the drag instead would have left Enter on a
+		// voiceover pill selecting a region kind the document has never heard of.
+		const { pill, selectRegion } = renderAudio();
+		fireEvent.keyDown(pill, { key: "Enter" });
+		expect(selectRegion).toHaveBeenCalledWith("audio", "aud_1", { additive: false });
+	});
+
 	it("body drag slides the pill and commits once, in move mode", () => {
 		const { pill, updateAudioSpan } = renderAudio();
 		fireEvent.pointerDown(pill, { clientX: 0 });
