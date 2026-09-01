@@ -431,14 +431,22 @@ fn open_device_with_dmabuf_export(
 ) -> Option<(wgpu::Device, wgpu::Queue)> {
     use std::ffi::CStr;
 
-    // Les trois qu'il faut EN PLUS de ce que wgpu demande deja. `dma_buf` depend
-    // de `external_memory_fd`, et le modificateur DRM est ce qui rend la
-    // disposition de l'image intelligible a VAAPI.
-    const WANTED: [&CStr; 3] = [
-        c"VK_KHR_external_memory_fd",
-        c"VK_EXT_external_memory_dma_buf",
-        c"VK_EXT_image_drm_format_modifier",
-    ];
+    // Les deux qu'il faut EN PLUS de ce que wgpu demande deja. `dma_buf` depend
+    // de `external_memory_fd` ; ensemble elles suffisent a exporter la memoire
+    // d'un buffer sous forme de descripteur dmabuf.
+    //
+    // PAS `VK_EXT_image_drm_format_modifier`. Il ne servirait qu'a exporter une
+    // IMAGE, dont la disposition en memoire depend du pavage et doit donc etre
+    // decrite au consommateur. Ce qu'on exporte ici est le buffer de staging que
+    // le compositeur remplit deja par `copy_texture_to_buffer` : lineaire par
+    // construction, avec des pitches qu'on choisit. Il n'y a aucun pavage a
+    // decrire, donc rien a demander au pilote.
+    //
+    // L'exiger etait une erreur mesurable, pas une precaution : c'est
+    // precisement l'extension que le rasteriseur logiciel n'expose pas, donc
+    // reclamer les trois refusait l'export a des machines parfaitement capables
+    // de le faire.
+    const WANTED: [&CStr; 2] = [c"VK_KHR_external_memory_fd", c"VK_EXT_external_memory_dma_buf"];
 
     unsafe {
         adapter.as_hal::<wgpu_hal::api::Vulkan, _, _>(|hal_adapter| {
