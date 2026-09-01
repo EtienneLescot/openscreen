@@ -138,18 +138,43 @@ struct ReadbackRing {
 /// Trois cibles R8Unorm plutot qu'une seule : Y est en pleine resolution et U/V
 /// en demie (4:2:0), et wgpu ne sait pas ecrire des attachements de tailles
 /// differentes dans une meme passe.
+/// Disposition de la chrominance. PAS un gout : une consequence de l'encodeur
+/// qui va consommer la frame. `libopenh264` n'accepte que du YUV420P planaire
+/// (ses `pix_fmts` sont yuv420p/yuvj420p), VAAPI encode depuis du NV12. Le
+/// compositeur doit donc savoir produire les deux.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum YuvFormat {
+    /// U et V dans deux plans `R8Unorm` separes.
+    I420,
+    /// U et V entrelaces dans un seul plan `Rg8Unorm`.
+    Nv12,
+}
+
+/// Les cibles de chrominance, dont la forme depend du format.
+enum Chroma {
+    Planar {
+        _u: wgpu::Texture,
+        _v: wgpu::Texture,
+        u_view: wgpu::TextureView,
+        v_view: wgpu::TextureView,
+        pipe_u: wgpu::RenderPipeline,
+        pipe_v: wgpu::RenderPipeline,
+    },
+    Interleaved {
+        _uv: wgpu::Texture,
+        uv_view: wgpu::TextureView,
+        pipe_uv: wgpu::RenderPipeline,
+    },
+}
+
 struct YuvTargets {
-    /// Gardees en vie pour leurs vues ; seules les vues servent au rendu.
+    /// Gardee en vie pour sa vue ; seule la vue sert au rendu.
     _y: wgpu::Texture,
-    _u: wgpu::Texture,
-    _v: wgpu::Texture,
     y_view: wgpu::TextureView,
-    u_view: wgpu::TextureView,
-    v_view: wgpu::TextureView,
+    chroma: Chroma,
+    fmt: YuvFormat,
     bind: wgpu::BindGroup,
     pipe_y: wgpu::RenderPipeline,
-    pipe_u: wgpu::RenderPipeline,
-    pipe_v: wgpu::RenderPipeline,
     /// Dimensions pour lesquelles tout ceci a ete construit : un resize doit
     /// tout refaire, et comparer ici est moins fragile que de s'en souvenir.
     w: u32,
@@ -159,9 +184,10 @@ struct YuvTargets {
     /// PORTENT du padding, et le lecteur doit le retirer ligne a ligne.
     bpr_y: u32,
     bpr_uv: u32,
-    /// Offsets des trois plans dans le buffer de staging unique. Alignes a 256
-    /// (exigence de `copy_texture_to_buffer`), ce que la taille du plan Y
-    /// garantit deja puisque `bpr_y` l'est.
+    /// Offsets des plans de chrominance dans le buffer de staging unique.
+    /// Alignes a 256 (exigence de `copy_texture_to_buffer`), ce que la taille du
+    /// plan Y garantit deja puisque `bpr_y` l'est. En NV12 il n'y a qu'un plan de
+    /// chrominance : `off_v` vaut alors `off_u` et ne doit pas etre lu.
     off_u: u64,
     off_v: u64,
     total: u64,
@@ -2946,9 +2972,39 @@ impl Compositor {
 
     /// Construit (ou reconstruit apres resize) les cibles et pipelines YUV.
     fn ensure_yuv(&self) -> Result<()> {
+        // I420 par defaut : c'est le seul format que l'encodeur software sait
+        // lire, donc le seul que l'export utilise aujourd'hui.
+        self.ensure_yuv_fmt(YuvFormat::I420)
+    }
+
+    /// La disposition du buffer de staging pour un format donne, sans rien
+    /// construire. Existe pour que le test puisse verifier l'arithmetique sans
+    /// GPU — c'est elle qui doit correspondre a ce que VAAPI attend, et une
+    /// erreur d'un octet y donnerait une image decalee plutot qu'une panne.
+    pub fn yuv_layout_for(w: u32, h: u32, fmt: YuvFormat) -> (u32, u32, u64, u64) {
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+        let bpr_y = w.div_ceil(256) * 256;
+        let chroma_row_bytes = match fmt {
+            YuvFormat::I420 => cw,
+            YuvFormat::Nv12 => cw * 2,
+        };
+        let bpr_uv = chroma_row_bytes.div_ceil(256) * 256;
+        let size_y = u64::from(bpr_y) * u64::from(h);
+        let size_uv = u64::from(bpr_uv) * u64::from(ch);
+        let total = match fmt {
+            YuvFormat::I420 => size_y + 2 * size_uv,
+            YuvFormat::Nv12 => size_y + size_uv,
+        };
+        (bpr_y, bpr_uv, size_y, total)
+    }
+
+    /// Comme `ensure_yuv`, pour un format donne. Reconstruit tout si le format
+    /// change : les cibles, les pipelines et la disposition du buffer en
+    /// dependent toutes.
+    fn ensure_yuv_fmt(&self, fmt: YuvFormat) -> Result<()> {
         let (w, h) = (self.render_w, self.render_h);
         if let Some(t) = self.yuv.borrow().as_ref() {
-            if t.w == w && t.h == h {
+            if t.w == w && t.h == h && t.fmt == fmt {
                 return Ok(());
             }
         }
@@ -2957,24 +3013,21 @@ impl Compositor {
         let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
         let gpu = &self.gpu;
 
-        let mk = |label: &str, tw: u32, th: u32| {
+        let mk = |label: &str, tw: u32, th: u32, f: wgpu::TextureFormat| {
             gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
+                format: f,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             })
         };
-        let y = mk("yuv-y", w, h);
-        let u = mk("yuv-u", cw, ch);
-        let v = mk("yuv-v", cw, ch);
+        let r8 = wgpu::TextureFormat::R8Unorm;
+        let y = mk("yuv-y", w, h, r8);
         let y_view = y.create_view(&wgpu::TextureViewDescriptor::default());
-        let u_view = u.create_view(&wgpu::TextureViewDescriptor::default());
-        let v_view = v.create_view(&wgpu::TextureViewDescriptor::default());
 
         let module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("yuv"),
@@ -3023,7 +3076,7 @@ impl Compositor {
             bind_group_layouts: &[&bgl],
             push_constant_ranges: &[],
         });
-        let mk_pipe = |entry: &str, label: &str| {
+        let mk_pipe = |entry: &str, label: &str, target: wgpu::TextureFormat| {
             gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -3038,7 +3091,7 @@ impl Compositor {
                     entry_point: Some(entry),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::R8Unorm,
+                        format: target,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -3055,27 +3108,66 @@ impl Compositor {
         };
 
         let bpr_y = w.div_ceil(256) * 256;
-        let bpr_uv = cw.div_ceil(256) * 256;
+        // La LARGEUR EN OCTETS d'une ligne de chrominance, pas en texels : en NV12
+        // le plan est `Rg8Unorm`, donc 2 octets par texel. En 1080p, I420 donne
+        // 960 -> 1024 et NV12 1920 -> 2048.
+        let chroma_row_bytes = match fmt {
+            YuvFormat::I420 => cw,
+            YuvFormat::Nv12 => cw * 2,
+        };
+        let bpr_uv = chroma_row_bytes.div_ceil(256) * 256;
         let size_y = u64::from(bpr_y) * u64::from(h);
         let size_uv = u64::from(bpr_uv) * u64::from(ch);
+        let (chroma, off_v, total) = match fmt {
+            YuvFormat::I420 => {
+                let u = mk("yuv-u", cw, ch, r8);
+                let v = mk("yuv-v", cw, ch, r8);
+                let d = wgpu::TextureViewDescriptor::default();
+                let (u_view, v_view) = (u.create_view(&d), v.create_view(&d));
+                (
+                    Chroma::Planar {
+                        _u: u,
+                        _v: v,
+                        u_view,
+                        v_view,
+                        pipe_u: mk_pipe("fs_u", "yuv-u", r8),
+                        pipe_v: mk_pipe("fs_v", "yuv-v", r8),
+                    },
+                    size_y + size_uv,
+                    size_y + 2 * size_uv,
+                )
+            }
+            YuvFormat::Nv12 => {
+                let rg8 = wgpu::TextureFormat::Rg8Unorm;
+                let uv = mk("yuv-uv", cw, ch, rg8);
+                let uv_view = uv.create_view(&wgpu::TextureViewDescriptor::default());
+                (
+                    Chroma::Interleaved {
+                        _uv: uv,
+                        uv_view,
+                        pipe_uv: mk_pipe("fs_uv", "yuv-uv", rg8),
+                    },
+                    // Un seul plan de chrominance : `off_v` duplique `off_u` et
+                    // n'est jamais lu (cf. le commentaire du champ).
+                    size_y,
+                    size_y + size_uv,
+                )
+            }
+        };
         let targets = YuvTargets {
             _y: y,
-            _u: u,
-            _v: v,
             y_view,
-            u_view,
-            v_view,
+            chroma,
+            fmt,
             bind,
-            pipe_y: mk_pipe("fs_y", "yuv-y"),
-            pipe_u: mk_pipe("fs_u", "yuv-u"),
-            pipe_v: mk_pipe("fs_v", "yuv-v"),
+            pipe_y: mk_pipe("fs_y", "yuv-y", r8),
             w,
             h,
             bpr_y,
             bpr_uv,
             off_u: size_y,
-            off_v: size_y + size_uv,
-            total: size_y + 2 * size_uv,
+            off_v,
+            total,
         };
         // Les buffers de l'ancienne taille ne conviennent plus.
         self.readback_yuv.borrow_mut().free.clear();
@@ -3123,11 +3215,18 @@ impl Compositor {
         {
             let g = self.yuv.borrow();
             let t = g.as_ref().expect("ensure_yuv");
-            for (view, pipe) in [
-                (&t.y_view, &t.pipe_y),
-                (&t.u_view, &t.pipe_u),
-                (&t.v_view, &t.pipe_v),
-            ] {
+            // Une passe par plan : Y toujours, puis U et V separement (I420) ou
+            // un seul plan entrelace (NV12).
+            let mut passes: Vec<(&wgpu::TextureView, &wgpu::RenderPipeline)> =
+                vec![(&t.y_view, &t.pipe_y)];
+            match &t.chroma {
+                Chroma::Planar { u_view, v_view, pipe_u, pipe_v, .. } => {
+                    passes.push((u_view, pipe_u));
+                    passes.push((v_view, pipe_v));
+                }
+                Chroma::Interleaved { uv_view, pipe_uv, .. } => passes.push((uv_view, pipe_uv)),
+            }
+            for (view, pipe) in passes {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("yuv-plane"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -3148,11 +3247,19 @@ impl Compositor {
                 pass.set_bind_group(0, &t.bind, &[]);
                 pass.draw(0..3, 0..1);
             }
-            for (tex, off, bpr, pw, ph) in [
-                (&t._y, 0u64, bpr_y, w, h),
-                (&t._u, off_u, bpr_uv, cw, ch),
-                (&t._v, off_v, bpr_uv, cw, ch),
-            ] {
+            // `pw` est en TEXELS (`copy_texture_to_buffer` veut une extent), et
+            // `bpr` en octets : en NV12 le plan de chrominance fait `cw` texels de
+            // 2 octets, d'ou le meme `cw` avec un `bpr_uv` deux fois plus grand.
+            let mut copies: Vec<(&wgpu::Texture, u64, u32, u32, u32)> =
+                vec![(&t._y, 0u64, bpr_y, w, h)];
+            match &t.chroma {
+                Chroma::Planar { _u, _v, .. } => {
+                    copies.push((_u, off_u, bpr_uv, cw, ch));
+                    copies.push((_v, off_v, bpr_uv, cw, ch));
+                }
+                Chroma::Interleaved { _uv, .. } => copies.push((_uv, off_u, bpr_uv, cw, ch)),
+            }
+            for (tex, off, bpr, pw, ph) in copies {
                 encoder.copy_texture_to_buffer(
                     wgpu::TexelCopyTextureInfo {
                         texture: tex,
@@ -3494,6 +3601,34 @@ mod tests {
     /// loin du degrade que le filtrage lineaire pose sur la couture.
     fn half_mask(w: u32, h: u32) -> Vec<u8> {
         (0..w * h).map(|i| if i % w < w / 2 { 0u8 } else { 255u8 }).collect()
+    }
+
+    /// La disposition NV12 doit etre EXACTEMENT celle que le pilote produit pour
+    /// une image NV12 lineaire, parce que c'est elle qu'on decrira a VAAPI dans
+    /// un `AVDRMFrameDescriptor`. Les valeurs ci-dessous ne sont pas devinees :
+    /// elles ont ete relevees sur ce materiel via `vkGetImageSubresourceLayout`
+    /// d'une `VkImage` NV12 en `DRM_FORMAT_MOD_LINEAR` (Y pitch 2048, UV a
+    /// l'offset 2211840, pitch 2048, total 3317760). Un ecart d'un octet ici
+    /// donnerait une image decalee et non une panne, d'ou le test.
+    #[test]
+    fn nv12_layout_matches_what_the_driver_produces() {
+        let (bpr_y, bpr_uv, off_uv, total) =
+            Compositor::yuv_layout_for(1920, 1080, YuvFormat::Nv12);
+        assert_eq!(bpr_y, 2048, "pitch du plan Y");
+        assert_eq!(bpr_uv, 2048, "pitch du plan UV entrelace (960 texels x 2 octets)");
+        assert_eq!(off_uv, 2_211_840, "offset du plan UV");
+        assert_eq!(total, 3_317_760, "taille totale");
+    }
+
+    /// I420 reste ce qu'il etait : c'est le format que l'encodeur software lit,
+    /// et ce test est ce qui garantit qu'ajouter NV12 ne l'a pas deplace.
+    #[test]
+    fn i420_layout_is_unchanged() {
+        let (bpr_y, bpr_uv, off_u, total) =
+            Compositor::yuv_layout_for(1920, 1080, YuvFormat::I420);
+        assert_eq!((bpr_y, bpr_uv), (2048, 1024));
+        assert_eq!(off_u, 2_211_840);
+        assert_eq!(total, 2_211_840 + 2 * 1024 * 540);
     }
 
     /// Dessine UN calque plein cadre sur le RT, par-dessus `clear`, et rend le
