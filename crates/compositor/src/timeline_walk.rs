@@ -159,12 +159,14 @@ pub(crate) unsafe fn walk_composited_timeline(
 ) -> Result<u64> {
     let cursor_enabled = scene.as_ref().map(|s| s.cursor.show).unwrap_or(false);
     let cursor_smoothing = scene.as_ref().map(|s| s.cursor.smoothing).unwrap_or(0.0);
-    // Régions éditées converties une fois : elles sont les mêmes pour tous les clips, et la
-    // conversion n'a pas à être refaite à chaque piste chargée.
-    let cursor_motion: Vec<crate::cursor::CursorMotionRegion> =
-        scene.as_ref().map(|s| s.cursor.motion.iter().map(Into::into).collect()).unwrap_or_default();
-    let mut cursor_tracks: HashMap<String, CursorTrack> = HashMap::new();
-    let mut cursor_active_path: Option<String> = None;
+    // Régions éditées gardées dans leur forme de scène : chacune appartient au clip dont le
+    // temps source la porte (`clipIndex`), donc la conversion vers la géométrie du sampler
+    // se fait PAR CLIP dans la boucle — une même recording coupée en deux clips ne partage
+    // pas ses régions, et la piste éditée qui en découle non plus.
+    let scene_cursor_motion: Vec<crate::scene::SceneCursorMotionRegion> =
+        scene.as_ref().map(|s| s.cursor.motion.clone()).unwrap_or_default();
+    let mut cursor_tracks: HashMap<(usize, String), CursorTrack> = HashMap::new();
+    let mut cursor_active: Option<(usize, String)> = None;
 
     let mut frames: u64 = 0;
 
@@ -284,7 +286,18 @@ pub(crate) unsafe fn walk_composited_timeline(
         }
 
         if cursor_enabled {
-            if !cursor_tracks.contains_key(&clip.screen) {
+            // La clé du cache est (clip, fichier), pas le fichier seul : deux coupes d'une
+            // même recording peuvent porter des régions différentes, et leur piste éditée
+            // respective ne doit pas se confondre.
+            let cursor_key = (clip_index, clip.screen.clone());
+            if !cursor_tracks.contains_key(&cursor_key) {
+                let cursor_motion: Vec<crate::cursor::CursorMotionRegion> = scene_cursor_motion
+                    .iter()
+                    // Sans propriétaire (`clipIndex` absent, scènes d'avant le champ) la
+                    // région s'applique à toutes les pistes — le comportement historique.
+                    .filter(|r| r.clip_index.map(|i| i == clip_index).unwrap_or(true))
+                    .map(Into::into)
+                    .collect();
                 let path = format!("{}.cursor.json", clip.screen);
                 if let Ok(raw) = CursorTrack::load(&path, 0.0, 24.0 * 3600.0) {
                     // Trajectoire éditée d'ABORD, lissage ensuite : le preset définit le tracé,
@@ -292,19 +305,19 @@ pub(crate) unsafe fn walk_composited_timeline(
                     // l'autre ordre les portions éditées resteraient nettes au milieu d'une
                     // piste amortie, et le slider n'aurait plus d'effet sur elles.
                     let edited = raw.with_motion(&cursor_motion);
-                    cursor_tracks.insert(clip.screen.clone(), edited.smoothed(cursor_smoothing));
+                    cursor_tracks.insert((clip_index, clip.screen.clone()), edited.smoothed(cursor_smoothing));
                 }
                 // absente/illisible → pas d'entrée : ce clip s'exporte sans curseur (visible,
                 // pas masqué en un curseur fantôme d'un autre clip).
             }
-            if cursor_active_path.as_deref() != Some(clip.screen.as_str()) {
-                if let Some(track) = cursor_tracks.get(&clip.screen) {
+            if cursor_active.as_ref() != Some(&cursor_key) {
+                if let Some(track) = cursor_tracks.get(&cursor_key) {
                     comp.set_cursor(track.clone());
-                    cursor_active_path = Some(clip.screen.clone());
+                    cursor_active = Some(cursor_key);
                 } else {
                     comp.clear_cursor();
                     comp.set_cursor_time(None);
-                    cursor_active_path = None;
+                    cursor_active = None;
                 }
             }
         }
@@ -327,7 +340,7 @@ pub(crate) unsafe fn walk_composited_timeline(
                 }
 
                 comp.set_timeline_time(Some(target_source_time as f32));
-                if cursor_enabled && cursor_active_path.is_some() {
+                if cursor_enabled && cursor_active.is_some() {
                     comp.set_cursor_time(Some(target_source_time as f32));
                 }
                 comp.compose_frame(sf, wf, frames as f32, cfg)?;

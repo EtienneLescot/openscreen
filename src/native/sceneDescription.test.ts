@@ -1863,9 +1863,24 @@ describe("buildSceneDescription.cursor.motion", () => {
 	});
 
 	it("hands the geometry over resolved, in the compositor's own vocabulary", () => {
-		const scene = buildSceneDescription(makeDoc({ cursorMotionRegions: [region] }));
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a1", originalPath: "/rec.mp4" })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a1",
+					sourceStartSec: 3,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 7,
+				}),
+			],
+			cursorMotionRegions: [region],
+		});
+		const scene = buildSceneDescription(doc);
 		expect(scene.cursor.motion?.[0]).toEqual({
 			id: "cm_1",
+			clipIndex: 0,
 			startSec: 3.5,
 			endSec: 5.5,
 			startPoint: { cx: 0.1, cy: 0.2 },
@@ -1876,6 +1891,52 @@ describe("buildSceneDescription.cursor.motion", () => {
 			speed: 2,
 			easing: "ease-out",
 		});
+	});
+
+	it("tags each region with its owning clip's index in SCENE order", () => {
+		// The compositor filters the region list per clip before applying it to that
+		// clip's cursor track, so the tag is what keeps the second recording's regions
+		// off the first recording's track in a multi-asset project. The index is the
+		// position in `SceneDescription.clips` — the timeline-sorted order, which here
+		// differs from the document order the fixtures are declared in.
+		const asset = makeAsset({ id: "a1", originalPath: "/rec.mp4" });
+		const doc = makeDoc({
+			assets: [asset],
+			clips: [
+				makeClip({
+					id: "c2",
+					assetId: "a1",
+					sourceStartSec: 20,
+					sourceEndSec: 25,
+					timelineStartSec: 10,
+					timelineEndSec: 15,
+				}),
+				makeClip({
+					id: "c1",
+					assetId: "a1",
+					sourceStartSec: 3,
+					sourceEndSec: 10,
+					timelineStartSec: 2,
+					timelineEndSec: 7,
+				}),
+			],
+			cursorMotionRegions: [
+				{ ...region, id: "second-clip", clipId: "c2" },
+				{ ...region, id: "first-clip", clipId: "c1" },
+				{ ...region, id: "deleted-clip", clipId: "gone" },
+				{ ...region, id: "legacy", clipId: undefined },
+			],
+		});
+		const byId = new Map(
+			(buildSceneDescription(doc).cursor.motion ?? []).map((r) => [r.id, r.clipIndex]),
+		);
+		expect(byId.get("first-clip")).toBe(0);
+		expect(byId.get("second-clip")).toBe(1);
+		// A clip that no longer resolves (deleted, hidden) and a region that never
+		// carried one are emitted UNTAGGED: they apply to every track, the historical
+		// behaviour, rather than silently vanishing from the render.
+		expect(byId.get("deleted-clip")).toBeUndefined();
+		expect(byId.get("legacy")).toBeUndefined();
 	});
 
 	it("emits an empty list for a project that never opened the feature", () => {

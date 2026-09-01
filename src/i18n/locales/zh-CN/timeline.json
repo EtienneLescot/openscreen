@@ -10,7 +10,7 @@
 		"addAnnotation": "添加标注 (A)",
 		"addSpeed": "添加速度 (S)",
 		"addCameraFullscreen": "添加全屏摄像头 (C)",
-		"addCursorMotion": "Split cursor path into editable sections"
+		"addCursorMotion": "将光标路径分割为可编辑的区域"
 	},
 	"hints": {
 		"pressZoom": "按 Z 添加缩放",
@@ -18,7 +18,7 @@
 		"pressAnnotation": "按 A 添加标注",
 		"pressSpeed": "按 S 添加速度",
 		"pressCameraFullscreen": "按 C 添加一个全屏摄像头片段",
-		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
+		"cursorMotionEmpty": "先将播放头放在光标活动之前，再使用路径工具"
 	},
 	"labels": {
 		"pan": "平移",
@@ -91,20 +91,20 @@
 	},
 	"cursorMotion": {
 		"segmentKinds": {
-			"move": "Move",
-			"hold": "Hold"
+			"move": "移动",
+			"hold": "停顿"
 		},
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "原始录制",
+			"straight": "直线",
+			"arc": "弧线",
+			"wave": "波浪",
+			"loop": "环绕",
+			"overshoot": "过冲"
 		},
-		"noCursorData": "This recording has no cursor data to direct.",
-		"noFollowingClick": "No recorded click after the playhead to move towards.",
-		"createdSegments": "Split the cursor path into {{count}} sections.",
-		"failed": "Could not read the cursor recording"
+		"noCursorData": "此录制没有可编排的光标数据。",
+		"noFollowingClick": "播放头之后没有可作为目标的已录制点击。",
+		"createdSegments": "已将光标路径分割为 {{count}} 个区域。",
+		"failed": "无法读取光标录制数据"
 	}
 }

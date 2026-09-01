@@ -405,6 +405,11 @@ pub struct ScenePoint {
 pub struct SceneCursorMotionRegion {
     #[allow(dead_code)]
     pub id: String,
+    /// Index du clip dont le temps SOURCE porte cette région (voir `SceneZoomRegion`).
+    /// Absent pour les scènes d'avant le champ — la région s'applique alors à toutes les
+    /// pistes curseur, le comportement historique.
+    #[serde(default)]
+    pub clip_index: Option<usize>,
     pub start_sec: f32,
     pub end_sec: f32,
     pub start_point: ScenePoint,
@@ -886,6 +891,7 @@ mod annotation_tests {
             "clickBounce": 1.0, "clipToBounds": false, "theme": "system",
             "motion": [{
                 "id": "r1",
+                "clipIndex": 2,
                 "startSec": 1.0, "endSec": 2.5,
                 "startPoint": { "cx": 0.1, "cy": 0.2 },
                 "endPoint": { "cx": 0.8, "cy": 0.4 },
@@ -902,6 +908,7 @@ mod annotation_tests {
         assert_eq!(r.start_sec, 1.0);
         assert_eq!(r.control_point.cy, 0.9);
         assert_eq!(r.cycles, 3);
+        assert_eq!(r.clip_index, Some(2), "le propriétaire de la région doit traverser le pont");
     }
 
     /// Une scène d'avant ce champ doit rester lisible : `motion` absent → aucune région,
@@ -914,5 +921,23 @@ mod annotation_tests {
         }"#;
         let cursor: SceneCursor = serde_json::from_str(json).expect("scène héritée");
         assert!(cursor.motion.is_empty());
+    }
+
+    /// Une région d'avant `clipIndex` reste lisible et sans propriétaire : elle s'applique
+    /// à toutes les pistes, le comportement historique — pas un échec de parse.
+    #[test]
+    fn a_cursor_motion_region_without_clip_index_parses_unowned() {
+        let json = r#"{
+            "show": true, "size": 1.0, "smoothing": 0.0, "motionBlur": 0.0,
+            "clickBounce": 1.0, "clipToBounds": false, "theme": "system",
+            "motion": [{
+                "id": "legacy", "startSec": 0.0, "endSec": 1.0,
+                "startPoint": { "cx": 0.0, "cy": 0.0 }, "endPoint": { "cx": 1.0, "cy": 1.0 },
+                "controlPoint": { "cx": 0.5, "cy": 0.5 },
+                "preset": "straight", "cycles": 1, "speed": 1.0, "easing": "linear"
+            }]
+        }"#;
+        let cursor: SceneCursor = serde_json::from_str(json).expect("région héritée");
+        assert_eq!(cursor.motion[0].clip_index, None);
     }
 }

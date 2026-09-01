@@ -329,35 +329,35 @@
 		"help": "Điều chỉnh mức đầu ra của âm thanh. Nó được áp dụng giống hệt nhau trong bản xem trước và khi xuất."
 	},
 	"cursorMotion": {
-		"title": "Cursor Motion",
-		"preset": "Path preset",
+		"title": "Quỹ đạo con trỏ",
+		"preset": "Hình dạng quỹ đạo",
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "Như bản ghi",
+			"straight": "Thẳng",
+			"arc": "Cung",
+			"wave": "Sóng",
+			"loop": "Vòng lặp",
+			"overshoot": "Vượt quá"
 		},
-		"speed": "Movement speed",
-		"speedHint": "Higher speeds cover the distance early and settle near the target. The section still ends on the recorded click, at its original time.",
-		"cycles": "Turns",
-		"easing": "Timing",
+		"speed": "Tốc độ di chuyển",
+		"speedHint": "Tốc độ càng cao, con trỏ càng sớm đi hết quãng đường và dừng gần mục tiêu. Phần vẫn kết thúc ở cú nhấp đã ghi, đúng thời điểm gốc.",
+		"cycles": "Số vòng",
+		"easing": "Nhịp độ",
 		"easings": {
-			"linear": "Linear",
-			"ease-in-out": "Smooth",
-			"ease-in": "Accelerate",
-			"ease-out": "Decelerate"
+			"linear": "Tuyến tính",
+			"ease-in-out": "Mượt",
+			"ease-in": "Tăng tốc",
+			"ease-out": "Giảm tốc"
 		},
-		"anchorHint": "Sections start and end where the cursor stopped or clicked, so they cannot be dragged. Split one to move a boundary.",
-		"holdDescription": "The cursor stays where it stopped. Nothing to shape here — this section is what keeps it still while the moves around it are directed.",
-		"applyToAllMoves": "Apply to all move sections",
-		"appliedToAllMoves": "Preset, speed, turns and timing copied to every move section.",
-		"splitAtPlayhead": "Split at playhead",
-		"splitOutsideRegion": "Move the playhead inside this section to split it.",
-		"delete": "Delete Cursor Motion",
-		"previousSection": "Previous section",
-		"nextSection": "Next section",
-		"sectionCounter": "Section {{current}} / {{total}}"
+		"anchorHint": "Các phần bắt đầu và kết thúc nơi con trỏ dừng lại hoặc nhấp, nên không thể kéo. Hãy chia một phần để di chuyển ranh giới.",
+		"holdDescription": "Con trỏ giữ nguyên vị trí nó dừng lại. Không có gì để nắn hình ở đây — phần này chính là thứ giữ nó yên trong khi các chuyển động xung quanh được dàn dựng.",
+		"applyToAllMoves": "Áp dụng cho mọi phần di chuyển",
+		"appliedToAllMoves": "Đã sao chép hình dạng, tốc độ, số vòng và nhịp độ vào mọi phần di chuyển.",
+		"splitAtPlayhead": "Chia tại đầu phát",
+		"splitOutsideRegion": "Hãy chuyển đầu phát vào trong phần này để chia nó.",
+		"delete": "Xóa quỹ đạo con trỏ",
+		"previousSection": "Phần trước",
+		"nextSection": "Phần tiếp theo",
+		"sectionCounter": "Phần {{current}} / {{total}}"
 	}
 }

@@ -330,35 +330,35 @@
 		"help": "調整音訊輸出電平。它在預覽與匯出中的效果完全一致。"
 	},
 	"cursorMotion": {
-		"title": "Cursor Motion",
-		"preset": "Path preset",
+		"title": "游標軌跡",
+		"preset": "路徑形狀",
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "原始錄製",
+			"straight": "直線",
+			"arc": "弧線",
+			"wave": "波浪",
+			"loop": "環繞",
+			"overshoot": "過衝"
 		},
-		"speed": "Movement speed",
-		"speedHint": "Higher speeds cover the distance early and settle near the target. The section still ends on the recorded click, at its original time.",
-		"cycles": "Turns",
-		"easing": "Timing",
+		"speed": "移動速度",
+		"speedHint": "速度越高，游標越早走完全程並在目標附近停穩。該區段仍會在原始時刻結束於錄製的點擊處。",
+		"cycles": "圈數",
+		"easing": "節奏",
 		"easings": {
-			"linear": "Linear",
-			"ease-in-out": "Smooth",
-			"ease-in": "Accelerate",
-			"ease-out": "Decelerate"
+			"linear": "線性",
+			"ease-in-out": "平滑",
+			"ease-in": "加速",
+			"ease-out": "減速"
 		},
-		"anchorHint": "Sections start and end where the cursor stopped or clicked, so they cannot be dragged. Split one to move a boundary.",
-		"holdDescription": "The cursor stays where it stopped. Nothing to shape here — this section is what keeps it still while the moves around it are directed.",
-		"applyToAllMoves": "Apply to all move sections",
-		"appliedToAllMoves": "Preset, speed, turns and timing copied to every move section.",
-		"splitAtPlayhead": "Split at playhead",
-		"splitOutsideRegion": "Move the playhead inside this section to split it.",
-		"delete": "Delete Cursor Motion",
-		"previousSection": "Previous section",
-		"nextSection": "Next section",
-		"sectionCounter": "Section {{current}} / {{total}}"
+		"anchorHint": "區段的起點與終點就是游標停頓或點擊的位置，因此無法拖曳。請分割區段來移動邊界。",
+		"holdDescription": "游標停在原處。這裡沒有可塑形的內容——這個區段的用意，就是在周圍的移動被編排時讓游標保持不動。",
+		"applyToAllMoves": "套用至所有移動區段",
+		"appliedToAllMoves": "已將形狀、速度、圈數與節奏複製到每個移動區段。",
+		"splitAtPlayhead": "在播放頭處分割",
+		"splitOutsideRegion": "將播放頭移到這個區段內即可分割。",
+		"delete": "刪除游標軌跡",
+		"previousSection": "上一個區段",
+		"nextSection": "下一個區段",
+		"sectionCounter": "區段 {{current}} / {{total}}"
 	}
 }

@@ -329,35 +329,35 @@
 		"help": "اضبط مستوى إخراج الصوت. يُطبَّق بالطريقة نفسها في المعاينة وعند التصدير."
 	},
 	"cursorMotion": {
-		"title": "Cursor Motion",
-		"preset": "Path preset",
+		"title": "حركة المؤشر",
+		"preset": "شكل المسار",
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "كما سُجّلت",
+			"straight": "مستقيم",
+			"arc": "قوس",
+			"wave": "موجة",
+			"loop": "حلقة",
+			"overshoot": "تجاوز"
 		},
-		"speed": "Movement speed",
-		"speedHint": "Higher speeds cover the distance early and settle near the target. The section still ends on the recorded click, at its original time.",
-		"cycles": "Turns",
-		"easing": "Timing",
+		"speed": "سرعة الحركة",
+		"speedHint": "السرعات الأعلى تقطع المسافة مبكرًا وتستقر قرب الهدف. تنتهي المقطع دائمًا عند النقرة المسجلة، في وقتها الأصلي.",
+		"cycles": "الدورات",
+		"easing": "الإيقاع",
 		"easings": {
-			"linear": "Linear",
-			"ease-in-out": "Smooth",
-			"ease-in": "Accelerate",
-			"ease-out": "Decelerate"
+			"linear": "خطي",
+			"ease-in-out": "سلس",
+			"ease-in": "تسارع",
+			"ease-out": "تباطؤ"
 		},
-		"anchorHint": "Sections start and end where the cursor stopped or clicked, so they cannot be dragged. Split one to move a boundary.",
-		"holdDescription": "The cursor stays where it stopped. Nothing to shape here — this section is what keeps it still while the moves around it are directed.",
-		"applyToAllMoves": "Apply to all move sections",
-		"appliedToAllMoves": "Preset, speed, turns and timing copied to every move section.",
-		"splitAtPlayhead": "Split at playhead",
-		"splitOutsideRegion": "Move the playhead inside this section to split it.",
-		"delete": "Delete Cursor Motion",
-		"previousSection": "Previous section",
-		"nextSection": "Next section",
-		"sectionCounter": "Section {{current}} / {{total}}"
+		"anchorHint": "تبدأ المقاطع وتنتهي حيث توقف المؤشر أو نقر، لذا لا يمكن سحبها. قسّم مقطعًا لتحريك حدّ.",
+		"holdDescription": "يبقى المؤشر حيث توقف. لا شيء لتشكيله هنا — هذا المقطع هو ما يُبقيه ثابتًا بينما تُوجَّه الحركات من حوله.",
+		"applyToAllMoves": "تطبيق على كل مقاطع الحركة",
+		"appliedToAllMoves": "تم نسخ الشكل والسرعة والدورات والإيقاع إلى كل مقاطع الحركة.",
+		"splitAtPlayhead": "تقسيم عند رأس التشغيل",
+		"splitOutsideRegion": "انقل رأس التشغيل إلى داخل هذا المقطع لتقسيمه.",
+		"delete": "حذف حركة المؤشر",
+		"previousSection": "المقطع السابق",
+		"nextSection": "المقطع التالي",
+		"sectionCounter": "المقطع {{current}} / {{total}}"
 	}
 }

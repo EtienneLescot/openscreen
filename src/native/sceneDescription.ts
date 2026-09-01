@@ -356,6 +356,12 @@ export type SceneCursorMotionEasing = "linear" | "ease-in-out" | "ease-in" | "ea
  *  preset. */
 export interface SceneCursorMotionRegion {
 	id: string;
+	/** Index of the clip (within `SceneDescription.clips`) whose source time this region's
+	 *  `startSec`/`endSec` are expressed in — the compositor filters the region list per
+	 *  clip before applying it to that clip's cursor track. Unset for a region whose owning
+	 *  clip can't be resolved (deleted, hidden): it then applies to every clip, the
+	 *  historical behaviour of payloads from before the field existed. */
+	clipIndex?: number;
 	startSec: number;
 	endSec: number;
 	/** Normalised screen-frame position the region starts from. */
@@ -518,6 +524,11 @@ export function buildSceneDescription(
 
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
 	const visibleClips = resolveVisibleClips(document);
+	// Region → clip ownership resolves through this map: `clipId` (document space) →
+	// index in `SceneDescription.clips` (scene space), the identity the compositor's
+	// per-clip cursor-motion filtering keys on. Order IS the identity here: `clips`
+	// below and this map must both read `visibleClips`, never two different orderings.
+	const clipIndexById = new Map(visibleClips.map((clip, index) => [clip.id, index] as const));
 	const clips: CompositorClipInput[] = visibleClips.flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);
 		if (!asset?.originalPath) return [];
@@ -855,17 +866,19 @@ export function buildSceneDescription(
 			// `sourceStartSec`/`sourceEndSec` are stored in. Projecting them would
 			// convert a value that is already in the target base.
 			//
-			// LIMITATION, multi-asset: `Scene.cursor.motion` carries no owner, and the
-			// compositor applies the whole list to whichever track is loaded. In a
-			// project whose clips draw on two different RECORDINGS, the second one's
-			// regions land on the first one's track. Single-asset projects — every
-			// project this feature has been used on so far — are unaffected. The fix
-			// belongs in the contract (an owner field, filtered in `live.rs` beside
-			// `resolve_scene_clip_index`), not here.
+			// Each region is tagged with its owning clip's index in `SceneDescription.clips`
+			// (resolved from the document region's `clipId`), and the compositor filters
+			// the list per clip before applying it to that clip's track — so in a project
+			// whose clips draw on two different RECORDINGS, the second one's regions land
+			// on the second one's track, not the first's. A region whose `clipId` no longer
+			// resolves (clip deleted or hidden) or that never carried one (pre-field
+			// documents) is emitted UNTAGGED and applies to every track, the historical
+			// behaviour.
 			motion: (document.cursorMotionRegions ?? []).map((region) => {
 				const startSec = region.sourceStartSec ?? 0;
 				return {
 					id: region.id,
+					clipIndex: region.clipId ? clipIndexById.get(region.clipId) : undefined,
 					startSec,
 					endSec: region.sourceEndSec ?? startSec,
 					startPoint: region.startPoint,

@@ -10,7 +10,7 @@
 		"addAnnotation": "注釈を追加 (A)",
 		"addSpeed": "再生速度を追加 (S)",
 		"addCameraFullscreen": "フルスクリーンカメラを追加 (C)",
-		"addCursorMotion": "Split cursor path into editable sections"
+		"addCursorMotion": "カーソルパスを編集可能なセクションに分割"
 	},
 	"hints": {
 		"pressZoom": "Zキーを押してズームを追加",
@@ -18,7 +18,7 @@
 		"pressAnnotation": "Aキーを押して注釈を追加",
 		"pressSpeed": "Sキーを押して再生速度を追加",
 		"pressCameraFullscreen": "Cキーを押してフルスクリーンカメラのセグメントを追加",
-		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
+		"cursorMotionEmpty": "再生ヘッドをカーソルの動きの前に置いてから、パスツールを使用してください"
 	},
 	"labels": {
 		"pan": "移動",
@@ -91,20 +91,20 @@
 	},
 	"cursorMotion": {
 		"segmentKinds": {
-			"move": "Move",
-			"hold": "Hold"
+			"move": "移動",
+			"hold": "静止"
 		},
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "録画通り",
+			"straight": "直線",
+			"arc": "弧",
+			"wave": "波",
+			"loop": "ループ",
+			"overshoot": "オーバーシュート"
 		},
-		"noCursorData": "This recording has no cursor data to direct.",
-		"noFollowingClick": "No recorded click after the playhead to move towards.",
-		"createdSegments": "Split the cursor path into {{count}} sections.",
-		"failed": "Could not read the cursor recording"
+		"noCursorData": "この録画には演出できるカーソルデータがありません。",
+		"noFollowingClick": "再生ヘッドより後ろに、目標にできる録画済みクリックがありません。",
+		"createdSegments": "カーソルパスを {{count}} 個のセクションに分割しました。",
+		"failed": "カーソルの録画データを読み込めませんでした"
 	}
 }

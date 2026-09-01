@@ -848,9 +848,11 @@ export function NewEditorShell() {
 	// copied is what the user is looking at — the old version dug into the raw
 	// document with a ternary chain that mapped a trim to "zoom" and sent
 	// cameraFullscreen down the speed branch, where neither could ever be found.
-	const handleCopyRegion = useCallback(async () => {
+	// Resolves to whether anything actually landed on the clipboard: Ctrl+X must
+	// not delete a selection whose copy was refused or failed.
+	const handleCopyRegion = useCallback(async (): Promise<boolean> => {
 		const sel = tl.selection;
-		if (!sel) return;
+		if (!sel) return false;
 		const { copyRegion } = await import("@/lib/ai-edition/store/regionClipboard");
 
 		// A trim is stored in SOURCE time against a clip anchor, so there is no
@@ -863,21 +865,22 @@ export function NewEditorShell() {
 			const group = coalescedTrimGroups(tl.trimRanges, tl.clips).find((g) =>
 				g.ids.includes(sel.id),
 			);
-			if (!group) return;
+			if (!group) return false;
 			copyRegion({ kind: "trim", region: { durationSec: group.end - group.start } });
 			setCopiedClipId(null);
 			toast.success("Region copied");
-			return;
+			return true;
 		}
 
 		// A cursor motion region is a path between two RESOLVED points — the cursor's
 		// actual position at a rest or a recorded click. Pasting it at the playhead
 		// would draw that path between two places the cursor never was. The inspector's
 		// "apply to all move sections" is the operation that means what copy would mean
-		// here, and it copies the styling without the anchors.
+		// here, and it copies the styling without the anchors. Cut is refused with it:
+		// there is no clipboard entry to justify deleting the section.
 		if (sel.kind === "cursorMotion") {
 			toast.info("Cursor motion is tied to its anchors — use Apply to all moves instead");
-			return;
+			return false;
 		}
 
 		const source =
@@ -889,11 +892,12 @@ export function NewEditorShell() {
 						? tl.speedRegions
 						: tl.cameraFullscreenRegions;
 		const region = (source as Array<{ id: string }>).find((r) => r.id === sel.id);
-		if (!region) return;
+		if (!region) return false;
 		copyRegion({ kind: sel.kind, region: region as unknown as Record<string, unknown> });
 		// One clipboard wins at a time: a copied pill retires the copied clip.
 		setCopiedClipId(null);
 		toast.success("Region copied");
+		return true;
 	}, [tl]);
 
 	useEffect(() => {
@@ -985,11 +989,15 @@ export function NewEditorShell() {
 			}
 			if (ctrl && e.key.toLowerCase() === "x") {
 				// F2.8 — cut: remember the region in the clipboard, then remove it.
-				// Trims included now that copying one means copying its length.
+				// Trims included now that copying one means copying its length. The
+				// removal only happens on a confirmed copy — cursor-motion selections
+				// refuse theirs, and deleting uncopied would make Ctrl+X a delete.
 				if (tl.selection) {
 					e.preventDefault();
 					const cut = tl.selection;
-					void handleCopyRegion().then(() => tl.removeRegion(cut.kind, cut.id));
+					void handleCopyRegion().then((copied) => {
+						if (copied) tl.removeRegion(cut.kind, cut.id);
+					});
 					return;
 				}
 			}

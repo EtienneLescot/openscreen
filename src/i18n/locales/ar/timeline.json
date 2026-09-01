@@ -10,7 +10,7 @@
 		"addAnnotation": "إضافة شرح (A)",
 		"addSpeed": "إضافة سرعة (S)",
 		"addCameraFullscreen": "إضافة كاميرا كاملة الشاشة (C)",
-		"addCursorMotion": "Split cursor path into editable sections"
+		"addCursorMotion": "تقسيم مسار المؤشر إلى مقاطع قابلة للتحرير"
 	},
 	"hints": {
 		"pressZoom": "اضغط Z لإضافة تكبير",
@@ -18,7 +18,7 @@
 		"pressAnnotation": "اضغط A لإضافة شرح",
 		"pressSpeed": "اضغط S لإضافة سرعة",
 		"pressCameraFullscreen": "اضغط C لإضافة مقطع كاميرا كاملة الشاشة",
-		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
+		"cursorMotionEmpty": "ضع رأس التشغيل قبل بعض نشاط المؤشر، ثم استخدم أداة المسار"
 	},
 	"labels": {
 		"pan": "تحريك",
@@ -91,20 +91,20 @@
 	},
 	"cursorMotion": {
 		"segmentKinds": {
-			"move": "Move",
-			"hold": "Hold"
+			"move": "حركة",
+			"hold": "توقف"
 		},
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "كما سُجّلت",
+			"straight": "مستقيم",
+			"arc": "قوس",
+			"wave": "موجة",
+			"loop": "حلقة",
+			"overshoot": "تجاوز"
 		},
-		"noCursorData": "This recording has no cursor data to direct.",
-		"noFollowingClick": "No recorded click after the playhead to move towards.",
-		"createdSegments": "Split the cursor path into {{count}} sections.",
-		"failed": "Could not read the cursor recording"
+		"noCursorData": "لا يحتوي هذا التسجيل على بيانات مؤشر لتوجيهها.",
+		"noFollowingClick": "لا توجد نقرة مسجلة بعد رأس التشغيل للتحرك نحوها.",
+		"createdSegments": "تم تقسيم مسار المؤشر إلى {{count}} مقاطع.",
+		"failed": "تعذّرت قراءة تسجيل المؤشر"
 	}
 }

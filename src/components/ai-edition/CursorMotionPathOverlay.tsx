@@ -14,7 +14,7 @@
 // overlay stretches with the stage, and every stroke carries
 // `vector-effect="non-scaling-stroke"` so that stretch never thickens a line.
 
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useMemo, useRef } from "react";
 import type { AxcutCursorMotionRegion } from "@/lib/ai-edition/schema";
 import { toModelCursorMotionRegion } from "@/lib/ai-edition/timeline/cursorMotionRegions";
@@ -159,6 +159,46 @@ export function CursorMotionPathOverlay({
 		onControlPointCommit?.();
 	}, [onControlPointCommit]);
 
+	// The handle is focusable, so it must also be movable from the keyboard: arrows
+	// nudge both coordinates (Shift = coarse step), each press landing as one committed
+	// edit — the drag commits once on release, a keypress is its own release.
+	const onKeyDown = useCallback(
+		(e: ReactKeyboardEvent) => {
+			const step = e.shiftKey ? 0.1 : 0.01;
+			let dx = 0;
+			let dy = 0;
+			switch (e.key) {
+				case "ArrowLeft":
+					dx = -step;
+					break;
+				case "ArrowRight":
+					dx = step;
+					break;
+				case "ArrowUp":
+					dy = -step;
+					break;
+				case "ArrowDown":
+					dy = step;
+					break;
+				default:
+					return;
+			}
+			e.preventDefault();
+			onControlPointChange(region.id, {
+				cx: clamp01(region.controlPoint.cx + dx),
+				cy: clamp01(region.controlPoint.cy + dy),
+			});
+			onControlPointCommit?.();
+		},
+		[
+			onControlPointChange,
+			onControlPointCommit,
+			region.controlPoint.cx,
+			region.controlPoint.cy,
+			region.id,
+		],
+	);
+
 	const controlX = region.controlPoint.cx * 100;
 	const controlY = region.controlPoint.cy * 100;
 	const shapeable = region.segmentKind === "move" && region.preset !== "recorded";
@@ -245,8 +285,12 @@ export function CursorMotionPathOverlay({
 					tabIndex={0}
 					aria-label="Cursor path control point"
 					aria-valuenow={Math.round(region.controlPoint.cx * 100)}
+					// The value is two-dimensional; `aria-valuenow` alone would announce
+					// only the horizontal half of where the handle sits.
+					aria-valuetext={`x ${Math.round(region.controlPoint.cx * 100)}%, y ${Math.round(region.controlPoint.cy * 100)}%`}
 					aria-valuemin={0}
 					aria-valuemax={100}
+					onKeyDown={onKeyDown}
 					onPointerDown={onPointerDown}
 					onPointerMove={onPointerMove}
 					onPointerUp={endDrag}

@@ -10,7 +10,7 @@
 		"addAnnotation": "Добавить аннотацию (A)",
 		"addSpeed": "Изменить скорость (S)",
 		"addCameraFullscreen": "Добавить камеру на весь экран (C)",
-		"addCursorMotion": "Split cursor path into editable sections"
+		"addCursorMotion": "Разбить траекторию курсора на редактируемые разделы"
 	},
 	"hints": {
 		"pressZoom": "Нажмите Z для добавления масштабирования",
@@ -18,7 +18,7 @@
 		"pressAnnotation": "Нажмите A для добавления аннотации",
 		"pressSpeed": "Нажмите S для изменения скорости",
 		"pressCameraFullscreen": "Нажмите C, чтобы добавить сегмент камеры на весь экран",
-		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
+		"cursorMotionEmpty": "Поставьте курсор воспроизведения перед участком с активностью курсора, затем включите инструмент траектории"
 	},
 	"labels": {
 		"pan": "Панорамирование",
@@ -91,20 +91,20 @@
 	},
 	"cursorMotion": {
 		"segmentKinds": {
-			"move": "Move",
-			"hold": "Hold"
+			"move": "Движение",
+			"hold": "Пауза"
 		},
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "Как записано",
+			"straight": "Прямая",
+			"arc": "Дуга",
+			"wave": "Волна",
+			"loop": "Петля",
+			"overshoot": "Перелёт"
 		},
-		"noCursorData": "This recording has no cursor data to direct.",
-		"noFollowingClick": "No recorded click after the playhead to move towards.",
-		"createdSegments": "Split the cursor path into {{count}} sections.",
-		"failed": "Could not read the cursor recording"
+		"noCursorData": "В этой записи нет данных курсора для постановки.",
+		"noFollowingClick": "После курсора воспроизведения нет записанного щелчка, к которому двигаться.",
+		"createdSegments": "Траектория курсора разбита на разделы: {{count}}.",
+		"failed": "Не удалось прочитать запись курсора"
 	}
 }

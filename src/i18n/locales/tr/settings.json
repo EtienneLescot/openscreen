@@ -329,35 +329,35 @@
 		"help": "Ses çıkış seviyesini ayarlayın. Önizlemede ve dışa aktarmada aynı şekilde uygulanır."
 	},
 	"cursorMotion": {
-		"title": "Cursor Motion",
-		"preset": "Path preset",
+		"title": "İmleç hareketi",
+		"preset": "Yol şekli",
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "Kaydedildiği gibi",
+			"straight": "Düz",
+			"arc": "Yay",
+			"wave": "Dalga",
+			"loop": "Döngü",
+			"overshoot": "Aşma"
 		},
-		"speed": "Movement speed",
-		"speedHint": "Higher speeds cover the distance early and settle near the target. The section still ends on the recorded click, at its original time.",
-		"cycles": "Turns",
-		"easing": "Timing",
+		"speed": "Hareket hızı",
+		"speedHint": "Daha yüksek hızlar mesafeyi daha erken kateder ve hedefin yakınında durur. Bölüm yine kayıtlı tıklamada, özgün zamanında biter.",
+		"cycles": "Tur sayısı",
+		"easing": "Zamanlama",
 		"easings": {
-			"linear": "Linear",
-			"ease-in-out": "Smooth",
-			"ease-in": "Accelerate",
-			"ease-out": "Decelerate"
+			"linear": "Doğrusal",
+			"ease-in-out": "Akıcı",
+			"ease-in": "Hızlanma",
+			"ease-out": "Yavaşlama"
 		},
-		"anchorHint": "Sections start and end where the cursor stopped or clicked, so they cannot be dragged. Split one to move a boundary.",
-		"holdDescription": "The cursor stays where it stopped. Nothing to shape here — this section is what keeps it still while the moves around it are directed.",
-		"applyToAllMoves": "Apply to all move sections",
-		"appliedToAllMoves": "Preset, speed, turns and timing copied to every move section.",
-		"splitAtPlayhead": "Split at playhead",
-		"splitOutsideRegion": "Move the playhead inside this section to split it.",
-		"delete": "Delete Cursor Motion",
-		"previousSection": "Previous section",
-		"nextSection": "Next section",
-		"sectionCounter": "Section {{current}} / {{total}}"
+		"anchorHint": "Bölümler imlecin durduğu veya tıkladığı yerde başlayıp bittiği için sürüklenemez. Bir sınırı taşımak için bir bölümü bölün.",
+		"holdDescription": "İmleç durduğu yerde kalır. Burada şekillenecek bir şey yok — bu bölüm, çevresindeki hareketler yönlendirilirken onu sabit tutan şeydir.",
+		"applyToAllMoves": "Tüm hareket bölümlerine uygula",
+		"appliedToAllMoves": "Yol şekli, hız, tur sayısı ve zamanlama her hareket bölümüne kopyalandı.",
+		"splitAtPlayhead": "Oynatma imlecinde böl",
+		"splitOutsideRegion": "Bölmek için oynatma imlecini bu bölümün içine taşıyın.",
+		"delete": "İmleç hareketini sil",
+		"previousSection": "Önceki bölüm",
+		"nextSection": "Sonraki bölüm",
+		"sectionCounter": "Bölüm {{current}} / {{total}}"
 	}
 }

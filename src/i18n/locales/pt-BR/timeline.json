@@ -10,7 +10,7 @@
 		"addAnnotation": "Adicionar Anotação (A)",
 		"addSpeed": "Adicionar Velocidade (S)",
 		"addCameraFullscreen": "Adicionar Câmera em Tela Cheia (C)",
-		"addCursorMotion": "Split cursor path into editable sections"
+		"addCursorMotion": "Dividir a trajetória do cursor em seções editáveis"
 	},
 	"hints": {
 		"pressZoom": "Pressione Z para adicionar zoom",
@@ -18,7 +18,7 @@
 		"pressAnnotation": "Pressione A para adicionar anotação",
 		"pressSpeed": "Pressione S para adicionar velocidade",
 		"pressCameraFullscreen": "Pressione C para adicionar um segmento de Câmera em Tela Cheia",
-		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
+		"cursorMotionEmpty": "Posicione o cursor de reprodução antes de alguma atividade do ponteiro do mouse e use a ferramenta de trajetória"
 	},
 	"labels": {
 		"pan": "Mover",
@@ -91,20 +91,20 @@
 	},
 	"cursorMotion": {
 		"segmentKinds": {
-			"move": "Move",
-			"hold": "Hold"
+			"move": "Movimento",
+			"hold": "Pausa"
 		},
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "Gravado",
+			"straight": "Reta",
+			"arc": "Arco",
+			"wave": "Onda",
+			"loop": "Laço",
+			"overshoot": "Ultrapassagem"
 		},
-		"noCursorData": "This recording has no cursor data to direct.",
-		"noFollowingClick": "No recorded click after the playhead to move towards.",
-		"createdSegments": "Split the cursor path into {{count}} sections.",
-		"failed": "Could not read the cursor recording"
+		"noCursorData": "Esta gravação não tem dados de cursor para dirigir.",
+		"noFollowingClick": "Nenhum clique gravado após o cursor de reprodução para mover em direção.",
+		"createdSegments": "Trajetória do cursor dividida em {{count}} seções.",
+		"failed": "Não foi possível ler a gravação do cursor"
 	}
 }

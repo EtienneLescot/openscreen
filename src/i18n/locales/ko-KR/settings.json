@@ -329,35 +329,35 @@
 		"help": "오디오 출력 레벨을 조정합니다. 미리보기와 내보내기에 동일하게 적용됩니다."
 	},
 	"cursorMotion": {
-		"title": "Cursor Motion",
-		"preset": "Path preset",
+		"title": "커서 움직임",
+		"preset": "경로 모양",
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "녹화 그대로",
+			"straight": "직선",
+			"arc": "호",
+			"wave": "물결",
+			"loop": "루프",
+			"overshoot": "오버슈트"
 		},
-		"speed": "Movement speed",
-		"speedHint": "Higher speeds cover the distance early and settle near the target. The section still ends on the recorded click, at its original time.",
-		"cycles": "Turns",
-		"easing": "Timing",
+		"speed": "이동 속도",
+		"speedHint": "속도가 높을수록 커서가 거리를 일찍 이동하고 대상 근처에 안정됩니다. 구간은 항상 녹화된 클릭 시점에 그대로 끝납니다.",
+		"cycles": "회전 수",
+		"easing": "타이밍",
 		"easings": {
-			"linear": "Linear",
-			"ease-in-out": "Smooth",
-			"ease-in": "Accelerate",
-			"ease-out": "Decelerate"
+			"linear": "선형",
+			"ease-in-out": "부드럽게",
+			"ease-in": "가속",
+			"ease-out": "감속"
 		},
-		"anchorHint": "Sections start and end where the cursor stopped or clicked, so they cannot be dragged. Split one to move a boundary.",
-		"holdDescription": "The cursor stays where it stopped. Nothing to shape here — this section is what keeps it still while the moves around it are directed.",
-		"applyToAllMoves": "Apply to all move sections",
-		"appliedToAllMoves": "Preset, speed, turns and timing copied to every move section.",
-		"splitAtPlayhead": "Split at playhead",
-		"splitOutsideRegion": "Move the playhead inside this section to split it.",
-		"delete": "Delete Cursor Motion",
-		"previousSection": "Previous section",
-		"nextSection": "Next section",
-		"sectionCounter": "Section {{current}} / {{total}}"
+		"anchorHint": "구간은 커서가 멈추거나 클릭한 지점에서 시작하고 끝나므로 드래그할 수 없습니다. 경계를 옮기려면 구간을 나누세요.",
+		"holdDescription": "커서는 멈춘 위치에 그대로 있습니다. 여기서 모양을 바꿀 것은 없습니다. 이 구간이 주변 움직임이 연출되는 동안 커서를 가만히 두는 역할을 합니다.",
+		"applyToAllMoves": "모든 이동 구간에 적용",
+		"appliedToAllMoves": "모양, 속도, 회전 수, 타이밍을 모든 이동 구간에 복사했습니다.",
+		"splitAtPlayhead": "재생 헤드에서 나누기",
+		"splitOutsideRegion": "나누려면 재생 헤드를 이 구간 안으로 옮기세요.",
+		"delete": "커서 움직임 삭제",
+		"previousSection": "이전 구간",
+		"nextSection": "다음 구간",
+		"sectionCounter": "구간 {{current}} / {{total}}"
 	}
 }

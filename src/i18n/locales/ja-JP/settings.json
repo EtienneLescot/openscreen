@@ -329,35 +329,35 @@
 		"help": "音声の出力レベルを調整します。プレビューと書き出しで同じように適用されます。"
 	},
 	"cursorMotion": {
-		"title": "Cursor Motion",
-		"preset": "Path preset",
+		"title": "カーソルの動き",
+		"preset": "パスの形状",
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "録画通り",
+			"straight": "直線",
+			"arc": "弧",
+			"wave": "波",
+			"loop": "ループ",
+			"overshoot": "オーバーシュート"
 		},
-		"speed": "Movement speed",
-		"speedHint": "Higher speeds cover the distance early and settle near the target. The section still ends on the recorded click, at its original time.",
-		"cycles": "Turns",
-		"easing": "Timing",
+		"speed": "移動速度",
+		"speedHint": "速度を上げるほど、カーソルは早く距離をカバーして目標付近に落ち着きます。セクションは常に録画されたクリックの時刻どおりに終わります。",
+		"cycles": "周回数",
+		"easing": "タイミング",
 		"easings": {
-			"linear": "Linear",
-			"ease-in-out": "Smooth",
-			"ease-in": "Accelerate",
-			"ease-out": "Decelerate"
+			"linear": "リニア",
+			"ease-in-out": "スムーズ",
+			"ease-in": "加速",
+			"ease-out": "減速"
 		},
-		"anchorHint": "Sections start and end where the cursor stopped or clicked, so they cannot be dragged. Split one to move a boundary.",
-		"holdDescription": "The cursor stays where it stopped. Nothing to shape here — this section is what keeps it still while the moves around it are directed.",
-		"applyToAllMoves": "Apply to all move sections",
-		"appliedToAllMoves": "Preset, speed, turns and timing copied to every move section.",
-		"splitAtPlayhead": "Split at playhead",
-		"splitOutsideRegion": "Move the playhead inside this section to split it.",
-		"delete": "Delete Cursor Motion",
-		"previousSection": "Previous section",
-		"nextSection": "Next section",
-		"sectionCounter": "Section {{current}} / {{total}}"
+		"anchorHint": "セクションはカーソルが停止またはクリックした位置で始まり終わるため、ドラッグできません。境界を動かすには分割してください。",
+		"holdDescription": "カーソルは停止した位置にとどまります。ここで形を変えるものはありません。このセクションが、周囲の動きを演出している間の静止を担っています。",
+		"applyToAllMoves": "すべての移動セクションに適用",
+		"appliedToAllMoves": "形状・速度・周回数・タイミングをすべての移動セクションにコピーしました。",
+		"splitAtPlayhead": "再生ヘッドで分割",
+		"splitOutsideRegion": "分割するには、再生ヘッドをこのセクション内に移動してください。",
+		"delete": "カーソルの動きを削除",
+		"previousSection": "前のセクション",
+		"nextSection": "次のセクション",
+		"sectionCounter": "セクション {{current}} / {{total}}"
 	}
 }

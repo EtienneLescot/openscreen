@@ -10,7 +10,7 @@
 		"addAnnotation": "Açıklama Ekle (A)",
 		"addSpeed": "Hız Ekle (S)",
 		"addCameraFullscreen": "Tam Ekran Kamera Ekle (C)",
-		"addCursorMotion": "Split cursor path into editable sections"
+		"addCursorMotion": "İmleç yolunu düzenlenebilir bölümlere ayır"
 	},
 	"hints": {
 		"pressZoom": "Yakınlaştırma eklemek için Z tuşuna basın",
@@ -18,7 +18,7 @@
 		"pressAnnotation": "Açıklama eklemek için A tuşuna basın",
 		"pressSpeed": "Hız eklemek için S tuşuna basın",
 		"pressCameraFullscreen": "Tam Ekran Kamera bölümü eklemek için C tuşuna basın",
-		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
+		"cursorMotionEmpty": "Oynatma imlecini bir imleç etkinliğinin önüne koyun, sonra yol aracını kullanın"
 	},
 	"labels": {
 		"pan": "Kaydır",
@@ -91,20 +91,20 @@
 	},
 	"cursorMotion": {
 		"segmentKinds": {
-			"move": "Move",
-			"hold": "Hold"
+			"move": "Hareket",
+			"hold": "Bekleme"
 		},
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "Kaydedildiği gibi",
+			"straight": "Düz",
+			"arc": "Yay",
+			"wave": "Dalga",
+			"loop": "Döngü",
+			"overshoot": "Aşma"
 		},
-		"noCursorData": "This recording has no cursor data to direct.",
-		"noFollowingClick": "No recorded click after the playhead to move towards.",
-		"createdSegments": "Split the cursor path into {{count}} sections.",
-		"failed": "Could not read the cursor recording"
+		"noCursorData": "Bu kayıtta yönlendirilecek imleç verisi yok.",
+		"noFollowingClick": "Oynatma imlecinden sonra hareket edilecek kayıtlı bir tıklama yok.",
+		"createdSegments": "İmleç yolu {{count}} bölüme bölündü.",
+		"failed": "İmleç kaydı okunamadı"
 	}
 }

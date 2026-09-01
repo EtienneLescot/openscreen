@@ -329,35 +329,35 @@
 		"help": "调整音频输出电平。它在预览和导出中的效果完全一致。"
 	},
 	"cursorMotion": {
-		"title": "Cursor Motion",
-		"preset": "Path preset",
+		"title": "光标轨迹",
+		"preset": "路径形状",
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "原始录制",
+			"straight": "直线",
+			"arc": "弧线",
+			"wave": "波浪",
+			"loop": "环绕",
+			"overshoot": "过冲"
 		},
-		"speed": "Movement speed",
-		"speedHint": "Higher speeds cover the distance early and settle near the target. The section still ends on the recorded click, at its original time.",
-		"cycles": "Turns",
-		"easing": "Timing",
+		"speed": "移动速度",
+		"speedHint": "速度越高，光标越早走完全程并在目标附近停稳。该区域仍会在原始时刻结束于录制的点击处。",
+		"cycles": "圈数",
+		"easing": "节奏",
 		"easings": {
-			"linear": "Linear",
-			"ease-in-out": "Smooth",
-			"ease-in": "Accelerate",
-			"ease-out": "Decelerate"
+			"linear": "线性",
+			"ease-in-out": "平滑",
+			"ease-in": "加速",
+			"ease-out": "减速"
 		},
-		"anchorHint": "Sections start and end where the cursor stopped or clicked, so they cannot be dragged. Split one to move a boundary.",
-		"holdDescription": "The cursor stays where it stopped. Nothing to shape here — this section is what keeps it still while the moves around it are directed.",
-		"applyToAllMoves": "Apply to all move sections",
-		"appliedToAllMoves": "Preset, speed, turns and timing copied to every move section.",
-		"splitAtPlayhead": "Split at playhead",
-		"splitOutsideRegion": "Move the playhead inside this section to split it.",
-		"delete": "Delete Cursor Motion",
-		"previousSection": "Previous section",
-		"nextSection": "Next section",
-		"sectionCounter": "Section {{current}} / {{total}}"
+		"anchorHint": "区域的起止点就是光标停顿或点击的位置，因此无法拖动。请分割区域来移动边界。",
+		"holdDescription": "光标停在原处。这里没有可塑形的内容——该区域的作用是在周围移动被编排时保持光标不动。",
+		"applyToAllMoves": "应用到所有移动区域",
+		"appliedToAllMoves": "已将形状、速度、圈数和节奏复制到每个移动区域。",
+		"splitAtPlayhead": "在播放头处分割",
+		"splitOutsideRegion": "将播放头移到该区域内即可分割。",
+		"delete": "删除光标轨迹",
+		"previousSection": "上一区域",
+		"nextSection": "下一区域",
+		"sectionCounter": "区域 {{current}} / {{total}}"
 	}
 }

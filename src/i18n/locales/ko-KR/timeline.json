@@ -10,7 +10,7 @@
 		"addAnnotation": "주석 추가 (A)",
 		"addSpeed": "속도 추가 (S)",
 		"addCameraFullscreen": "전체 화면 카메라 추가 (C)",
-		"addCursorMotion": "Split cursor path into editable sections"
+		"addCursorMotion": "커서 경로를 편집 가능한 구간으로 나누기"
 	},
 	"hints": {
 		"pressZoom": "Z를 눌러 줌 추가",
@@ -18,7 +18,7 @@
 		"pressAnnotation": "A를 눌러 주석 추가",
 		"pressSpeed": "S를 눌러 속도 추가",
 		"pressCameraFullscreen": "C를 눌러 전체 화면 카메라 구간을 추가하세요",
-		"cursorMotionEmpty": "Place the playhead before some cursor activity, then use the path tool"
+		"cursorMotionEmpty": "재생 헤드를 커서 활동 이전 위치에 둔 뒤 경로 도구를 사용하세요"
 	},
 	"labels": {
 		"pan": "이동",
@@ -91,20 +91,20 @@
 	},
 	"cursorMotion": {
 		"segmentKinds": {
-			"move": "Move",
-			"hold": "Hold"
+			"move": "이동",
+			"hold": "정지"
 		},
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "녹화 그대로",
+			"straight": "직선",
+			"arc": "호",
+			"wave": "물결",
+			"loop": "루프",
+			"overshoot": "오버슈트"
 		},
-		"noCursorData": "This recording has no cursor data to direct.",
-		"noFollowingClick": "No recorded click after the playhead to move towards.",
-		"createdSegments": "Split the cursor path into {{count}} sections.",
-		"failed": "Could not read the cursor recording"
+		"noCursorData": "이 녹화에는 연출할 커서 데이터가 없습니다.",
+		"noFollowingClick": "재생 헤드 이후에 이동할 대상인 녹화된 클릭이 없습니다.",
+		"createdSegments": "커서 경로를 {{count}}개 구간으로 나눴습니다.",
+		"failed": "커서 녹화를 읽지 못했습니다"
 	}
 }

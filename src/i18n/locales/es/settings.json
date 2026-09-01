@@ -329,35 +329,35 @@
 		"help": "Ajusta el nivel de salida del audio. Se aplica igual en la vista previa y en la exportación."
 	},
 	"cursorMotion": {
-		"title": "Cursor Motion",
-		"preset": "Path preset",
+		"title": "Movimiento del cursor",
+		"preset": "Forma del trayecto",
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "Grabado",
+			"straight": "Recta",
+			"arc": "Arco",
+			"wave": "Onda",
+			"loop": "Bucle",
+			"overshoot": "Sobrepaso"
 		},
-		"speed": "Movement speed",
-		"speedHint": "Higher speeds cover the distance early and settle near the target. The section still ends on the recorded click, at its original time.",
-		"cycles": "Turns",
-		"easing": "Timing",
+		"speed": "Velocidad del movimiento",
+		"speedHint": "A mayor velocidad, el cursor recorre la distancia antes y se detiene cerca del objetivo. La sección termina igualmente en el clic grabado, en su instante original.",
+		"cycles": "Vueltas",
+		"easing": "Ritmo",
 		"easings": {
-			"linear": "Linear",
-			"ease-in-out": "Smooth",
-			"ease-in": "Accelerate",
-			"ease-out": "Decelerate"
+			"linear": "Lineal",
+			"ease-in-out": "Suave",
+			"ease-in": "Acelerar",
+			"ease-out": "Desacelerar"
 		},
-		"anchorHint": "Sections start and end where the cursor stopped or clicked, so they cannot be dragged. Split one to move a boundary.",
-		"holdDescription": "The cursor stays where it stopped. Nothing to shape here — this section is what keeps it still while the moves around it are directed.",
-		"applyToAllMoves": "Apply to all move sections",
-		"appliedToAllMoves": "Preset, speed, turns and timing copied to every move section.",
-		"splitAtPlayhead": "Split at playhead",
-		"splitOutsideRegion": "Move the playhead inside this section to split it.",
-		"delete": "Delete Cursor Motion",
-		"previousSection": "Previous section",
-		"nextSection": "Next section",
-		"sectionCounter": "Section {{current}} / {{total}}"
+		"anchorHint": "Las secciones empiezan y terminan donde el cursor se detuvo o hizo clic, así que no se pueden arrastrar. Divide una para mover un límite.",
+		"holdDescription": "El cursor se queda donde se detuvo. Aquí no hay nada que dar forma: esta sección es lo que lo mantiene quieto mientras se dirigen los movimientos a su alrededor.",
+		"applyToAllMoves": "Aplicar a todas las secciones de movimiento",
+		"appliedToAllMoves": "Forma, velocidad, vueltas y ritmo copiados a cada sección de movimiento.",
+		"splitAtPlayhead": "Dividir en el cabezal de reproducción",
+		"splitOutsideRegion": "Mueve el cabezal de reproducción dentro de esta sección para dividirla.",
+		"delete": "Eliminar movimiento del cursor",
+		"previousSection": "Sección anterior",
+		"nextSection": "Sección siguiente",
+		"sectionCounter": "Sección {{current}} / {{total}}"
 	}
 }

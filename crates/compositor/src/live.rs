@@ -1532,9 +1532,22 @@ unsafe fn render_thread(
         // les lire au-dessus les prendrait à l'état du tour précédent — une trajectoire
         // éditée n'apparaîtrait qu'à la frame suivante, ou jamais si rien d'autre ne bouge.
         if let Some(raw) = &raw_cursor {
+            // Régions du clip ACTIF seulement : chacune appartient au clip dont le temps
+            // source la porte (`clipIndex`), et la piste rechargée est celle de ce clip.
+            // Sans propriétaire (`clipIndex` absent, scènes d'avant le champ) une région
+            // s'applique à toutes les pistes — le comportement historique. Le filtre lit
+            // `active_clip_index`, rafraîchi par les blocs set_active_clip et scène
+            // ci-dessus : placé avant, il prendrait le clip du tour précédent.
             let motion: Vec<crate::cursor::CursorMotionRegion> = full_scene
                 .as_ref()
-                .map(|s| s.cursor.motion.iter().map(Into::into).collect())
+                .map(|s| {
+                    s.cursor
+                        .motion
+                        .iter()
+                        .filter(|r| r.clip_index.map(|i| i == active_clip_index).unwrap_or(true))
+                        .map(Into::into)
+                        .collect()
+                })
                 .unwrap_or_default();
             if ip.cursor_smoothing != last_smoothing || motion != last_motion {
                 comp.set_cursor(raw.with_motion(&motion).smoothed(ip.cursor_smoothing));

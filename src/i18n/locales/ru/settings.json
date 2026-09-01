@@ -329,35 +329,35 @@
 		"help": "Настройте уровень звука на выходе. Он одинаково применяется в предпросмотре и при экспорте."
 	},
 	"cursorMotion": {
-		"title": "Cursor Motion",
-		"preset": "Path preset",
+		"title": "Движение курсора",
+		"preset": "Форма траектории",
 		"presets": {
-			"recorded": "Recorded",
-			"straight": "Straight",
-			"arc": "Arc",
-			"wave": "Wave",
-			"loop": "Loop",
-			"overshoot": "Overshoot"
+			"recorded": "Как записано",
+			"straight": "Прямая",
+			"arc": "Дуга",
+			"wave": "Волна",
+			"loop": "Петля",
+			"overshoot": "Перелёт"
 		},
-		"speed": "Movement speed",
-		"speedHint": "Higher speeds cover the distance early and settle near the target. The section still ends on the recorded click, at its original time.",
-		"cycles": "Turns",
-		"easing": "Timing",
+		"speed": "Скорость движения",
+		"speedHint": "Чем выше скорость, тем раньше курсор проходит расстояние и замирает у цели. Раздел по-прежнему заканчивается записанным щелчком в исходный момент.",
+		"cycles": "Обороты",
+		"easing": "Темп",
 		"easings": {
-			"linear": "Linear",
-			"ease-in-out": "Smooth",
-			"ease-in": "Accelerate",
-			"ease-out": "Decelerate"
+			"linear": "Линейный",
+			"ease-in-out": "Плавный",
+			"ease-in": "Разгон",
+			"ease-out": "Торможение"
 		},
-		"anchorHint": "Sections start and end where the cursor stopped or clicked, so they cannot be dragged. Split one to move a boundary.",
-		"holdDescription": "The cursor stays where it stopped. Nothing to shape here — this section is what keeps it still while the moves around it are directed.",
-		"applyToAllMoves": "Apply to all move sections",
-		"appliedToAllMoves": "Preset, speed, turns and timing copied to every move section.",
-		"splitAtPlayhead": "Split at playhead",
-		"splitOutsideRegion": "Move the playhead inside this section to split it.",
-		"delete": "Delete Cursor Motion",
-		"previousSection": "Previous section",
-		"nextSection": "Next section",
-		"sectionCounter": "Section {{current}} / {{total}}"
+		"anchorHint": "Разделы начинаются и заканчиваются там, где курсор остановился или щёлкнул, поэтому их нельзя перетаскивать. Разделите раздел, чтобы сдвинуть границу.",
+		"holdDescription": "Курсор остаётся там, где остановился. Здесь нечего формировать — этот раздел и есть то, что удерживает его на месте, пока движениями вокруг управляют.",
+		"applyToAllMoves": "Применить ко всем разделам движения",
+		"appliedToAllMoves": "Форма, скорость, обороты и темп скопированы в каждый раздел движения.",
+		"splitAtPlayhead": "Разделить по курсору воспроизведения",
+		"splitOutsideRegion": "Переместите курсор воспроизведения внутрь этого раздела, чтобы разделить его.",
+		"delete": "Удалить движение курсора",
+		"previousSection": "Предыдущий раздел",
+		"nextSection": "Следующий раздел",
+		"sectionCounter": "Раздел {{current}} / {{total}}"
 	}
 }

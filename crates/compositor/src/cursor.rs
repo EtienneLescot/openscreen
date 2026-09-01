@@ -50,6 +50,34 @@ fn sample_at(samples: &[(f32, f32, f32)], t: f32) -> Option<(f32, f32)> {
     Some((a.1 + (b.1 - a.1) * f, a.2 + (b.2 - a.2) * f))
 }
 
+/// Sous-intervalles de `[lo, hi]` une fois retranchée l'union de `blockers` : ce qui reste
+/// du span d'une région après que les régions postérieures — qui gagnent le recouvrement —
+/// y ont masqué leurs portions. Un `blockers` vide rend `[(lo, hi)]` ; une région entièrement
+/// recouverte rend une liste vide et ne pose aucun point.
+fn visible_spans(lo: f32, hi: f32, blockers: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let mut sorted: Vec<(f32, f32)> =
+        blockers.iter().copied().filter(|(b_lo, b_hi)| *b_lo < hi && *b_hi > lo).collect();
+    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut spans = Vec::new();
+    let mut cursor = lo;
+    for (b_lo, b_hi) in sorted {
+        if b_hi <= cursor {
+            continue; // déjà masqué par un bloqueur précédent
+        }
+        if b_lo > cursor {
+            spans.push((cursor, b_lo));
+        }
+        cursor = b_hi;
+        if cursor >= hi {
+            return spans;
+        }
+    }
+    if cursor < hi {
+        spans.push((cursor, hi));
+    }
+    spans
+}
+
 /// Port de `advanceFollowFocus` (`cursorFollowUtils.ts`) : lissage exponentiel dont le facteur
 /// croît avec la distance à la cible (loin = rattrape vite, près = décélère), corrigé en temps
 /// pour être indépendant de la cadence.
@@ -255,16 +283,27 @@ impl CursorTrack {
         let mut samples: Vec<(f32, f32, f32)> =
             self.samples.iter().filter(|(t, _, _)| covering(*t).is_none()).copied().collect();
 
-        for region in &active {
-            let span = region.end_s - region.start_s;
-            let steps = ((span / STEP_S).round() as usize).max(1);
-            for i in 0..=steps {
-                // Le dernier point est posé sur `end_s` exact plutôt que sur la grille : la
-                // couture avec l'échantillon brut suivant doit être franche, sinon
-                // l'interpolation de `sample_at` traverse un trou et coupe le raccord.
-                let t = if i == steps { region.end_s } else { region.start_s + i as f32 * STEP_S };
-                let (x, y) = sample_region(region, t);
-                samples.push((t, x, y));
+        for (i, region) in active.iter().enumerate() {
+            // La dernière région doit gagner sur TOUT son recouvrement, pas seulement aux
+            // instants échantillonnés : chaque région ne pose donc des points que sur ses
+            // sous-intervalles visibles (son span moins ceux des régions qui la suivent
+            // dans la liste). Ré-échantillonner un span recouvert entier entrelacerait les
+            // grilles des deux régions, et `sample_at` interpolerait d'une courbe à l'autre
+            // entre les points.
+            let blockers: Vec<(f32, f32)> =
+                active[i + 1..].iter().map(|r| (r.start_s, r.end_s)).collect();
+            for (lo, hi) in visible_spans(region.start_s, region.end_s, &blockers) {
+                let span = hi - lo;
+                let steps = ((span / STEP_S).round() as usize).max(1);
+                for k in 0..=steps {
+                    // Le dernier point est posé sur la borne exacte du sous-intervalle plutôt
+                    // que sur la grille : la couture avec ce qui suit (télémétrie brute ou la
+                    // région masquante elle-même) doit être franche, sinon l'interpolation de
+                    // `sample_at` traverse un trou et coupe le raccord.
+                    let t = if k == steps { hi } else { lo + k as f32 * STEP_S };
+                    let (x, y) = sample_region(region, t);
+                    samples.push((t, x, y));
+                }
             }
         }
 
@@ -561,6 +600,39 @@ mod tests {
             detour_track().with_motion(&[region(CursorMotionPreset::Arc), second]);
         let (_, y) = edited.at(2.0).unwrap();
         assert!((y - 0.8).abs() < 1e-3, "la seconde région devrait l'emporter, obtenu {y}");
+    }
+
+    /// …et pas seulement AUX instants échantillonnés : ré-échantillonner chaque région sur
+    /// son span entier entrelace les grilles, et `sample_at` interpolerait d'une courbe à
+    /// l'autre entre deux points. Un temps hors grille des deux côtés doit donc rendre la
+    /// courbe de la région postérieure, au point près.
+    #[test]
+    fn overlap_keeps_the_last_region_between_sample_times() {
+        let mut second = region(CursorMotionPreset::Straight);
+        second.start_s = 1.25;
+        second.end_s = 2.0;
+        second.end = (1.0, 0.8);
+        let edited =
+            detour_track().with_motion(&[region(CursorMotionPreset::Arc), second.clone()]);
+
+        // 1.401 n'est multiple de la grille 240 Hz d'aucune des deux régions (ancrées à
+        // 1.0 et 1.25) : toute coincidence de points est exclue du chemin de `sample_at`.
+        let t = 1.401;
+        let (x, y) = edited.at(t).expect("dans le recouvrement");
+        let (want_x, want_y) = sample_region(&second, t);
+        assert!(
+            (x - want_x).abs() < 1e-3 && (y - want_y).abs() < 1e-3,
+            "la seconde région doit régner sur tout le recouvrement, obtenu ({x}, {y}), sa courbe dit ({want_x}, {want_y})"
+        );
+
+        // Avant le recouvrement, la première région reste seule maîtresse de son tracé.
+        let t = 1.1234;
+        let (x, y) = edited.at(t).expect("avant le recouvrement");
+        let (want_x, want_y) = sample_region(&region(CursorMotionPreset::Arc), t);
+        assert!(
+            (x - want_x).abs() < 1e-3 && (y - want_y).abs() < 1e-3,
+            "la première région doit rester seule avant le recouvrement, obtenu ({x}, {y}), sa courbe dit ({want_x}, {want_y})"
+        );
     }
 
     /// L'édition déplace la trajectoire, pas la chronologie : clics et états gardent leurs
