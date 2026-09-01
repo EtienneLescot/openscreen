@@ -368,7 +368,10 @@ describe("V4Timeline audio lane drag", () => {
 		origin: "user" as const,
 	});
 
-	function renderAudio(trackOverrides: Partial<ReturnType<typeof makeTrack>> = {}) {
+	function renderAudio(
+		trackOverrides: Partial<ReturnType<typeof makeTrack>> = {},
+		props: { onAddVoiceover?: () => void } = {},
+	) {
 		const placeAudioTrack = vi.fn(
 			async (_id: string, _span: { startMs: number; endMs: number; offsetMs?: number }) => {
 				/* the drag only awaits it */
@@ -405,7 +408,7 @@ describe("V4Timeline audio lane drag", () => {
 				onPrevClip={vi.fn()}
 				onNextClip={vi.fn()}
 				onEditClip={vi.fn()}
-				onAddVoiceover={vi.fn()}
+				onAddVoiceover={props.onAddVoiceover ?? vi.fn()}
 			/>,
 		);
 		return { pill: screen.getByTitle("vo"), placeAudioTrack, selectAudioTrack };
@@ -413,6 +416,17 @@ describe("V4Timeline audio lane drag", () => {
 
 	// 900px / 1800s = 0.5 px per second, so +90px is +180s.
 	const secForPx = (px: number) => (px / VIEWPORT_PX) * TOTAL_SEC;
+
+	it("offers a voiceover button in the toolbar", () => {
+		// The audio lane's empty state is the only OTHER affordance for `V`, and it
+		// disappears the moment anything is in the lane — so after the first import
+		// the shortcut was undiscoverable.
+		const onAddVoiceover = vi.fn();
+		renderAudio({}, { onAddVoiceover });
+		const button = screen.getByLabelText("audio.addVoiceover");
+		fireEvent.click(button);
+		expect(onAddVoiceover).toHaveBeenCalledTimes(1);
+	});
 
 	it("selects the track on pointer-down before any movement", () => {
 		const { pill, selectAudioTrack } = renderAudio();
