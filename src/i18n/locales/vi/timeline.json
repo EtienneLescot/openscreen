@@ -86,13 +86,16 @@
 		"smartCutsNeedsTranscript": "Cần có bản phiên âm",
 		"smartCutsNoAudio": "Media này không có âm thanh",
 		"smartCutsNoSpeech": "Không phát hiện giọng nói",
-		"smartCutsFailed": "Phiên âm thất bại — thử lại trong Media"
+		"smartCutsFailed": "Phiên âm thất bại — thử lại trong Media",
+		"addAudioTooltip": "Thêm âm thanh"
 	},
 	"audio": {
 		"addVoiceover": "Thêm thuyết minh",
+		"addVoiceoverHint": "Ghi âm lời thuyết minh trên video của bạn",
 		"subtitle": "Đặt lớp thuyết minh hoặc nhạc nền lên dòng thời gian",
 		"record": "Ghi âm thuyết minh",
 		"importFile": "Nhập tệp âm thanh",
+		"importFileHint": "Nhập nhạc hoặc tệp âm thanh",
 		"recording": "Đang ghi",
 		"stop": "Dừng",
 		"micDenied": "Quyền truy cập micrô bị từ chối",

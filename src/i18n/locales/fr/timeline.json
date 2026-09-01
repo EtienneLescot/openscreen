@@ -86,13 +86,16 @@
 		"smartCutsNeedsTranscript": "Nécessite une transcription",
 		"smartCutsNoAudio": "Ce média n'a pas d'audio",
 		"smartCutsNoSpeech": "Aucune parole détectée",
-		"smartCutsFailed": "Échec de la transcription — relancez-la depuis Médias"
+		"smartCutsFailed": "Échec de la transcription — relancez-la depuis Médias",
+		"addAudioTooltip": "Ajouter un audio"
 	},
 	"audio": {
 		"addVoiceover": "Ajouter une voix off",
+		"addVoiceoverHint": "Enregistrez une narration par-dessus votre vidéo",
 		"subtitle": "Placez une couche de voix off ou de musique de fond sur la timeline",
 		"record": "Enregistrer une voix off",
 		"importFile": "Importer un fichier audio",
+		"importFileHint": "Importez une musique ou un fichier audio",
 		"recording": "Enregistrement",
 		"stop": "Arrêter",
 		"micDenied": "L'accès au micro a été refusé",
