@@ -1510,6 +1510,19 @@
 	cursor: pointer;
 }
 /* The label rides above the waveform (which is inset:0 behind it). */
+/* Where a looping track starts its file over. A hairline rather than a full
+   divider: it has to be legible against the waveform without reading as a cut,
+   which is what a solid line on a timeline means everywhere else. */
+.laneLoopMark {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 1px;
+	z-index: 1;
+	pointer-events: none;
+	background: color-mix(in srgb, var(--fg) 45%, transparent);
+}
+
 .laneAudioLabel {
 	position: relative;
 	z-index: 1;

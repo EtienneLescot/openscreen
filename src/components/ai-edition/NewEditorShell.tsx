@@ -1064,6 +1064,14 @@ export function NewEditorShell() {
 				}
 				if (tl.selection) {
 					void tl.removeRegion(tl.selection.kind, tl.selection.id);
+					return;
+				}
+				// An audio track is selected through its OWN channel, not `selection`
+				// (the two are mutually exclusive — see addAudioTrack), so it needs its
+				// own branch here or Delete does nothing on the one lane that looks
+				// exactly like every other.
+				if (tl.selectedAudioTrackId) {
+					void tl.removeAudioTrack(tl.selectedAudioTrackId);
 				}
 			};
 

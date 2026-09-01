@@ -1393,6 +1393,45 @@ export function useTimeline() {
 		[saveDocument],
 	);
 
+	// Turning loop ON fills the rest of the programme with the track.
+	//
+	// Looping only means anything when the span EXCEEDS the source, so a toggle
+	// that changed nothing else did nothing at all — the user had to know to then
+	// drag the pill's right edge out, which is not a thing anyone guesses. Filling
+	// is what "loop" is for, it is one undo away, and the edge still trims it back
+	// to any length. Turning loop OFF deliberately leaves the span alone: shrinking
+	// it would throw away a length the user may have set by hand.
+	const setAudioTrackLoop = useCallback(
+		async (trackId: string, loop: boolean) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const fragments = doc.audioTracks.filter((t) => trackGroupId(t) === trackId);
+			const [pill] = collapseTracksToPills(fragments);
+			if (!pill) return;
+			const programmeEndMs = Math.round(
+				doc.timeline.clips.reduce((max, c) => Math.max(max, c.timelineEndSec), 0) * 1000,
+			);
+			// One write, so the fill and the flag are a single undo step.
+			const patched = patchAudioTrack(doc, trackId, { loop });
+			if (!loop || programmeEndMs <= pill.endMs) {
+				await saveDocument(patched, { history: true });
+				return;
+			}
+			const others = patched.audioTracks.filter((t) => trackGroupId(t) !== trackId);
+			const filled = anchorAudioTrackFragments(
+				{ ...pill, loop, endMs: programmeEndMs },
+				doc.timeline.clips,
+				() => createId("audio"),
+			);
+			if (filled.length === 0) {
+				await saveDocument(patched, { history: true });
+				return;
+			}
+			await saveDocument({ ...doc, audioTracks: [...others, ...filled] }, { history: true });
+		},
+		[saveDocument],
+	);
+
 	const setAudioTrackGain = useCallback(
 		async (trackId: string, gainDb: number) => {
 			await updateAudioTrack(trackId, { gainDb });
@@ -1425,6 +1464,7 @@ export function useTimeline() {
 		addAudio,
 		removeAudioTrack,
 		updateAudioTrack,
+		setAudioTrackLoop,
 		placeAudioTrack,
 		setAudioTrackGain,
 		selectedAudioTrackId,
