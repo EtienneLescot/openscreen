@@ -3,6 +3,7 @@ import { type AxcutAsset, type AxcutClip, createAudioTrack, createEmptyDocument 
 import {
 	anchorAudioTrackFragments,
 	collapseTracksToPills,
+	packAudioTrackRows,
 	patchAudioTrack,
 	removeAudioTrack,
 	resolveFadeSecs,
@@ -230,5 +231,49 @@ describe("resolveFadeSecs", () => {
 		const { fadeInSec, fadeOutSec } = resolveFadeSecs(6000, 4000, 2);
 		expect(fadeInSec).toBeCloseTo(1.2);
 		expect(fadeOutSec).toBeCloseTo(0.8);
+	});
+});
+
+describe("packAudioTrackRows", () => {
+	const t = (id: string, startMs: number, endMs: number) => ({ id, startMs, endMs });
+
+	it("keeps tracks that never overlap on one row", () => {
+		// The common case stays a single-line lane.
+		const { rowOf, rowCount } = packAudioTrackRows([
+			t("a", 0, 1000),
+			t("b", 1000, 2000),
+			t("c", 5000, 6000),
+		]);
+		expect(rowCount).toBe(1);
+		expect([rowOf.get("a"), rowOf.get("b"), rowOf.get("c")]).toEqual([0, 0, 0]);
+	});
+
+	it("stacks tracks that overlap, so neither hides the other", () => {
+		const { rowOf, rowCount } = packAudioTrackRows([t("a", 0, 5000), t("b", 1000, 2000)]);
+		expect(rowCount).toBe(2);
+		expect(rowOf.get("a")).toBe(0);
+		expect(rowOf.get("b")).toBe(1);
+	});
+
+	it("reuses a row as soon as it frees up", () => {
+		// b overlaps a and goes to row 1; c starts after a ends, so it drops back
+		// to row 0 rather than opening a third row.
+		const { rowOf, rowCount } = packAudioTrackRows([
+			t("a", 0, 3000),
+			t("b", 1000, 9000),
+			t("c", 4000, 5000),
+		]);
+		expect(rowCount).toBe(2);
+		expect(rowOf.get("c")).toBe(0);
+	});
+
+	it("treats touching tracks as non-overlapping", () => {
+		// One ending exactly where the next begins is a sequence, not a pile.
+		const { rowCount } = packAudioTrackRows([t("a", 0, 1000), t("b", 1000, 2000)]);
+		expect(rowCount).toBe(1);
+	});
+
+	it("always reports at least one row, even with nothing to place", () => {
+		expect(packAudioTrackRows([]).rowCount).toBe(1);
 	});
 });

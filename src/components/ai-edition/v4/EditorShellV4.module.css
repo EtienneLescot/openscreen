@@ -1548,6 +1548,8 @@
 	gap: 5px;
 }
 /* The audio lane is taller than the effect lanes to give the waveform room. */
+/* Height is set inline from the row count — the lane grows only as far as the
+   tracks actually overlap. This is the single-row floor. */
 .tlLaneAudio {
 	height: 32px;
 }
