@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type AxcutTranscript, createEmptyDocument } from "../schema";
+import { type AxcutTranscript, createEmptyDocument, documentSchema } from "../schema";
 import {
 	carryOverWordEdits,
 	insertDocumentWord,
+	insertRangesMatchWords,
 	insertWord,
 	removeDocumentWords,
 	removeWord,
@@ -665,5 +666,102 @@ describe("carryOverWordEdits with inserted words", () => {
 		expect(result).toMatchObject({ carried: 2, dropped: 0 });
 		expect(result.transcript.words.find((w) => w.id === "n3")?.text).toBe("OpenScreenApp");
 		expect(result.transcript.words.some((w) => w.text === "really")).toBe(true);
+	});
+});
+
+// ─── The pause an added word needs ───────────────────────────────
+// Created time is STORED, as a region beside the trims. Something has to keep those
+// records true against the words they belong to, and `withInsertRangesForWords` is the one
+// writer — these hold it to the invariant it maintains. The first attempt at this made
+// CLIPS instead, and every other writer of `timeline.clips` disagreed with them.
+
+describe("insert ranges", () => {
+	function docWithClip() {
+		const doc = makeDoc();
+		return {
+			...doc,
+			timeline: {
+				...doc.timeline,
+				clips: [
+					{
+						id: "clip_1",
+						assetId: "asset_1",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 0,
+						timelineEndSec: 10,
+						wordRefs: [],
+						origin: "user" as const,
+						reason: "",
+					},
+				],
+			},
+		};
+	}
+
+	it("stores a pause when the free silence does not cover the word", () => {
+		// "really" after word_2: word_3 starts exactly where word_2 ends, so the word
+		// borrows nothing and needs its whole reading time — max(0.4, 6/15) = 0.4s.
+		const result = insertDocumentWord(docWithClip(), "asset_1", "word_2", "after", "really");
+		expect(result.timeline.insertRanges).toHaveLength(1);
+		expect(result.timeline.insertRanges[0]).toMatchObject({
+			assetId: "asset_1",
+			wordId: "synth_1",
+			atSec: 3,
+			durationSec: 0.4,
+			origin: "user",
+		});
+		expect(insertRangesMatchWords(result)).toBe(true);
+	});
+
+	// The clips are the thing the first attempt broke. Nothing here may touch them.
+	it("leaves the clips exactly as they were", () => {
+		const before = docWithClip();
+		const result = insertDocumentWord(before, "asset_1", "word_2", "after", "really");
+		expect(result.timeline.clips).toEqual(before.timeline.clips);
+	});
+
+	it("stores nothing when the word fits in silence that is already there", () => {
+		// word_3 ends at 4 and word_4 starts at 5: a full second, more than "really" needs.
+		const result = insertDocumentWord(docWithClip(), "asset_1", "word_3", "after", "really");
+		expect(result.timeline.insertRanges).toEqual([]);
+		expect(insertRangesMatchWords(result)).toBe(true);
+	});
+
+	it("resizes the pause when the word is rewritten longer", () => {
+		const added = insertDocumentWord(docWithClip(), "asset_1", "word_2", "after", "really");
+		const longer = setDocumentWordText(added, "asset_1", "synth_1", "really quite genuinely so");
+		const [range] = longer.timeline.insertRanges;
+		expect(range.durationSec).toBeCloseTo(25 / 15, 5);
+		expect(range.id).toBe(added.timeline.insertRanges[0].id);
+		expect(insertRangesMatchWords(longer)).toBe(true);
+	});
+
+	it("drops the pause with the word", () => {
+		const added = insertDocumentWord(docWithClip(), "asset_1", "word_2", "after", "really");
+		const gone = removeDocumentWords(added, "asset_1", ["synth_1"]);
+		expect(gone.timeline.insertRanges).toEqual([]);
+		expect(insertRangesMatchWords(gone)).toBe(true);
+	});
+
+	it("keeps one pause per added word, and no more", () => {
+		let doc = insertDocumentWord(docWithClip(), "asset_1", "word_2", "after", "really");
+		doc = insertDocumentWord(doc, "asset_1", "word_1", "after", "personally");
+		expect(doc.timeline.insertRanges).toHaveLength(2);
+		expect(new Set(doc.timeline.insertRanges.map((r) => r.wordId)).size).toBe(2);
+		expect(insertRangesMatchWords(doc)).toBe(true);
+	});
+
+	// Correcting a SPOKEN word must not invent a pause: it has audio behind it already.
+	it("stores nothing for an ordinary correction", () => {
+		const result = setDocumentWordText(docWithClip(), "asset_1", "word_3", "OpenScreenApp");
+		expect(result.timeline.insertRanges).toEqual([]);
+	});
+
+	it("survives the document schema", () => {
+		const added = insertDocumentWord(docWithClip(), "asset_1", "word_2", "after", "really");
+		const parsed = documentSchema.parse(JSON.parse(JSON.stringify(added)));
+		expect(parsed.timeline.insertRanges).toHaveLength(1);
+		expect(insertRangesMatchWords(parsed)).toBe(true);
 	});
 });

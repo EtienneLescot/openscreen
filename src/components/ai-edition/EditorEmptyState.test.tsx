@@ -47,6 +47,7 @@ const sampleDoc = vi.hoisted(
 			clips: [],
 			gaps: [],
 			trimRanges: [],
+			insertRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],

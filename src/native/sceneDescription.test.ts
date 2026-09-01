@@ -84,6 +84,7 @@ function makeDoc(
 			clips,
 			gaps: [],
 			trimRanges: [],
+			insertRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],
