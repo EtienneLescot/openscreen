@@ -567,9 +567,18 @@ unsafe impl Send for FreeFrame {}
 struct EncodeWorker {
     full_tx: Option<std::sync::mpsc::Sender<EncJob>>,
     empty_rx: std::sync::mpsc::Receiver<FreeFrame>,
-    /// Pour rendre au pool une frame empruntee mais finalement pas remplie
-    /// (l'amorcage de la ring de relecture ne produit rien les premieres fois).
-    empty_tx: std::sync::mpsc::Sender<FreeFrame>,
+    /// Frame empruntee mais finalement pas remplie — l'amorcage de la ring de
+    /// relecture ne produit rien les premiers tours — gardee ici pour le tour
+    /// suivant. `null` quand il n'y en a pas.
+    ///
+    /// POURQUOI PAS UN CLONE DU `Sender`. C'etait la premiere version, et elle
+    /// interdisait de detecter la mort du worker : tant que `EncodeWorker`
+    /// gardait un emetteur vivant, `empty_rx.recv()` ne pouvait JAMAIS rendre
+    /// `Err`, donc un worker qui panique laissait la marche bloquee pour
+    /// toujours sur `take_free` — `finish` n'etait jamais atteint. Le canal ne
+    /// doit avoir qu'un seul emetteur, celui du worker, pour que sa disparition
+    /// soit observable.
+    spare: std::cell::Cell<*mut AVFrame>,
     handle: Option<std::thread::JoinHandle<Result<Muxer>>>,
     /// Premiere erreur rencontree par le worker. La marche la relit a chaque
     /// frame : sans ca, un encodeur mort a la frame 12 laisserait composer les
@@ -589,7 +598,6 @@ impl EncodeWorker {
                 .send(FreeFrame(f))
                 .map_err(|_| anyhow::anyhow!("pool d'encodage: canal ferme a l'amorcage"))?;
         }
-        let empty_tx_keep = empty_tx.clone();
         let fatal = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
         let fatal_worker = std::sync::Arc::clone(&fatal);
         let handle = std::thread::Builder::new()
@@ -624,20 +632,25 @@ impl EncodeWorker {
         Ok(EncodeWorker {
             full_tx: Some(full_tx),
             empty_rx,
-            empty_tx: empty_tx_keep,
+            spare: std::cell::Cell::new(std::ptr::null_mut()),
             handle: Some(handle),
             fatal,
         })
     }
 
-    /// Rend au pool une frame empruntee sans avoir ete remplie.
+    /// Garde une frame empruntee sans avoir ete remplie, pour le tour suivant.
     fn give_back(&self, frame: *mut AVFrame) {
-        let _ = self.empty_tx.send(FreeFrame(frame));
+        let prev = self.spare.replace(frame);
+        debug_assert!(prev.is_null(), "give_back deux fois sans take_free");
     }
 
     /// Emprunte une frame libre au pool. C'est ICI que la marche attend quand
     /// l'encodeur prend du retard.
     fn take_free(&self) -> Result<*mut AVFrame> {
+        let spare = self.spare.replace(std::ptr::null_mut());
+        if !spare.is_null() {
+            return Ok(spare);
+        }
         match self.empty_rx.recv() {
             Ok(FreeFrame(f)) => Ok(f),
             Err(_) => Err(self.fatal_error("le thread d'encodage s'est arrete")),
@@ -686,6 +699,10 @@ impl Drop for EncodeWorker {
         drop(self.full_tx.take());
         if let Some(h) = self.handle.take() {
             let _ = h.join();
+        }
+        let mut spare = self.spare.replace(std::ptr::null_mut());
+        if !spare.is_null() {
+            unsafe { crate::ffi::av_frame_free(&mut spare) };
         }
         while let Ok(FreeFrame(f)) = self.empty_rx.try_recv() {
             let mut f = f;
