@@ -648,7 +648,19 @@ export function VirtualPreview({
 					trimRangesRef.current,
 					track.startMs / 1000,
 				);
-				const spanSec = Math.max(0, (track.endMs - track.startMs) / 1000);
+				// The span on the OUTPUT programme, not the raw ruler: both ends go
+				// through the same projection the head does. A track buried inside a
+				// trimmed stretch collapses to zero length and stays silent, instead
+				// of playing its full raw length parked at the cut — audible with
+				// nothing on screen to explain it.
+				const spanSec = Math.max(
+					0,
+					projectRawTimelineSecToPlayback(
+						clipsRef.current,
+						trimRangesRef.current,
+						track.endMs / 1000,
+					) - outputStartSec,
+				);
 				const trackTarget = resolveTimelineAudioPlayback(
 					outputTimeSec,
 					outputStartSec,

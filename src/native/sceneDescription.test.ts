@@ -2097,6 +2097,61 @@ describe("buildSceneDescription.audioTracks", () => {
 		expect(buildSceneDescription(doc).audioTracks[0]?.startSec).toBeCloseTo(3, 6);
 	});
 
+	it("drops a track that sits entirely inside a trimmed stretch", () => {
+		// The trim takes raw 4..8 out of the programme; a track living at raw 5..7
+		// has nowhere left to play. It used to project both ends onto the cut and
+		// then play its full raw length there — audible, and out of place, with
+		// nothing on screen to account for it.
+		const screen = makeAsset({ id: "scr", originalPath: "/screen.mp4", durationSec: 20 });
+		const doc = makeDoc({
+			assets: [screen, audioAsset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "scr",
+					sourceStartSec: 0,
+					sourceEndSec: 20,
+					timelineStartSec: 0,
+					timelineEndSec: 20,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "scr", startSec: 4, endSec: 8, reason: "", origin: "user" },
+				],
+			},
+			audioTracks: [{ ...track, startMs: 5000, endMs: 7000 }],
+		});
+		expect(buildSceneDescription(doc).audioTracks).toEqual([]);
+	});
+
+	it("shortens a track by the trim it crosses", () => {
+		// Raw 2..12 with raw 4..8 cut is 6s of programme, not 10.
+		const screen = makeAsset({ id: "scr", originalPath: "/screen.mp4", durationSec: 20 });
+		const doc = makeDoc({
+			assets: [screen, audioAsset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "scr",
+					sourceStartSec: 0,
+					sourceEndSec: 20,
+					timelineStartSec: 0,
+					timelineEndSec: 20,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "scr", startSec: 4, endSec: 8, reason: "", origin: "user" },
+				],
+			},
+			audioTracks: [{ ...track, startMs: 2000, endMs: 12_000, offsetMs: 0 }],
+		});
+		const [entry] = buildSceneDescription(doc).audioTracks;
+		expect(entry.startSec).toBeCloseTo(2, 6);
+		expect(entry.trimEndSec - entry.trimStartSec).toBeCloseTo(6, 6);
+	});
+
 	it("drops a track whose asset has no resolvable path", () => {
 		const doc = makeDoc({ assets: [], audioTracks: [track] });
 		expect(buildSceneDescription(doc).audioTracks).toEqual([]);

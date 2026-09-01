@@ -203,6 +203,75 @@ describe("resolveTimelineAudioPlayback", () => {
 	});
 });
 
+describe("resolveTimelineAudioPlayback under a trim", () => {
+	const clip: AxcutClip = {
+		id: "clip_1",
+		assetId: "asset_1",
+		sourceStartSec: 0,
+		sourceEndSec: 20,
+		timelineStartSec: 0,
+		timelineEndSec: 20,
+		wordRefs: [],
+		origin: "user",
+		reason: "",
+	};
+	const trim: AxcutTrimRange = {
+		id: "trim_1",
+		assetId: "asset_1",
+		startSec: 4,
+		endSec: 8,
+		origin: "user",
+		reason: "",
+	};
+	const project = (rawSec: number) => projectRawTimelineSecToPlayback([clip], [trim], rawSec);
+
+	const buried: AxcutAudioTrack = {
+		id: "buried",
+		assetId: "a1",
+		kind: "music",
+		startMs: 5000,
+		endMs: 7000,
+		durationSec: 30,
+		offsetMs: 0,
+		gainDb: 0,
+		loop: false,
+		fadeInMs: 0,
+		fadeOutMs: 0,
+		muted: false,
+		label: "",
+		origin: "user",
+	};
+
+	it("never plays a track buried inside the trim", () => {
+		// Both ends project onto the cut, so the track's OUTPUT span is zero. Read
+		// off the raw span instead it stayed 2s long and played at the boundary,
+		// with nothing on screen to explain the sound.
+		const outStart = project(buried.startMs / 1000);
+		const outSpan = project(buried.endMs / 1000) - outStart;
+		expect(outSpan).toBeCloseTo(0, 6);
+		for (const raw of [3, 5, 6, 9, 12]) {
+			expect(resolveTimelineAudioPlayback(project(raw), outStart, buried, outSpan).shouldPlay).toBe(
+				false,
+			);
+		}
+	});
+
+	it("plays a track that merely crosses the trim, for the length that survives", () => {
+		const crossing = { ...buried, id: "crossing", startMs: 2000, endMs: 12_000 };
+		const outStart = project(crossing.startMs / 1000);
+		const outSpan = project(crossing.endMs / 1000) - outStart;
+		// Raw 2..12 with raw 4..8 cut leaves 6s of programme.
+		expect(outSpan).toBeCloseTo(6, 6);
+		expect(resolveTimelineAudioPlayback(project(3), outStart, crossing, outSpan).shouldPlay).toBe(
+			true,
+		);
+		// Just past the end of what survives.
+		expect(
+			resolveTimelineAudioPlayback(outStart + 6.1, outStart, crossing, outSpan).shouldPlay,
+		).toBe(false);
+	});
+});
+
 describe("timelineAudioFadeAt", () => {
 	const track: AxcutAudioTrack = {
 		id: "t1",
