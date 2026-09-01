@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutAudioRegion, AxcutClip, AxcutTrimRange } from "../schema";
-import { placeAudioRegions, resolveAudioPlayback } from "./audio-placement";
+import {
+	audioContentBounds,
+	audioGhostExtent,
+	placeAudioRegions,
+	resolveAudioPlayback,
+} from "./audio-placement";
 
 function clip(over: Partial<AxcutClip> = {}): AxcutClip {
 	return {
@@ -226,5 +231,62 @@ describe("resolveAudioPlayback", () => {
 	it("parks at the first in-point when there is nothing to play", () => {
 		expect(resolveAudioPlayback(placements, 0).targetTimeSec).toBe(1);
 		expect(resolveAudioPlayback([], 0)).toEqual({ targetTimeSec: 0, shouldPlay: false });
+	});
+});
+
+describe("audioContentBounds — where a resize must stop at the file's own edges", () => {
+	it("stops the left edge where the in-point would hit the file's start", () => {
+		// Pill at 10–20s playing the file from 4s: only 4s of tape exist to the left.
+		const b = audioContentBounds(4, 10, 120, 10, 20);
+		expect(b).not.toBeNull();
+		expect(b?.minStartT).toBe(6);
+		// The right edge can still reach the file's end: 4+10=14 played, 106 left.
+		expect(b?.maxEndT).toBe(126);
+	});
+
+	it("clamps the left bound to the timeline's own start", () => {
+		// More in-point than timeline seconds before the pill: the lane starts at 0.
+		expect(audioContentBounds(30, 10, 120, 10, 20)?.minStartT).toBe(0);
+	});
+
+	it("stops the right edge where the played window runs off the file's end", () => {
+		// Pill at 0–10s playing 100–110 of a 115s file: only 5s of tape remain.
+		const b = audioContentBounds(100, 10, 115, 0, 10);
+		expect(b?.maxEndT).toBe(15);
+		expect(b?.minStartT).toBe(0);
+	});
+
+	it("leaves both edges free while the pill is a window inside the file", () => {
+		const b = audioContentBounds(10, 10, 120, 5, 15);
+		expect(b?.minStartT).toBe(0);
+		expect(b?.maxEndT).toBe(115);
+	});
+
+	it("returns null while the duration is unknown — a failed probe must not freeze the pill", () => {
+		expect(audioContentBounds(10, 10, null, 5, 15)).toBeNull();
+		expect(audioContentBounds(10, 10, 0, 5, 15)).toBeNull();
+	});
+});
+
+describe("audioGhostExtent — the rest of the tape around the pill", () => {
+	it("spans from the file's start to its end, mapped onto the timeline", () => {
+		// Pill at 10–20s playing 4–14s of a 120s file: the tape runs from 6s (where
+		// 0:00 sits) to 126s (where the file ends).
+		const g = audioGhostExtent(4, 10, 120, 10, 20, 300);
+		expect(g).toEqual({ startT: 6, endT: 126, sourceStartSec: 0, sourceEndSec: 120 });
+	});
+
+	it("clips to the timeline's bounds and reports the visible source window", () => {
+		// Same pill on a 60s timeline: the tape's tail is cut at 60s = source 54s.
+		const g = audioGhostExtent(4, 10, 120, 10, 20, 60);
+		expect(g).toEqual({ startT: 6, endT: 60, sourceStartSec: 0, sourceEndSec: 54 });
+	});
+
+	it("is null when the pill already plays the whole file", () => {
+		expect(audioGhostExtent(0, 120, 120, 0, 120, 300)).toBeNull();
+	});
+
+	it("is null while the duration is unknown", () => {
+		expect(audioGhostExtent(4, 10, null, 10, 20, 300)).toBeNull();
 	});
 });
