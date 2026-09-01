@@ -803,7 +803,6 @@ export const createProjectInputSchema = z.object({
 export const addAssetInputSchema = z.object({
 	path: z.string().trim().min(1),
 	label: z.string().trim().optional(),
-	autoTranscribe: z.boolean().default(true),
 });
 
 export const chatInputSchema = z.object({
