@@ -85,6 +85,16 @@ describe("AddAudioLayerDialog", () => {
 		await vi.waitFor(() => expect(props.onRecordingStart).toHaveBeenCalledTimes(1));
 	});
 
+	it("does not cover the video it is recording against", () => {
+		// It used to be a modal over a dimmed backdrop, which hid the one thing a
+		// voiceover needs you to watch. It is a docked bar now: no backdrop, and
+		// nothing claiming to be a modal dialog.
+		const { container } = renderDialog();
+		expect(container.querySelector('[aria-modal="true"]')).toBeNull();
+		expect(container.querySelector('[class*="Backdrop"]')).toBeNull();
+		expect(screen.getByText("audio.record")).toBeTruthy();
+	});
+
 	it("reports the end of a take, which is what un-mutes the timeline", async () => {
 		// The shell silences the existing audio tracks between these two callbacks,
 		// so a stop that never reported would leave the timeline mute for good.

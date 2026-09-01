@@ -97,6 +97,7 @@
 		"importFile": "Importar arquivo de áudio",
 		"importFileHint": "Importe música ou um arquivo de áudio",
 		"recording": "Gravando",
+		"recordingHint": "Narre junto com o vídeo — ele continua tocando enquanto você grava",
 		"stop": "Parar",
 		"micDenied": "Acesso ao microfone negado",
 		"recordingUnavailable": "A gravação não está disponível aqui",

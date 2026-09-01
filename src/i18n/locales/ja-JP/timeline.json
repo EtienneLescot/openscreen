@@ -97,6 +97,7 @@
 		"importFile": "音声ファイルを読み込む",
 		"importFileHint": "音楽やオーディオファイルを読み込む",
 		"recording": "録音中",
+		"recordingHint": "動画に合わせて話してください — 録音中も再生されます",
 		"stop": "停止",
 		"micDenied": "マイクへのアクセスが拒否されました",
 		"recordingUnavailable": "ここでは録音できません",

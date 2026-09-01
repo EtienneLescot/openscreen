@@ -1813,3 +1813,83 @@
 	pointer-events: none;
 	z-index: 14;
 }
+
+/* ── Voiceover recorder ──────────────────────────────────────────────────
+   Deliberately NOT a modal. The whole point of a voiceover is narrating to
+   the video that is playing, so a centred dialog over a dimmed backdrop hides
+   the one thing the user needs to watch. This docks at the bottom instead:
+   no backdrop, nothing covered but a strip of the timeline, and the preview
+   stays lit and playing behind it. */
+.voiceoverBar {
+	position: fixed;
+	left: 50%;
+	bottom: 24px;
+	transform: translateX(-50%);
+	z-index: 60;
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 12px 16px;
+	border-radius: 14px;
+	border: 1px solid var(--border);
+	background: var(--surface-1);
+	box-shadow: 0 18px 40px rgb(0 0 0 / 38%);
+}
+
+.voiceoverBarTitle {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin-right: 4px;
+}
+.voiceoverBarTitle strong {
+	font: 600 13px var(--font-display);
+	color: var(--fg);
+}
+.voiceoverBarTitle span {
+	font-size: 11px;
+	color: var(--muted);
+}
+
+.voiceoverBarBtn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 7px;
+	padding: 9px 14px;
+	border-radius: 10px;
+	border: 1px solid var(--border);
+	background: var(--bg-2, var(--surface-2));
+	color: var(--fg-1, var(--fg));
+	font: 600 13px var(--font-display);
+	cursor: pointer;
+	white-space: nowrap;
+}
+.voiceoverBarBtn:hover:not(:disabled) {
+	background: var(--surface-3);
+}
+.voiceoverBarBtn:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+.voiceoverBarBtnDanger {
+	border-color: var(--danger);
+	color: var(--danger);
+}
+
+/* The live take: a pulsing dot and the running length, so the user can see it
+   is actually capturing without looking away from the video. */
+.voiceoverBarLive {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--danger);
+	font: 600 13px var(--font-display);
+	font-variant-numeric: tabular-nums;
+}
+.voiceoverBarDot {
+	width: 10px;
+	height: 10px;
+	border-radius: 999px;
+	background: var(--danger);
+}

@@ -97,6 +97,7 @@
 		"importFile": "Ses dosyası içe aktar",
 		"importFileHint": "Müzik veya ses dosyası içe aktarın",
 		"recording": "Kaydediliyor",
+		"recordingHint": "Videoyla birlikte anlatın — kayıt sırasında oynamaya devam eder",
 		"stop": "Durdur",
 		"micDenied": "Mikrofon erişimi reddedildi",
 		"recordingUnavailable": "Burada kayıt kullanılamıyor",

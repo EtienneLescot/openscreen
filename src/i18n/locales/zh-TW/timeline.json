@@ -97,6 +97,7 @@
 		"importFile": "匯入音訊檔案",
 		"importFileHint": "匯入音樂或音訊檔案",
 		"recording": "錄製中",
+		"recordingHint": "跟著影片講解 — 錄製時影片會繼續播放",
 		"stop": "停止",
 		"micDenied": "麥克風存取遭拒絕",
 		"recordingUnavailable": "此處無法錄音",

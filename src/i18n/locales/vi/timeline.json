@@ -97,6 +97,7 @@
 		"importFile": "Nhập tệp âm thanh",
 		"importFileHint": "Nhập nhạc hoặc tệp âm thanh",
 		"recording": "Đang ghi",
+		"recordingHint": "Thuyết minh cùng video — video vẫn phát trong khi bạn ghi âm",
 		"stop": "Dừng",
 		"micDenied": "Quyền truy cập micrô bị từ chối",
 		"recordingUnavailable": "Không thể ghi âm ở đây",
