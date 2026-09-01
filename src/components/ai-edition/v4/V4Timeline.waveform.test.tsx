@@ -134,6 +134,7 @@ function renderBars(atGainDb: number): string[] {
 			onPrevClip={vi.fn()}
 			onNextClip={vi.fn()}
 			onEditClip={vi.fn()}
+			onAddVoiceover={vi.fn()}
 		/>,
 	);
 	const bars = Array.from(

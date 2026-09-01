@@ -4,6 +4,7 @@ import {
 	Loader2,
 	Maximize2,
 	MessageSquare,
+	Mic,
 	Music,
 	Pencil,
 	Scissors,
@@ -444,6 +445,7 @@ export function V4Timeline({
 	onPrevClip,
 	onNextClip,
 	onEditClip,
+	onAddVoiceover,
 }: {
 	tl: TimelineApi;
 	setCurrentTime: (sec: number) => void;
@@ -457,6 +459,9 @@ export function V4Timeline({
 	/** Opens the (now single, shell-level) EditClipModal for this clip —
 	 * trim in/out and crop both live there per-clip. */
 	onEditClip: (clip: AxcutClip) => void;
+	/** Opens the voiceover recorder. Shell-level like the clip editor: the
+	 *  dialog owns the microphone and the shell owns the transport. */
+	onAddVoiceover: () => void;
 }) {
 	const t = useScopedT("timeline");
 	// The camera lane borrows the Layout pane's "No Webcam" wording when there is no
@@ -905,7 +910,16 @@ export function V4Timeline({
 			const origStart = track.startMs / 1000;
 			const origTrimStart = track.offsetMs / 1000;
 			const origTrimEnd = origTrimStart + spanSec;
-			const maxEnd = sourceLen > 0 ? sourceLen : origTrimEnd;
+			// A looping track may be pulled out PAST the end of its file — that is
+			// the whole point of looping, and capping at the source length is what
+			// made the loop toggle do nothing: the span could never exceed the
+			// window loop repeats, so it always played exactly once. Only the
+			// programme end bounds it (applied below).
+			const maxEnd = track.loop
+				? Number.POSITIVE_INFINITY
+				: sourceLen > 0
+					? sourceLen
+					: origTrimEnd;
 			// Snap the moving edge to clip boundaries and the timeline ends, same PILL_SNAP_PX
 			// magnet the region pills use.
 			const snapTargets = [
@@ -1567,15 +1581,26 @@ export function V4Timeline({
 								</button>
 								{/* Add audio sits right after Add annotation (issue #350). */}
 								{tool.id === "comment" ? (
-									<button
-										type="button"
-										className={styles.tlToolBtn}
-										title={ts("audioTrack.add")}
-										aria-label={ts("audioTrack.add")}
-										onClick={() => void tl.addAudio()}
-									>
-										<Music size={15} />
-									</button>
+									<>
+										<button
+											type="button"
+											className={styles.tlToolBtn}
+											title={ts("audioTrack.add")}
+											aria-label={ts("audioTrack.add")}
+											onClick={() => void tl.addAudio()}
+										>
+											<Music size={15} />
+										</button>
+										<button
+											type="button"
+											className={styles.tlToolBtn}
+											title={t("audio.addVoiceover")}
+											aria-label={t("audio.addVoiceover")}
+											onClick={onAddVoiceover}
+										>
+											<Mic size={15} />
+										</button>
+									</>
 								) : null}
 							</Fragment>
 						))}
@@ -1752,7 +1777,9 @@ export function V4Timeline({
 													leftPct={pctOf(start)}
 													widthPct={pctOf(widthSec)}
 													sourceStartSec={trimStart}
-													sourceEndSec={trimEnd}
+													// A looping pill can outrun its file; the waveform draws
+													// the source it actually has.
+													sourceEndSec={duration > 0 ? Math.min(trimEnd, duration) : trimEnd}
 													selected={tl.selectedAudioTrackId === track.id}
 													onStartDrag={startAudioDrag}
 													onSelect={tl.selectAudioTrack}

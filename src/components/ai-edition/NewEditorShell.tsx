@@ -1459,6 +1459,7 @@ export function NewEditorShell() {
 						onTogglePlay={togglePlay}
 						onPrevClip={handlePrevClip}
 						onNextClip={handleNextClip}
+						onAddVoiceover={openVoiceoverFlow}
 						onEditClip={setEditClipTarget}
 					/>
 				</div>

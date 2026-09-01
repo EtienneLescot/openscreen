@@ -110,6 +110,7 @@ function renderTimeline(
 			onPrevClip={vi.fn()}
 			onNextClip={vi.fn()}
 			onEditClip={vi.fn()}
+			onAddVoiceover={vi.fn()}
 		/>,
 	);
 	return {
@@ -367,7 +368,7 @@ describe("V4Timeline audio lane drag", () => {
 		origin: "user" as const,
 	});
 
-	function renderAudio() {
+	function renderAudio(trackOverrides: Partial<ReturnType<typeof makeTrack>> = {}) {
 		const placeAudioTrack = vi.fn(
 			async (_id: string, _span: { startMs: number; endMs: number; offsetMs?: number }) => {
 				/* the drag only awaits it */
@@ -385,7 +386,7 @@ describe("V4Timeline audio lane drag", () => {
 			selection: null,
 			multiSelection: [],
 			clipSelection: null,
-			audioTracks: [makeTrack()],
+			audioTracks: [{ ...makeTrack(), ...trackOverrides }],
 			selectedAudioTrackId: null,
 			selectAudioTrack,
 			placeAudioTrack,
@@ -404,6 +405,7 @@ describe("V4Timeline audio lane drag", () => {
 				onPrevClip={vi.fn()}
 				onNextClip={vi.fn()}
 				onEditClip={vi.fn()}
+				onAddVoiceover={vi.fn()}
 			/>,
 		);
 		return { pill: screen.getByTitle("vo"), placeAudioTrack, selectAudioTrack };
@@ -459,6 +461,31 @@ describe("V4Timeline audio lane drag", () => {
 		window.dispatchEvent(new MouseEvent("pointerup", { clientX: 90 }));
 		const [, placement] = placeAudioTrack.mock.calls[0];
 		expect(placement.offsetMs).toBe(0);
+	});
+
+	it("caps the out-point at the source length when the track does not loop", () => {
+		// A non-looping track has nothing to play past the end of its file, so the
+		// right edge stops there however far the pointer goes.
+		const { pill, placeAudioTrack } = renderAudio();
+		const handle = pill.lastElementChild as Element;
+		fireEvent.pointerDown(handle, { clientX: 0 });
+		window.dispatchEvent(new MouseEvent("pointermove", { clientX: 400 }));
+		window.dispatchEvent(new MouseEvent("pointerup", { clientX: 400 }));
+		const [, placement] = placeAudioTrack.mock.calls[0];
+		expect((placement.endMs - placement.startMs) / 1000).toBeCloseTo(60, 3);
+	});
+
+	it("lets a looping track be pulled out past the end of its file", () => {
+		// This is what makes the loop toggle mean anything: the span has to be able
+		// to EXCEED the source, or the audio always plays exactly once and turning
+		// loop on does nothing at all.
+		const { pill, placeAudioTrack } = renderAudio({ loop: true });
+		const handle = pill.lastElementChild as Element;
+		fireEvent.pointerDown(handle, { clientX: 0 });
+		window.dispatchEvent(new MouseEvent("pointermove", { clientX: 400 }));
+		window.dispatchEvent(new MouseEvent("pointerup", { clientX: 400 }));
+		const [, placement] = placeAudioTrack.mock.calls[0];
+		expect((placement.endMs - placement.startMs) / 1000).toBeGreaterThan(60);
 	});
 
 	it("right-handle drag pulls the out-point in, head fixed", () => {
