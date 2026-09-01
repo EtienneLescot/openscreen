@@ -330,10 +330,21 @@ impl VideoEncoder {
     /// reste est de retirer le padding des trois plans — `copy_texture_to_buffer`
     /// aligne chaque `bytes_per_row` sur 256, donc en 1080p Y arrive en 2048 pour
     /// 1920 utiles et U/V en 1024 pour 960.
-    pub unsafe fn send_yuv420p(&mut self, planes: &[u8], rw: i32, rh: i32, pts: i64) -> Result<()> {
+    pub unsafe fn depad_into(
+        dst_frame: *mut AVFrame,
+        planes: &[u8],
+        rw: i32,
+        rh: i32,
+        enc_w: i32,
+        enc_h: i32,
+    ) -> Result<()> {
         use crate::ffi::*;
-        if rw != self.w || rh != self.h {
-            bail!("send_yuv420p {rw}x{rh} != encodeur {}x{}", self.w, self.h);
+        // Les DEUX bornes comptent. La verification de taille seule laisserait
+        // passer un buffer assez gros mais de mauvaise geometrie : les strides
+        // seraient recalcules depuis rw/rh et l'image sortirait silencieusement
+        // decalee, ce qui est bien plus difficile a diagnostiquer qu'un echec.
+        if rw != enc_w || rh != enc_h {
+            bail!("depad_into {rw}x{rh} != encodeur {enc_w}x{enc_h}");
         }
         let (w, h) = (rw as usize, rh as usize);
         let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
@@ -345,7 +356,7 @@ impl VideoEncoder {
             bail!("plans YUV tronques : {} octets", planes.len());
         }
 
-        averr(av_frame_make_writable(self.sw), "make_writable")?;
+        averr(av_frame_make_writable(dst_frame), "make_writable")?;
         // Ligne a ligne parce que les deux strides different : celui du GPU est
         // aligne a 256, celui de l'AVFrame a ce que ffmpeg a choisi.
         for (plane, src_off, src_stride, pw, ph) in [
@@ -353,8 +364,8 @@ impl VideoEncoder {
             (1, off_u, bpr_uv, cw, ch),
             (2, off_v, bpr_uv, cw, ch),
         ] {
-            let dst = (*self.sw).data[plane];
-            let dst_stride = (*self.sw).linesize[plane] as usize;
+            let dst = (*dst_frame).data[plane];
+            let dst_stride = (*dst_frame).linesize[plane] as usize;
             for y in 0..ph {
                 std::ptr::copy_nonoverlapping(
                     planes.as_ptr().add(src_off + y * src_stride),
@@ -363,8 +374,7 @@ impl VideoEncoder {
                 );
             }
         }
-        (*self.sw).pts = pts;
-        averr(avcodec_send_frame(self.ctx, self.sw), "send_frame")
+        Ok(())
     }
 
     /// Flush : une frame nulle finalise le bitstream de l'encodeur.
@@ -407,24 +417,228 @@ unsafe fn alloc_sw_frame(pix_fmt: crate::ffi::AVPixelFormat::Type, w: i32, h: i3
     Ok(frame)
 }
 
-/// Draine les paquets de l'encodeur vers le muxer. Symetrique de
-/// `pipeline_macos::drain_encoder`.
-unsafe fn drain_encoder(
-    ectx: *mut crate::ffi::AVCodecContext,
+/// Etat du muxer MP4, deplacable en bloc sur le thread d'encodage.
+///
+/// POURQUOI UN SEUL TYPE PLUTOT QUE QUATRE VARIABLES. `av_interleaved_write_frame`
+/// touche `octx`, la piste video `ostream` et le paquet de travail `opkt` ; et
+/// `AacEncoder` garde un `*mut AVStream` qui pointe DANS la table de flux de
+/// `octx` (audio.rs). Les separer laisserait un pointeur vers l'interieur d'un
+/// objet possede par un autre thread. Ils partent donc ensemble, ou pas du tout.
+struct Muxer {
     octx: *mut crate::ffi::AVFormatContext,
+    pb: *mut crate::ffi::AVIOContext,
     ostream: *mut crate::ffi::AVStream,
     opkt: *mut crate::ffi::AVPacket,
-) -> Result<()> {
-    use crate::ffi::*;
-    loop {
-        let r = avcodec_receive_packet(ectx, opkt);
-        if r == AVERROR_EOF || r == AVERROR_EAGAIN {
-            return Ok(());
+    aac: AacEncoder,
+}
+
+// SAFETY : aucun de ces pointeurs n'a d'affinite de thread. Le muxer est DEPLACE
+// vers le worker puis rendu au thread appelant par le `join` ; il n'est jamais
+// partage, d'ou `Send` sans `Sync`.
+unsafe impl Send for Muxer {}
+
+impl Muxer {
+    /// Draine les paquets de l'encodeur vers le fichier. Symetrique de
+    /// `pipeline_macos::drain_encoder`.
+    unsafe fn drain(&mut self, ectx: *mut crate::ffi::AVCodecContext) -> Result<()> {
+        use crate::ffi::*;
+        loop {
+            let r = avcodec_receive_packet(ectx, self.opkt);
+            if r == AVERROR_EOF || r == AVERROR_EAGAIN {
+                return Ok(());
+            }
+            averr(r, "receive_packet")?;
+            av_packet_rescale_ts(self.opkt, (*ectx).time_base, (*self.ostream).time_base);
+            averr(
+                av_interleaved_write_frame(self.octx, self.opkt),
+                "interleaved_write_frame",
+            )?;
+            av_packet_unref(self.opkt);
         }
-        averr(r, "receive_packet")?;
-        av_packet_rescale_ts(opkt, (*ectx).time_base, (*ostream).time_base);
-        averr(av_interleaved_write_frame(octx, opkt), "interleaved_write_frame")?;
-        av_packet_unref(opkt);
+    }
+
+    /// Ferme le conteneur. La liberation, elle, est dans `Drop` : un `?` entre
+    /// l'ouverture et ici ne doit pas fuir le contexte ni le fichier.
+    unsafe fn finish(&mut self) -> Result<()> {
+        crate::ffi::averr(crate::ffi::av_write_trailer(self.octx), "write_trailer")
+    }
+}
+
+impl Drop for Muxer {
+    fn drop(&mut self) {
+        unsafe {
+            crate::ffi::avio_closep(&mut self.pb);
+            crate::ffi::avformat_free_context(self.octx);
+            crate::ffi::av_packet_free(&mut self.opkt);
+        }
+    }
+}
+
+/// Une frame remplie, en route vers l'encodeur.
+struct EncJob {
+    frame: *mut AVFrame,
+    pts: i64,
+}
+// SAFETY : la frame appartient au pool et n'est touchee que par UN thread a la
+// fois — le passage par le canal est le transfert de propriete.
+unsafe impl Send for EncJob {}
+
+/// Une frame vidée que le worker rend au pool.
+struct FreeFrame(*mut AVFrame);
+// SAFETY : idem `EncJob`, dans l'autre sens.
+unsafe impl Send for FreeFrame {}
+
+/// Encodeur + muxer deportes sur leur propre thread.
+///
+/// POURQUOI. L'export tenait sur UN thread : decodage, composition, relecture,
+/// de-padding puis encodage a la queue leu leu, pendant que sept coeurs ne
+/// faisaient rien. `avcodec_send_frame` pese a lui seul 29,5 s des ~57 s d'un
+/// export de 3600 frames ; le sortir du chemin critique laisse la marche de
+/// timeline avancer pendant que l'encodeur travaille la frame precedente.
+///
+/// LE POOL BORNE LA MEMOIRE, PAS UN CANAL. Le thread de marche va plus vite que
+/// l'encodeur : une file non bornee finirait par contenir les 3600 frames, soit
+/// ~11,2 Go. Ici il existe EXACTEMENT `depth` AVFrames, qui tournent entre le
+/// canal `empty` et le canal `full`. Le depassement n'est pas evite, il est
+/// inexprimable — et `empty_rx.recv()` est le seul point ou la marche attend
+/// l'encodeur, donc le seul endroit a instrumenter si le debit deçoit.
+///
+/// LE DE-PADDING RESTE COTE MARCHE. Recopier les plans depuis le buffer relu
+/// (lignes alignees a 256) vers l'AVFrame coute ~0,67 ms par frame. Le mettre
+/// ici le poserait sur le thread qui est desormais le goulot ; le laisser sur la
+/// marche, qui a du mou, ne coute rien. Meme raison pour laquelle il ne sert a
+/// rien de donner la memoire mappee du GPU directement a l'encodeur : ca
+/// supprimerait cette copie sans deplacer le goulot, en echange d'un slot de
+/// staging maintenu mappe a travers une frontiere de thread.
+struct EncodeWorker {
+    full_tx: Option<std::sync::mpsc::Sender<EncJob>>,
+    empty_rx: std::sync::mpsc::Receiver<FreeFrame>,
+    /// Pour rendre au pool une frame empruntee mais finalement pas remplie
+    /// (l'amorcage de la ring de relecture ne produit rien les premieres fois).
+    empty_tx: std::sync::mpsc::Sender<FreeFrame>,
+    handle: Option<std::thread::JoinHandle<Result<Muxer>>>,
+    /// Premiere erreur rencontree par le worker. La marche la relit a chaque
+    /// frame : sans ca, un encodeur mort a la frame 12 laisserait composer les
+    /// 3588 suivantes avant que quiconque s'en apercoive.
+    fatal: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl EncodeWorker {
+    /// Demarre le thread et alloue le pool. `enc` et `mux` lui appartiennent
+    /// jusqu'au `finish`.
+    fn spawn(mut enc: VideoEncoder, mut mux: Muxer, depth: usize) -> Result<EncodeWorker> {
+        let (full_tx, full_rx) = std::sync::mpsc::channel::<EncJob>();
+        let (empty_tx, empty_rx) = std::sync::mpsc::channel::<FreeFrame>();
+        for _ in 0..depth.max(2) {
+            let f = unsafe {
+                alloc_sw_frame(crate::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P, enc.w, enc.h)?
+            };
+            empty_tx
+                .send(FreeFrame(f))
+                .map_err(|_| anyhow::anyhow!("pool d'encodage: canal ferme a l'amorcage"))?;
+        }
+        let empty_tx_keep = empty_tx.clone();
+        let fatal = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let fatal_worker = std::sync::Arc::clone(&fatal);
+        let handle = std::thread::Builder::new()
+            .name("openscreen-encode".into())
+            .spawn(move || -> Result<Muxer> {
+                while let Ok(job) = full_rx.recv() {
+                    let r = unsafe {
+                        (*job.frame).pts = job.pts;
+                        crate::ffi::averr(
+                            crate::ffi::avcodec_send_frame(enc.ctx, job.frame),
+                            "send_frame",
+                        )
+                        .and_then(|()| mux.drain(enc.ctx))
+                    };
+                    // La frame retourne au pool DANS TOUS LES CAS : la garder
+                    // sur une erreur bloquerait la marche sur `empty_rx.recv()`
+                    // au lieu de lui laisser voir `fatal`.
+                    let _ = empty_tx.send(FreeFrame(job.frame));
+                    if let Err(e) = r {
+                        *fatal_worker.lock().unwrap() = Some(format!("{e:#}"));
+                        return Err(e);
+                    }
+                }
+                // Canal ferme = plus aucune frame ne viendra : on vide
+                // l'encodeur ici, pendant qu'il nous appartient encore.
+                unsafe {
+                    enc.flush()?;
+                    mux.drain(enc.ctx)?;
+                }
+                Ok(mux)
+            })?;
+        Ok(EncodeWorker {
+            full_tx: Some(full_tx),
+            empty_rx,
+            empty_tx: empty_tx_keep,
+            handle: Some(handle),
+            fatal,
+        })
+    }
+
+    /// Rend au pool une frame empruntee sans avoir ete remplie.
+    fn give_back(&self, frame: *mut AVFrame) {
+        let _ = self.empty_tx.send(FreeFrame(frame));
+    }
+
+    /// Emprunte une frame libre au pool. C'est ICI que la marche attend quand
+    /// l'encodeur prend du retard.
+    fn take_free(&self) -> Result<*mut AVFrame> {
+        match self.empty_rx.recv() {
+            Ok(FreeFrame(f)) => Ok(f),
+            Err(_) => Err(self.fatal_error("le thread d'encodage s'est arrete")),
+        }
+    }
+
+    fn submit(&self, frame: *mut AVFrame, pts: i64) -> Result<()> {
+        match self.full_tx.as_ref() {
+            Some(tx) => tx
+                .send(EncJob { frame, pts })
+                .map_err(|_| self.fatal_error("le thread d'encodage s'est arrete")),
+            None => Err(anyhow::anyhow!("submit apres finish")),
+        }
+    }
+
+    /// Prefere l'erreur reelle du worker au symptome (« canal ferme »).
+    fn fatal_error(&self, fallback: &str) -> anyhow::Error {
+        match self.fatal.lock().unwrap().clone() {
+            Some(e) => anyhow::anyhow!("encodage: {e}"),
+            None => anyhow::anyhow!("{fallback}"),
+        }
+    }
+
+    /// Ferme la file, attend le worker et RECUPERE le muxer : le `join` est
+    /// l'arete de synchronisation qui rend `octx` utilisable ici pour l'audio et
+    /// le trailer.
+    fn finish(&mut self) -> Result<Muxer> {
+        drop(self.full_tx.take());
+        let handle = self
+            .handle
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("finish appele deux fois"))?;
+        match handle.join() {
+            Ok(r) => r,
+            // Un panic du worker ne passe pas par `fatal` : le relayer en erreur
+            // plutot que de le repropager sur le thread de marche.
+            Err(_) => Err(self.fatal_error("le thread d'encodage a panique")),
+        }
+    }
+}
+
+impl Drop for EncodeWorker {
+    fn drop(&mut self) {
+        // Chemin d'abandon (un `?` ailleurs) : fermer la file debloque le worker,
+        // et le join evite de liberer le pool sous ses pieds.
+        drop(self.full_tx.take());
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+        while let Ok(FreeFrame(f)) = self.empty_rx.try_recv() {
+            let mut f = f;
+            unsafe { crate::ffi::av_frame_free(&mut f) };
+        }
     }
 }
 
@@ -453,7 +667,11 @@ pub fn run_composited_multi(
     let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
     let t0 = std::time::Instant::now();
 
-    let mut enc = VideoEncoder::open(&params.codec, out_w as i32, out_h as i32, out_fps, bit_rate)?;
+    let enc = VideoEncoder::open(&params.codec, out_w as i32, out_h as i32, out_fps, bit_rate)?;
+    // Le contexte de l'encodeur n'est PAS recopie ici. Une variable `ectx`
+    // partagee serait un `Sync` officieux : `VideoEncoder` est `Send` et
+    // volontairement pas `Sync`, et un `*mut AVCodecContext` copie efface
+    // exactement cette distinction au moment ou l'encodage part sur un thread.
     let ectx = enc.ctx;
 
     let mut screen_decs: HashMap<String, Decoder> = HashMap::new();
@@ -465,7 +683,7 @@ pub fn run_composited_multi(
     let mut pb: *mut crate::ffi::AVIOContext = ptr::null_mut();
     let ostream;
     let opkt;
-    let mut audio_encoder;
+    let audio_encoder;
     unsafe {
         crate::ffi::averr(
             crate::ffi::avformat_alloc_output_context2(&mut octx, ptr::null(), ptr::null(), outc.as_ptr()),
@@ -495,6 +713,12 @@ pub fn run_composited_multi(
         )?;
         opkt = crate::ffi::av_packet_alloc();
     }
+    // A partir d'ici le muxer est un seul objet, et il part avec l'encodeur.
+    let mux = Muxer { octx, pb, ostream, opkt, aac: audio_encoder };
+    // Profondeur 3 : deux frames en vol suffisent a couvrir l'encodeur, la
+    // troisieme absorbe les a-coups de la marche (une fin de clip y decode tout
+    // l'audio du clip d'un coup, cf. `on_clip_end`).
+    let mut worker = EncodeWorker::spawn(enc, mux, 3)?;
 
     // Un PCM par clip, assemble apres la marche video (elle seule dit combien de
     // frames chaque clip a produit, donc combien d'audio lui revient).
@@ -524,13 +748,30 @@ pub fn run_composited_multi(
             &mut webcam_decs,
             &mut |n| {
                 // Soumet la copie de la frame n SANS l'attendre et recolte la
-                // precedente : c'est tout le pipelining. Pendant que le CPU
-                // passe son temps dans `avcodec_send_frame` sur la frame n-1,
-                // le GPU finit la composition, la conversion YUV et la copie de n.
-                if let Some((rw, rh, planes)) = comp.readback_submit_yuv()? {
-                    enc.send_yuv420p(&planes, rw as i32, rh as i32, encoded_pts)?;
+                // precedente : c'est tout le pipelining GPU. L'encodage, lui,
+                // n'est plus ici du tout — il tourne sur `worker` pendant que
+                // cette closure compose deja la frame suivante.
+                let frame = worker.take_free()?;
+                let mut filled = false;
+                comp.readback_submit_yuv(|rw, rh, planes| {
+                    VideoEncoder::depad_into(
+                        frame,
+                        planes,
+                        rw as i32,
+                        rh as i32,
+                        out_w as i32,
+                        out_h as i32,
+                    )?;
+                    filled = true;
+                    Ok(())
+                })?;
+                if filled {
+                    worker.submit(frame, encoded_pts)?;
                     encoded_pts += 1;
-                    drain_encoder(ectx, octx, ostream, opkt)?;
+                } else {
+                    // Amorcage de la ring : rien a encoder, la frame empruntee
+                    // retourne au pool telle quelle.
+                    worker.give_back(frame);
                 }
                 // Progression = frames COMPOSEES (inchangee) : la barre ne doit
                 // pas reculer d'une frame parce que l'encodage a un tour de
@@ -567,20 +808,42 @@ pub fn run_composited_multi(
     };
 
     unsafe {
-        // Drain de la ring AVANT le flush de l'encodeur : les `depth - 1`
-        // dernieres copies sont encore en vol, et sans ce drain la derniere
-        // frame composee ne serait jamais encodee (video amputee d'une frame).
-        while let Some((rw, rh, planes)) = comp.readback_take_yuv()? {
-            enc.send_yuv420p(&planes, rw as i32, rh as i32, encoded_pts)?;
-            encoded_pts += 1;
-            drain_encoder(ectx, octx, ostream, opkt)?;
+        // Drain de la ring AVANT de fermer la file : les `depth - 1` dernieres
+        // copies sont encore en vol, et sans ce drain la derniere frame composee
+        // ne serait jamais encodee (video amputee d'une frame).
+        loop {
+            let frame = worker.take_free()?;
+            let mut filled = false;
+            let got = comp.readback_take_yuv_with(|rw, rh, planes| {
+                VideoEncoder::depad_into(
+                    frame,
+                    planes,
+                    rw as i32,
+                    rh as i32,
+                    out_w as i32,
+                    out_h as i32,
+                )?;
+                filled = true;
+                Ok(())
+            })?;
+            if filled {
+                worker.submit(frame, encoded_pts)?;
+                encoded_pts += 1;
+            } else {
+                worker.give_back(frame);
+            }
+            if !got {
+                break;
+            }
         }
         // Le compositeur peut survivre a l'export (l'appelant le possede) : on
         // lui rend sa profondeur par defaut plutot que de lui laisser une ring
         // a 2 et le buffer de 8 Mo qui va avec.
         comp.set_readback_yuv_depth(1)?;
-        enc.flush()?;
-        drain_encoder(ectx, octx, ostream, opkt)?;
+        // Fermer la file fait sortir le worker de sa boucle ; il vide l'encodeur
+        // et rend le muxer. Le `join` interne est l'arete de synchronisation qui
+        // rend `octx` de nouveau utilisable ici.
+        let mut mux = worker.finish()?;
         // Audio : le plan part des frames REELLEMENT produites par clip (un clip
         // raccourci voit son audio raccourci d'autant), puis un seul encode AAC.
         // Récupération des jobs audio lancés pendant le parcours. `spawn` en admet quatre
@@ -595,15 +858,12 @@ pub fn run_composited_multi(
 
         let declared_audio: Vec<bool> = clips.iter().map(|c| c.has_audio).collect();
         let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
-        audio_encoder.encode(
+        let octx = mux.octx;
+        mux.aac.encode(
             &finish_audio(assemble_concatenated_pcm(&clip_pcm, &plan), audio_settings),
             octx,
         )?;
-        crate::ffi::averr(crate::ffi::av_write_trailer(octx), "write_trailer")?;
-        crate::ffi::avio_closep(&mut pb);
-        crate::ffi::avformat_free_context(octx);
-        let mut opkt = opkt;
-        crate::ffi::av_packet_free(&mut opkt);
+        mux.finish()?;
     }
 
     let wall_s = t0.elapsed().as_secs_f64();
