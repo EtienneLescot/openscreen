@@ -23,6 +23,7 @@ import {
 } from "@/lib/captioning/annotationsFromCaptions";
 import type { CaptionSegment } from "@/lib/captioning/transcribe";
 import type { AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
+import { expandRawSec, type RulerInsert, rulerInserts } from "../timeline/inserted-time";
 import {
 	type CaptionAnchorV,
 	type CaptionSettings,
@@ -157,6 +158,7 @@ export function sourceSpanToTimelineSpans(
 	startSec: number,
 	endSec: number,
 	clips: AxcutClip[],
+	inserts: readonly RulerInsert[] = [],
 ): Array<{ startSec: number; endSec: number }> {
 	const out: Array<{ startSec: number; endSec: number }> = [];
 	for (const clip of clips) {
@@ -170,7 +172,15 @@ export function sourceSpanToTimelineSpans(
 			endSec: clip.timelineStartSec + (e - clip.sourceStartSec),
 		});
 	}
-	return out;
+	// Onto the ruler the viewer actually sees. Expanding BOTH ends does the whole job:
+	// a line after a pause slides along by it, and a line that covers the held moment
+	// has only its end pushed out — so it stays on screen through the pause instead of
+	// going dark over the one moment an added word exists for.
+	if (inserts.length === 0) return out;
+	return out.map((span) => ({
+		startSec: expandRawSec(span.startSec, inserts),
+		endSec: expandRawSec(span.endSec, inserts),
+	}));
 }
 
 /**
@@ -189,6 +199,9 @@ export function deriveCaptionCues(
 	if (clips.length === 0) return [];
 
 	const transcripts = new Map(document.transcripts.map((t) => [t.assetId, t]));
+	// `?? []` because the key is additive: a document written before it — or a hand-built
+	// one that never went through the schema — simply has no pauses.
+	const inserts = rulerInserts(document.timeline.insertRanges ?? [], clips);
 	// A transcript is only projected once per asset even when several clips draw
 	// from it (line grouping is the expensive part, clipping is cheap).
 	const linesByAsset = new Map<string, CaptionSegment[]>();
@@ -205,7 +218,13 @@ export function deriveCaptionCues(
 		for (const line of lines) {
 			const text = line.text.trim();
 			if (!text) continue;
-			for (const span of sourceSpanToTimelineSpans(assetId, line.startSec, line.endSec, clips)) {
+			for (const span of sourceSpanToTimelineSpans(
+				assetId,
+				line.startSec,
+				line.endSec,
+				clips,
+				inserts,
+			)) {
 				const startMs = Math.round(span.startSec * 1000);
 				const endMs = Math.max(Math.round(span.endSec * 1000), startMs + 1);
 				cues.push({ id: `caption-${n++}`, startMs, endMs, text });

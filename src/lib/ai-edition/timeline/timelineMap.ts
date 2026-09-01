@@ -17,6 +17,7 @@
 // against the COMPRESSED segment layout, which slips every region after a trim
 // forward by the trimmed duration.
 
+import type { PlaybackSegment } from "../document/timeline";
 import type { AxcutClip } from "../schema";
 import { ventilateSpanAcrossClips } from "./region-ventilation";
 import { findRawClipForSegment, getRawVirtualStartTime } from "./virtual-preview";
@@ -399,11 +400,15 @@ export function anchorRegionsWithDerivedMs<
  * the gap.
  */
 export function segmentRawSpanSec(
-	segment: AxcutClip,
+	segment: PlaybackSegment,
 	rawClips: AxcutClip[],
 ): { startSec: number; endSec: number } {
 	const startSec = getRawVirtualStartTime(segment, rawClips);
-	const lenSec = (segment.sourceEndSec ?? segment.sourceStartSec) - segment.sourceStartSec;
+	// A held segment's source window is the single frame it shows, so its source length
+	// is zero — its RAW span is the pause it carries. Without this the playhead could
+	// never be inside it and would step straight over the pause.
+	const lenSec =
+		segment.heldSec ?? (segment.sourceEndSec ?? segment.sourceStartSec) - segment.sourceStartSec;
 	return { startSec, endSec: startSec + lenSec };
 }
 
@@ -559,7 +564,7 @@ export function projectRegionsToSource<
 	T extends { id: string; startMs: number; endMs: number } & RegionClipAnchor,
 >(
 	regions: T[],
-	visibleSegments: AxcutClip[],
+	visibleSegments: PlaybackSegment[],
 	rawClips: AxcutClip[],
 	makeId: () => string,
 ): (T & { clipIndex?: number; underTrim?: boolean })[] {
@@ -639,7 +644,7 @@ export function projectRegionsToSource<
 
 export interface NativePosition {
 	/** The trim-narrowed playback segment (from `visibleSegments`) that is active. */
-	clip: AxcutClip;
+	clip: PlaybackSegment;
 	/** Its index in `visibleSegments`, matching `SceneDescription.clips` / native `clip_index`. */
 	clipIndex: number;
 	/** Screen-source seconds the native decoder should present for this segment. */
@@ -675,7 +680,7 @@ const NATIVE_EOF_MARGIN_SEC = 0.033;
  */
 export function resolveNativePosition(
 	rawSec: number,
-	visibleSegments: AxcutClip[],
+	visibleSegments: PlaybackSegment[],
 	rawClips: AxcutClip[],
 ): NativePosition | null {
 	if (!Number.isFinite(rawSec) || visibleSegments.length === 0) return null;
@@ -689,6 +694,13 @@ export function resolveNativePosition(
 	if (index < 0) return positionUnderCut(rawSec, visibleSegments, rawClips);
 
 	const seg = visibleSegments[index];
+	// Inside a pause the source clock does not advance: the whole point of the segment
+	// is created time over one held frame. Clamping here is what stops the raw-playhead
+	// delta — which DOES advance through the pause — from pushing the decoder past the
+	// held frame into the content that belongs after it.
+	if (seg.heldSec !== undefined) {
+		return { clip: seg, clipIndex: index, sourceTimeSec: seg.sourceStartSec };
+	}
 	const segSourceEnd = seg.sourceEndSec ?? seg.sourceStartSec;
 	const unclamped = seg.sourceStartSec + (rawSec - spans[index].startSec);
 	const maxSource = Math.max(seg.sourceStartSec, segSourceEnd - NATIVE_EOF_MARGIN_SEC);

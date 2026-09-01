@@ -51,6 +51,12 @@ import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
+	expandRawSec,
+	type RulerInsert,
+	rulerInserts,
+	totalInsertedSec,
+} from "@/lib/ai-edition/timeline/inserted-time";
+import {
 	newRegionDurationSec,
 	setTimelineScale,
 } from "@/lib/ai-edition/timeline/newRegionDuration";
@@ -219,6 +225,10 @@ interface RulerTick {
 interface PlayheadOverlayProps {
 	/** Full timeline length in seconds — the denominator for the playhead's percentage. */
 	totalSec: number;
+	/** The pauses added words created. `currentTimeSec` is a STORED second; the ruler it is
+	 *  drawn on counts the pauses, so it has to be placed through them or it drifts from
+	 *  the clips by the whole added time. */
+	inserts: readonly RulerInsert[];
 	/** Live scrub position, when a drag is in flight. Takes precedence over the store. */
 	overrideTimeSec: number | null;
 	canvasStyle: React.CSSProperties;
@@ -244,13 +254,14 @@ interface PlayheadOverlayProps {
  */
 const PlayheadOverlay = memo(function PlayheadOverlay({
 	totalSec,
+	inserts,
 	overrideTimeSec,
 	canvasStyle,
 	onPointerDown,
 	playheadRef,
 }: PlayheadOverlayProps) {
 	const storeTimeSec = useProjectStore((s) => s.currentTimeSec);
-	const pct = ((overrideTimeSec ?? storeTimeSec) / totalSec) * 100;
+	const pct = (expandRawSec(overrideTimeSec ?? storeTimeSec, inserts) / totalSec) * 100;
 	return (
 		<div className={styles.tlPlayheadLayer} aria-hidden>
 			<div className={styles.tlCanvas} style={canvasStyle}>
@@ -631,15 +642,26 @@ export function V4Timeline({
 	// clicked instead of looking like it worked. Same question, same helper as the Layout
 	// pane: is a camera attached anywhere on this timeline?
 	const hasAnyCamera = useMemo(() => hasAnyClipWithCamera(tl.assets, clips), [tl.assets, clips]);
+	// The pauses added words created, placed on the ruler. Everything below measures the
+	// EXPANDED ruler — stored clip geometry plus the time those pauses add — because that
+	// is the film's real length and the one the playhead runs along. Stored geometry is
+	// never rewritten for this: only what is drawn moves.
+	// `?? []` because the key is additive: a document written before it has no pauses.
+	const inserts = useMemo(
+		() => rulerInserts(tl.insertRanges ?? [], clips),
+		[tl.insertRanges, clips],
+	);
 	const total = useMemo(
 		() =>
 			Math.max(
 				1,
-				clips.reduce((m, c) => Math.max(m, c.timelineEndSec), 0),
+				clips.reduce((m, c) => Math.max(m, c.timelineEndSec), 0) + totalInsertedSec(inserts),
 			),
-		[clips],
+		[clips, inserts],
 	);
 	const pctOf = useCallback((sec: number) => (sec / total) * 100, [total]);
+	/** Stored raw seconds → a percentage of the expanded ruler. */
+	const pctAt = useCallback((sec: number) => pctOf(expandRawSec(sec, inserts)), [pctOf, inserts]);
 	const showLanes = variant === "edit";
 
 	// The visible fraction of the timeline, and what one second is worth on screen
@@ -1594,8 +1616,10 @@ export function V4Timeline({
 					compact ? ` ${styles.lanePillCompact}` : ""
 				}${seg.interactive && isPillSelected(p.id) ? ` ${styles.lanePillSel}` : ""}`}
 				style={{
-					left: `${pctOf(seg.segStart)}%`,
-					width: `${pctOf(durSec)}%`,
+					left: `${pctAt(seg.segStart)}%`,
+					// Measured on the expanded ruler at BOTH ends: a region straddling a pause
+					// covers it, so its box has to grow by that pause and not merely slide.
+					width: `${pctOf(expandRawSec(seg.segEnd, inserts) - expandRawSec(seg.segStart, inserts))}%`,
 					transform: seg.shiftPx ? `translateX(${seg.shiftPx}px)` : undefined,
 					transition: !clipDrag
 						? undefined
@@ -2006,7 +2030,7 @@ export function V4Timeline({
 								<div
 									key={tick.sec}
 									className={`${styles.tlTick}${tick.major ? ` ${styles.tlTickMajor}` : ""}`}
-									style={{ left: `${pctOf(tick.sec)}%` }}
+									style={{ left: `${pctAt(tick.sec)}%` }}
 								>
 									{tick.major ? (
 										<span className={styles.tlTickLabel}>{fmtTick(tick.sec, rulerTicks.step)}</span>
@@ -2153,6 +2177,12 @@ export function V4Timeline({
 						>
 							{clips.map((c, i) => {
 								const dur = c.timelineEndSec - c.timelineStartSec;
+								// On the expanded ruler the box also carries whatever pauses fall
+								// inside it — the film really does stay on this clip's frame for
+								// them, so they belong to its box rather than between boxes.
+								const boxStart = expandRawSec(c.timelineStartSec, inserts);
+								const boxEnd = expandRawSec(c.timelineEndSec, inserts);
+								const boxLen = boxEnd - boxStart;
 								const asset = tl.assets.find((a) => a.id === c.assetId);
 								const clipVideoUrl = videoSources.find((v) => v.id === c.assetId)?.src;
 								const selected = tl.clipSelection === c.id;
@@ -2180,12 +2210,12 @@ export function V4Timeline({
 											dragging ? ` ${styles.tlClipDragging}` : ""
 										}`}
 										style={{
-											left: `${pctOf(c.timelineStartSec)}%`,
+											left: `${pctOf(boxStart)}%`,
 											// Minus the gutter that separates two cards (it used to be the
 											// flex row's `gap`). A clip shorter than the gutter lands on
 											// .tlClip's 1px min-width instead of collapsing — same rule as
 											// the lane pills above.
-											width: `calc(${pctOf(dur)}% - ${CLIP_GUTTER_PX}px)`,
+											width: `calc(${pctOf(boxLen)}% - ${CLIP_GUTTER_PX}px)`,
 											transform: clipTransform,
 										}}
 										onPointerDown={(e) => startClipDrag(e, c)}
@@ -2228,25 +2258,41 @@ export function V4Timeline({
 												{tl.assets.find((a) => a.id === c.assetId)?.label ?? c.assetId}
 											</span>
 										</div>
-										{(insertedWordsByClip.get(c.id) ?? []).map(({ word, atPct }) => (
-											<button
-												key={word.id}
-												type="button"
-												data-no-clip-drag
-												data-inserted-word={word.id}
-												className={styles.tlClipInsert}
-												style={{ left: `${atPct}%` }}
-												title={t("toolbar.addedWord", { word: word.text })}
-												aria-label={t("toolbar.addedWord", { word: word.text })}
-												onPointerDown={(e) => e.stopPropagation()}
-												onClick={(e) => {
-													// Jump to the moment the added text sits on. The clip box
-													// underneath would otherwise take this as a selection.
-													e.stopPropagation();
-													setCurrentTime(c.timelineStartSec + (word.startSec - c.sourceStartSec));
-												}}
-											/>
-										))}
+										{(insertedWordsByClip.get(c.id) ?? []).map(({ word, atPct }) => {
+											// A word whose pause the film actually holds gets a BAND as wide
+											// as the time it adds — that width is the added time, drawn. One
+											// that fitted in silence already there adds nothing and stays the
+											// hairline it was: there is nothing to show.
+											const pause = inserts.find((ins) => ins.wordId === word.id);
+											const left = pause
+												? ((expandRawSec(pause.atRawSec, inserts) - boxStart) / boxLen) * 100
+												: atPct;
+											const width = pause ? (pause.durationSec / boxLen) * 100 : 0;
+											return (
+												<button
+													key={word.id}
+													type="button"
+													data-no-clip-drag
+													data-inserted-word={word.id}
+													data-inserted-sec={pause?.durationSec ?? 0}
+													className={styles.tlClipInsert}
+													style={
+														width > 0
+															? { left: `${left}%`, width: `${width}%`, marginLeft: 0 }
+															: { left: `${left}%` }
+													}
+													title={t("toolbar.addedWord", { word: word.text })}
+													aria-label={t("toolbar.addedWord", { word: word.text })}
+													onPointerDown={(e) => e.stopPropagation()}
+													onClick={(e) => {
+														// Jump to the moment the added text sits on. The clip box
+														// underneath would otherwise take this as a selection.
+														e.stopPropagation();
+														setCurrentTime(c.timelineStartSec + (word.startSec - c.sourceStartSec));
+													}}
+												/>
+											);
+										})}
 										{selected ? (
 											<button
 												type="button"
@@ -2282,6 +2328,7 @@ export function V4Timeline({
 				{showLanes ? (
 					<PlayheadOverlay
 						totalSec={total}
+						inserts={inserts}
 						overrideTimeSec={scrubbingTimeSec}
 						canvasStyle={canvasStyle}
 						onPointerDown={startScrub}

@@ -41,6 +41,12 @@ export function useNativePlaybackSync(
 	);
 	const activeClipId = activePosition?.clip.id ?? null;
 	const sourceTimeSec = activePosition?.sourceTimeSec ?? null;
+	// A pause holds ONE frame for its whole length. Free-running the decoder through it
+	// would play what comes after instead, and the app clock — which does traverse the
+	// pause — would then re-seek on the drift and stutter. Pausing the decoder is what
+	// makes the pause a pause; the webcam holds with the screen because both derive
+	// from the one asset source clock the pause stops advancing.
+	const held = activePosition?.clip.heldSec !== undefined;
 
 	// Reactive "is a native view active?" so activation mid-session re-pushes the
 	// current transport/playhead (time & playing aren't memoised in the store).
@@ -54,8 +60,8 @@ export function useNativePlaybackSync(
 		if (!active) {
 			return;
 		}
-		setNativePlaying(playing);
-	}, [active, playing]);
+		setNativePlaying(playing && !held);
+	}, [active, playing, held]);
 
 	// Scrub/step while paused OR periodic resync during playback when drift > 100ms
 	const lastSyncedSourceTimeRef = useRef<number | null>(null);
@@ -67,6 +73,16 @@ export function useNativePlaybackSync(
 			return;
 		}
 		const now = performance.now();
+
+		// Inside a pause while playing: the decoder is parked on the held frame (see the
+		// transport effect). Refresh the drift refs every run so the check never reads a
+		// correctly-frozen source clock as divergence and fights itself with seeks.
+		if (playing && held) {
+			setNativeTime(sourceTimeSec);
+			lastSyncedSourceTimeRef.current = sourceTimeSec;
+			lastSyncedWallTimeRef.current = now;
+			return;
+		}
 
 		// When clip changes, let setActiveClip handle the atomic clip-switch-and-seek.
 		if (lastActiveClipIdRef.current !== activeClipId) {
@@ -95,5 +111,5 @@ export function useNativePlaybackSync(
 			lastSyncedSourceTimeRef.current = sourceTimeSec;
 			lastSyncedWallTimeRef.current = now;
 		}
-	}, [active, playing, activeClipId, sourceTimeSec]);
+	}, [active, playing, held, activeClipId, sourceTimeSec]);
 }
