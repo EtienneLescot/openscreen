@@ -188,7 +188,9 @@ function hasAllowedImportVideoExtension(filePath: string): boolean {
 
 // Imported audio (issue #350). Kept separate from the video set so the two
 // pickers stay honest — an audio picker must not approve a video path and vice
-// versa. Mirrors SUPPORTED_AUDIO_EXTENSIONS in the document service.
+// versa. A SUBSET of SUPPORTED_AUDIO_EXTENSIONS in the document service, which
+// also accepts `.webm`: that gate is told the kind by its caller, while this one
+// only has the extension to go on and `.webm` is far more often a video.
 const ALLOWED_IMPORT_AUDIO_EXTENSIONS = new Set([
 	".mp3",
 	".wav",

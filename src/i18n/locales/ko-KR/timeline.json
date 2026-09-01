@@ -15,7 +15,7 @@
 		"pressZoom": "Z를 눌러 줌 추가",
 		"pressTrim": "T를 눌러 트림 추가",
 		"pressAnnotation": "A를 눌러 주석 추가",
-		"pressAudio": "M을 눌러 오디오 추가",
+		"pressAudio": "M 키로 오디오 추가, V 키로 보이스오버 녹음",
 		"pressSpeed": "S를 눌러 속도 추가",
 		"pressCameraFullscreen": "C를 눌러 전체 화면 카메라 구간을 추가하세요"
 	},

@@ -369,7 +369,7 @@ describe("V4Timeline audio lane drag", () => {
 
 	function renderAudio() {
 		const placeAudioTrack = vi.fn(
-			async (_id: string, _span: { startMs: number; endMs: number }) => {
+			async (_id: string, _span: { startMs: number; endMs: number; offsetMs?: number }) => {
 				/* the drag only awaits it */
 			},
 		);
@@ -430,6 +430,35 @@ describe("V4Timeline audio lane drag", () => {
 		// The span slides whole: head moves, length is unchanged.
 		expect(placement.startMs / 1000).toBeCloseTo(100 + secForPx(90), 3);
 		expect((placement.endMs - placement.startMs) / 1000).toBeCloseTo(60, 3);
+	});
+
+	it("left-handle drag trims into the source instead of sliding the audio", () => {
+		// A left-edge drag is a trim IN: the head moves right by N seconds and the
+		// same N is skipped in the file, so what plays under the pill stays put.
+		// Committing the span alone left `offsetMs` untouched, which just slid the
+		// whole track along — the "my music starts five seconds late" symptom.
+		const { pill, placeAudioTrack } = renderAudio();
+		const handle = pill.firstElementChild as Element;
+		fireEvent.pointerDown(handle, { clientX: 0 });
+		window.dispatchEvent(new MouseEvent("pointermove", { clientX: 15 }));
+		window.dispatchEvent(new MouseEvent("pointerup", { clientX: 15 }));
+		expect(placeAudioTrack).toHaveBeenCalledTimes(1);
+		const [, placement] = placeAudioTrack.mock.calls[0];
+		const movedSec = placement.startMs / 1000 - 100;
+		expect(movedSec).toBeGreaterThan(0);
+		// The head moved and the source in-point advanced by the same amount.
+		expect((placement.offsetMs ?? 0) / 1000).toBeCloseTo(movedSec, 3);
+		// The tail is untouched, so the span shortens by exactly what was trimmed.
+		expect((placement.endMs - placement.startMs) / 1000).toBeCloseTo(60 - movedSec, 3);
+	});
+
+	it("a plain move leaves the source in-point alone", () => {
+		const { pill, placeAudioTrack } = renderAudio();
+		fireEvent.pointerDown(pill, { clientX: 0 });
+		window.dispatchEvent(new MouseEvent("pointermove", { clientX: 90 }));
+		window.dispatchEvent(new MouseEvent("pointerup", { clientX: 90 }));
+		const [, placement] = placeAudioTrack.mock.calls[0];
+		expect(placement.offsetMs).toBe(0);
 	});
 
 	it("right-handle drag pulls the out-point in, head fixed", () => {
