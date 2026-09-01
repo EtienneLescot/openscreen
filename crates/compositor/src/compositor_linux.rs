@@ -409,6 +409,11 @@ impl Compositor {
                     // `dummy_view()` est lie a la place, et la branche du shader n'est de
                     // toute facon prise que si fx.z > 0.5.
                     tex_entry(4),
+                    // Plan V. En 5 et pas en 3 : les bindings 0-4 etaient deja
+                    // pris quand le chroma est passe d'un plan entrelace a deux
+                    // plans, et renumeroter aurait touche tous les bind groups
+                    // pour un gain nul.
+                    tex_entry(5),
                 ],
             });
         let pipeline_layout = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -964,7 +969,7 @@ impl Compositor {
     unsafe fn nv12_srvs(
         &self,
         frame: *const AVFrame,
-    ) -> Result<(wgpu::TextureView, wgpu::TextureView)> {
+    ) -> Result<(wgpu::TextureView, wgpu::TextureView, wgpu::TextureView)> {
         crate::linux_frames::nv12_planes(frame)
     }
 
@@ -1107,7 +1112,7 @@ impl Compositor {
     fn make_bind(
         &self,
         cb: &LayerCB,
-        planes: Option<(&wgpu::TextureView, &wgpu::TextureView)>,
+        planes: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
         dummy: &wgpu::TextureView,
     ) -> (wgpu::Buffer, wgpu::BindGroup) {
         let uniform = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1115,7 +1120,7 @@ impl Compositor {
             contents: layer_bytes(cb),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let (y, uv) = planes.unwrap_or((dummy, dummy));
+        let (y, u, v) = planes.unwrap_or((dummy, dummy, dummy));
         // Le masque est lie sur TOUS les draws, pas seulement celui de la camera.
         // wgpu valide le bind group contre le layout : le binding 4 est declare
         // (`tex_entry(4)`), donc une entree absente ferait echouer CHAQUE draw et
@@ -1139,7 +1144,7 @@ impl Compositor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(uv),
+                    resource: wgpu::BindingResource::TextureView(u),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -1148,6 +1153,10 @@ impl Compositor {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(mask_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(v),
                 },
             ],
         });
@@ -1282,7 +1291,7 @@ impl Compositor {
             ..Default::default()
         };
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), dummy);
+        let (buf, bind) = self.make_bind(&cb, Some((&view, &view, &view)), dummy);
         Ok(BgDraw { _buf: buf, _tex: Some(tex), _view: Some(view), bind })
     }
 
@@ -1404,7 +1413,8 @@ impl Compositor {
     pub unsafe fn capture_webcam_rgb(
         &self,
         wy: &wgpu::TextureView,
-        wuv: &wgpu::TextureView,
+        wu: &wgpu::TextureView,
+        wv: &wgpu::TextureView,
         src: [f32; 4],
         width: u32,
         height: u32,
@@ -1460,7 +1470,7 @@ impl Compositor {
                 mb: [1.0, 1.0, 1.0, 0.0],
                 ..Default::default()
             },
-            Some((wy, wuv)),
+            Some((wy, wu, wv)),
             &self.dummy_view(),
         );
 
@@ -1616,7 +1626,8 @@ impl Compositor {
     unsafe fn pump_segmentation(
         &self,
         wy: &wgpu::TextureView,
-        wuv: &wgpu::TextureView,
+        wu: &wgpu::TextureView,
+        wv: &wgpu::TextureView,
         valid: [f32; 2],
     ) -> Result<()> {
         if *self.seg_failed.borrow() {
@@ -1681,7 +1692,8 @@ impl Compositor {
         // `fx.xy`.
         self.capture_webcam_rgb(
             wy,
-            wuv,
+            wu,
+            wv,
             [0.0, 0.0, valid[0], valid[1]],
             crate::segmentation::MODEL_WIDTH,
             crate::segmentation::MODEL_HEIGHT,
@@ -1801,7 +1813,7 @@ impl Compositor {
         if Self::pixel_buffer_of(screen).is_none() {
             return self.clear_rt();
         }
-        let (sy, suv) = self.nv12_srvs(screen)?;
+        let (sy, su, sv) = self.nv12_srvs(screen)?;
         let (stw, sth) = self.tex_dims(screen);
         let (wtw, wth) = self.tex_dims(webcam);
         let (scw, sch) = ((*screen).width as f32, (*screen).height as f32);
@@ -1839,8 +1851,8 @@ impl Compositor {
         if wants_seg && !webcam.is_null() {
             // `nv12_srvs` dereference `data[0]` sans verifier la frame elle-meme,
             // d'ou le garde de nullite au-dessus (meme condition que le draw PiP).
-            if let Ok((wy, wuv)) = self.nv12_srvs(webcam) {
-                self.pump_segmentation(&wy, &wuv, w_valid)?;
+            if let Ok((wy, wu, wv)) = self.nv12_srvs(webcam) {
+                self.pump_segmentation(&wy, &wu, &wv, w_valid)?;
             }
         }
 
@@ -1947,7 +1959,7 @@ impl Compositor {
         // `_screen_uniform` garde le buffer uniforme en vie (reference par le bind).
         let dummy = self.dummy_view();
         let (_screen_uniform, screen_bind) =
-            self.make_bind(&screen_layer, Some((&sy, &suv)), &dummy);
+            self.make_bind(&screen_layer, Some((&sy, &su, &sv)), &dummy);
 
         // OMBRE PORTEE de l'ecran, dessinee JUSTE AVANT le calque ecran. Le shader
         // la connait depuis le debut ; ce qui manquait etait uniquement le draw
@@ -2062,7 +2074,7 @@ impl Compositor {
             scene_ref.as_ref().and_then(|s| s.webcam_effect.as_ref()),
             Some(e) if e.shader_code() == 1.0
         ) && self.webcam_mask.borrow().is_some();
-        let webcam_draw = webcam_planes.as_ref().map(|(wy, wuv)| {
+        let webcam_draw = webcam_planes.as_ref().map(|(wy, wu, wv)| {
             // COVER-CROP. `src` etait cable a [0,0,1,1], donc la texture entiere
             // etait etiree sur la boite quelle que soit sa forme : le facteur de
             // deformation valait exactement `box_ar / cam_ar`. Invisible en PiP
@@ -2113,7 +2125,7 @@ impl Compositor {
             };
             // Le masque est lie par `make_bind` sur tous les draws, pas seulement
             // celui-ci : le layout l'exige (cf. `tex_entry(4)`).
-            self.make_bind(&cb, Some((wy, wuv)), &dummy)
+            self.make_bind(&cb, Some((wy, wu, wv)), &dummy)
         });
 
         // OMBRE de la camera. Pas dans les presets « bloc » (dual-frame,
@@ -2267,7 +2279,7 @@ impl Compositor {
                         // la lit.
                         let (buf, bind) = self.make_bind(
                             &cb,
-                            Some((&self.ann_copy_view, &self.ann_copy_view)),
+                            Some((&self.ann_copy_view, &self.ann_copy_view, &self.ann_copy_view)),
                             &dummy,
                         );
                         ann_draws.push(AnnDraw::plain(buf, bind));
@@ -2327,7 +2339,7 @@ impl Compositor {
                             fx: [0.0, 0.0, 1.0, 1.0],
                             ..Default::default()
                         };
-                        let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), &dummy);
+                        let (buf, bind) = self.make_bind(&cb, Some((&view, &view, &view)), &dummy);
                         ann_draws.push(AnnDraw {
                             _buf: buf,
                             _glyphs: None,
@@ -2476,7 +2488,7 @@ impl Compositor {
                         };
                         // Atlas R8 au binding 1 (texY) que le mode 11 echantillonne.
                         let (buf, bind) =
-                            self.make_bind(&cb, Some((&glyphs.view, &glyphs.view)), &dummy);
+                            self.make_bind(&cb, Some((&glyphs.view, &glyphs.view, &glyphs.view)), &dummy);
                         ann_draws.push(AnnDraw {
                             _buf: buf,
                             _glyphs: Some(glyphs),
@@ -2623,7 +2635,7 @@ impl Compositor {
                 }
                 };
                 // Sprite RGBA au binding 1 (texY) que le mode 7 echantillonne.
-                let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), &dummy);
+                let (buf, bind) = self.make_bind(&cb, Some((&view, &view, &view)), &dummy);
                 bufs.push(buf);
                 binds.push(bind);
             }
@@ -3412,18 +3424,17 @@ mod tests {
         w: u32,
         h: u32,
         luma: impl Fn(u32, u32) -> u8,
-    ) -> (wgpu::TextureView, wgpu::TextureView) {
+    ) -> (wgpu::TextureView, wgpu::TextureView, wgpu::TextureView) {
         let mut y = vec![0u8; (w * h) as usize];
         for row in 0..h {
             for col in 0..w {
                 y[(row * w + col) as usize] = luma(col, row);
             }
         }
-        let (ytex, uvtex) = nv12_textures(gpu, w, h, &y, &vec![UV_NEUTRAL; (w * (h / 2)) as usize]);
-        (
-            ytex.create_view(&wgpu::TextureViewDescriptor::default()),
-            uvtex.create_view(&wgpu::TextureViewDescriptor::default()),
-        )
+        let (ytex, utex, vtex) =
+            nv12_textures(gpu, w, h, &y, &vec![UV_NEUTRAL; (w * (h / 2)) as usize]);
+        let d = wgpu::TextureViewDescriptor::default();
+        (ytex.create_view(&d), utex.create_view(&d), vtex.create_view(&d))
     }
 
     /// Le couple de textures NV12-split (Y `R8Unorm`, UV entrelacee `Rg8Unorm`)
@@ -3434,7 +3445,7 @@ mod tests {
         h: u32,
         y: &[u8],
         uv: &[u8],
-    ) -> (wgpu::Texture, wgpu::Texture) {
+    ) -> (wgpu::Texture, wgpu::Texture, wgpu::Texture) {
         let mk = |label: &str, format, tw: u32, th: u32| {
             gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -3448,7 +3459,13 @@ mod tests {
             })
         };
         let ytex = mk("test-nv12-y", wgpu::TextureFormat::R8Unorm, w, h);
-        let uvtex = mk("test-nv12-uv", wgpu::TextureFormat::Rg8Unorm, w / 2, h / 2);
+        // Les helpers de test parlent encore NV12 entrelace parce que c'est la
+        // forme lisible pour ecrire un cas ; le carrier, lui, veut deux plans.
+        // On desentrelace ici plutot que de reecrire chaque test.
+        let utex = mk("test-yuv-u", wgpu::TextureFormat::R8Unorm, w / 2, h / 2);
+        let vtex = mk("test-yuv-v", wgpu::TextureFormat::R8Unorm, w / 2, h / 2);
+        let u_plane: Vec<u8> = uv.iter().step_by(2).copied().collect();
+        let v_plane: Vec<u8> = uv.iter().skip(1).step_by(2).copied().collect();
         let write = |tex: &wgpu::Texture, data: &[u8], bpr: u32, tw: u32, th: u32| {
             gpu.context.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -3467,10 +3484,9 @@ mod tests {
             );
         };
         write(&ytex, y, w, w, h);
-        // UV : `w / 2` texels de 2 octets par ligne, soit `w` octets — la meme
-        // valeur que pour Y, par coincidence arithmetique et non par symetrie.
-        write(&uvtex, uv, w, w / 2, h / 2);
-        (ytex, uvtex)
+        write(&utex, &u_plane, w / 2, w / 2, h / 2);
+        write(&vtex, &v_plane, w / 2, w / 2, h / 2);
+        (ytex, utex, vtex)
     }
 
     /// Masque 0 sur la moitie gauche, 255 sur la droite. La frontiere tombe pile
@@ -3489,7 +3505,7 @@ mod tests {
         comp: &Compositor,
         clear: wgpu::Color,
         cb: &LayerCB,
-        planes: (&wgpu::TextureView, &wgpu::TextureView),
+        planes: (&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView),
     ) -> (u32, u32, Vec<u8>) {
         let dummy = comp.dummy_view();
         let (_buf, bind) = comp.make_bind(cb, Some(planes), &dummy);
@@ -3530,13 +3546,14 @@ mod tests {
         // Moitie gauche noire, moitie droite blanche : la capture doit rendre les
         // deux dans le bon sens. Une inversion d'axe passerait un test de taille
         // sans se voir.
-        let (y, uv) = nv12_views(&gpu, 64, 64, |col, _| if col < 32 { Y_BLACK } else { Y_WHITE });
+        let (y, u, v) = nv12_views(&gpu, 64, 64, |col, _| if col < 32 { Y_BLACK } else { Y_WHITE });
 
         let mut out = Vec::new();
         unsafe {
             comp.capture_webcam_rgb(
                 &y,
-                &uv,
+                &u,
+                &v,
                 [0.0, 0.0, 1.0, 1.0],
                 crate::segmentation::MODEL_WIDTH,
                 crate::segmentation::MODEL_HEIGHT,
@@ -3567,7 +3584,8 @@ mod tests {
         unsafe {
             comp.capture_webcam_rgb(
                 &y,
-                &uv,
+                &u,
+                &v,
                 [0.0, 0.0, 1.0, 1.0],
                 crate::segmentation::MODEL_WIDTH,
                 crate::segmentation::MODEL_HEIGHT,
@@ -3594,13 +3612,13 @@ mod tests {
     fn a_capture_whose_rows_need_padding_is_depadded_correctly() {
         let Some(gpu) = gpu() else { return };
         let comp = Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
-        let (y, uv) = nv12_views(&gpu, 64, 64, |col, _| if col < 32 { Y_BLACK } else { Y_WHITE });
+        let (y, u, v) = nv12_views(&gpu, 64, 64, |col, _| if col < 32 { Y_BLACK } else { Y_WHITE });
 
         let (w, h) = (100usize, 56usize);
         assert_ne!((w * 4) % 256, 0, "cette largeur doit justement ETRE mal alignee");
         let mut out = Vec::new();
         unsafe {
-            comp.capture_webcam_rgb(&y, &uv, [0.0, 0.0, 1.0, 1.0], w as u32, h as u32, &mut out)
+            comp.capture_webcam_rgb(&y, &u, &v, [0.0, 0.0, 1.0, 1.0], w as u32, h as u32, &mut out)
                 .expect("capture_webcam_rgb");
         }
         assert_eq!(out.len(), w * h * 3, "le padding d'alignement a fuit dans la sortie");
@@ -3621,9 +3639,9 @@ mod tests {
     fn a_capture_of_zero_size_is_refused_rather_than_rendered() {
         let Some(gpu) = gpu() else { return };
         let comp = Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
-        let (y, uv) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
+        let (y, u, v) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
         let mut out = Vec::new();
-        let r = unsafe { comp.capture_webcam_rgb(&y, &uv, [0.0, 0.0, 1.0, 1.0], 0, 144, &mut out) };
+        let r = unsafe { comp.capture_webcam_rgb(&y, &u, &v, [0.0, 0.0, 1.0, 1.0], 0, 144, &mut out) };
         assert!(r.is_err(), "une cible de largeur nulle doit etre refusee");
     }
 
@@ -3666,7 +3684,7 @@ mod tests {
         let Some(gpu) = gpu() else { return };
         let comp = Compositor::new_sized(&gpu, 64, 64).expect("Compositor::new_sized");
         comp.set_webcam_mask(&half_mask(8, 8), 8, 8).expect("set_webcam_mask");
-        let (y, uv) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
+        let (y, u, v) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
 
         // Fond bleu franc : une couleur que la camera (blanche, chroma neutre) ne
         // peut pas produire, donc « il reste du bleu » signifie « la camera a ete
@@ -3687,7 +3705,7 @@ mod tests {
                 mb: [1.0, 1.0, 1.0, 0.0],
                 ..Default::default()
             },
-            (&y, &uv),
+            (&y, &u, &v),
         );
 
         let px = |col: usize, row: usize| -> [u8; 4] {
@@ -3707,7 +3725,7 @@ mod tests {
         let Some(gpu) = gpu() else { return };
         let comp = Compositor::new_sized(&gpu, 64, 64).expect("Compositor::new_sized");
         comp.set_webcam_mask(&half_mask(8, 8), 8, 8).expect("set_webcam_mask");
-        let (y, uv) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
+        let (y, u, v) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
 
         let (rw, _, rgba) = draw_one_layer(
             &comp,
@@ -3724,7 +3742,7 @@ mod tests {
                 mb: [1.0, 1.0, 1.0, 0.0],
                 ..Default::default()
             },
-            (&y, &uv),
+            (&y, &u, &v),
         );
         let px = |col: usize, row: usize| -> [u8; 4] {
             let i = (row * rw as usize + col) * 4;
@@ -3763,13 +3781,14 @@ mod tests {
         }
 
         fn from_planes(gpu: &Gpu, w: u32, h: u32, y: &[u8], uv: &[u8]) -> FakeFrame {
-            let (ytex, uvtex) = nv12_textures(gpu, w, h, y, uv);
+            let (ytex, utex, vtex) = nv12_textures(gpu, w, h, y, uv);
             // Le carrier que `linux_frames::nv12_planes` et `carrier_dims`
             // deballent. `Box::into_raw` ici, `Box::from_raw` dans `Drop` — c'est
             // exactement la mecanique de `CpuFrames::attach_carrier`.
             let carrier = Box::into_raw(Box::new(crate::linux_frames::VkFrameTex {
                 y: ytex,
-                uv: uvtex,
+                u: utex,
+                v: vtex,
                 width: w,
                 height: h,
             })) as *mut u8;

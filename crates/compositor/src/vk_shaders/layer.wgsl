@@ -32,11 +32,15 @@ struct Layer {
 
 @group(0) @binding(0) var<uniform> layer: Layer;
 @group(0) @binding(1) var texY:  texture_2d<f32>;   // R8Unorm, sample .r
-@group(0) @binding(2) var texUV: texture_2d<f32>;   // Rg8Unorm, sample .rg
+@group(0) @binding(2) var texU:  texture_2d<f32>;   // R8Unorm, sample .r
 @group(0) @binding(3) var samp:  sampler;
 // Masque de segmentation du sujet webcam, R8. Une vue 1x1 est liee quand aucun masque
 // n'existe : la branche n'est de toute facon prise que si layer.fx.z > 0.5.
 @group(0) @binding(4) var texMask: texture_2d<f32>;
+// V est en binding 5 et pas 3 : les bindings 0-4 etaient deja pris quand le plan
+// de chroma a ete dedouble, et renumeroter aurait touche tous les bind groups
+// pour un gain nul.
+@group(0) @binding(5) var texV:  texture_2d<f32>;   // R8Unorm, sample .r
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -72,7 +76,10 @@ fn yuv709_limited(y: f32, cbcr: vec2<f32>) -> vec3<f32> {
 
 fn sample_yuv(uv: vec2<f32>) -> vec3<f32> {
     let y = textureSample(texY, samp, uv).r;
-    let cbcr = textureSample(texUV, samp, uv).rg;
+    let cbcr = vec2<f32>(
+        textureSample(texU, samp, uv).r,
+        textureSample(texV, samp, uv).r,
+    );
     return yuv709_limited(y, cbcr);
 }
 
