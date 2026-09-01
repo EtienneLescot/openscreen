@@ -512,13 +512,23 @@ export function buildSceneDescription(
 		if (!asset?.originalPath) return [];
 		const sourceDurationSec = asset.durationSec ?? track.durationSec;
 		const offsetSec = track.offsetMs / 1000;
-		const spanSec = (track.endMs - track.startMs) / 1000;
-		if (spanSec <= 0) return [];
 		const startSec = projectRawTimelineSecToPlayback(
 			projectedClips,
 			document.timeline.trimRanges,
 			track.startMs / 1000,
 		);
+		// Measure the span on the OUTPUT programme, not the raw ruler. A track
+		// sitting inside a trimmed stretch projects BOTH its ends onto the same
+		// boundary, so its output span is zero and it is dropped — where the raw
+		// span kept it alive and played it, in full, at the cut. A track that
+		// merely crosses a trim shortens by what the cut removed.
+		const endSec = projectRawTimelineSecToPlayback(
+			projectedClips,
+			document.timeline.trimRanges,
+			track.endMs / 1000,
+		);
+		const spanSec = endSec - startSec;
+		if (spanSec <= 0) return [];
 		const base = {
 			path: asset.originalPath,
 			gainDb: track.gainDb,
