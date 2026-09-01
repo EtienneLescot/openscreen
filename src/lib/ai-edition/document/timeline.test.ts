@@ -1683,3 +1683,56 @@ describe("a malformed legacyEditor envelope", () => {
 		expect(next.legacyEditor).toEqual({ speedRegions: null, cameraFullscreenRegions: 42 });
 	});
 });
+
+describe("projectRawTimelineSecToPlayback with speed regions", () => {
+	const clip: AxcutClip = {
+		id: "c1",
+		assetId: "a1",
+		sourceStartSec: 0,
+		sourceEndSec: 20,
+		timelineStartSec: 0,
+		timelineEndSec: 20,
+		wordRefs: [],
+		origin: "user",
+		reason: "",
+	};
+
+	it("is the identity when nothing is sped up", () => {
+		expect(projectRawTimelineSecToPlayback([clip], [], 8, [])).toBeCloseTo(8, 6);
+	});
+
+	it("halves the time a 2x stretch takes to play", () => {
+		// Raw 4..8 at 2x plays in 2s, so raw 8 lands at output 6.
+		const speed = [{ startMs: 4000, endMs: 8000, speed: 2 }];
+		expect(projectRawTimelineSecToPlayback([clip], [], 4, speed)).toBeCloseTo(4, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [], 6, speed)).toBeCloseTo(5, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [], 8, speed)).toBeCloseTo(6, 6);
+		// Everything after carries the compression with it.
+		expect(projectRawTimelineSecToPlayback([clip], [], 12, speed)).toBeCloseTo(10, 6);
+	});
+
+	it("stretches a slow-motion region instead", () => {
+		const speed = [{ startMs: 0, endMs: 4000, speed: 0.5 }];
+		expect(projectRawTimelineSecToPlayback([clip], [], 4, speed)).toBeCloseTo(8, 6);
+	});
+
+	it("composes with trims", () => {
+		// Raw 2..4 cut, then raw 6..10 at 2x. Raw 12 = 2 kept + 2 kept + 2 (4s at 2x)
+		// + 2 = output 8.
+		const trim: AxcutTrimRange = {
+			id: "t1",
+			assetId: "a1",
+			startSec: 2,
+			endSec: 4,
+			origin: "user",
+			reason: "",
+		};
+		const speed = [{ startMs: 6000, endMs: 10_000, speed: 2 }];
+		expect(projectRawTimelineSecToPlayback([clip], [trim], 12, speed)).toBeCloseTo(8, 6);
+	});
+
+	it("ignores a nonsense rate rather than dividing by it", () => {
+		const speed = [{ startMs: 0, endMs: 4000, speed: 0 }];
+		expect(projectRawTimelineSecToPlayback([clip], [], 4, speed)).toBeCloseTo(4, 6);
+	});
+});

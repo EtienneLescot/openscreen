@@ -225,18 +225,69 @@ export function resolvePlaybackSegments(
  * delayed every track by the total trim duration ahead of it. The preview already lands them
  * correctly because its playhead jumps across trims; this makes the render agree.
  */
+export interface PlaybackSpeedRegion {
+	startMs: number;
+	endMs: number;
+	speed: number;
+}
+
+/**
+ * Output seconds a raw interval `[fromSec, toSec)` occupies once the speed
+ * regions covering it are applied: a 2x stretch of raw time takes half as long
+ * to play, so it contributes half its raw length to the programme.
+ *
+ * Subdivides at every speed boundary the interval crosses and integrates
+ * `1 / speed` piecewise. Regions are matched on the raw ruler, the same
+ * coordinate their pills are drawn in.
+ */
+function outputDurationOfRawSpan(
+	fromSec: number,
+	toSec: number,
+	speedRegions: PlaybackSpeedRegion[],
+): number {
+	if (toSec <= fromSec) return 0;
+	if (speedRegions.length === 0) return toSec - fromSec;
+	// Every boundary inside the span, so each piece has one constant speed.
+	const cuts = new Set<number>([fromSec, toSec]);
+	for (const region of speedRegions) {
+		for (const edge of [region.startMs / 1000, region.endMs / 1000]) {
+			if (edge > fromSec && edge < toSec) cuts.add(edge);
+		}
+	}
+	const edges = [...cuts].sort((a, b) => a - b);
+	let out = 0;
+	for (let i = 0; i < edges.length - 1; i++) {
+		const start = edges[i];
+		const end = edges[i + 1];
+		const mid = (start + end) / 2;
+		const region = speedRegions.find(
+			(r) => mid >= r.startMs / 1000 && mid < r.endMs / 1000 && r.speed > 0,
+		);
+		out += (end - start) / (region?.speed ?? 1);
+	}
+	return out;
+}
+
 export function projectRawTimelineSecToPlayback(
 	clips: AxcutClip[],
 	trimRanges: AxcutTrimRange[],
 	rawSec: number,
+	/**
+	 * Speed regions on the raw ruler. Supplied by the AUDIO paths, which overlay
+	 * a 1x track onto the finished programme and so need its real, speed-adjusted
+	 * clock; omitted by callers that only care about trims. Left out, the
+	 * projection behaves exactly as it did before speed was modelled.
+	 */
+	speedRegions: PlaybackSpeedRegion[] = [],
 ): number {
 	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
 	let outCursor = 0; // output length of the kept content walked so far
 	let lastRawEnd = 0; // raw end of the last kept segment, for the trailing overhang
 	let landed: number | null = null; // output(rawSec), once it falls in/before a kept segment
 
-	// Each kept segment as a raw extent `{ rawStart, dur }`; its output duration equals `dur`
-	// (trims only remove, they don't scale — speed is the separate approximation noted above).
+	// Each kept segment as a raw extent `{ rawStart, dur }`. Trims only REMOVE, so a kept
+	// segment's raw length survives here; how long it takes to PLAY is a separate question
+	// that `outputDurationOfRawSpan` answers, because a speed region scales it.
 	const keptSegments = (clip: AxcutClip): Array<{ rawStart: number; dur: number }> => {
 		const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
 		if (sourceEnd <= clip.sourceStartSec) {
@@ -264,11 +315,11 @@ export function projectRawTimelineSecToPlayback(
 			const rawEnd = seg.rawStart + seg.dur;
 			if (landed === null && rawSec < rawEnd) {
 				// `rawSec` is inside this segment, or before it in a trimmed/gap region (then
-				// `within` clamps to 0 → the output edge just before the gap).
-				const within = Math.min(Math.max(rawSec - seg.rawStart, 0), seg.dur);
-				landed = outCursor + within;
+				// the span clamps to nothing → the output edge just before the gap).
+				const within = Math.min(Math.max(rawSec, seg.rawStart), rawEnd);
+				landed = outCursor + outputDurationOfRawSpan(seg.rawStart, within, speedRegions);
 			}
-			outCursor += seg.dur;
+			outCursor += outputDurationOfRawSpan(seg.rawStart, rawEnd, speedRegions);
 			lastRawEnd = rawEnd;
 		}
 	}

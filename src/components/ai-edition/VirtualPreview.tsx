@@ -635,10 +635,16 @@ export function VirtualPreview({
 			// applies the global gain on top, matching the export); the `.volume` path is
 			// the fallback for when the graph is unavailable — there a boost caps at 0 dB.
 			const globalGain = audioGainScalar(audioGainDbRef.current);
+			// Speed-aware: under a 2x region the raw playhead races, and a projection
+			// blind to speed raced the audio's target position with it — the track
+			// was never given a faster `playbackRate`, but seeking it twice as fast
+			// amounts to the same thing. Dividing raw time by the rate turns that
+			// back into 1x wall-clock, which is what the render does too.
 			const outputTimeSec = projectRawTimelineSecToPlayback(
 				clipsRef.current,
 				trimRangesRef.current,
 				virtualTimeSecRef.current,
+				speedRegionsRef.current,
 			);
 			for (const track of audioTracksRef.current) {
 				const el = audioTrackElsRef.current.get(track.id);
@@ -647,19 +653,26 @@ export function VirtualPreview({
 					clipsRef.current,
 					trimRangesRef.current,
 					track.startMs / 1000,
+					speedRegionsRef.current,
 				);
-				// The span on the OUTPUT programme, not the raw ruler: both ends go
-				// through the same projection the head does. A track buried inside a
-				// trimmed stretch collapses to zero length and stays silent, instead
-				// of playing its full raw length parked at the cut — audible with
-				// nothing on screen to explain it.
+				// Length is measured WITHOUT speed, position WITH it. A trim REMOVES
+				// timeline — a track buried in one has zero length and stays silent,
+				// rather than playing its full raw length parked at the cut. A speed
+				// region only COMPRESSES: the track still holds all its audio and
+				// still plays at 1x, so it must not be cut short because the video
+				// under it was sped up.
 				const spanSec = Math.max(
 					0,
 					projectRawTimelineSecToPlayback(
 						clipsRef.current,
 						trimRangesRef.current,
 						track.endMs / 1000,
-					) - outputStartSec,
+					) -
+						projectRawTimelineSecToPlayback(
+							clipsRef.current,
+							trimRangesRef.current,
+							track.startMs / 1000,
+						),
 				);
 				const trackTarget = resolveTimelineAudioPlayback(
 					outputTimeSec,
