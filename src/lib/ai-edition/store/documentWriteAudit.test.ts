@@ -246,6 +246,12 @@ const DECLARED: WritePath[] = [
 	// setAudioTrackGain routes through), or delete it — one undo step apiece.
 	w("src/lib/ai-edition/store/useTimeline.ts", "placeAudioTrack", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "removeAudioTrack", "save", "gesture"),
+	// Three exits, one gesture: the toggle writes the flag alone when there is
+	// nothing to fill, and the flag plus the filled span when there is. Either
+	// way it is one undo step (see setAudioTrackLoop).
+	w("src/lib/ai-edition/store/useTimeline.ts", "setAudioTrackLoop", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "setAudioTrackLoop", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "setAudioTrackLoop", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAudioTrack", "save", "gesture"),
 	// The round-2 defect: a background duration probe every freshly imported asset
 	// fires, because `addAsset` never populates `durationSec`.

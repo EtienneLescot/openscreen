@@ -2237,7 +2237,9 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 				<Toggle
 					checked={track.loop}
 					ariaLabel={ts("audioTrack.loop")}
-					onChange={(v) => void tl.updateAudioTrack(track.id, { loop: v })}
+					// Fills the rest of the programme on the way on — see
+					// setAudioTrackLoop for why the toggle moves the edge for you.
+					onChange={(v) => void tl.setAudioTrackLoop(track.id, v)}
 				/>
 			</div>
 			<button

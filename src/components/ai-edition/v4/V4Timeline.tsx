@@ -355,6 +355,8 @@ const AudioLanePill = memo(function AudioLanePill({
 	widthPct,
 	sourceStartSec,
 	sourceEndSec,
+	spanSec,
+	loopWindowSec,
 	selected,
 	onStartDrag,
 	onSelect,
@@ -370,6 +372,10 @@ const AudioLanePill = memo(function AudioLanePill({
 	 *  span, or the live window while an edge is being dragged. */
 	sourceStartSec: number;
 	sourceEndSec: number;
+	/** The pill's own length in seconds, and how much source one repeat plays —
+	 *  together they say where the loop boundaries fall. */
+	spanSec: number;
+	loopWindowSec: number;
 	selected: boolean;
 	onStartDrag: (e: ReactPointerEvent, track: AxcutAudioTrack, mode: "move" | "l" | "r") => void;
 	onSelect: (id: string) => void;
@@ -411,6 +417,19 @@ const AudioLanePill = memo(function AudioLanePill({
 				// clamps, so scaling by the track gain alone under-read a boosted output.
 				gain={audioGainScalar(track.gainDb) * outputGain}
 			/>
+			{/* Where the file starts over, so a looping bed reads as one deliberate
+			    repeat rather than a mystery. Only drawn when the pill actually
+			    outruns its source — otherwise there is nothing to repeat. */}
+			{track.loop && loopWindowSec > 0
+				? Array.from({ length: Math.min(200, Math.ceil(spanSec / loopWindowSec) - 1) }, (_, i) => (
+						<span
+							key={`loop-${i + 1}`}
+							data-testid="audio-loop-mark"
+							className={styles.laneLoopMark}
+							style={{ left: `${(((i + 1) * loopWindowSec) / spanSec) * 100}%` }}
+						/>
+					))
+				: null}
 			<span className={styles.laneAudioLabel}>
 				<Music size={11} />
 				{label}
@@ -1776,6 +1795,8 @@ export function V4Timeline({
 													assetDurationSec={duration}
 													leftPct={pctOf(start)}
 													widthPct={pctOf(widthSec)}
+													spanSec={widthSec}
+													loopWindowSec={Math.max(0, (duration || 0) - trimStart)}
 													sourceStartSec={trimStart}
 													// A looping pill can outrun its file; the waveform draws
 													// the source it actually has.

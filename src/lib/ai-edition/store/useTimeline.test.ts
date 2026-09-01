@@ -1408,6 +1408,52 @@ describe("useTimeline audio tracks", () => {
 		expect(track).toMatchObject({ startMs: 9000, endMs: 10_000 });
 	});
 
+	it("turning loop on fills the rest of the programme, in one undo step", async () => {
+		// Looping only means anything when the span exceeds the source, so a toggle
+		// that changed nothing else did nothing at all. The sample timeline is one
+		// 0..10s clip and the asset is 30s, so the track is created 2..10 (clamped
+		// to the content) and filling is a no-op — place it short first.
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioTrack("audio_1", 2)) ?? "";
+		});
+		await act(async () => {
+			await result.current.placeAudioTrack(id, { startMs: 2000, endMs: 4000 });
+		});
+		await act(async () => {
+			await result.current.setAudioTrackLoop(id, true);
+		});
+		const tracks = useProjectStore.getState().document?.audioTracks ?? [];
+		expect(tracks[0]).toMatchObject({ startMs: 2000, endMs: 10_000, loop: true });
+
+		// One step: the flag and the fill undo together.
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		const back = useProjectStore.getState().document?.audioTracks[0];
+		expect(back).toMatchObject({ endMs: 4000, loop: false });
+	});
+
+	it("turning loop off leaves the span alone", async () => {
+		// Shrinking back would throw away a length the user may have set by hand.
+		const { result } = renderTimeline();
+		let id = "";
+		await act(async () => {
+			id = (await result.current.addAudioTrack("audio_1", 2)) ?? "";
+		});
+		await act(async () => {
+			await result.current.setAudioTrackLoop(id, true);
+		});
+		const filled = useProjectStore.getState().document?.audioTracks[0]?.endMs;
+		await act(async () => {
+			await result.current.setAudioTrackLoop(id, false);
+		});
+		const track = useProjectStore.getState().document?.audioTracks[0];
+		expect(track?.loop).toBe(false);
+		expect(track?.endMs).toBe(filled);
+	});
+
 	it("removeAudioTrack deletes the track", async () => {
 		const { result } = renderTimeline();
 		let id = "";

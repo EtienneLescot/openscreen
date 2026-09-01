@@ -428,6 +428,18 @@ describe("V4Timeline audio lane drag", () => {
 		expect(onAddVoiceover).toHaveBeenCalledTimes(1);
 	});
 
+	it("marks where a looping track starts its file over", () => {
+		// A 60s file under a 180s span repeats twice more after the first pass, so
+		// there are two boundaries to show — at a third and two thirds.
+		const { pill } = renderAudio({ loop: true, endMs: 100_000 + 180_000 });
+		expect(pill.querySelectorAll('[data-testid="audio-loop-mark"]')).toHaveLength(2);
+	});
+
+	it("draws no loop marks when the track fits inside its source", () => {
+		const { pill } = renderAudio({ loop: true });
+		expect(pill.querySelectorAll('[data-testid="audio-loop-mark"]')).toHaveLength(0);
+	});
+
 	it("selects the track on pointer-down before any movement", () => {
 		const { pill, selectAudioTrack } = renderAudio();
 		fireEvent.pointerDown(pill, { clientX: 0 });
