@@ -63,6 +63,14 @@
 			"circle": "Круг",
 			"square": "Квадрат",
 			"rounded": "Скруглённый"
+		},
+		"webcamBackground": "Фон камеры",
+		"webcamBlurIntensity": "Интенсивность размытия",
+		"bgModes": {
+			"none": "Оригинал",
+			"transparent": "Вырезка",
+			"blur": "Размытие",
+			"custom": "Пользовательский"
 		}
 	},
 	"effects": {

@@ -63,6 +63,14 @@
 			"circle": "円",
 			"square": "正方形",
 			"rounded": "角丸"
+		},
+		"webcamBackground": "カメラ背景",
+		"webcamBlurIntensity": "ぼかしの強さ",
+		"bgModes": {
+			"none": "オリジナル",
+			"transparent": "切り抜き",
+			"blur": "ぼかし",
+			"custom": "カスタム"
 		}
 	},
 	"effects": {

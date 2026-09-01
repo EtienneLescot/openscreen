@@ -3,6 +3,7 @@
 //! unique encodeur AAC alimente le même muxer que la vidéo.
 
 use crate::ffi::*;
+
 use crate::regions::SpeedSegment;
 use crate::scene::{SceneAudio, SceneAudioTrack};
 use anyhow::{bail, Result};
@@ -477,6 +478,12 @@ pub struct WsolaTimeStretcher {
     buf: PlanarPcm,
     mono: Vec<f32>,
     buf_start: i64,
+    /// Décalage de lecture dans `buf`/`mono`. `discard_below` ne recopiait pas moins que le
+    /// reste du buffer à chaque grain : la région entière est poussée d'un coup, donc pour
+    /// 65 M d'échantillons cela faisait ~N²/(2·ha) ≈ 1,1e12 f32 recopiés par canal — le vrai
+    /// coût du chemin WSOLA, devant la recherche par grain. On avance un curseur et on ne
+    /// compacte que lorsque la tête dépasse la moitié du buffer, ce qui rend le total O(N).
+    buf_head: usize,
     out: PlanarPcm,
     win_sum: Vec<f32>,
     out_start: usize,
@@ -522,6 +529,7 @@ impl WsolaTimeStretcher {
             buf: vec![Vec::new(); channels],
             mono: Vec::new(),
             buf_start: 0,
+            buf_head: 0,
             out: vec![Vec::new(); channels],
             win_sum: Vec::new(),
             out_start: 0,
@@ -587,8 +595,12 @@ impl WsolaTimeStretcher {
         }
     }
 
+    fn buf_len(&self) -> usize {
+        self.buf[0].len() - self.buf_head
+    }
+
     fn buf_end(&self) -> i64 {
-        self.buf_start + self.buf[0].len() as i64
+        self.buf_start + self.buf_len() as i64
     }
 
     fn sample_at(&self, channel: usize, absolute_index: i64) -> f32 {
@@ -596,7 +608,10 @@ impl WsolaTimeStretcher {
         if index < 0 {
             0.0
         } else {
-            self.buf[channel].get(index as usize).copied().unwrap_or(0.0)
+            self.buf[channel]
+                .get(self.buf_head + index as usize)
+                .copied()
+                .unwrap_or(0.0)
         }
     }
 
@@ -605,12 +620,19 @@ impl WsolaTimeStretcher {
         if index < 0 {
             0.0
         } else {
-            self.mono.get(index as usize).copied().unwrap_or(0.0)
+            self.mono
+                .get(self.buf_head + index as usize)
+                .copied()
+                .unwrap_or(0.0)
         }
     }
 
     fn process(&mut self, final_chunk: bool) -> PlanarPcm {
         let mut emitted = self.empty_chunk();
+        // Pas de garde anti-stagnation ici : `search_target` croît de `ha > 0` à chaque tour
+        // et `grain_pos` ne s'en écarte que de `search_radius` au plus, donc le break sur
+        // `buf_end` finit toujours par tomber. Une garde de plus tronquerait `emitted` — la
+        // région sortirait muette pour tout signal — sans jamais se déclencher.
         loop {
             let search_target = (self.ideal_pos + self.ha).round() as i64;
             let required_end = (self.grain_pos + self.n as i64)
@@ -738,12 +760,18 @@ impl WsolaTimeStretcher {
         if drop_count <= 0 {
             return;
         }
-        let drop_count = drop_count as usize;
-        for channel in 0..self.channels {
-            self.buf[channel] = self.buf[channel][drop_count.min(self.buf[channel].len())..].to_vec();
-        }
-        self.mono = self.mono[drop_count.min(self.mono.len())..].to_vec();
+        self.buf_head += (drop_count as usize).min(self.buf_len());
         self.buf_start = absolute_index;
+        // Compactage amorti : ne recopier que lorsque la tête consommée dépasse ce qui
+        // reste laisse un coût total en O(N) au lieu du O(N²) d'une recopie par grain.
+        if self.buf_head > self.buf[0].len() - self.buf_head {
+            let head = self.buf_head;
+            for channel in 0..self.channels {
+                self.buf[channel].drain(..head);
+            }
+            self.mono.drain(..head);
+            self.buf_head = 0;
+        }
     }
 }
 
@@ -767,6 +795,20 @@ fn stretch_pcm_to_length(pcm: &[Vec<f32>], target_samples: usize) -> PlanarPcm {
     }
 
     let speed = source_samples as f64 / target_samples as f64;
+
+    // atempo d'abord : le WSOLA ci-dessous fait le même time-stretch préservant la hauteur,
+    // mais coûte un ordre de grandeur de plus. Mesuré en release sur une région de 5 min
+    // (14,4 M échantillons) : 0,6 s contre 20 s à 1,25×, 4,9 s contre 55 s à 0,25× — et
+    // c'est le WSOLA APRÈS la correction de `discard_below`, qui recopiait tout le buffer
+    // restant à chaque grain et faisait tenir un export mesuré (65,4 M échantillons) plus de
+    // dix minutes sans finir, l'export paraissant figé à ~80 %. `avfilter_atempo_stretch`
+    // rend `None` si la chaîne ne monte pas, si le sink négocie un format inattendu ou si la
+    // sortie reste plus courte que la cible ; le WSOLA reste alors le chemin de repli exact
+    // d'avant, en journalisant la raison.
+    if let Some(stretched) = unsafe { avfilter_atempo_stretch(pcm, target_samples, speed) } {
+        return stretched;
+    }
+
     let mut stretcher = WsolaTimeStretcher::new(
         AUDIO_OUTPUT_SAMPLE_RATE,
         AUDIO_OUTPUT_CHANNELS,
@@ -790,6 +832,431 @@ fn stretch_pcm_to_length(pcm: &[Vec<f32>], target_samples: usize) -> PlanarPcm {
         }
     }
     exact
+}
+
+/// Plafond du nombre d'étages atempo chaînés.
+///
+/// `speed` vient de `source_samples / target_samples`, pas de l'éditeur : une scène corrompue
+/// où une poignée d'échantillons vise une cible d'une heure donne un ratio arbitrairement
+/// petit, et le chaînage par 0.5 empile alors une trentaine d'étages — plus d'un millier pour
+/// un subnormal — chacun avec sa fenêtre d'analyse et sa perte d'amorçage. Huit couvre
+/// jusqu'à 0.5⁸ ≈ 0,0039, soit vingt-cinq fois sous `MIN_PLAYBACK_SPEED` (0,1) ; au-delà on
+/// rend `None` et le WSOLA, qui n'a pas de bornes, prend le relais.
+const ATEMPO_MAX_STAGES: usize = 8;
+
+/// Découpe un facteur de vitesse en facteurs que `atempo` accepte individuellement : le
+/// filtre n'admet que [0.5, 100.0], on chaîne donc les dépassements (0.2 → [0.5, 0.5, 0.8],
+/// 250 → [100.0, 2.5]) — le produit des facteurs reconstitue la vitesse demandée.
+///
+/// Rend `None` au-delà de `ATEMPO_MAX_STAGES` maillons. La borne haute est chaînée elle
+/// aussi : `MAX_PLAYBACK_SPEED` vaut 100 donc un seul étage suffit à tout ce que l'éditeur
+/// produit, mais `speed` est un rapport de longueurs quantifiées, pas la vitesse cliquée, et
+/// rien ne garantit qu'il reste sous la borne du filtre.
+fn atempo_factors(speed: f64) -> Option<Vec<f64>> {
+    let mut factors = Vec::new();
+    let mut remaining = speed;
+    while remaining > 100.0 || remaining < 0.5 {
+        if factors.len() >= ATEMPO_MAX_STAGES {
+            return None;
+        }
+        if remaining > 100.0 {
+            factors.push(100.0);
+            remaining /= 100.0;
+        } else {
+            factors.push(0.5);
+            remaining /= 0.5;
+        }
+    }
+    factors.push(remaining);
+    Some(factors)
+}
+
+/// RAII : libère le graphe même en sortie précoce sur erreur.
+struct FilterGraphGuard(*mut AVFilterGraph);
+
+impl Drop for FilterGraphGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { avfilter_graph_free(&mut self.0) };
+        }
+    }
+}
+
+/// RAII : libère la trame de drain même en sortie précoce sur erreur.
+struct FrameGuard(*mut AVFrame);
+
+impl Drop for FrameGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { av_frame_free(&mut self.0) };
+        }
+    }
+}
+
+/// Taille des trames poussées vers le graphe. Le drain est entrelacé avec l'alimentation
+/// (cf. `atempo_drain`) : sans cela `av_buffersrc_add_frame` empile toute la région dans la
+/// file du buffersrc — ~523 Mo pour une speed region stéréo de 20 min, en plus du slice
+/// d'entrée et de l'accumulateur de sortie.
+const ATEMPO_FEED_CHUNK: usize = 4096;
+
+/// Rallonge de silence poussée derrière la région avant l'EOF, par étage atempo.
+///
+/// atempo laisse tomber la dernière fenêtre de chaque étage. En prolongeant l'entrée d'un
+/// silence, la fenêtre perdue devient du silence et le contenu réel sort en entier : mesuré
+/// sur le pin ffmpeg n8.1.2 (48 kHz stéréo), le manque tombe de 981 à 217 échantillons pour
+/// un étage 0.5×, de 2 735 à 553 pour deux, de 8 234 à 2 676 pour quatre. Au-delà la courbe
+/// est plate — un tail 16× plus grand ne change plus rien — ce qui reste est traité par la
+/// correction de tempo de `avfilter_atempo_stretch`.
+const ATEMPO_PRIME_TAIL: usize = 4096;
+
+/// Marge de sécurité, en échantillons, sur la longueur demandée à la passe corrigée.
+///
+/// Le manque de la seconde passe n'est pas exactement celui mesuré à la première (le tempo
+/// a bougé de moins de 1 %, la chaîne est la même). Viser 64 échantillons de plus fait
+/// tomber le résidu du côté du surplus, tronqué : 1,3 ms de contenu en moins plutôt qu'un
+/// trou de silence.
+const ATEMPO_LENGTH_GUARD: usize = 64;
+
+/// Longueur du silence à pousser derrière la région pour une chaîne donnée.
+fn atempo_prime_tail(factors: &[f64], speed: f64) -> usize {
+    ATEMPO_PRIME_TAIL
+        .saturating_mul(factors.len() + 1)
+        .saturating_mul(speed.max(1.0).ceil() as usize)
+}
+
+/// Vide le buffersink dans `stretched`, sans jamais y garder plus de `keep` échantillons par
+/// plan, et compte dans `produced` TOUT ce qui est sorti — y compris ce qui est jeté.
+///
+/// Les deux chiffres servent à des choses différentes : `stretched` est le résultat, alors
+/// que `produced` mesure ce que la chaîne a réellement rendu pour une entrée de longueur
+/// connue, donc son manque (cf. `avfilter_atempo_stretch`).
+///
+/// Rend `Some(true)` sur EOF, `Some(false)` quand le graphe n'a plus rien de prêt (EAGAIN),
+/// `None` sur une vraie panne — l'appelant retombe alors sur WSOLA.
+unsafe fn atempo_drain(
+    sink_ctx: *mut AVFilterContext,
+    frame: *mut AVFrame,
+    stretched: &mut PlanarPcm,
+    keep: usize,
+    produced: &mut usize,
+) -> Option<bool> {
+    loop {
+        let ret = av_buffersink_get_frame(sink_ctx, frame);
+        if ret == AVERROR_EAGAIN {
+            return Some(false);
+        }
+        if ret == AVERROR_EOF {
+            return Some(true);
+        }
+        if ret < 0 {
+            eprintln!(
+                "[openscreen-compositor] atempo: av_buffersink_get_frame a échoué (ret={ret}), repli WSOLA"
+            );
+            return None;
+        }
+        let count = (*frame).nb_samples.max(0) as usize;
+        let channels = (*frame).ch_layout.nb_channels.max(0) as usize;
+        // La chaîne est épinglée en flt entrelacé de bout en bout (cf. `avfilter_atempo_stretch`) ;
+        // tout autre format signifie que la négociation a fait autre chose que ce qu'on a
+        // demandé, et le désentrelacement ci-dessous lirait n'importe quoi.
+        if (*frame).format != AVSampleFormat::AV_SAMPLE_FMT_FLT as i32
+            || channels != AUDIO_OUTPUT_CHANNELS
+        {
+            eprintln!(
+                "[openscreen-compositor] atempo: trame de sortie inattendue (format={} canaux={channels}), repli WSOLA",
+                (*frame).format
+            );
+            av_frame_unref(frame);
+            return None;
+        }
+        let wanted = count.min(keep.saturating_sub(stretched[0].len()));
+        if wanted > 0 {
+            let interleaved = *(*frame).extended_data.add(0) as *const f32;
+            let samples =
+                std::slice::from_raw_parts(interleaved, count * AUDIO_OUTPUT_CHANNELS);
+            for channel in 0..AUDIO_OUTPUT_CHANNELS {
+                let plane = &mut stretched[channel];
+                plane.reserve(wanted);
+                for index in 0..wanted {
+                    plane.push(samples[index * AUDIO_OUTPUT_CHANNELS + channel]);
+                }
+            }
+        }
+        *produced += count;
+        av_frame_unref(frame);
+    }
+}
+
+/// Monte `abuffer → atempo… → abuffersink`, y pousse `pcm` suivi de `prime_tail` échantillons
+/// de silence, et rend le nombre total d'échantillons sortis — `stretched` en reçoit les
+/// `keep` premiers.
+///
+/// La chaîne est épinglée en **flt entrelacé** 48 kHz stéréo, pas en fltp : `af_atempo`
+/// n'annonce que des formats packed (U8/S16/S32/FLT/DBL, cf. son `query_formats`), donc un
+/// abuffer en fltp fait insérer un aresample de conversion et rend une branche planaire du
+/// drain inatteignable — mesuré, le sink négociait déjà `AV_SAMPLE_FMT_FLT`. En demandant flt
+/// des deux côtés il n'y a aucun filtre de conversion dans le graphe, et l'entrelacement est
+/// absorbé par la recopie qu'on fait de toute façon.
+unsafe fn atempo_pass(
+    pcm: &[Vec<f32>],
+    factors: &[f64],
+    prime_tail: usize,
+    keep: usize,
+    stretched: &mut PlanarPcm,
+) -> Option<usize> {
+    let graph_guard = FilterGraphGuard(avfilter_graph_alloc());
+    let graph = graph_guard.0;
+    if graph.is_null() {
+        return None;
+    }
+
+    let abuffer_name = CString::new("abuffer").ok()?;
+    let abuffersink_name = CString::new("abuffersink").ok()?;
+    let atempo_name = CString::new("atempo").ok()?;
+    let abuffer = avfilter_get_by_name(abuffer_name.as_ptr());
+    let abuffersink = avfilter_get_by_name(abuffersink_name.as_ptr());
+    let atempo = avfilter_get_by_name(atempo_name.as_ptr());
+    if abuffer.is_null() || abuffersink.is_null() || atempo.is_null() {
+        return None;
+    }
+
+    let create_filter = |graph: *mut AVFilterGraph,
+                         filter: *const AVFilter,
+                         name: &str,
+                         args: Option<&str>,
+                         options: &[(&str, &str)]|
+     -> Option<*mut AVFilterContext> {
+        let cname = CString::new(name).ok()?;
+        let cargs = match args {
+            Some(args) => Some(CString::new(args).ok()?),
+            None => None,
+        };
+        let ctx = avfilter_graph_alloc_filter(graph, filter, cname.as_ptr());
+        if ctx.is_null() {
+            eprintln!("[openscreen-compositor] atempo: alloc_filter({name}) a rendu null");
+            return None;
+        }
+        // Les options typées se posent entre l'alloc et l'init — `avfilter_init_str` fige la
+        // négociation. Un échec n'est pas fatal : l'abuffer porte déjà le format, ceci ne fait
+        // que l'imposer aussi côté sink pour qu'aucun build ffmpeg ne puisse y glisser un
+        // aresample. Le drain vérifie le format reçu de toute façon.
+        for (key, value) in options {
+            let ckey = CString::new(*key).ok()?;
+            let cvalue = CString::new(*value).ok()?;
+            let ret = av_opt_set(
+                ctx as *mut std::ffi::c_void,
+                ckey.as_ptr(),
+                cvalue.as_ptr(),
+                AV_OPT_SEARCH_CHILDREN as i32,
+            );
+            if ret < 0 {
+                eprintln!(
+                    "[openscreen-compositor] atempo: av_opt_set({name}.{key}={value}) a échoué (ret={ret}), négociation laissée libre"
+                );
+            }
+        }
+        // `map_or` consommerait `cargs` et le pointeur rendu par la closure serait dangling
+        // avant même l'appel — on emprunte donc pour la durée de l'appel.
+        let args_ptr = match &cargs {
+            Some(args) => args.as_ptr(),
+            None => ptr::null(),
+        };
+        let ret = avfilter_init_str(ctx, args_ptr);
+        if ret < 0 {
+            eprintln!(
+                "[openscreen-compositor] atempo: init_str({name}, {:?}) a échoué (ret={ret})",
+                args.unwrap_or("")
+            );
+            return None;
+        }
+        Some(ctx)
+    };
+
+    let rate = AUDIO_OUTPUT_SAMPLE_RATE;
+    let src_ctx = create_filter(
+        graph,
+        abuffer,
+        "in",
+        Some(&format!(
+            "time_base=1/{rate}:sample_rate={rate}:sample_fmt=flt:channel_layout=stereo"
+        )),
+        &[],
+    )?;
+    let sink_ctx = create_filter(graph, abuffersink, "out", None, &[("sample_fmts", "flt")])?;
+
+    let mut previous = src_ctx;
+    for (index, factor) in factors.iter().enumerate() {
+        let stage = create_filter(
+            graph,
+            atempo,
+            &format!("atempo{index}"),
+            Some(&format!("{factor}")),
+            &[],
+        )?;
+        if avfilter_link(previous, 0, stage, 0) < 0 {
+            eprintln!("[openscreen-compositor] atempo: avfilter_link a échoué au maillon {index}");
+            return None;
+        }
+        previous = stage;
+    }
+    if avfilter_link(previous, 0, sink_ctx, 0) < 0 {
+        eprintln!("[openscreen-compositor] atempo: avfilter_link vers le sink a échoué");
+        return None;
+    }
+    if avfilter_graph_config(graph, ptr::null_mut()) < 0 {
+        eprintln!("[openscreen-compositor] atempo: avfilter_graph_config a échoué");
+        return None;
+    }
+
+    let sink_frame = FrameGuard(av_frame_alloc());
+    if sink_frame.0.is_null() {
+        return None;
+    }
+
+    // Alimentation : le PCM passe par trames flt de 4096 échantillons, prolongé par la
+    // rallonge de silence. `av_buffersrc_add_frame` déplace les références du frame dans le
+    // graphe ; on alloue donc une trame neuve par tranche et on la libère après envoi (le
+    // shell est vide à ce point). Le drain est entrelacé ici : sans lui la file du buffersrc
+    // porterait toute la région d'un coup. La condition d'arrêt est l'entrée épuisée, PAS
+    // « on a de quoi remplir la cible » — s'arrêter là couperait la rallonge, et les derniers
+    // grains du contenu réel resteraient dans le graphe.
+    let source_samples = pcm.first().map(|plane| plane.len()).unwrap_or(0);
+    let total_input = source_samples.saturating_add(prime_tail);
+    let mut offset = 0usize;
+    let mut produced = 0usize;
+    let mut drained_to_eof = false;
+    while offset < total_input {
+        let count = ATEMPO_FEED_CHUNK.min(total_input - offset);
+        let mut frame = av_frame_alloc();
+        if frame.is_null() {
+            eprintln!("[openscreen-compositor] atempo: av_frame_alloc (feed) a échoué");
+            return None;
+        }
+        (*frame).format = AVSampleFormat::AV_SAMPLE_FMT_FLT as i32;
+        (*frame).sample_rate = rate;
+        (*frame).nb_samples = count as i32;
+        av_channel_layout_default(&mut (*frame).ch_layout, AUDIO_OUTPUT_CHANNELS as i32);
+        if av_frame_get_buffer(frame, 0) < 0 {
+            eprintln!("[openscreen-compositor] atempo: av_frame_get_buffer (feed) a échoué");
+            av_frame_free(&mut frame);
+            return None;
+        }
+        // Un seul plan en flt : on écrit entrelacé. Le `write_bytes` couvre à la fois les
+        // canaux absents d'une source mono et la rallonge de silence finale.
+        let destination = *(*frame).extended_data.add(0) as *mut f32;
+        ptr::write_bytes(destination, 0, count * AUDIO_OUTPUT_CHANNELS);
+        for channel in 0..AUDIO_OUTPUT_CHANNELS {
+            if let Some(plane) = pcm.get(channel) {
+                let available = plane.len().saturating_sub(offset).min(count);
+                for index in 0..available {
+                    *destination.add(index * AUDIO_OUTPUT_CHANNELS + channel) =
+                        plane[offset + index];
+                }
+            }
+        }
+        (*frame).pts = offset as i64;
+        let ret = av_buffersrc_add_frame(src_ctx, frame);
+        av_frame_free(&mut frame);
+        if ret < 0 {
+            eprintln!("[openscreen-compositor] atempo: av_buffersrc_add_frame (offset={offset}) a échoué (ret={ret})");
+            return None;
+        }
+        offset += count;
+        if atempo_drain(sink_ctx, sink_frame.0, stretched, keep, &mut produced)? {
+            drained_to_eof = true;
+            break;
+        }
+    }
+
+    // EOF : le graphe vide alors ses derniers grains.
+    if !drained_to_eof {
+        if av_buffersrc_add_frame(src_ctx, ptr::null_mut()) < 0 {
+            eprintln!("[openscreen-compositor] atempo: flush du buffersrc a échoué, repli WSOLA");
+            return None;
+        }
+        atempo_drain(sink_ctx, sink_frame.0, stretched, keep, &mut produced)?;
+    }
+    Some(produced)
+}
+
+/// Étire le PCM d'un facteur `speed` via une chaîne `abuffer → atempo… → abuffersink` montée
+/// en processus, dans l'avfilter LGPL déjà vendored avec l'app (avfilter-11.dll /
+/// libavfilter.so.11 / libavfilter.11.dylib voyagent dans le même lot que avcodec — cf.
+/// scripts/fetch-ffmpeg.mjs qui copie TOUTES les av*.dll du build BtbN).
+///
+/// **Deux passes.** atempo ne rend pas exactement `n/tempo` échantillons : il en manque un
+/// nombre fixe par chaîne, indépendant de la longueur de l'entrée (mesuré sur n8.1.2 :
+/// ~217 pour un étage, ~550 pour deux, ~2 700 pour quatre, soit jusqu'à 56 ms à 0,1×). Le
+/// manque ne se rattrape pas en poussant plus d'entrée — c'est une différence de durée
+/// rendue, pas une queue retenue — et le combler par des zéros collait un trou de silence
+/// devant le segment suivant, puisque le crossfade equal-power ne couvre que les frontières
+/// de clip, jamais la concaténation par segment. La première passe mesure donc le manque sur
+/// le contenu réel, sans rien garder, et la seconde demande `cible + manque` pour que le
+/// contenu remplisse la cible ; le surplus est tronqué. Aux vitesses > 1 le manque est nul et
+/// la seconde passe est sautée.
+///
+/// Retourne `None` sur toute défaillance (montage, négociation, exécution, sortie plus courte
+/// que la cible) : l'appelant retombe alors sur le WSOLA d'origine.
+unsafe fn avfilter_atempo_stretch(
+    pcm: &[Vec<f32>],
+    target_samples: usize,
+    speed: f64,
+) -> Option<PlanarPcm> {
+    if !speed.is_finite() || speed <= 0.0 || target_samples == 0 {
+        return None;
+    }
+    let source_samples = pcm.first().map(|plane| plane.len()).unwrap_or(0);
+    if source_samples == 0 {
+        return None;
+    }
+
+    let planes = |capacity: usize| -> PlanarPcm {
+        (0..AUDIO_OUTPUT_CHANNELS)
+            .map(|_| Vec::with_capacity(capacity))
+            .collect()
+    };
+
+    let factors = atempo_factors(speed)?;
+    let prime_tail = atempo_prime_tail(&factors, speed);
+    let mut stretched = planes(target_samples);
+    let produced = atempo_pass(pcm, &factors, prime_tail, target_samples, &mut stretched)?;
+    let expected = ((source_samples + prime_tail) as f64 / speed).round() as usize;
+    let shortfall = expected.saturating_sub(produced);
+
+    if shortfall > 0 {
+        // Le contenu réel s'arrête `shortfall` échantillons avant la cible, et ce qui suit
+        // dans `stretched` n'est que la rallonge de silence étirée. On rejoue en demandant
+        // une cible plus longue du même montant : la chaîne étant la même, elle en perd
+        // autant, et le contenu tombe cette fois pile sur `target_samples`.
+        let corrected_target = target_samples + shortfall + ATEMPO_LENGTH_GUARD;
+        let corrected_speed = source_samples as f64 / corrected_target as f64;
+        let corrected_factors = atempo_factors(corrected_speed)?;
+        let corrected_tail = atempo_prime_tail(&corrected_factors, corrected_speed);
+        let mut corrected = planes(target_samples);
+        atempo_pass(
+            pcm,
+            &corrected_factors,
+            corrected_tail,
+            target_samples,
+            &mut corrected,
+        )?;
+        if corrected[0].len() >= target_samples {
+            stretched = corrected;
+        }
+    }
+
+    // Plus court que la cible : la chaîne n'a pas fait son travail. On rend `None` — compléter
+    // par des zéros exporterait un trou en se faisant passer pour un succès, et le contrat de
+    // `stretch_pcm_to_length` est un repli WSOLA sur échec.
+    if stretched[0].len() < target_samples {
+        eprintln!(
+            "[openscreen-compositor] atempo: sortie de {} échantillons pour une cible de {target_samples} (vitesse {speed}, {} étages), repli WSOLA",
+            stretched[0].len(),
+            factors.len()
+        );
+        return None;
+    }
+    Some(stretched)
 }
 
 /// Découpe le PCM gardé avec les mêmes spans et la même quantification frame que la vidéo.
@@ -1170,6 +1637,187 @@ mod tests {
     /// un seul suffit, mais les deux plans doivent exister (le format de sortie est stéréo).
     fn planar(samples: &[f32]) -> PlanarPcm {
         vec![samples.to_vec(), samples.to_vec()]
+    }
+
+    /// Un sinus 440 Hz de `secs` secondes sur les deux canaux.
+    fn sine(secs: f64) -> PlanarPcm {
+        let total = (secs * AUDIO_OUTPUT_SAMPLE_RATE as f64).round() as usize;
+        let mut pcm: PlanarPcm = vec![Vec::with_capacity(total); AUDIO_OUTPUT_CHANNELS];
+        for i in 0..total {
+            let t = i as f32 / AUDIO_OUTPUT_SAMPLE_RATE as f32;
+            let sample = (2.0 * PI * 440.0 * t).sin() * 0.5;
+            for channel in 0..AUDIO_OUTPUT_CHANNELS {
+                pcm[channel].push(sample);
+            }
+        }
+        pcm
+    }
+
+    /// Hauteur mesurée par passages à zéro montants sur une fenêtre d'une seconde.
+    fn pitch_hz(plane: &[f32], start: usize) -> usize {
+        let window = (AUDIO_OUTPUT_SAMPLE_RATE as usize).min(plane.len().saturating_sub(start + 1));
+        (start..start + window)
+            .filter(|&i| plane[i] <= 0.0 && plane[i + 1] > 0.0)
+            .count()
+    }
+
+    /// Énergie RMS des `count` derniers échantillons.
+    fn tail_rms(plane: &[f32], count: usize) -> f32 {
+        let start = plane.len().saturating_sub(count);
+        let slice = &plane[start..];
+        if slice.is_empty() {
+            return 0.0;
+        }
+        (slice.iter().map(|v| v * v).sum::<f32>() / slice.len() as f32).sqrt()
+    }
+
+    /// Les presets réellement cliquables dans l'éditeur (`SPEED_OPTIONS`), plus les bornes
+    /// `MIN_PLAYBACK_SPEED` / `MAX_PLAYBACK_SPEED` de `src/components/video-editor/types.ts`.
+    const EDITOR_SPEEDS: [f64; 13] = [
+        0.1, 0.25, 0.5, 0.75, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0, 5.0, 10.0, 100.0,
+    ];
+
+    #[test]
+    fn atempo_covers_every_editor_speed_without_a_silent_tail() {
+        // Le bug que ce test verrouille : atempo n'émet jamais sa dernière fenêtre, et
+        // compléter le manque par des zéros collait jusqu'à 181 ms de blanc (0,1×, quatre
+        // étages) devant le segment suivant — un dropout audible dans un export « réussi ».
+        // La rallonge de silence en entrée fait sortir les derniers grains pour de bon, donc
+        // la fin de région doit porter autant de signal que son milieu, à toute vitesse et
+        // sur des spans courts comme longs.
+        for &speed in &EDITOR_SPEEDS {
+            for &secs in &[0.05f64, 0.5, 3.0] {
+                let pcm = sine(secs);
+                let source = pcm[0].len();
+                let target = (source as f64 / speed).round() as usize;
+                if target == 0 {
+                    continue;
+                }
+                let stretched = unsafe { avfilter_atempo_stretch(&pcm, target, speed) }
+                    .unwrap_or_else(|| {
+                        panic!("atempo doit couvrir {speed}× sur {secs}s (cible {target})")
+                    });
+                for plane in &stretched {
+                    assert_eq!(plane.len(), target, "vitesse {speed}× durée {secs}s");
+                }
+                // 10 ms de queue : le zero-padding d'avant en laissait au moins 5 ms à 0,1×.
+                // Le trou : un silence numérique en fin de région. Zéro tolérance — la
+                // correction de tempo est faite pour que le contenu tombe pile sur la cible.
+                let trailing_silence =
+                    stretched[0].iter().rev().take_while(|v| **v == 0.0).count();
+                assert_eq!(
+                    trailing_silence, 0,
+                    "{trailing_silence} échantillons de silence en fin de région à {speed}× sur {secs}s"
+                );
+                let tail = (AUDIO_OUTPUT_SAMPLE_RATE as usize / 100).min(target);
+                assert!(
+                    tail_rms(&stretched[0], tail) > 0.05,
+                    "queue sans énergie à {speed}× sur {secs}s : rms={}",
+                    tail_rms(&stretched[0], tail)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn atempo_preserves_pitch_through_a_chain_of_stages() {
+        // 0,25× et 0,1× sortent des bornes [0.5, 100] d'un seul atempo et passent donc par
+        // la chaîne multi-étages — le cas que le test d'origine (1,25×, un seul maillon)
+        // ne touchait pas, alors que 0,25× est un preset de la liste déroulante.
+        for &speed in &[0.1f64, 0.25, 0.5] {
+            let pcm = sine(2.0);
+            let target = (pcm[0].len() as f64 / speed).round() as usize;
+            let stretched = unsafe { avfilter_atempo_stretch(&pcm, target, speed) }
+                .unwrap_or_else(|| panic!("la chaîne atempo doit monter à {speed}×"));
+            let measured = pitch_hz(&stretched[0], target / 2);
+            assert!(
+                (measured as f64 - 440.0).abs() <= 2.0,
+                "hauteur à {speed}× : {measured} Hz (un rééchantillonnage la déplacerait)"
+            );
+        }
+    }
+
+    #[test]
+    fn stretch_pcm_to_length_is_exact_at_every_editor_speed() {
+        // Contrat de bout en bout, repli WSOLA compris : quelle que soit la branche prise,
+        // la longueur rendue est exactement celle que le plan de concaténation attend.
+        for &speed in &EDITOR_SPEEDS {
+            let pcm = sine(0.5);
+            let target = (pcm[0].len() as f64 / speed).round() as usize;
+            let stretched = stretch_pcm_to_length(&pcm, target);
+            assert_eq!(stretched.len(), AUDIO_OUTPUT_CHANNELS);
+            for plane in &stretched {
+                assert_eq!(plane.len(), target, "vitesse {speed}×");
+            }
+        }
+    }
+
+    #[test]
+    fn wsola_fallback_still_stretches_and_keeps_pitch() {
+        // Le chemin de repli reste atteignable (avfilter absent d'un build, graphe qui ne
+        // monte pas) et sa recopie de buffer a été remplacée par un curseur de lecture :
+        // ce test verrouille qu'il rend toujours la bonne durée à la bonne hauteur.
+        let pcm = sine(2.0);
+        let speed = 0.5;
+        let target = (pcm[0].len() as f64 / speed).round() as usize;
+        let mut stretcher = WsolaTimeStretcher::new(
+            AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_OUTPUT_CHANNELS,
+            speed,
+            target,
+        );
+        let mut emitted: PlanarPcm = vec![Vec::new(); AUDIO_OUTPUT_CHANNELS];
+        for chunk in [stretcher.push(&pcm), stretcher.flush()] {
+            for channel in 0..AUDIO_OUTPUT_CHANNELS {
+                emitted[channel].extend_from_slice(&chunk[channel]);
+            }
+        }
+        // Le WSOLA vise la durée sans la garantir à l'échantillon près : c'est
+        // `stretch_pcm_to_length` qui recadre. On tolère 1 % ici.
+        let produced = emitted[0].len() as f64;
+        assert!(
+            (produced - target as f64).abs() / (target as f64) < 0.02,
+            "WSOLA a rendu {produced} pour une cible de {target}"
+        );
+        let measured = pitch_hz(&emitted[0], target / 2);
+        assert!(
+            (measured as f64 - 440.0).abs() <= 3.0,
+            "hauteur WSOLA : {measured} Hz"
+        );
+    }
+
+    #[test]
+    fn atempo_factors_split_out_of_range_speeds() {
+        // Dans les bornes : un seul maillon.
+        assert_eq!(atempo_factors(1.25), Some(vec![1.25]));
+        assert_eq!(atempo_factors(0.5), Some(vec![0.5]));
+        // Hors bornes : chaîne dont le produit reconstitue la vitesse.
+        assert_eq!(atempo_factors(0.2), Some(vec![0.5, 0.5, 0.8]));
+        assert_eq!(atempo_factors(250.0), Some(vec![100.0, 2.5]));
+        for speed in [0.07f64, 0.3, 1.0, 3.7, 4_000.0] {
+            let product: f64 = atempo_factors(speed).expect("dans le plafond").iter().product();
+            assert!((product - speed).abs() < 1e-9, "produit={product} attendu={speed}");
+        }
+        // MIN_PLAYBACK_SPEED tient largement dans le plafond.
+        assert_eq!(atempo_factors(0.1).map(|f| f.len()), Some(4));
+    }
+
+    #[test]
+    fn atempo_declines_a_chain_it_would_have_to_stack() {
+        // `speed` est `source_samples / target_samples`, pas la vitesse cliquée : une scène
+        // corrompue où une poignée d'échantillons vise une cible d'une heure produit un
+        // ratio arbitrairement petit. Sans plafond le chaînage empilait une trentaine
+        // d'étages — plus d'un millier pour un subnormal — chacun avec sa perte d'amorçage.
+        assert_eq!(atempo_factors(1.0 / 48_000.0 / 3_600.0), None);
+        assert_eq!(atempo_factors(f64::MIN_POSITIVE), None);
+        assert_eq!(atempo_factors(1e30), None);
+        // Et le repli tient le contrat de longueur : c'est le WSOLA qui prend la main.
+        let pcm = sine(0.05);
+        let target = pcm[0].len() * 5_000;
+        let stretched = stretch_pcm_to_length(&pcm, target);
+        for plane in &stretched {
+            assert_eq!(plane.len(), target);
+        }
     }
 
     #[test]

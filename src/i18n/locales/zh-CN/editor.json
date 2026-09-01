@@ -139,7 +139,6 @@
 		"sourceTranscript": "来源转录文本",
 		"close": "关闭",
 		"transcriptReady": "转录已就绪",
-		"notGeneratedYet": "尚未生成",
 		"regenerateAs": "重新生成为",
 		"auto": "自动",
 		"regenerate": "重新生成",
@@ -152,12 +151,7 @@
 		"transcriptionFailed": "转录失败",
 		"cpuBackendHint": "正在使用 CPU 运行 — 比 GPU 慢约 2 倍",
 		"noTranscript": "没有转录文本",
-		"generating": "正在生成",
-		"generationFailed": "生成失败",
-		"generated": "已生成",
 		"generationFailedHint": "生成失败 — 选择语言并重新生成。",
-		"noPreviewAvailable": "无法预览",
-		"restart": "重新开始",
 		"detectedLanguage": "检测到的语言：{{language}}",
 		"noAudioTrack": "无音频轨道",
 		"noAudioTrackHint": "此媒体没有音频轨道，没有可转录的内容。",
@@ -213,18 +207,6 @@
 		"cameraFullscreenDescription": "该区间播放时，摄像头会占满整个画面 — 没有边框、圆角和背景 — 并在结束时平滑还原。在时间轴上拖动区间边缘可调整其起始位置和时长。",
 		"deleteRegion": "删除区间",
 		"freehandRendersAsBox": "导出时，手绘形状会以其外接矩形遮挡——宁可多遮，绝不少遮。"
-	},
-	"leftPanel": {
-		"mediaTitle": "媒体",
-		"searchPlaceholder": "搜索…",
-		"clearSearch": "清除搜索",
-		"emptyHint": "此项目中还没有媒体。请在下方导入视频。",
-		"transcriptReadyBadge": "转录已就绪"
-	},
-	"leftRail": {
-		"chat": "聊天",
-		"media": "媒体",
-		"ariaLabel": "左侧工具"
 	},
 	"chat": {
 		"changeProvider": "更换提供方",

@@ -146,18 +146,12 @@
 		"transcriptionFailed": "Transcription failed",
 		"cpuBackendHint": "Running on CPU — about 2× slower than on the GPU",
 		"noTranscript": "No transcript",
-		"notGeneratedYet": "Not generated yet",
 		"regenerateAs": "Regenerate as",
 		"auto": "Auto",
 		"regenerate": "Regenerate",
 		"transcriptEmpty": "Transcript is empty.",
 		"notGeneratedHint": "Not generated yet — pick a language and click regenerate.",
-		"generating": "Generating",
-		"generationFailed": "Generation failed",
-		"generated": "Generated",
 		"generationFailedHint": "Generation failed — pick a language and regenerate.",
-		"noPreviewAvailable": "No preview available",
-		"restart": "Restart",
 		"detectedLanguage": "Detected language: {{language}}",
 		"noAudioTrack": "No audio track",
 		"noAudioTrackHint": "This media has no audio track — there is nothing to transcribe.",
@@ -213,18 +207,6 @@
 		"cameraFullscreenDescription": "While this region plays, the camera takes the whole frame — no border, no rounding, no background — and eases back at the end. Drag the region's edges on the timeline to change when it starts and how long it lasts.",
 		"deleteRegion": "Delete region",
 		"freehandRendersAsBox": "In the export, a freehand shape is covered by its bounding box — over-covered, never under."
-	},
-	"leftPanel": {
-		"mediaTitle": "Media",
-		"searchPlaceholder": "Search…",
-		"clearSearch": "Clear search",
-		"emptyHint": "No media in this project yet. Import a video below.",
-		"transcriptReadyBadge": "TRANSCRIPT READY"
-	},
-	"leftRail": {
-		"chat": "Chat",
-		"media": "Media",
-		"ariaLabel": "Left tools"
 	},
 	"chat": {
 		"changeProvider": "Change provider",

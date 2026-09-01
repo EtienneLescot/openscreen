@@ -61,9 +61,9 @@ and **one** encoder + muxer pair:
   per-segment rounded frame counts into a single output frame counter;
   audio follows the same integer accumulation (`AudioConcatPlan`).
 
-- **Audio and video junctions are seamless.** Audio is decoded per
-  segment up front (`audio.rs::decode_clip_audio`), WSOLA stretches each
-  speed sub-segment to its output sample count, and
+- **Audio and video junctions are seamless.** Audio is decoded per clip
+  (`audio.rs::decode_clip_audio`), a libavfilter `atempo` chain stretches
+  each speed sub-segment to its output sample count, and
   `assemble_concatenated_pcm` concatenates the per-segment PCM at the
   integer sample offsets the video loop just produced — never
   `round(cumulativeSec * sampleRate)`, because that compounds per-segment
@@ -71,8 +71,44 @@ and **one** encoder + muxer pair:
   timeline. A short equal-power fade (`cos` on the tail, `sin` on the
   head, `cos² + sin² = 1`) covers each internal boundary to suppress the
   click where two recordings meet butt-joined, without shifting timing.
-  The WSOLA stretch is kicked off before the video loop so it overlaps
-  the encode and does not add to the wall.
+  The in-tree WSOLA stretcher is still there, but only as the fallback
+  `stretch_pcm_to_length` takes when the filter chain cannot be built,
+  negotiates a format the drain does not read, or still comes up short of
+  the target after the corrected pass (see
+  [Audio](native-compositor.md#audio)).
+
+- **The stretch runs beside the encode, not inside it.**
+  `walk_composited_timeline`'s `on_clip_end` callback fires once per clip,
+  after that clip's frames have been composed and submitted to the
+  encoder. It used to decode and stretch that clip's audio right there,
+  on the render thread; since a clip's audio depends on nothing but that
+  clip, it now hands the work to `ClipAudioJobs`
+  ([`audio_jobs.rs`](../../crates/compositor/src/audio_jobs.rs), at most
+  four in flight) and the walk carries straight on to the next clip. The
+  results are collected after the walk, indexed by clip. `spawn` admits
+  four before it collects one, so what is left to wait for at the end is up
+  to four jobs — bounded by the slowest of them, not by their sum. Dropping
+  the collection joins them rather than detaching, so an export that fails
+  between the walk and the collection does not leave decoders running.
+
+  This matters for reporting as much as for wall time. `progress()`
+  counts composed frames as they are handed to the encoder and nothing
+  calls it during the audio phase, so while that work sat on the render
+  thread the bar parked at whatever percentage the clip's last frame
+  reported — for minutes, back when WSOLA was O(grain × radius) per
+  rendered sample. That is the reporting half of "frozen at ~80%"; the
+  cost half was the move to `atempo`.
+
+- **The progress total is speed-adjusted.** The native side reports a raw
+  running count of composed frames and never a total, so the percentage
+  is computed in the renderer
+  ([`outputFrameCount`](../../src/lib/exporter/outputFrameCount.ts)). It
+  has to mirror `speed_segments_for_window`, because a clip under a 1.25×
+  region emits `duration × fps / 1.25` frames: counting source seconds
+  instead made the bar stop at exactly 80% and the export finish there —
+  the number in the title of the bug. The two sides share one fixture
+  table, asserted by `outputFrameCount.test.ts` and by
+  `speed_segments_match_the_exporter_frame_totals`.
 
 - **Imported audio tracks** (voiceover / BGM / SFX, issue #350) are mixed
   on top of the assembled programme by `audio.rs::mix_external_tracks`,

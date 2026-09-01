@@ -4,6 +4,24 @@ import PackageDescription
 
 let package = Package(
 	name: "OpenScreenScreenCaptureKitHelper",
+	// macOS 13 is DELIBERATE, and it is the same number the app declares in
+	// electron-builder.json5 (`mac.minimumSystemVersion`) and promises in the README.
+	// Those three must move together; scripts/check-macos-deployment-target.test.mjs
+	// asserts this one never rises above what the app declares.
+	//
+	// It has to be at least 13 regardless: ScreenCaptureRecorder is
+	// `@available(macOS 13.0, *)` and its main() hard-guards `#available(macOS 13.0, *)`,
+	// because SCStream's usable surface starts there.
+	//
+	// What this block is NOT allowed to become is higher than the declared floor, which is
+	// how #515 happened. The floor was set here when ScreenCaptureKit was the only target;
+	// openscreen-macos-cursor-helper was added later and inherited it, because SwiftPM has
+	// no per-target override. The app then advertised macOS 12 while shipping a 13-only
+	// helper, and the damage was not the version number: at a deployment target >= 13 the
+	// linker resolves the Swift Foundation overlay symbols against Foundation.framework and
+	// drops /usr/lib/swift/libswiftFoundation.dylib from the load commands, so on macOS 12
+	// the helper died in dyld before it could speak — which the app reported to the user as
+	// a denied Accessibility grant.
 	platforms: [
 		.macOS(.v13)
 	],

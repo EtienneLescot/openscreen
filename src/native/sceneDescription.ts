@@ -15,7 +15,11 @@
  * contract — do not change the exported types.
  */
 
-import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
+import type {
+	CameraFullscreenRegion,
+	SpeedRegion,
+	WebcamBackgroundMode,
+} from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION, getZoomScale } from "@/components/video-editor/types";
 import { annotationFontSizeFraction } from "@/lib/ai-edition/annotationScale";
 import {
@@ -72,6 +76,16 @@ export interface SceneZoomRegion {
 	 *  numerically overlap (same or different asset). Unset only for a region that
 	 *  `projectRegionsToSourceTime` couldn't place on any clip. */
 	clipIndex?: number;
+	/** The whole region lies on a stretch a trim removed. Its `startSec`/`endSec` are outside
+	 *  `clips[clipIndex]`'s source window on purpose, and `clipIndex` is the segment the cut
+	 *  interrupts (`cutAddressingSegmentIndex`) — the ONLY thing addressing it.
+	 *
+	 *  Native shows it when the playhead is parked on the cut and gates it HARD on its own
+	 *  span: no ease-in / ease-out window, and no chaining with a neighbouring zoom. That gate
+	 *  is what keeps the render cut — an export never composes a frame at those source times,
+	 *  and a transition envelope would otherwise reach the kept frames beside the cut.
+	 *  Omitted (not `false`) when there is no trim under the region. See issue #216. */
+	underTrim?: boolean;
 }
 
 /** A "Full Camera" timeline region (from `legacyEditor.cameraFullscreenRegions`). Times in seconds. */
@@ -80,6 +94,9 @@ export interface SceneCameraFullscreenRegion {
 	endSec: number;
 	/** See `SceneZoomRegion.clipIndex`. */
 	clipIndex?: number;
+	/** See `SceneZoomRegion.underTrim`. Full-Camera needs no extra gate — its envelope is
+	 *  already contained in `[startSec, endSec]` — so this only carries the intent. */
+	underTrim?: boolean;
 }
 
 /** A speed region projected onto each clip's source time. The native compositor matches
@@ -121,6 +138,9 @@ export interface SceneAnnotation {
 	endSec: number;
 	/** See `SceneZoomRegion.clipIndex`. */
 	clipIndex?: number;
+	/** See `SceneZoomRegion.underTrim`. Annotations need no extra gate — they are already
+	 *  drawn only while `startSec <= t < endSec` — so this only carries the intent. */
+	underTrim?: boolean;
 	kind: "text" | "image" | "figure" | "blur";
 	/** Which box `x`/`y`/`w`/`h` — and `text.fontSizeRel` — are fractions of. Absent means
 	 *  `"screen"`, the historical behaviour and the only one annotations ever use. */
@@ -430,6 +450,24 @@ export interface SceneDescription {
 	cropByClip: Array<{ x: number; y: number; width: number; height: number } | null>;
 	/** Output frame. `fps` null = use the first clip's source fps. */
 	output: { width: number; height: number; fps: number | null };
+	/** Webcam background effect. Omitted when the mode is "none". */
+	webcamEffect?: SceneWebcamEffect;
+}
+
+/**
+ * The webcam background effect, as the compositor needs it.
+ *
+ * Carries the MODE and its parameters only — never pixels. The per-pixel subject mask is
+ * produced by the segmentation running in the compositor process and reaches the shader as a
+ * texture. An earlier design baked the composite here and shipped it as a video track; the codec
+ * could not carry alpha, and preview and export drifted apart.
+ */
+export interface SceneWebcamEffect {
+	mode: WebcamBackgroundMode;
+	/** 0..1, only meaningful for "blur". */
+	blurIntensity: number;
+	/** Background behind the subject for "custom", parsed like `settings.wallpaper`. */
+	background?: SceneBackground;
 }
 
 /** Parse the settings wallpaper string into the discriminated SceneBackground union. */
@@ -957,6 +995,7 @@ export function buildSceneDescription(
 			focusMode: settings.autoFocusAll ? "auto" : (region.focusMode ?? null),
 			rotation: region.rotationPreset ?? null,
 			clipIndex: region.clipIndex,
+			...(region.underTrim ? { underTrim: true } : {}),
 		})),
 		annotations: projectedAnnotations
 			.map((region) => {
@@ -971,6 +1010,7 @@ export function buildSceneDescription(
 					startSec: region.startMs / 1000,
 					endSec: region.endMs / 1000,
 					clipIndex: region.clipIndex,
+					...(region.underTrim ? { underTrim: true as const } : {}),
 					kind: region.type,
 					...(space ? { space } : {}),
 					// Authored as percentages of the box named by `space` — the screen rect unless
@@ -1049,14 +1089,33 @@ export function buildSceneDescription(
 			startSec: region.startMs / 1000,
 			endSec: region.endMs / 1000,
 			clipIndex: region.clipIndex,
+			...(region.underTrim ? { underTrim: true } : {}),
 		})),
-		speedRegions: projectedSpeedRegions.map((region) => ({
-			startSec: region.startMs / 1000,
-			endSec: region.endMs / 1000,
-			speed: region.speed,
-			clipIndex: region.clipIndex,
-		})),
+		// Speed is the one modifier with nothing to show for itself on a parked playhead: a
+		// still frame has no rate. So the entries under a trim are dropped here rather than
+		// shipped inert — `speed_at` (regions.rs) matches on clipIndex + time with no window
+		// to bound it, and the export's frame count is derived from these spans. Nothing to
+		// gain, an arithmetic to put at risk.
+		speedRegions: projectedSpeedRegions
+			.filter((region) => !region.underTrim)
+			.map((region) => ({
+				startSec: region.startMs / 1000,
+				endSec: region.endMs / 1000,
+				speed: region.speed,
+				clipIndex: region.clipIndex,
+			})),
 		cropByClip,
 		output: { ...pickOutputDims(document, settings.aspectRatio), fps: null },
+		// Omitted rather than sent as `{mode:"none"}`: the Rust side defaults the field, and
+		// every project without a webcam effect would otherwise carry it for nothing.
+		...(settings.webcamBackgroundMode !== "none"
+			? {
+					webcamEffect: {
+						mode: settings.webcamBackgroundMode,
+						blurIntensity: settings.webcamBlurIntensity,
+						background: parseWallpaper(settings.webcamWallpaper),
+					},
+				}
+			: {}),
 	};
 }

@@ -18,3 +18,6 @@
    Conservé identique côté macOS pour que la symétrie avec cpu_frames_windows.rs
    soit claire ; le code effectif vit dans mac_frames.rs. */
 #include <libswscale/swscale.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersrc.h>
+#include <libavfilter/buffersink.h>

@@ -69,7 +69,10 @@ import {
 	LinuxNativeCaptureSession,
 } from "../native-bridge/capture/linuxNativeCaptureSession";
 import { createCursorRecordingSession } from "../native-bridge/cursor/recording/factory";
-import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
+import {
+	isMacCursorHelperUnavailable,
+	requestMacCursorAccessibilityAccess,
+} from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
 import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { toHelperRect } from "../native-bridge/helperCoordinates";
@@ -1972,14 +1975,27 @@ export function registerIpcHandlers(
 	ipcMain.handle("request-native-mac-cursor-access", async () => {
 		const access = await requestMacCursorAccessibilityAccess();
 
-		// When the editable cursor can't get Accessibility trust, pop a native dialog
-		// that deep-links to the Accessibility pane (mirrors the Screen Recording flow).
+		// Pop the native Accessibility dialog ONLY for a genuine denial — the helper ran,
+		// asked, and was told no. Every other !granted status means the helper never got
+		// to ask (absent from the build, killed by the loader, crashed, hung), and telling
+		// the user to grant a permission they may well already hold is what made #515
+		// impossible to escape. Those degrade silently instead; the recorder falls back to
+		// position-only cursor telemetry and the countdown still runs.
 		if (process.platform === "darwin" && !access.granted) {
+			if (isMacCursorHelperUnavailable(access.status)) {
+				console.warn(
+					`[cursor-macos] editable cursor unavailable (status=${access.status}${
+						access.error ? `, error=${access.error}` : ""
+					}); the app ${
+						access.accessibilityTrusted ? "does" : "does not"
+					} hold Accessibility trust. Recording continues with position-only cursor telemetry.`,
+				);
+				return access;
+			}
+
 			const mainWin = getMainWindow();
 			const detail =
-				access.status === "missing-helper"
-					? "The cursor helper couldn't be found in this build, so the editable cursor can't be enabled. Rebuild the native helper (npm run build:native:mac) or switch the HUD cursor mode to system."
-					: "Allow OpenScreen under System Settings → Privacy & Security → Accessibility, then press record again to start the countdown.";
+				"Allow OpenScreen under System Settings → Privacy & Security → Accessibility, then press record again to start the countdown.";
 			const messageOptions = {
 				type: "warning",
 				buttons: ["Open Accessibility Settings", "Cancel"],

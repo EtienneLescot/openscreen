@@ -407,13 +407,33 @@ async function fetchSharedDlls(tag, binDir) {
 		return;
 	}
 
-	// probe for any previously vendored DLL by name; re-download is driven by
-	// --force same as the static exe, checked once we know what we'd extract.
-	const alreadyVendored =
-		process.platform === "win32" &&
+	// Completeness probe, not a mere existence probe. The compositor addon now
+	// links six shared ffmpeg DLLs — see crates/compositor/build.rs
+	// (avcodec, avformat, avutil, swresample, swscale, avfilter). A warm dev/CI
+	// tree that already holds the five pre-avfilter DLLs would satisfy an "any
+	// av*.dll is present" check and let `avfilter-11.dll` go un-vendored, breaking
+	// require() at runtime (OpenScreen#371 review, EtienneLescot). Require all
+	// six explicitly so a missing one forces a re-vendor.
+	const REQUIRED_SHARED_DLLS = [
+		"avcodec",
+		"avformat",
+		"avutil",
+		"swresample",
+		"swscale",
+		"avfilter",
+	];
+	fs.mkdirSync(binDir, { recursive: true });
+	const vendoredFiles = new Set(
 		fs
 			.readdirSync(binDir, { withFileTypes: true })
-			.some((e) => e.isFile() && isSharedLib(e.name) && /^(lib)?av/i.test(e.name));
+			.filter((e) => e.isFile())
+			.map((e) => e.name),
+	);
+	const alreadyVendored =
+		process.platform === "win32" &&
+		REQUIRED_SHARED_DLLS.every((lib) =>
+			[...vendoredFiles].some((f) => new RegExp(`^${lib}-\\d+\\.dll$`).test(f)),
+		);
 	// The build-time SDK comes out of this same archive, so a tree that has the
 	// DLLs but not the SDK must still re-download — otherwise we skip here and
 	// the compositor build fails afterwards on the missing FFMPEG_DIR.

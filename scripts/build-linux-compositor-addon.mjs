@@ -16,7 +16,7 @@
 //      (ensureFfmpegSharedDllsOnPath), but glibc reads LD_LIBRARY_PATH once at
 //      process start, so the equivalent trick cannot work after Electron is
 //      already running. Instead the addon is linked with `-rpath,$ORIGIN` and
-//      the five ffmpeg sonames are copied next to it, which makes the .node
+//      the six ffmpeg sonames are copied next to it, which makes the .node
 //      self-contained wherever it is installed — no env var, no PATH surgery.
 
 import { spawnSync } from "node:child_process";
@@ -36,6 +36,7 @@ const FFMPEG_SONAMES = [
 	"libavutil.so.60",
 	"libswscale.so.9",
 	"libswresample.so.6",
+	"libavfilter.so.11",
 ];
 
 const run = (command, args, options = {}) =>

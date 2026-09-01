@@ -23,8 +23,8 @@ Download the latest installer for your platform from the [download page](/downlo
 | | Minimum | Recommended |
 |---|---|---|
 | **Windows** | Windows 10 version 1903 (build 18362) or later, Intel 8th Gen / AMD Ryzen 2000 series or newer | Windows 11, Intel 12th Gen / AMD Ryzen 4000 series or newer |
-| **macOS** | macOS 12.3 (Monterey) — required by ScreenCaptureKit for native capture | macOS 14 or later |
-| **Linux** | `xdg-desktop-portal` and PipeWire for native capture and system audio (default on Ubuntu 22.04+, Fedora 34+) — recording still works without them through the [browser-capture fallback](#platform-differences), with fewer capabilities | Same, kept up to date |
+| **macOS** | macOS 13 (Ventura) — required by ScreenCaptureKit for capture | macOS 14 or later |
+| **Linux** | `xdg-desktop-portal` and PipeWire for native capture and system audio (default on Ubuntu 22.04+, Fedora 34+) — recording still works without them through the [browser-capture fallback](#platform-differences), with fewer capabilities. Recording mouse clicks on Wayland additionally needs your user in the `input` group — see [Mouse clicks on Wayland](#mouse-clicks-on-wayland) | Same, kept up to date |
 | **RAM** | 8 GB | 16 GB |
 
 :::note Older integrated graphics on Windows
@@ -111,16 +111,30 @@ Home Manager users can use `openscreen.homeManagerModules.default` with the same
 
 You may need to grant screen-recording permission depending on your desktop environment.
 
+### Mouse clicks on Wayland
+
+Wayland exposes no portal for input events, so OpenScreen reads left-button presses straight from the kernel's evdev interface (`/dev/input/event*`) instead. Those device nodes are owned by `root:input`, so a recording only distinguishes a click from ordinary cursor movement when your user is in the `input` group:
+
+```bash
+sudo usermod -aG input $USER
+```
+
+Log out and back in for the new group to take effect. Nothing breaks without it — recording works exactly as it did before, and every cursor sample is simply recorded as a move.
+
+The scope is deliberately narrow: only the left mouse button (`BTN_LEFT`) is ever read, never keystrokes. To turn the reader off entirely even where the permission exists, set `OPENSCREEN_DISABLE_CLICK_CAPTURE=1` in the environment OpenScreen is launched from.
+
+**Touchpads:** only a physical click — pressing the pad down until it depresses — is recorded. **Tap-to-click is not**, because your compositor's input stack (libinput) synthesises those taps for its own use and never writes them back to the kernel device that OpenScreen reads, so there is nothing at the evdev layer to see. A mouse, or a touchpad with tap-to-click turned off, records every click.
+
 ## Platform differences
 
 The editing tools are the same everywhere — zooms, backgrounds, crop/trim/speed, annotations, transcription, captions, and projects. Every export format works on every platform; what differs is **capture**, and how fast MP4 encodes on Linux:
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| Capture pipeline | Native (ScreenCaptureKit) | Native (Windows Graphics Capture) | Browser pipeline |
-| Custom cursor themes / click effects | ✅ | ✅ | ❌ (position-only, used for auto-zoom) |
+| Capture pipeline | Native (ScreenCaptureKit) | Native (Windows Graphics Capture) | Native (PipeWire via the ScreenCast portal); browser fallback without the helper, losing hardware encode and cursor telemetry |
+| Custom cursor themes / click effects | ✅ | ✅ | ✅ on Wayland — click capture needs the `input` group ([details](#mouse-clicks-on-wayland)) |
 | Webcam | Native capture | Native capture | Browser capture (still works as PiP) |
-| System audio | macOS 13+; permission prompt on 14.2+; not available on macOS 12 and below | Works out of the box | Needs PipeWire (default on Ubuntu 22.04+, Fedora 34+) |
+| System audio | Works out of the box; permission prompt on macOS 14.2+ | Works out of the box | Needs PipeWire (default on Ubuntu 22.04+, Fedora 34+) |
 | MP4 export | ✅ | ✅ | ✅ (software encode) |
 | GIF export | ✅ | ✅ | ✅ |
 | On-device transcription | Metal (Apple Silicon) / CPU | Vulkan / CPU | Vulkan / CPU |

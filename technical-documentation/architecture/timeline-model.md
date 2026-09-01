@@ -71,8 +71,8 @@ Every public export of
 | `dropPillById` / `dropPillsByIds` (`:290` / `:299`) | Delete every region under a pill (resolved from the merge rule) | regions → regions |
 | `replacePillSpan` (`:316`) | Move/resize a pill: clamp against different-identity neighbours, then re-anchor to the clamped span | pill + clip layout → re-anchored fragments |
 | `segmentRawSpanSec` (`:401`) | One kept playback segment → its RAW-virtual extent | segment → RAW span |
-| `projectRegionsToSource` (`:452`) | Region array → source-ms entries with `clipIndex` for native (anchored path uses anchor; unanchored path falls back to RAW mapping through each segment's own raw extent — never drops an un-anchorable region onto an unrelated clip) | RAW/anchored → source + `clipIndex` |
-| `resolveNativePosition` (`:556`) | RAW-virtual playhead → `{clip, clipIndex, sourceTimeSec}` for the active native decoder + paired camera (snaps to the next kept segment when the playhead sits over a trimmed-out stretch) | RAW-virtual → source + `clipIndex` |
+| `projectRegionsToSource` (`:558`) | Region array → source-ms entries with `clipIndex` for native (anchored path uses anchor; unanchored path falls back to RAW mapping through each segment's own raw extent — never drops an un-anchorable region onto an unrelated clip). A region wholly under a trim is emitted once, marked `underTrim`, addressed by the segment the cut interrupts | RAW/anchored → source + `clipIndex` |
+| `resolveNativePosition` (`:676`) | RAW-virtual playhead → `{clip, clipIndex, sourceTimeSec}` for the active native decoder + paired camera (over a trimmed-out stretch it presents the removed frames themselves, borrowing the same segment index the modifiers under that cut borrow) | RAW-virtual → source + `clipIndex` |
 
 The two **universal region rules** every region kind obeys are expressed once in this
 file rather than re-derived per kind:
@@ -202,10 +202,21 @@ the contract a reviewer can grade against. Each is asserted in
   trim at `[2,4]`: a region authored at RAW `[6,8]` lands on source `[6,8]`, not
   `[8,10]`. (`resolveNativePosition` / `projectRegionsToSource` "keeps a region on its
   source moment despite a trim before it".)
-- **A region fully under a trim is dropped, never leaked.** Two clips of *different*
-  assets whose source windows overlap numerically: a zoom fully trimmed away on its
-  own clip must not re-appear on the later clip. (`projectRegionsToSource` "drops a
-  region a trim removes entirely rather than leaking it onto a later clip".)
+- **A region fully under a trim stays on its own clip, never leaks.** Two clips of
+  *different* assets whose source windows overlap numerically: a zoom fully trimmed away
+  on its own clip must not re-appear on the later clip. It is not dropped either — a trim
+  is marked by its pill and skipped during playback, but a user who moves the playhead
+  onto it themselves sees what is underneath, modifiers included (issue #216). So it is
+  emitted once with `underTrim`, borrowing the `clipIndex` of the segment the cut
+  interrupts; the borrowed index is what pins it to one clip. Dropped only when its clip
+  has no kept segment left to name it. (`projectRegionsToSource` "keeps a fully-trimmed
+  region on its own clip instead of leaking it onto a later one".)
+- **The render still cuts.** `underTrim` tells native (`scene.rs`, `regions.rs`) to gate
+  the region hard on its own span: full strength inside, nothing outside, no ease-in/out
+  window and no chaining with a neighbouring zoom. An export never composes a frame at
+  those source times, so the entry is inert there — without the gate a zoom's ease-in
+  (1.5 s before its start) would reach the kept frames beside the cut and the preview
+  would show what the export does not.
 - **A named clip beats anything inferred from (assetId, sourceTime), and clip ORDER is
   never an input.** Asserted in
   [`virtual-preview.test.ts`](../../src/lib/ai-edition/timeline/virtual-preview.test.ts)

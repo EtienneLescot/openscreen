@@ -73,6 +73,11 @@ os_arch_tag() {
 readonly OS_ARCH="$(os_arch_tag)"
 readonly OUT_DIR="${OUT_ROOT}/${OS_ARCH}"
 
+# Kept beside the other build constants so it is greppable next to the ffmpeg one in
+# scripts/fetch-ffmpeg-macos.mjs; the two must agree, and both must match
+# `mac.minimumSystemVersion` in electron-builder.json5.
+readonly MACOS_DEPLOYMENT_TARGET="13.0"
+
 # Determine the default backend flag for this host.
 backend_flag_for_host() {
   case "${OS_ARCH}" in
@@ -304,6 +309,21 @@ DEFAULT_FLAG="$(backend_flag_for_host)"
 BUILD_FLAGS=()
 if [[ -n "${DEFAULT_FLAG}" ]]; then
   BUILD_FLAGS+=("${DEFAULT_FLAG}")
+fi
+# Pin the macOS floor the app actually ships against (`mac.minimumSystemVersion` in
+# electron-builder.json5). Without it CMake
+# defaults the deployment target to the BUILD MACHINE's SDK, so whisper-stt-server and
+# the libwhisper/libggml*/libparakeet dylibs inherit whatever macOS built them —
+# measured 26.0 on the shipped v1.10.0 payload, and ~15.x from CI's `macos-latest`,
+# a floor that moves on its own whenever GitHub rolls that image.
+#
+# This is the macOS twin of the ubuntu-22.04 pin in build-whisper-stt.yml: same defect
+# (a shipped binary's floor decided by the runner rather than by the project), different
+# libc. Note it is NOT a loader version gate — dyld does not refuse a binary whose minos
+# exceeds the running OS. Setting it is what makes the linker enforce macOS 12 symbol
+# availability, which is what actually fails at load time. See issue #515.
+if [[ "${OS_ARCH}" == darwin-* ]]; then
+  BUILD_FLAGS+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_DEPLOYMENT_TARGET}")
 fi
 # See the comment in build_variant() re: bash 3.2 + `set -u` + empty arrays
 # (macOS x64/CPU has no DEFAULT_FLAG, so BUILD_FLAGS is genuinely empty here).

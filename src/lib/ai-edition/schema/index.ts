@@ -898,11 +898,9 @@ export const chatInputSchema = z.object({
 // value outside this list fails to resolve a language id there. "auto" is
 // always index 0 — code that needs "every real language, no sentinel" relies
 // on that (see `WhisperLanguageCode` below) rather than filtering it out.
-// Consumed by both "Regenerate as" pickers: `MediaStage.tsx` (the one
-// actually mounted by `NewEditorShell`) and `Modals.tsx`'s
-// `SourceTranscriptModal` (currently unreachable — `LeftPanel` is only ever
-// mounted with `active="chat"` — but kept correct rather than deleted, since
-// nothing marks it dead code and a test or a future rewire could reach it).
+// Consumed by the "Regenerate as" picker in `MediaStage.tsx`. A second,
+// unreachable copy lived in the v3 left panel's transcript modal until that
+// whole surface was deleted — see decisions.md.
 export const TRANSCRIPT_LANGUAGE_CODES = [
 	"auto",
 	"en",

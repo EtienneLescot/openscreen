@@ -22,7 +22,7 @@ Switch to **Media** in the top bar. The stage shows one card per source in the p
 
 Select a card to open its detail panel:
 
-- **Source Transcript** — the full text for that asset, with its status (Pending transcription / Transcribing / Generated / Failed) and the detected language.
+- **Source Transcript** — the full text for that asset, with its status (No transcript / Pending transcription / Downloading speech model / Transcribing / Transcript ready / No speech detected / No audio track / Transcription failed) and the detected language.
 - **Regenerate as** — re-run local Whisper for this asset, either on **Auto** detection or forced to English, French, or Spanish.
 
 **Import media** adds a source from disk — video, audio, or images. The file dialog accepts `webm`, `mp4`, `mov`, `avi`, `mkv`, `m4v`, `wmv`, `flv`, and `ts`.

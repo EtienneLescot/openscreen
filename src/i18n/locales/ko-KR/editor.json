@@ -139,7 +139,6 @@
 		"sourceTranscript": "소스 대본",
 		"close": "닫기",
 		"transcriptReady": "대본 준비 완료",
-		"notGeneratedYet": "아직 생성되지 않음",
 		"regenerateAs": "다음 언어로 재생성",
 		"auto": "자동",
 		"regenerate": "재생성",
@@ -152,12 +151,7 @@
 		"transcriptionFailed": "받아쓰기 실패",
 		"cpuBackendHint": "CPU에서 실행 중 — GPU보다 약 2배 느립니다",
 		"noTranscript": "대본 없음",
-		"generating": "생성 중",
-		"generationFailed": "생성 실패",
-		"generated": "생성됨",
 		"generationFailedHint": "생성 실패 — 언어를 선택하고 다시 생성하세요.",
-		"noPreviewAvailable": "미리보기를 사용할 수 없습니다",
-		"restart": "다시 시작",
 		"detectedLanguage": "감지된 언어: {{language}}",
 		"noAudioTrack": "오디오 트랙 없음",
 		"noAudioTrackHint": "이 미디어에는 오디오 트랙이 없어 받아쓸 내용이 없습니다.",
@@ -213,18 +207,6 @@
 		"cameraFullscreenDescription": "이 구간이 재생되는 동안 카메라가 화면 전체를 채웁니다. 테두리, 둥근 모서리, 배경이 없으며 끝에서 부드럽게 돌아옵니다. 타임라인에서 구간의 가장자리를 끌어 시작 위치와 길이를 조정하세요.",
 		"deleteRegion": "구간 삭제",
 		"freehandRendersAsBox": "내보내기에서 자유형 도형은 외곽 사각형으로 덮입니다. 더 많이 덮되, 부족하게 덮지는 않습니다."
-	},
-	"leftPanel": {
-		"mediaTitle": "미디어",
-		"searchPlaceholder": "검색…",
-		"clearSearch": "검색 지우기",
-		"emptyHint": "이 프로젝트에는 아직 미디어가 없습니다. 아래에서 동영상을 가져오세요.",
-		"transcriptReadyBadge": "대본 준비 완료"
-	},
-	"leftRail": {
-		"chat": "채팅",
-		"media": "미디어",
-		"ariaLabel": "왼쪽 도구"
 	},
 	"chat": {
 		"changeProvider": "제공업체 변경",

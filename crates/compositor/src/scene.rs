@@ -331,6 +331,18 @@ pub struct SceneZoomRegion {
     pub focus_mode: Option<String>,
     /// "iso" | "left" | "right" | null.
     pub rotation: Option<String>,
+    /// La région entière tombe sur une portion qu'un trim retire. Ses temps sont donc HORS de
+    /// la fenêtre source de `clip_index`, qui n'est là que pour l'adresser (le segment que la
+    /// coupe interrompt, cf. `cutAddressingSegmentIndex` côté TS).
+    ///
+    /// Conséquence de rendu : la région est jouée SÈCHE, pleine force sur `[start_sec, end_sec)`
+    /// et rien en dehors — ni fenêtre d'ease-in/ease-out, ni chaînage avec une région voisine.
+    /// C'est ce qui garde la coupe : un export ne compose jamais de frame à ces temps source,
+    /// alors qu'une enveloppe de transition, elle, déborderait sur les frames gardées d'à côté.
+    /// L'utilisateur qui pose la tête de lecture sur le trim voit l'effet ; le rendu, non.
+    /// `#[serde(default)]` : absent de tout payload sans trim sous un modificateur (issue #216).
+    #[serde(default)]
+    pub under_trim: bool,
 }
 
 /// Une zone de vitesse portée par le temps source d'un clip.
@@ -462,6 +474,43 @@ pub struct SceneOutput {
     pub fps: Option<f64>,
 }
 
+/// Effet d'arrière-plan de la webcam.
+///
+/// Ne porte que le MODE et ses paramètres — jamais des pixels. Le masque par pixel vient de
+/// la segmentation qui tourne dans ce processus (`segmentation.rs`) et arrive au shader comme
+/// texture `t3`. Une version antérieure faisait cuire le composite côté app et l'envoyait
+/// comme piste vidéo : le codec ne sait pas porter l'alpha, et preview et export divergeaient.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneWebcamEffect {
+    /// "none" | "transparent" | "blur" | "custom"
+    pub mode: String,
+    /// 0..1, seulement pour `blur`.
+    #[serde(default)]
+    pub blur_intensity: f32,
+    /// Fond derrière le sujet pour `custom`, parsé comme `settings.wallpaper`.
+    #[serde(default)]
+    pub background: Option<SceneBackground>,
+    /// Chemin du modèle ONNX de segmentation. Même convention que `SceneCursorSprite::path`
+    /// ou qu'un wallpaper image : c'est l'app qui sait où ses assets sont installés, le
+    /// natif ne devine pas. Absent = pas de segmentation, l'effet reste éteint.
+    #[serde(default)]
+    pub model_path: Option<String>,
+}
+
+impl SceneWebcamEffect {
+    /// Code passé au shader dans `fx.z` : 0 = aucun (la webcam se dessine telle quelle),
+    /// 1 = détourage, 2 = flou, 3 = fond personnalisé.
+    pub(crate) fn shader_code(&self) -> f32 {
+        match self.mode.as_str() {
+            "transparent" => 1.0,
+            "blur" => 2.0,
+            "custom" => 3.0,
+            _ => 0.0,
+        }
+    }
+}
+
 /// Tout ce dont le natif a besoin pour composer la scène, sérialisé depuis un document.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -491,6 +540,9 @@ pub struct Scene {
     /// Crop écran par clip, dans le même ordre que `clips` (`cropByClip` côté TS).
     #[serde(default)]
     pub crop_by_clip: Vec<Option<SceneCrop>>,
+    /// Effet d'arrière-plan de la webcam. Absent = aucun effet.
+    #[serde(default)]
+    pub webcam_effect: Option<SceneWebcamEffect>,
     /// État de rendu interne, positionné par `for_clip_window` (jamais envoyé par l'app).
     #[serde(skip)]
     pub(crate) active_clip_index: usize,
@@ -506,6 +558,13 @@ impl Scene {
     /// Copie de scène limitée aux régions du clip actif. `clipIndex` est l'identité fiable
     /// lorsque plusieurs clips réutilisent les mêmes temps source ; son absence retombe sur le
     /// chevauchement avec la fenêtre source pour accepter les anciens payloads.
+    ///
+    /// Les deux tests étaient jusqu'ici cumulés, ce que la phrase ci-dessus ne dit pas : le
+    /// chevauchement est le REPLI, pas une seconde condition. La différence n'apparaît que pour
+    /// une région hors fenêtre, et une seule l'est — celle qui vit sous un trim (`under_trim`,
+    /// cf. `SceneZoomRegion`). L'app en émet une par modificateur entièrement coupé, adressée au
+    /// segment que la coupe interrompt, pour que la tête de lecture posée sur le trim montre ce
+    /// qu'il y a dessous. Exiger le chevauchement l'aurait filtrée ici même.
     pub(crate) fn for_clip_window(
         &self,
         clip_index: usize,
@@ -514,7 +573,9 @@ impl Scene {
     ) -> Scene {
         let belongs = |region_clip_index: Option<usize>, start_sec: f64, end_sec: f64| {
             let overlaps_window = end_sec > source_start_sec && start_sec < source_end_sec;
-            overlaps_window && region_clip_index.map(|i| i == clip_index).unwrap_or(true)
+            region_clip_index
+                .map(|i| i == clip_index)
+                .unwrap_or(overlaps_window)
         };
         let mut scene = self.clone();
         scene.zoom_regions.retain(|region| {
@@ -638,6 +699,37 @@ mod tests {
         let s = Scene::from_json(json).expect("parse sans webcam_rect");
         assert!(s.layout.webcam_rect.is_none());
         assert_eq!(s.layout.preset, "picture-in-picture");
+        assert!(s.webcam_effect.is_none());
+    }
+
+    #[test]
+    fn webcam_effect_maps_each_mode_to_its_shader_code() {
+        let scene_with = |effect: &str| {
+            let json = format!(
+                r##"{{"clips":[],"layout":{{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0}},"background":{{"kind":"color","color":"#000000"}},"zoomRegions":[],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":null}},"webcamEffect":{}}}"##,
+                effect
+            );
+            Scene::from_json(&json).expect("parse avec webcamEffect").webcam_effect.expect("présent")
+        };
+
+        assert_eq!(scene_with(r#"{"mode":"none"}"#).shader_code(), 0.0);
+        assert_eq!(scene_with(r#"{"mode":"transparent"}"#).shader_code(), 1.0);
+        assert_eq!(scene_with(r#"{"mode":"blur","blurIntensity":0.75}"#).shader_code(), 2.0);
+        assert_eq!(scene_with(r#"{"mode":"custom"}"#).shader_code(), 3.0);
+        // Un mode inconnu (document trafiqué, schéma futur) ne doit pas allumer un effet.
+        assert_eq!(scene_with(r#"{"mode":"hologram"}"#).shader_code(), 0.0);
+
+        let blur = scene_with(r#"{"mode":"blur","blurIntensity":0.75}"#);
+        assert_eq!(blur.blur_intensity, 0.75);
+        // `blurIntensity` absent => 0, pas une erreur de parse.
+        assert_eq!(scene_with(r#"{"mode":"blur"}"#).blur_intensity, 0.0);
+
+        let custom =
+            scene_with(r##"{"mode":"custom","background":{"kind":"color","color":"#ff0080"}}"##);
+        match custom.background {
+            Some(SceneBackground::Color { color }) => assert_eq!(color, "#ff0080"),
+            other => panic!("attendu un fond couleur, obtenu {other:?}"),
+        }
     }
 }
 
@@ -746,17 +838,36 @@ mod annotation_tests {
 
     #[test]
     fn for_clip_window_keeps_only_the_annotations_of_the_composed_clip() {
-        // Même règle que les zoom/speed/camera regions : bon clip ET recouvrement de la fenêtre.
+        // Même règle que les zoom/speed/camera regions : `clipIndex` décide seul quand il est là.
+        // `under-trim` porte des temps hors fenêtre EXPRÈS (il vit sous une coupe) et doit donc
+        // survivre : le dessin est ensuite borné par `startSec`/`endSec`, jamais atteints par un
+        // export. Cf. issue #216.
         let json = scene_json(
             r##"[{"id":"keep","clipIndex":0,"startSec":1.0,"endSec":2.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0},
                  {"id":"other-clip","clipIndex":1,"startSec":1.0,"endSec":2.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0},
-                 {"id":"out-of-window","clipIndex":0,"startSec":50.0,"endSec":51.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0}]"##,
+                 {"id":"under-trim","clipIndex":0,"underTrim":true,"startSec":50.0,"endSec":51.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0}]"##,
         );
         let scene = Scene::from_json(&json).expect("parse");
         let filtered = scene.for_clip_window(0, 0.0, 10.0);
         assert_eq!(
             filtered.annotations.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
-            vec!["keep"]
+            vec!["keep", "under-trim"]
+        );
+    }
+
+    #[test]
+    fn for_clip_window_still_falls_back_to_window_overlap_without_a_clip_index() {
+        // Vieux payload : rien ne dit à quel clip la région appartient, le chevauchement de
+        // fenêtre reste la seule réponse disponible. C'est le REPLI, pas une seconde condition.
+        let json = scene_json(
+            r##"[{"id":"in-window","startSec":1.0,"endSec":2.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0},
+                 {"id":"out-of-window","startSec":50.0,"endSec":51.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0}]"##,
+        );
+        let scene = Scene::from_json(&json).expect("parse");
+        let filtered = scene.for_clip_window(0, 0.0, 10.0);
+        assert_eq!(
+            filtered.annotations.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            vec!["in-window"]
         );
     }
 }

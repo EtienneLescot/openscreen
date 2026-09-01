@@ -178,6 +178,42 @@ describe("buildSceneDescription.background", () => {
 	});
 });
 
+describe("buildSceneDescription.webcamEffect", () => {
+	// Omitted rather than sent as {mode:"none"}: the Rust side defaults the field, so every
+	// project without an effect would otherwise carry it for nothing.
+	it("omits the effect entirely when no webcam background is set", () => {
+		expect(buildSceneDescription(makeDoc()).webcamEffect).toBeUndefined();
+	});
+
+	it("carries the mode and its parameters, never pixels", () => {
+		const doc = makeDoc({
+			legacyEditor: { webcamBackgroundMode: "blur", webcamBlurIntensity: 0.85 },
+		});
+		expect(buildSceneDescription(doc).webcamEffect).toEqual({
+			mode: "blur",
+			blurIntensity: 0.85,
+			background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+		});
+	});
+
+	it("parses the custom background the same way the scene wallpaper is parsed", () => {
+		const doc = makeDoc({
+			legacyEditor: { webcamBackgroundMode: "custom", webcamWallpaper: "#34b27b" },
+		});
+		expect(buildSceneDescription(doc).webcamEffect?.background).toEqual({
+			kind: "color",
+			color: "#34b27b",
+		});
+	});
+
+	// An unknown mode is already rejected by `getEditorSettings`, so it can never reach the
+	// scene — this pins that the two guards agree rather than each assuming the other.
+	it("falls back to omitting the effect when the stored mode is not a known one", () => {
+		const doc = makeDoc({ legacyEditor: { webcamBackgroundMode: "hologram" } });
+		expect(buildSceneDescription(doc).webcamEffect).toBeUndefined();
+	});
+});
+
 // --- clips -----------------------------------------------------------------
 
 describe("buildSceneDescription.clips", () => {
@@ -580,6 +616,74 @@ describe("buildSceneDescription.zoomRegions with an earlier trim", () => {
 			},
 		]);
 	});
+
+	it("keeps a zoom that a trim removes entirely, marked underTrim", () => {
+		// A trim cuts at render time, but it is marked by its pill and the user can still park
+		// the playhead on it — so what lies underneath has to reach the compositor (issue #216).
+		// Trim removes source [2,8]; the zoom at raw [3,5] falls entirely inside it. It is
+		// emitted on its own source span, addressed to the segment the cut interrupts (seg1,
+		// source [0,2] → clipIndex 0), and marked so native gates it on that span alone.
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a", originalPath: "/a.mp4" })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "a", startSec: 2, endSec: 8, reason: "", origin: "user" },
+				],
+			},
+			zoomRanges: [
+				makeZoom({ id: "z", startMs: 3000, endMs: 5000, depth: 3, focus: { cx: 0.5, cy: 0.5 } }),
+			],
+		});
+		expect(buildSceneDescription(doc).zoomRegions).toEqual([
+			{
+				id: "z",
+				startSec: 3,
+				endSec: 5,
+				scale: ZOOM_DEPTH_SCALES[3],
+				focusX: 0.5,
+				focusY: 0.5,
+				focusMode: null,
+				rotation: null,
+				clipIndex: 0,
+				underTrim: true,
+			},
+		]);
+	});
+
+	it("drops a speed region a trim removes entirely rather than shipping it inert", () => {
+		// Same geometry, speed instead of zoom. A still frame has no rate to show, and these
+		// spans are what the export's frame count is derived from — nothing to gain.
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a", originalPath: "/a.mp4" })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "a", startSec: 2, endSec: 8, reason: "", origin: "user" },
+				],
+			},
+			legacyEditor: { speedRegions: [{ id: "s", startMs: 3000, endMs: 5000, speed: 2 }] },
+		});
+		expect(buildSceneDescription(doc).speedRegions).toEqual([]);
+	});
 });
 
 // --- cameraFullscreenRegions -------------------------------------------------
@@ -630,6 +734,36 @@ describe("buildSceneDescription.cameraFullscreenRegions", () => {
 		expect(cameraFullscreenRegions).toEqual([
 			{ startSec: 103, endSec: 105, clipIndex: 0 },
 			{ startSec: 200, endSec: 202, clipIndex: 1 },
+		]);
+	});
+
+	it("keeps a region a trim removes entirely, marked underTrim", () => {
+		// Same rule as zoom and annotations (issue #216): addressed by the segment the cut
+		// interrupts (seg1, source [0,2] → clipIndex 0) instead of dropped. Full Camera needs
+		// no extra gate native-side — its envelope is already contained in [startSec, endSec].
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a", originalPath: "/a.mp4" })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "a", startSec: 2, endSec: 8, reason: "", origin: "user" },
+				],
+			},
+			legacyEditor: {
+				cameraFullscreenRegions: [{ id: "cf1", startMs: 3000, endMs: 5000 }],
+			},
+		});
+		expect(buildSceneDescription(doc).cameraFullscreenRegions).toEqual([
+			{ startSec: 3, endSec: 5, clipIndex: 0, underTrim: true },
 		]);
 	});
 });
@@ -1638,6 +1772,74 @@ describe("buildSceneDescription.annotations", () => {
 	it("is empty when the document has no annotations", () => {
 		const scene = buildSceneDescription(docWithAnnotations([]));
 		expect(scene.annotations).toEqual([]);
+	});
+
+	it("keeps an annotation a trim removes entirely, marked underTrim", () => {
+		// The symptom issue #216 opens on. The trim removes source [2,8]; the annotation at
+		// raw [3,5] falls entirely inside it, so it reaches native addressed by the segment
+		// the cut interrupts (seg1, source [0,2] → clipIndex 0) rather than being dropped.
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a1", originalPath: "/tmp/a1.mp4", durationSec: 10 })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a1",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "a1", startSec: 2, endSec: 8, reason: "", origin: "user" },
+				],
+			},
+			annotations: [
+				{
+					id: "ann1",
+					startMs: 3000,
+					endMs: 5000,
+					type: "text",
+					content: "",
+					textContent: "Hello",
+					position: { x: 25, y: 50 },
+					size: { width: 40, height: 10 },
+					style,
+					zIndex: 0,
+				},
+			],
+		});
+		const scene = buildSceneDescription(doc);
+		expect(scene.annotations).toHaveLength(1);
+		expect(scene.annotations[0]).toMatchObject({
+			id: "ann1",
+			startSec: 3,
+			endSec: 5,
+			clipIndex: 0,
+			underTrim: true,
+		});
+	});
+
+	it("omits underTrim entirely when no trim sits under the annotation", () => {
+		// Not `false`: a payload with nothing cut under it stays byte-for-byte what it was.
+		const scene = buildSceneDescription(
+			docWithAnnotations([
+				{
+					id: "ann1",
+					startMs: 1000,
+					endMs: 3000,
+					type: "text",
+					content: "",
+					textContent: "Hello",
+					position: { x: 25, y: 50 },
+					size: { width: 40, height: 10 },
+					style,
+					zIndex: 0,
+				},
+			]),
+		);
+		expect(scene.annotations[0]).not.toHaveProperty("underTrim");
 	});
 });
 

@@ -375,3 +375,51 @@ impl Drop for CpuFrames {
         }
     }
 }
+
+/// Fabrique un `CVPixelBufferRef` NV12 IOSurface-backed et y écrit les deux plans donnés.
+///
+/// Réservé aux tests, mais posé ICI plutôt que dans le module de test : `CVPixelBufferCreate`,
+/// le dictionnaire d'attributs IOSurface/Metal et le verrou d'accès CPU sont déjà écrits
+/// au-dessus, et les redéclarer ailleurs ferait vivre deux copies de la même FFI.
+///
+/// `y` fait `w * h` octets, `uv` fait `w * (h / 2)` (Cb, Cr entrelacés, demi-résolution).
+/// C'est exactement ce que `CVMetalTextureCache` sait présenter en `R8Unorm` + `RG8Unorm`,
+/// donc ce que `Compositor::nv12_srvs` attend — la même route qu'une frame VideoToolbox.
+#[cfg(test)]
+pub(crate) fn nv12_pixel_buffer_from_planes(
+    w: u32,
+    h: u32,
+    y: &[u8],
+    uv: &[u8],
+) -> Result<CVPixelBufferRef> {
+    let (w, h) = (w as usize, h as usize);
+    if y.len() < w * h || uv.len() < w * (h / 2) {
+        bail!(
+            "plans trop courts pour {w}x{h} : Y={} octets, UV={} octets",
+            y.len(),
+            uv.len()
+        );
+    }
+    unsafe {
+        let pb = create_nv12_pixel_buffer(w, h)?;
+        if CVPixelBufferLockBaseAddress(pb.as_ptr(), 0) != 0 {
+            bail!("CVPixelBufferLockBaseAddress (fixture NV12)");
+        }
+        let base_y = CVPixelBufferGetBaseAddressOfPlane(pb.as_ptr(), 0);
+        let pitch_y = CVPixelBufferGetBytesPerRowOfPlane(pb.as_ptr(), 0);
+        let base_uv = CVPixelBufferGetBaseAddressOfPlane(pb.as_ptr(), 1);
+        let pitch_uv = CVPixelBufferGetBytesPerRowOfPlane(pb.as_ptr(), 1);
+        if base_y.is_null() || base_uv.is_null() {
+            CVPixelBufferUnlockBaseAddress(pb.as_ptr(), 0);
+            bail!("plans nuls (fixture NV12)");
+        }
+        for row in 0..h {
+            ptr::copy_nonoverlapping(y.as_ptr().add(row * w), base_y.add(row * pitch_y), w);
+        }
+        for row in 0..h / 2 {
+            ptr::copy_nonoverlapping(uv.as_ptr().add(row * w), base_uv.add(row * pitch_uv), w);
+        }
+        CVPixelBufferUnlockBaseAddress(pb.as_ptr(), 0);
+        Ok(pb)
+    }
+}

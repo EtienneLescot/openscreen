@@ -139,7 +139,6 @@
 		"sourceTranscript": "Kaynak Metin Dökümü",
 		"close": "Kapat",
 		"transcriptReady": "Metin dökümü hazır",
-		"notGeneratedYet": "Henüz oluşturulmadı",
 		"regenerateAs": "Şu dilde yeniden oluştur",
 		"auto": "Otomatik",
 		"regenerate": "Yeniden oluştur",
@@ -152,12 +151,7 @@
 		"transcriptionFailed": "Metne dökme başarısız oldu",
 		"cpuBackendHint": "CPU üzerinde çalışıyor — GPU'ya göre yaklaşık 2× daha yavaş",
 		"noTranscript": "Transkript yok",
-		"generating": "Oluşturuluyor",
-		"generationFailed": "Oluşturma başarısız oldu",
-		"generated": "Oluşturuldu",
 		"generationFailedHint": "Oluşturma başarısız oldu — bir dil seçip yeniden oluşturun.",
-		"noPreviewAvailable": "Önizleme kullanılamıyor",
-		"restart": "Yeniden başlat",
 		"detectedLanguage": "Algılanan dil: {{language}}",
 		"noAudioTrack": "Ses parçası yok",
 		"noAudioTrackHint": "Bu medyada ses parçası yok — metne dökülecek bir şey bulunmuyor.",
@@ -213,18 +207,6 @@
 		"cameraFullscreenDescription": "Bu bölge oynarken kamera tüm kareyi kaplar — kenarlık, yuvarlatma ve arka plan olmadan — ve sonunda yumuşakça geri döner. Ne zaman başlayacağını ve ne kadar süreceğini değiştirmek için zaman çizelgesinde bölgenin kenarlarını sürükleyin.",
 		"deleteRegion": "Bölgeyi sil",
 		"freehandRendersAsBox": "Dışa aktarmada serbest çizim, sınırlayıcı dikdörtgeniyle kapatılır — eksik değil, fazla kapatır."
-	},
-	"leftPanel": {
-		"mediaTitle": "Medya",
-		"searchPlaceholder": "Ara…",
-		"clearSearch": "Aramayı temizle",
-		"emptyHint": "Bu projede henüz medya yok. Aşağıdan bir video içe aktarın.",
-		"transcriptReadyBadge": "TRANSKRİPT HAZIR"
-	},
-	"leftRail": {
-		"chat": "Sohbet",
-		"media": "Medya",
-		"ariaLabel": "Sol araçlar"
 	},
 	"chat": {
 		"changeProvider": "Sağlayıcıyı değiştir",

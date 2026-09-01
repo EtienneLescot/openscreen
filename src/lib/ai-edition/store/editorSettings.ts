@@ -17,12 +17,16 @@ import {
 	DEFAULT_CURSOR_MOTION_BLUR,
 	DEFAULT_CURSOR_SIZE,
 	DEFAULT_CURSOR_SMOOTHING,
+	DEFAULT_WEBCAM_BACKGROUND_MODE,
+	DEFAULT_WEBCAM_BLUR_INTENSITY,
 	DEFAULT_WEBCAM_LAYOUT_PRESET,
 	DEFAULT_WEBCAM_MASK_SHAPE,
 	DEFAULT_WEBCAM_MIRRORED,
 	DEFAULT_WEBCAM_POSITION,
 	DEFAULT_WEBCAM_REACTIVE_ZOOM,
 	DEFAULT_WEBCAM_SIZE_PRESET,
+	isWebcamBackgroundMode,
+	type WebcamBackgroundMode,
 	type WebcamLayoutPreset,
 	type WebcamMaskShape,
 	type WebcamPosition,
@@ -31,6 +35,7 @@ import {
 import { DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { DEFAULT_WALLPAPER } from "@/lib/wallpaper";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
+import { clamp01 } from "@/utils/math";
 import type { AxcutDocument } from "../schema";
 
 // ponytail: avoid dragging in lib/exporter full surface here — we only
@@ -98,6 +103,9 @@ export interface EditorSettingsSnapshot {
 	 *  Authoritative: `webcamCropRegion.x/y` are rebuilt from it on read. */
 	webcamCropPan: CropPan;
 	audioGainDb: number;
+	webcamBackgroundMode: WebcamBackgroundMode;
+	webcamWallpaper: string;
+	webcamBlurIntensity: number;
 	cursor: CursorVisualSettings;
 	cursorShow: boolean;
 	cursorTheme: string;
@@ -127,6 +135,9 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	webcamCropRegion: DEFAULT_CROP_REGION,
 	webcamCropPan: DEFAULT_CROP_PAN,
 	audioGainDb: 0,
+	webcamBackgroundMode: DEFAULT_WEBCAM_BACKGROUND_MODE,
+	webcamWallpaper: DEFAULT_WALLPAPER,
+	webcamBlurIntensity: DEFAULT_WEBCAM_BLUR_INTENSITY,
 	cursor: {
 		size: DEFAULT_CURSOR_SIZE,
 		smoothing: DEFAULT_CURSOR_SMOOTHING,
@@ -157,6 +168,9 @@ interface LegacyShape {
 	webcamCropRegion?: CropRegion;
 	webcamCropPan?: CropPan;
 	audioGainDb?: number;
+	webcamBackgroundMode?: WebcamBackgroundMode;
+	webcamWallpaper?: string;
+	webcamBlurIntensity?: number;
 	cursorSize?: number;
 	cursorSmoothing?: number;
 	cursorMotionBlur?: number;
@@ -233,6 +247,15 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 			AUDIO_GAIN_DB_LIMIT,
 			Math.max(-AUDIO_GAIN_DB_LIMIT, num(legacy?.audioGainDb, 0)),
 		),
+		webcamBackgroundMode: isWebcamBackgroundMode(legacy?.webcamBackgroundMode)
+			? legacy.webcamBackgroundMode
+			: DEFAULT_EDITOR_SETTINGS.webcamBackgroundMode,
+		webcamWallpaper: str(legacy?.webcamWallpaper, DEFAULT_EDITOR_SETTINGS.webcamWallpaper),
+		// Same 0-1 range the slider offers; unclamped, a stored 1000 reaches
+		// `blur(25000px)` on the preview canvas and wedges the compositing thread.
+		webcamBlurIntensity: clamp01(
+			num(legacy?.webcamBlurIntensity, DEFAULT_EDITOR_SETTINGS.webcamBlurIntensity),
+		),
 		cursor,
 		cursorShow: bool(legacy?.cursorShow, DEFAULT_EDITOR_SETTINGS.cursorShow),
 		cursorTheme: str(legacy?.cursorTheme, DEFAULT_EDITOR_SETTINGS.cursorTheme),
@@ -257,6 +280,9 @@ export interface EditorSettingsPatch {
 	webcamCropRegion?: CropRegion;
 	webcamCropPan?: CropPan;
 	audioGainDb?: number;
+	webcamBackgroundMode?: WebcamBackgroundMode;
+	webcamWallpaper?: string;
+	webcamBlurIntensity?: number;
 	cursor?: Partial<CursorVisualSettings> & { theme?: string; show?: boolean };
 	autoFocusAll?: boolean;
 }

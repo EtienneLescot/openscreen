@@ -139,7 +139,6 @@
 		"sourceTranscript": "نص المصدر",
 		"close": "إغلاق",
 		"transcriptReady": "النص جاهز",
-		"notGeneratedYet": "لم يُنشأ بعد",
 		"regenerateAs": "إعادة الإنشاء بلغة",
 		"auto": "تلقائي",
 		"regenerate": "إعادة الإنشاء",
@@ -152,12 +151,7 @@
 		"transcriptionFailed": "فشل النسخ",
 		"cpuBackendHint": "يعمل على المعالج — أبطأ بنحو 2× من معالج الرسوميات",
 		"noTranscript": "لا يوجد نص مكتوب",
-		"generating": "جارٍ الإنشاء",
-		"generationFailed": "فشل الإنشاء",
-		"generated": "تم الإنشاء",
 		"generationFailedHint": "فشل الإنشاء — اختر لغة وأعد الإنشاء.",
-		"noPreviewAvailable": "لا تتوفر معاينة",
-		"restart": "إعادة التشغيل",
 		"detectedLanguage": "اللغة المكتشفة: {{language}}",
 		"noAudioTrack": "لا يوجد مسار صوتي",
 		"noAudioTrackHint": "لا يحتوي هذا الملف على مسار صوتي — لا يوجد ما يمكن نسخه.",
@@ -213,18 +207,6 @@
 		"cameraFullscreenDescription": "أثناء تشغيل هذه المنطقة تملأ الكاميرا الإطار بالكامل — بلا حدود ولا استدارة ولا خلفية — ثم تعود بسلاسة في النهاية. اسحب حواف المنطقة على المخطط الزمني لتغيير وقت بدايتها ومدتها.",
 		"deleteRegion": "حذف المنطقة",
 		"freehandRendersAsBox": "الشكل الحر يُغطى بمستطيله المحيط في التصدير — تغطية زائدة، وليست ناقصة."
-	},
-	"leftPanel": {
-		"mediaTitle": "الوسائط",
-		"searchPlaceholder": "بحث…",
-		"clearSearch": "مسح البحث",
-		"emptyHint": "لا توجد وسائط في هذا المشروع بعد. استورد فيديو أدناه.",
-		"transcriptReadyBadge": "النص جاهز"
-	},
-	"leftRail": {
-		"chat": "المحادثة",
-		"media": "الوسائط",
-		"ariaLabel": "الأدوات اليسرى"
 	},
 	"chat": {
 		"changeProvider": "تغيير المزوّد",

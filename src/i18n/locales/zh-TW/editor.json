@@ -139,7 +139,6 @@
 		"sourceTranscript": "來源逐字稿",
 		"close": "關閉",
 		"transcriptReady": "逐字稿已就緒",
-		"notGeneratedYet": "尚未產生",
 		"regenerateAs": "以此語言重新產生",
 		"auto": "自動",
 		"regenerate": "重新產生",
@@ -152,12 +151,7 @@
 		"transcriptionFailed": "轉錄失敗",
 		"cpuBackendHint": "正在使用 CPU 執行 — 比 GPU 慢約 2 倍",
 		"noTranscript": "沒有逐字稿",
-		"generating": "產生中",
-		"generationFailed": "產生失敗",
-		"generated": "已產生",
 		"generationFailedHint": "產生失敗 — 選擇語言並重新產生。",
-		"noPreviewAvailable": "無法預覽",
-		"restart": "重新開始",
 		"detectedLanguage": "偵測到的語言：{{language}}",
 		"noAudioTrack": "無音訊軌道",
 		"noAudioTrackHint": "此媒體沒有音訊軌道，沒有可轉錄的內容。",
@@ -213,18 +207,6 @@
 		"cameraFullscreenDescription": "此區間播放時，攝影機會佔滿整個畫面 — 沒有邊框、圓角與背景 — 並在結束時平順還原。在時間軸上拖曳區間邊緣，即可調整開始位置與長度。",
 		"deleteRegion": "刪除區間",
 		"freehandRendersAsBox": "匯出時，手繪形狀會以其外接矩形遮蔽——寧可多遮，絕不少遮。"
-	},
-	"leftPanel": {
-		"mediaTitle": "媒體",
-		"searchPlaceholder": "搜尋…",
-		"clearSearch": "清除搜尋",
-		"emptyHint": "此專案中尚無媒體。請在下方匯入影片。",
-		"transcriptReadyBadge": "逐字稿已就緒"
-	},
-	"leftRail": {
-		"chat": "聊天",
-		"media": "媒體",
-		"ariaLabel": "左側工具"
 	},
 	"chat": {
 		"changeProvider": "更換提供者",

@@ -139,7 +139,6 @@
 		"sourceTranscript": "Bản ghi lời thoại nguồn",
 		"close": "Đóng",
 		"transcriptReady": "Bản ghi lời thoại đã sẵn sàng",
-		"notGeneratedYet": "Chưa được tạo",
 		"regenerateAs": "Tạo lại bằng",
 		"auto": "Tự động",
 		"regenerate": "Tạo lại",
@@ -152,12 +151,7 @@
 		"transcriptionFailed": "Phiên âm thất bại",
 		"cpuBackendHint": "Đang chạy trên CPU — chậm hơn khoảng 2× so với GPU",
 		"noTranscript": "Không có bản ghi lời thoại",
-		"generating": "Đang tạo",
-		"generationFailed": "Tạo thất bại",
-		"generated": "Đã tạo",
 		"generationFailedHint": "Tạo thất bại — chọn ngôn ngữ và tạo lại.",
-		"noPreviewAvailable": "Không có bản xem trước",
-		"restart": "Bắt đầu lại",
 		"detectedLanguage": "Ngôn ngữ phát hiện: {{language}}",
 		"noAudioTrack": "Không có bản âm thanh",
 		"noAudioTrackHint": "Media này không có bản âm thanh — không có gì để phiên âm.",
@@ -213,18 +207,6 @@
 		"cameraFullscreenDescription": "Khi vùng này phát, máy quay chiếm trọn khung hình — không viền, không bo góc, không nền — rồi trở lại mượt mà ở cuối. Kéo hai mép của vùng trên dòng thời gian để thay đổi thời điểm bắt đầu và độ dài.",
 		"deleteRegion": "Xóa vùng",
 		"freehandRendersAsBox": "Khi xuất, hình vẽ tay được che bằng khung bao của nó — che dư, không bao giờ che thiếu."
-	},
-	"leftPanel": {
-		"mediaTitle": "Media",
-		"searchPlaceholder": "Tìm kiếm…",
-		"clearSearch": "Xóa tìm kiếm",
-		"emptyHint": "Chưa có media nào trong dự án này. Nhập video bên dưới.",
-		"transcriptReadyBadge": "BẢN GHI LỜI THOẠI ĐÃ SẴN SÀNG"
-	},
-	"leftRail": {
-		"chat": "Trò chuyện",
-		"media": "Media",
-		"ariaLabel": "Công cụ bên trái"
 	},
 	"chat": {
 		"changeProvider": "Đổi nhà cung cấp",
