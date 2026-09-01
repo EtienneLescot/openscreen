@@ -602,3 +602,175 @@ body {
 .pagination-nav__link:hover {
 	border-color: var(--os-accent-border);
 }
+
+/* ===================================================================
+   Blog: the development journal. The stable page classes
+   (.blog-list-page, .blog-post-page, .blog-tags-*-page) come from
+   Docusaurus's ThemeClassNames; each post renders as an <article>,
+   which no other page type uses. The blog sidebar's own CSS-module
+   classes are hash-suffixed, so they're matched with [class*=] the
+   same way the navbar widgets are above.
+   =================================================================== */
+
+.blog-list-page h1,
+.blog-tags-post-list-page h1 {
+	font-weight: 700;
+	letter-spacing: -0.02em;
+	color: var(--os-fg-emphasis);
+}
+
+/* One quiet card per entry on the journal index, rather than the
+   default bare stacked articles. */
+.blog-list-page article {
+	margin: 0 0 1.25rem;
+	padding: 1.6rem 1.6rem 1.4rem;
+	border: 1px solid var(--os-border);
+	border-radius: 14px;
+	background: var(--os-surface-1);
+	box-shadow: var(--os-elev-card);
+}
+
+.blog-list-page article header {
+	margin-bottom: 0.9rem;
+	color: var(--os-muted);
+	font-size: 0.85rem;
+}
+
+.blog-list-page article h2 {
+	margin-bottom: 0.4rem;
+	font-size: 1.3rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	color: var(--os-fg-emphasis);
+}
+
+.blog-list-page article h2 a {
+	color: inherit;
+}
+
+.blog-list-page article h2 a:hover {
+	color: var(--os-accent);
+	text-decoration: none;
+}
+
+.blog-list-page article .button {
+	border: 1px solid var(--os-border);
+	border-radius: 9px;
+	background: transparent;
+	color: var(--os-accent);
+	font-size: 12.5px;
+	font-weight: 500;
+}
+
+.blog-list-page article .button:hover {
+	border-color: var(--os-accent-border);
+	background: var(--os-accent-wash);
+}
+
+/* Post page: the article header carries the title, the author line
+   and the tags before the body starts. */
+.blog-post-page article header {
+	margin-bottom: 2rem;
+	color: var(--os-muted);
+	font-size: 0.9rem;
+}
+
+.blog-post-page article header h1 {
+	margin-bottom: 0.6rem;
+	font-weight: 700;
+	letter-spacing: -0.02em;
+	color: var(--os-fg-emphasis);
+}
+
+/* The post body mirrors the docs article's heading/link/table
+   treatment (.theme-doc-markdown is scoped to docs only). */
+:is(.blog-post-page, .blog-tags-post-list-page) .markdown h2 {
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	color: var(--os-fg-emphasis);
+	margin-top: 2.25rem;
+}
+
+:is(.blog-post-page, .blog-tags-post-list-page) .markdown a {
+	color: var(--os-accent);
+}
+
+:is(.blog-post-page, .blog-tags-post-list-page) .markdown table {
+	width: 100%;
+	border-radius: 12px;
+	overflow: hidden;
+	border: 1px solid var(--os-border);
+	background: var(--os-surface-1);
+}
+
+:is(.blog-post-page, .blog-tags-post-list-page) .markdown table th,
+:is(.blog-post-page, .blog-tags-post-list-page) .markdown table td {
+	border: none;
+	padding: 0.6rem 1rem;
+	font-size: 0.92em;
+}
+
+:is(.blog-post-page, .blog-tags-post-list-page) .markdown table tr {
+	border-top: 1px solid var(--os-border-soft);
+	background: transparent;
+}
+
+:is(.blog-post-page, .blog-tags-post-list-page) .markdown pre {
+	border-radius: 12px;
+	border: 1px solid var(--os-border);
+}
+
+/* Post tags render through the theme's Tag component (hash-suffixed
+   tagRegular_* classes); restyled into quiet pills. */
+a[class*="tagRegular"] {
+	border-radius: 999px;
+	border: 1px solid var(--os-border);
+	background: var(--os-surface-2);
+	color: var(--os-muted);
+	font-size: 0.72rem;
+	font-weight: 500;
+	padding: 0.2rem 0.7rem;
+	transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+a[class*="tagRegular"]:hover {
+	color: var(--os-accent);
+	border-color: var(--os-accent-border);
+	background: var(--os-accent-wash);
+	text-decoration: none;
+}
+
+/* The journal sidebar: same quiet list the docs sidebar uses, built
+   from the blog theme's own (hash-suffixed) classes. */
+[class*="sidebarItemTitle"],
+[class*="yearGroupHeading"] {
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 0.7rem;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--os-meta);
+}
+
+[class*="yearGroupHeading"] {
+	margin-top: 1.5rem;
+	margin-bottom: 0.4rem;
+}
+
+[class*="sidebarItemLink"] {
+	border-radius: 8px;
+	font-size: 0.9rem;
+	font-weight: 500;
+	color: var(--os-fg-2);
+	transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+[class*="sidebarItemLink"]:hover {
+	background: var(--os-surface-2);
+}
+
+[class*="sidebarItemLinkActive"],
+[class*="sidebarItemLinkActive"]:hover {
+	background: var(--os-accent-soft);
+	color: var(--os-accent);
+	font-weight: 600;
+}
