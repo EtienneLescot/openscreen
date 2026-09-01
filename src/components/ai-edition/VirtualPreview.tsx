@@ -5,7 +5,12 @@ import {
 	MAX_NATIVE_PLAYBACK_RATE,
 } from "@/components/video-editor/types";
 import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
-import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import type {
+	AxcutClip,
+	AxcutInsertRange,
+	AxcutTrimRange,
+	AxcutZoomRegion,
+} from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
@@ -116,6 +121,8 @@ interface VirtualPreviewProps {
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
 	trimRanges?: AxcutTrimRange[];
+	/** The pauses added words created — they lengthen playback, they do not cut it. */
+	insertRanges?: AxcutInsertRange[];
 	seekTarget?: { timeSec: number; isSource?: boolean; requestId: number } | null;
 	onTimeChange?: (timeSec: number) => void;
 	onLoadedMetadata?: (
@@ -160,6 +167,7 @@ export function VirtualPreview({
 	zoomRegions = [],
 	speedRegions = [],
 	trimRanges = [],
+	insertRanges = [],
 	seekTarget,
 	onTimeChange,
 	onLoadedMetadata,
@@ -411,8 +419,8 @@ export function VirtualPreview({
 	// source time to a RAW virtual time that jumps discontinuously by exactly the trim's
 	// width the moment the video itself jumps — matching the marker's own pixel span.
 	const playbackClips = useMemo(
-		() => resolvePlaybackSegments(clips, trimRanges),
-		[clips, trimRanges],
+		() => resolvePlaybackSegments(clips, trimRanges, insertRanges),
+		[clips, trimRanges, insertRanges],
 	);
 	const playbackClipsRef = useRef(playbackClips);
 	playbackClipsRef.current = playbackClips;

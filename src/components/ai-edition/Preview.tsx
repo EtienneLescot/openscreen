@@ -4,6 +4,7 @@ import { useScopedT } from "@/contexts/I18nContext";
 import type {
 	AxcutAnnotationRegion,
 	AxcutClip,
+	AxcutInsertRange,
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
@@ -26,6 +27,7 @@ interface PreviewProps {
 	speedRegions?: SpeedRegion[];
 	cameraFullscreenRegions?: CameraFullscreenRegion[];
 	trimRanges?: AxcutTrimRange[];
+	insertRanges?: AxcutInsertRange[];
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;
@@ -57,6 +59,7 @@ export function Preview({
 	speedRegions,
 	cameraFullscreenRegions,
 	trimRanges,
+	insertRanges,
 	selectedZoomRegionId,
 	onZoomFocusChange,
 	onZoomFocusCommit,
@@ -183,6 +186,7 @@ export function Preview({
 						speedRegions={speedRegions}
 						cameraFullscreenRegions={cameraFullscreenRegions}
 						trimRanges={trimRanges}
+						insertRanges={insertRanges}
 						selectedZoomRegionId={selectedZoomRegionId}
 						onZoomFocusChange={onZoomFocusChange}
 						onZoomFocusCommit={onZoomFocusCommit}

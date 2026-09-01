@@ -1176,6 +1176,9 @@ export function useTimeline() {
 	return {
 		zoomRegions: document?.zoomRanges ?? [],
 		trimRanges: document?.timeline.trimRanges ?? [],
+		// The pauses added words created. The ruler counts them; nothing else in the
+		// timeline store writes them (see `document/transcript.ts`).
+		insertRanges: document?.timeline.insertRanges ?? [],
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
 		speedRegions,
 		cameraFullscreenRegions,

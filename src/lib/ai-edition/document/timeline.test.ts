@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type AxcutClip,
 	type AxcutDocument,
+	type AxcutInsertRange,
 	type AxcutTrimRange,
 	axcutSchemaVersion,
 } from "../schema";
@@ -1604,5 +1605,91 @@ describe("a malformed legacyEditor envelope", () => {
 
 		expect(next.timeline.clips[0]).toMatchObject({ sourceStartSec: 2, sourceEndSec: 5 });
 		expect(next.legacyEditor).toEqual({ speedRegions: null, cameraFullscreenRegions: 42 });
+	});
+});
+
+// ─── The pause an added word bought ──────────────────────────────
+// Created time only exists once playback honours it. These pin the one thing the record
+// is for: the stream really does stay on the held frame, and the film really is longer.
+
+describe("resolvePlaybackSegments with insert ranges", () => {
+	const CLIPS: AxcutClip[] = [
+		{
+			id: "c1",
+			assetId: "a1",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+			wordRefs: [],
+			origin: "user",
+			reason: "",
+		},
+	];
+	const insert = (overrides: Partial<AxcutInsertRange> = {}): AxcutInsertRange => ({
+		id: "ins_1",
+		assetId: "a1",
+		atSec: 10,
+		durationSec: 0.5,
+		wordId: "synth_1",
+		reason: "held",
+		origin: "user",
+		...overrides,
+	});
+
+	it("holds the frame where the pause sits, and lengthens the stream by it", () => {
+		const segments = resolvePlaybackSegments(CLIPS, [], [insert()]);
+		expect(segments).toHaveLength(2);
+		expect(segments[1]).toMatchObject({
+			sourceStartSec: 10,
+			sourceEndSec: 10,
+			heldSec: 0.5,
+			timelineStartSec: 10,
+			timelineEndSec: 10.5,
+		});
+	});
+
+	it("changes nothing when there is no pause", () => {
+		expect(resolvePlaybackSegments(CLIPS, [], [])).toHaveLength(1);
+	});
+
+	// The usual case, and the one the first cut of this missed: a pause sits at the end of
+	// the word it follows, which is almost never a boundary a trim happened to leave.
+	it("cuts the clip open where a pause falls in the MIDDLE of it", () => {
+		const segments = resolvePlaybackSegments(CLIPS, [], [insert({ atSec: 2.5 })]);
+		expect(segments.map((s) => [s.sourceStartSec, s.sourceEndSec, s.heldSec])).toEqual([
+			[0, 2.5, undefined],
+			[2.5, 2.5, 0.5],
+			[2.5, 10, undefined],
+		]);
+		// 10s of film plus half a second of held frame.
+		expect(segments[2].timelineEndSec).toBeCloseTo(10.5, 5);
+	});
+
+	// The moment the pause holds is not in the film any more, so neither is the pause.
+	it("drops a pause whose moment a trim removed", () => {
+		const trims: AxcutTrimRange[] = [
+			{ id: "t1", assetId: "a1", startSec: 4, endSec: 10, origin: "user", reason: "" },
+		];
+		const segments = resolvePlaybackSegments(CLIPS, trims, [insert()]);
+		expect(segments.some((s) => s.heldSec !== undefined)).toBe(false);
+	});
+
+	it("places a pause inside a clip between the halves a trim left", () => {
+		const trims: AxcutTrimRange[] = [
+			{ id: "t1", assetId: "a1", startSec: 4, endSec: 6, origin: "user", reason: "" },
+		];
+		const segments = resolvePlaybackSegments(CLIPS, trims, [insert({ atSec: 4 })]);
+		expect(segments.map((s) => s.heldSec)).toEqual([undefined, 0.5, undefined]);
+		// The stream is the kept film plus the pause: 4s + 0.5s + 4s.
+		expect(segments[segments.length - 1].timelineEndSec).toBeCloseTo(8.5, 5);
+	});
+
+	it("never writes the held flag onto a stored clip", () => {
+		// The field lives on the derived segment only; that is the whole difference from
+		// the attempt that made clips for it.
+		const segments = resolvePlaybackSegments(CLIPS, [], [insert()]);
+		expect(CLIPS[0]).not.toHaveProperty("heldSec");
+		expect(segments[0]).not.toHaveProperty("heldSec");
 	});
 });

@@ -3,7 +3,24 @@
 // (store, exporter, agent) feeds an AxcutDocument and gets back intervals
 // or a new document with updated clips.
 
-import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "../schema";
+import type {
+	AxcutClip,
+	AxcutDocument,
+	AxcutInsertRange,
+	AxcutTranscript,
+	AxcutTrimRange,
+} from "../schema";
+
+/**
+ * What `resolvePlaybackSegments` returns: a clip-shaped slice of playable film, plus the
+ * one thing a stored clip can never carry — `heldSec`, the pause an added word created.
+ *
+ * A held segment's source window is the single frame it shows; its LENGTH is `heldSec`.
+ * The field lives only on this derived shape, never on `clipSchema`, so nothing can write
+ * one to disk — which is the whole difference from the attempt that made clips for it.
+ */
+export type PlaybackSegment = AxcutClip & { heldSec?: number };
+
 import {
 	anchoredToRawSpanSec,
 	anchorRegionsWithDerivedMs,
@@ -163,10 +180,32 @@ export function subtractInterval(intervals: Interval[], cut: Interval): Interval
 export function resolvePlaybackSegments(
 	clips: AxcutClip[],
 	trimRanges: AxcutTrimRange[],
-): AxcutClip[] {
+	insertRanges: readonly AxcutInsertRange[] = [],
+): PlaybackSegment[] {
 	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
-	const result: AxcutClip[] = [];
+	const result: PlaybackSegment[] = [];
 	let timelineCursor = 0;
+	// The pauses added words need, in the order they will be met. Consumed as the walk
+	// passes each one's moment, so a pause inside a span a trim removed is never reached —
+	// which is right: the moment it holds is not in the film any more.
+	const pending = [...insertRanges].sort((a, b) => a.atSec - b.atSec);
+	const holdAt = (clip: AxcutClip, atSec: number): PlaybackSegment | null => {
+		const insert = pending.find(
+			(range) => range.assetId === clip.assetId && Math.abs(range.atSec - atSec) < 1e-6,
+		);
+		if (!insert) return null;
+		pending.splice(pending.indexOf(insert), 1);
+		return {
+			...clip,
+			id: `${clip.id}__hold_${insert.id}`,
+			sourceStartSec: atSec,
+			sourceEndSec: atSec,
+			timelineStartSec: 0,
+			timelineEndSec: 0,
+			heldSec: insert.durationSec,
+			reason: insert.reason,
+		};
+	};
 	for (const clip of ordered) {
 		const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
 		if (sourceEnd <= clip.sourceStartSec) {
@@ -185,18 +224,52 @@ export function resolvePlaybackSegments(
 			if (!trimAppliesToClip(trim, clip)) continue;
 			kept = subtractInterval(kept, { startSec: trim.startSec, endSec: trim.endSec });
 		}
-		kept.forEach((iv, i) => {
-			const dur = iv.endSec - iv.startSec;
-			if (dur <= 0) return;
+		// A pause sits at the END of the word it follows, which is almost never a boundary a
+		// trim happened to leave. So each kept span is cut at the moments it holds, and the
+		// held frame goes between the halves: the stream plays up to that frame, stays on it
+		// for the pause, then carries on — which is what makes the film longer.
+		const pieces: Array<{ startSec: number; endSec: number; holdAtEnd: boolean }> = [];
+		for (const iv of kept) {
+			const moments = pending
+				.filter(
+					(range) =>
+						range.assetId === clip.assetId &&
+						range.atSec > iv.startSec + 1e-6 &&
+						range.atSec <= iv.endSec + 1e-6,
+				)
+				.map((range) => range.atSec)
+				.sort((a, b) => a - b);
+			let from = iv.startSec;
+			for (const at of moments) {
+				pieces.push({ startSec: from, endSec: Math.min(at, iv.endSec), holdAtEnd: true });
+				from = Math.min(at, iv.endSec);
+			}
+			if (iv.endSec - from > 1e-6 || pieces.length === 0) {
+				pieces.push({ startSec: from, endSec: iv.endSec, holdAtEnd: false });
+			}
+		}
+		pieces.forEach((piece, i) => {
+			const dur = piece.endSec - piece.startSec;
+			if (dur > 0) {
+				result.push({
+					...clip,
+					id: pieces.length === 1 ? clip.id : `${clip.id}_seg${i + 1}`,
+					sourceStartSec: piece.startSec,
+					sourceEndSec: piece.endSec,
+					timelineStartSec: timelineCursor,
+					timelineEndSec: timelineCursor + dur,
+				});
+				timelineCursor += dur;
+			}
+			if (!piece.holdAtEnd) return;
+			const hold = holdAt(clip, piece.endSec);
+			if (!hold) return;
 			result.push({
-				...clip,
-				id: kept.length === 1 ? clip.id : `${clip.id}_seg${i + 1}`,
-				sourceStartSec: iv.startSec,
-				sourceEndSec: iv.endSec,
+				...hold,
 				timelineStartSec: timelineCursor,
-				timelineEndSec: timelineCursor + dur,
+				timelineEndSec: timelineCursor + (hold.heldSec ?? 0),
 			});
-			timelineCursor += dur;
+			timelineCursor += hold.heldSec ?? 0;
 		});
 	}
 	return result;

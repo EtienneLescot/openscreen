@@ -35,6 +35,7 @@ import { resolveAspectRatioValue } from "@/lib/ai-edition/document/outputFormat"
 import type {
 	AxcutAnnotationRegion,
 	AxcutClip,
+	AxcutInsertRange,
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
@@ -70,6 +71,7 @@ interface PreviewCanvasProps {
 	speedRegions?: SpeedRegion[];
 	cameraFullscreenRegions?: CameraFullscreenRegion[];
 	trimRanges?: AxcutTrimRange[];
+	insertRanges?: AxcutInsertRange[];
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;

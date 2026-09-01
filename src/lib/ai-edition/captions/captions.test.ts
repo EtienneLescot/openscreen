@@ -650,3 +650,52 @@ describe("translated caption layout", () => {
 		);
 	});
 });
+
+// ─── Captions across an added word's pause ───────────────────────
+// The pause lengthens the ruler, so every line after it slides — and the line the pause
+// exists FOR has to stay on screen through it rather than going dark over the one moment
+// an added word is there for.
+
+describe("captions and a pause", () => {
+	function withPause(): AxcutDocument {
+		const base = doc();
+		return {
+			...base,
+			timeline: {
+				...base.timeline,
+				insertRanges: [
+					{
+						id: "ins_1",
+						assetId: "asset-1",
+						// Inside "hello there friend" (0–2s), so the line covers it.
+						atSec: 1.2,
+						durationSec: 0.5,
+						wordId: "synth_1",
+						reason: "",
+						origin: "user" as const,
+					},
+				],
+			},
+		};
+	}
+
+	it("keeps the covering line up through the pause instead of cutting it short", () => {
+		const before = deriveCaptionCues(doc(), ON, {});
+		const after = deriveCaptionCues(withPause(), ON, {});
+		const line = (cues: typeof before) => cues.find((cue) => cue.text.includes("hello"));
+		expect(line(after)?.startMs).toBe(line(before)?.startMs);
+		// Half a second longer: exactly the pause it now spans.
+		expect((line(after)?.endMs ?? 0) - (line(before)?.endMs ?? 0)).toBe(500);
+	});
+
+	it("slides everything after the pause along by it", () => {
+		const before = deriveCaptionCues(doc(), ON, {});
+		const after = deriveCaptionCues(withPause(), ON, {});
+		const later = (cues: typeof before) => cues.find((cue) => cue.text.includes("goodbye"));
+		expect((later(after)?.startMs ?? 0) - (later(before)?.startMs ?? 0)).toBe(500);
+	});
+
+	it("is unchanged when the project has no pauses", () => {
+		expect(deriveCaptionCues(doc(), ON, {})).toEqual(deriveCaptionCues(doc(), ON, {}));
+	});
+});
