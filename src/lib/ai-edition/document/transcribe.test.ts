@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { type AxcutDocument, axcutSchemaVersion } from "../schema";
-import { transcribeAsset } from "./transcribe";
+import { transcribeAsset, withTranscript } from "./transcribe";
 
 vi.mock("@/components/video-editor/projectPersistence", () => ({
 	toFileUrl: (path: string) => `file://${path}`,
@@ -118,5 +118,24 @@ describe("transcribeAsset language handling", () => {
 		const t = await transcribeAsset(doc, "asset_1");
 
 		expect(t.language).toBe("auto");
+	});
+});
+
+describe("withTranscript", () => {
+	it("updates transcripts[] and the primary asset's legacy top-level transcript together", () => {
+		const doc = makeDoc();
+		const transcript = {
+			assetId: "asset_1",
+			language: "en",
+			segments: [],
+			words: [],
+		};
+
+		const next = withTranscript(doc, transcript);
+
+		expect(next.transcripts).toEqual([transcript]);
+		expect(next.transcript).toBe(transcript);
+		expect(doc.transcripts).toEqual([]);
+		expect(doc.transcript).toBeNull();
 	});
 });

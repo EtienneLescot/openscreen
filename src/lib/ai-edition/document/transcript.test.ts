@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutTranscript } from "../schema";
-import { setWordText } from "./transcript";
+import {
+	replaceTranscriptText,
+	replaceTranscriptTextRange,
+	setWordText,
+	transcriptTextForWords,
+} from "./transcript";
 
 function fixture(language = "en"): AxcutTranscript {
 	return {
@@ -286,5 +291,231 @@ describe("setWordText", () => {
 		expect(() => setWordText(transcript, "word_2", "replacement")).toThrowError(
 			/segment_1.*word_2|word_2.*segment_1/,
 		);
+	});
+});
+
+describe("replaceTranscriptTextRange", () => {
+	it("inserts and replaces within one word", () => {
+		const inserted = replaceTranscriptTextRange(
+			fixture(),
+			["word_1", "word_2", "word_3"],
+			3,
+			3,
+			" really",
+		);
+		expect(inserted.words.find((word) => word.id === "word_2")?.text).toBe("u reallyse");
+		expect(transcriptTextForWords(inserted, ["word_1", "word_2", "word_3"])).toBe(
+			"I u reallyse OpenScreen",
+		);
+
+		const replaced = replaceTranscriptTextRange(
+			fixture(),
+			["word_1", "word_2", "word_3"],
+			3,
+			5,
+			"sed",
+		);
+		expect(replaced.words.find((word) => word.id === "word_2")?.text).toBe("used");
+		expect(replaced.segments[0].text).toBe("I used OpenScreen");
+	});
+
+	it.each([
+		{ label: "backward", start: 1, end: 2 },
+		{ label: "forward", start: 1, end: 2 },
+	])("deletes one non-BMP code point $label without splitting it", ({ start, end }) => {
+		const transcript = transcriptForTokens("en", ["A😀B", "tail"]);
+		const result = replaceTranscriptTextRange(transcript, ["word_1", "word_2"], start, end, "");
+
+		expect(result.words.find((word) => word.id === "word_1")?.text).toBe("AB");
+		expect(transcriptTextForWords(result, ["word_1", "word_2"])).toBe("AB tail");
+	});
+
+	it("replaces across words, empties later affected rows, and leaves unaffected rows alone", () => {
+		const transcript = transcriptForTokens("en", ["Hello", "brave", "world", "today"]);
+		const untouched = transcript.words.find((word) => word.id === "word_4");
+		const snapshot = structuredClone(transcript);
+		const result = replaceTranscriptTextRange(
+			transcript,
+			["word_1", "word_2", "word_3", "word_4"],
+			2,
+			17,
+			"llo",
+		);
+
+		expect(result.words.find((word) => word.id === "word_1")?.text).toBe("Hello");
+		expect(result.words.find((word) => word.id === "word_2")?.text).toBe("");
+		expect(result.words.find((word) => word.id === "word_3")?.text).toBe("");
+		expect(result.words.find((word) => word.id === "word_4")).toBe(untouched);
+		// The chain of gaps across the emptied rows is all zero (one spoken
+		// phrase), so no break is manufactured: a full-sentence merge reads as
+		// one line again.
+		expect(transcriptTextForWords(result, ["word_1", "word_2", "word_3", "word_4"])).toBe(
+			"Hello today",
+		);
+		expect(transcript).toEqual(snapshot);
+	});
+
+	it("attaches an insertion at a word boundary to the preceding real word", () => {
+		const result = replaceTranscriptTextRange(
+			transcriptForTokens("en", ["Hello", "world"]),
+			["word_1", "word_2"],
+			5,
+			5,
+			"!",
+		);
+
+		expect(result.words.find((word) => word.id === "word_1")?.text).toBe("Hello!");
+		expect(result.words.find((word) => word.id === "word_2")?.text).toBe("world");
+	});
+
+	it("rebuilds every segment touched by a cross-segment replacement", () => {
+		const transcript = fixture();
+		// Offsets are code points into the projection starting at "use": 33 ends
+		// after "segment" (the two projected break chars shift it by 2 vs flat).
+		const result = replaceTranscriptTextRange(
+			transcript,
+			["word_2", "word_3", "word_4", "word_5"],
+			1,
+			33,
+			"crossed",
+		);
+
+		expect(result.segments[0].text).toBe("I ucrossed");
+		expect(result.segments[1].text).toBe("");
+	});
+
+	it.each(["missing_word", "silence_1"])("rejects non-document word ID %s", (wordId) => {
+		expect(() => replaceTranscriptTextRange(fixture(), ["word_1", wordId], 0, 0, "x")).toThrowError(
+			wordId,
+		);
+	});
+
+	it("derives the minimal code-point range when replacing the full visible text", () => {
+		const transcript = transcriptForTokens("en", ["one", "two", "three"]);
+		const result = replaceTranscriptText(
+			transcript,
+			["word_1", "word_2", "word_3"],
+			"one TWO three",
+		);
+
+		expect(result.words.find((word) => word.id === "word_1")?.text).toBe("one");
+		expect(result.words.find((word) => word.id === "word_2")?.text).toBe("TWO");
+		expect(result.words.find((word) => word.id === "word_3")?.text).toBe("three");
+	});
+
+	it("projects Chinese compactly while keeping mixed Latin boundaries readable", () => {
+		const transcript = transcriptForTokens("auto", ["我", "使用", "Claude", "Code", "剪视频"]);
+
+		expect(
+			transcriptTextForWords(transcript, ["word_1", "word_2", "word_3", "word_4", "word_5"]),
+		).toBe("我使用 Claude Code 剪视频");
+	});
+
+	it("replaces mixed CJK/Latin text using offsets from the natural projection", () => {
+		const transcript = transcriptForTokens("zh", ["我", "使用", "克劳德扣", "剪视频"]);
+		const wordIds = ["word_1", "word_2", "word_3", "word_4"];
+		const result = replaceTranscriptText(transcript, wordIds, "我使用 Claude Code 剪视频");
+
+		expect(transcriptTextForWords(result, wordIds)).toBe("我使用 Claude Code 剪视频");
+		expect(result.words.find((word) => word.id === "word_1")?.text).toBe("我");
+		expect(result.words.find((word) => word.id === "word_4")?.text).toBe("剪视频");
+		expect(result.segments[0].text).toBe("我使用 Claude Code 剪视频");
+	});
+
+	it("normalizes pasted line breaks to spaces", () => {
+		const transcript = transcriptForTokens("en", ["one", "two"]);
+		const result = replaceTranscriptText(transcript, ["word_1", "word_2"], "one pasted\ntext two");
+
+		expect(transcriptTextForWords(result, ["word_1", "word_2"])).toBe("one pasted text two");
+	});
+});
+
+describe("text-mode paragraph projection", () => {
+	/** Contiguous first paragraph, then a real speech pause, then a second one. */
+	function paragraphFixture(): AxcutTranscript {
+		return {
+			assetId: "asset_para",
+			language: "auto",
+			segments: [
+				{
+					id: "segment_para",
+					kind: "speech",
+					startSec: 0,
+					endSec: 5,
+					text: "大家好世界 AA BB",
+					wordIds: ["word_1", "word_2", "word_3", "word_4"],
+				},
+			],
+			words: [
+				{ id: "word_1", segmentId: "segment_para", startSec: 0, endSec: 1, text: "大家好" },
+				// Gap 0 — an ASR fragment of the same phrase, reassembles inline.
+				{ id: "word_2", segmentId: "segment_para", startSec: 1, endSec: 2, text: "世界" },
+				// Real pause between takes — starts a new paragraph.
+				{ id: "word_3", segmentId: "segment_para", startSec: 3, endSec: 4, text: "AA" },
+				{ id: "word_4", segmentId: "segment_para", startSec: 4, endSec: 5, text: "BB" },
+			],
+		};
+	}
+
+	const paraWordIds = ["word_1", "word_2", "word_3", "word_4"];
+
+	it("breaks paragraphs at speech pauses and reassembles gap-0 ASR fragments", () => {
+		expect(transcriptTextForWords(paragraphFixture(), paraWordIds)).toBe("大家好世界\n\nAA BB");
+	});
+
+	it("maps an edit spanning the paragraph break onto the correct rows", () => {
+		// "大家好世界⏎⏎AA BB" — code-point offsets 5-8: "界" is overwritten by
+		// "X", the two break chars are consumed, "A" becomes " Y".
+		const result = replaceTranscriptTextRange(paragraphFixture(), paraWordIds, 5, 8, "X Y");
+
+		expect(result.words.find((word) => word.id === "word_2")?.text).toBe("世界X YA");
+		expect(result.words.find((word) => word.id === "word_3")?.text).toBe("");
+		expect(result.words.find((word) => word.id === "word_4")?.text).toBe("BB");
+		// The break itself is never stored: the next projection re-derives it
+		// from the unchanged timings.
+		expect(transcriptTextForWords(result, paraWordIds)).toBe("大家好世界X YA\n\nBB");
+	});
+
+	it("replaces text with the breaks intact and leaves the other paragraph's rows alone", () => {
+		const transcript = paragraphFixture();
+		const snapshot = structuredClone(transcript);
+		const result = replaceTranscriptText(transcript, paraWordIds, "大家好世界\n\nAA CC");
+
+		expect(result.words.find((word) => word.id === "word_4")?.text).toBe("CC");
+		expect(result.words.find((word) => word.id === "word_1")?.text).toBe(
+			snapshot.words.find((word) => word.id === "word_1")?.text,
+		);
+		expect(transcriptTextForWords(result, paraWordIds)).toBe("大家好世界\n\nAA CC");
+	});
+
+	it("canonicalizes lone newlines to spaces but keeps \\n\\n paragraph breaks", () => {
+		const transcript = paragraphFixture();
+
+		// A lone hand-typed newline is a soft wrap: it lands as a trailing space
+		// in the row before it (rows are stored single-line); the "世界" merge
+		// goes to the row holding the text before the wrap point.
+		const softWrap = replaceTranscriptText(transcript, paraWordIds, "大家好\n世界\n\nAA BB");
+		expect(softWrap.words.find((word) => word.id === "word_1")?.text).toBe("大家好 ");
+		// CRLF pastes from Windows editors collapse onto the same projection
+		// unchanged — a pure no-op.
+		expect(replaceTranscriptText(transcript, paraWordIds, "大家好世界\r\n\r\nAA BB")).toBe(
+			transcript,
+		);
+	});
+
+	it("merging across a break: the pause survives upstream and re-projects after the emptied row", () => {
+		const transcript = paragraphFixture();
+		const result = replaceTranscriptText(transcript, paraWordIds, "大家好世界AA BB");
+
+		// Rows are stored single-line — the merge lands in the row before the
+		// old break, the emptied row keeps its timing, nothing is lost:
+		expect(result.words.find((word) => word.id === "word_2")?.text).toBe("世界AA");
+		expect(result.words.find((word) => word.id === "word_3")?.text).toBe("");
+		expect(result.words.find((word) => word.id === "word_4")?.text).toBe("BB");
+		// The real 1s pause now sits INSIDE the merged row ("世界|AA"), which a
+		// between-rows break cannot express. Known approximation: the break
+		// re-projects right after the emptied row, keeping paragraph two alive
+		// rather than silently absorbing it.
+		expect(transcriptTextForWords(result, paraWordIds)).toBe("大家好世界AA\n\nBB");
 	});
 });
