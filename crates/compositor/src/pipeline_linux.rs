@@ -1190,6 +1190,12 @@ impl VaapiEncoder {
         (*me.ctx).time_base = AVRational { num: 1, den: fps };
         (*me.ctx).framerate = AVRational { num: fps, den: 1 };
         (*me.ctx).bit_rate = bit_rate;
+        // MP4 veut SPS/PPS dans l'extradata, pas repetes devant chaque image
+        // cle. Le chemin software le pose depuis toujours (`try_open`) ; l'avoir
+        // oublie ici produisait un fichier qui se lit quand meme, parce que le
+        // muxer recupere ce qu'il trouve — mais un lecteur qui se fie a
+        // `codecpar` seul aurait de quoi echouer.
+        (*me.ctx).flags |= AV_CODEC_FLAG_GLOBAL_HEADER as i32;
         (*me.ctx).hw_frames_ctx = av_buffer_ref(me.va_frames);
         if avcodec_open2(me.ctx, enc, ptr::null_mut()) < 0 {
             return None;
