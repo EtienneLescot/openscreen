@@ -13,10 +13,12 @@ import {
 	HelpCircle,
 	Layout as LayoutIcon,
 	Loader2,
+	Mic,
 	MousePointerClick,
 	Music,
 	Sliders,
 	Trash2,
+	Video,
 } from "lucide-react";
 
 import {
@@ -44,6 +46,7 @@ import { collapseTracksToPills, trackGroupId } from "@/lib/ai-edition/document/a
 import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import type {
 	AxcutAsset,
+	AxcutAudioTrack,
 	AxcutClip,
 	AxcutTranscript,
 	AxcutTrimRange,
@@ -62,7 +65,9 @@ import {
 	type ClipWord,
 	findCueWordId,
 	isSilenceWord,
+	type TranscriptLane,
 	type TrimRun,
+	voiceoverPlacements,
 } from "@/lib/ai-edition/timeline/aggregated-transcript";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
@@ -714,6 +719,49 @@ export interface TrimTarget {
 //
 // Mirrors axcut's apps/web/src/components/CurrentTranscriptView.tsx.
 /**
+ * Which lane's speech the transcript is read from (issue #560).
+ *
+ * Shown only when there is a voiceover to switch TO. A one-sided switch is worse
+ * than no switch: it asks a question about a lane the project does not have, and
+ * every project that never imports audio would carry it forever.
+ *
+ * A control, not a filter. Everything downstream — word edits, trims, the agent's
+ * grounding, captions — consumes the aggregate, so this changes what the whole tab
+ * IS rather than hiding part of it.
+ */
+function TranscriptLaneSwitch({
+	lane,
+	onChange,
+}: {
+	lane: TranscriptLane;
+	onChange: (lane: TranscriptLane) => void;
+}) {
+	const ts = useScopedT("settings");
+	return (
+		<div className={styles.laneSwitch} role="group" aria-label={ts("transcript.laneLabel")}>
+			<button
+				type="button"
+				className={`${styles.laneSwitchBtn} ${lane === "recording" ? styles.isActive : ""}`}
+				aria-pressed={lane === "recording"}
+				onClick={() => onChange("recording")}
+			>
+				<Video size={13} />
+				{ts("transcript.laneRecording")}
+			</button>
+			<button
+				type="button"
+				className={`${styles.laneSwitchBtn} ${lane === "voiceover" ? styles.isActive : ""}`}
+				aria-pressed={lane === "voiceover"}
+				onClick={() => onChange("voiceover")}
+			>
+				<Mic size={13} />
+				{ts("transcript.laneVoiceover")}
+			</button>
+		</div>
+	);
+}
+
+/**
  * Caption settings, reached from the transcript tab (issue #560).
  *
  * The pane is reused VERBATIM rather than rebuilt into a popover body: it is ~600
@@ -746,6 +794,7 @@ function CaptionSettingsButton() {
 
 export function TranscriptPane({
 	clips,
+	audioTracks,
 	transcripts,
 	assets,
 	trimRanges,
@@ -761,6 +810,9 @@ export function TranscriptPane({
 	blocked,
 }: {
 	clips: AxcutClip[];
+	/** Every audio track on the timeline. Only the voiceover ones can be read from;
+	 *  music is not transcribed at all, so it never becomes a lane to choose. */
+	audioTracks: AxcutAudioTrack[];
 	transcripts: AxcutTranscript[];
 	assets: AxcutAsset[];
 	trimRanges: AxcutTrimRange[];
@@ -795,9 +847,22 @@ export function TranscriptPane({
 	// on `cueWordId`, so a frame that doesn't cross a word boundary re-renders nothing
 	// but this component's own (cheap) lookup.
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
+
+	// Local, not stored: which lane you are reading is a view of the document, not a
+	// fact about it. It moves here the day captions have to follow the same choice —
+	// that is a second reader, and two readers of one choice need somewhere shared.
+	const [lane, setLane] = useState<TranscriptLane>("recording");
+	const voiceover = useMemo(() => voiceoverPlacements(audioTracks), [audioTracks]);
+	// Derived rather than reset in an effect: deleting the last voiceover pill while
+	// reading it must not leave the pane addressing a lane that is gone, and an effect
+	// would render that empty state once before correcting it.
+	const activeLane: TranscriptLane =
+		lane === "voiceover" && voiceover.length === 0 ? "recording" : lane;
+	const placements = activeLane === "voiceover" ? voiceover : clips;
+
 	const sections = useMemo(
-		() => buildAggregatedSections(clips, transcripts, assets, trimRanges),
-		[clips, transcripts, assets, trimRanges],
+		() => buildAggregatedSections(placements, transcripts, assets, trimRanges),
+		[placements, transcripts, assets, trimRanges],
 	);
 
 	// the cue position is the playback head's location in the current clip's source time.
@@ -819,7 +884,12 @@ export function TranscriptPane({
 
 	const cueWordId = useMemo(() => findCueWordId(sections, cue), [sections, cue]);
 
-	const hasAnyTranscript = transcripts.length > 0;
+	const laneSwitch =
+		voiceover.length > 0 ? <TranscriptLaneSwitch lane={activeLane} onChange={setLane} /> : null;
+	// Asked of the LANE, not the document: a project with a recording transcript and a
+	// freshly imported voiceover has transcripts, and the voiceover lane still has
+	// nothing to show — the empty state is what says so.
+	const hasAnyTranscript = sections.some((section) => section.transcript !== null);
 	// Only silence is a dead end: every other reason (a retryable failure, no
 	// engine, nothing attempted) leaves the button worth pressing.
 	const silentMedia = blocked?.reason === "no-audio";
@@ -830,7 +900,7 @@ export function TranscriptPane({
 		transcriptionLabel,
 	);
 
-	if (clips.length === 0 || !hasAnyTranscript) {
+	if (placements.length === 0 || !hasAnyTranscript) {
 		return (
 			<Pane
 				title={ts("transcript.title")}
@@ -838,6 +908,7 @@ export function TranscriptPane({
 				helpText={ts("transcript.help")}
 				actions={<CaptionSettingsButton />}
 			>
+				{laneSwitch}
 				<div
 					style={{
 						display: "flex",
@@ -852,7 +923,7 @@ export function TranscriptPane({
 				>
 					<FileText size={28} style={{ color: "var(--dim)" }} />
 					<p style={{ font: "500 13px var(--font-body)", color: "var(--fg-2)" }}>
-						{clips.length === 0
+						{placements.length === 0
 							? ts("transcript.noClips")
 							: isTranscribing
 								? (paneBusyLabel ?? ts("transcript.transcribing"))
@@ -889,6 +960,7 @@ export function TranscriptPane({
 				</span>
 			</header>
 			<div className={styles.paneBody}>
+				{laneSwitch}
 				{sections.map((section, idx) => (
 					<TranscriptClipBlock
 						key={section.clip.id}

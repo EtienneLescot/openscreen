@@ -1290,6 +1290,7 @@ export function NewEditorShell() {
 
 	const transcriptProps = {
 		clips,
+		audioTracks: document?.audioTracks ?? [],
 		transcripts: document?.transcripts ?? [],
 		assets: document?.assets ?? [],
 		trimRanges: document?.timeline?.trimRanges ?? [],

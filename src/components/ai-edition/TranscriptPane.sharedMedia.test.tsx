@@ -71,6 +71,7 @@ function renderPane(onSeek: (sec: number) => void = vi.fn()) {
 		<I18nProvider>
 			<TranscriptPane
 				clips={CLIPS}
+				audioTracks={[]}
 				transcripts={[TRANSCRIPT]}
 				assets={[ASSET]}
 				trimRanges={[]}

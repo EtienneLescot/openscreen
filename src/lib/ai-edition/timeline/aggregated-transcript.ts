@@ -14,8 +14,44 @@
 // names a word a filler. The transcript view shows plain text for every
 // kept word; the user or the LLM decides what to mark as skipped.
 
-import type { AxcutAsset, AxcutClip, AxcutTranscript, AxcutTrimRange, AxcutWord } from "../schema";
+import type {
+	AxcutAsset,
+	AxcutAudioTrack,
+	AxcutClip,
+	AxcutTranscript,
+	AxcutTrimRange,
+	AxcutWord,
+} from "../schema";
 import { trimAppliesToClip } from "./trim-mapping";
+
+/**
+ * The unit the aggregation actually runs over: one stretch of ONE asset's source
+ * time, laid somewhere on the timeline (issue #560).
+ *
+ * `AxcutClip` is one provider of this and was, for a long time, the only one —
+ * which is why everything downstream is still named after clips. A voiceover is
+ * the second: speech that the transcript tab could not see, because the tab was
+ * wired to `timeline.clips` rather than to the shape clips happen to have.
+ *
+ * Deliberately structural rather than a union of the two record types. Nothing
+ * below this line needs to know which lane a section came from, and the moment it
+ * could ask, something would start behaving differently per lane — which is the
+ * one thing this parameterisation is meant to prevent.
+ */
+export interface TranscriptPlacement {
+	/** Unique on the timeline. Namespaces every rendered word (see {@link clipWordId}). */
+	id: string;
+	assetId: string;
+	sourceStartSec: number;
+	/** Open-ended when the placement runs to the end of its source. */
+	sourceEndSec?: number;
+	/** Where the window lands on the RAW ruler. Source time is per asset, so this is
+	 *  the only thing that turns a word back into a moment the playhead can seek to. */
+	timelineStartSec: number;
+}
+
+/** Which lane's speech the transcript tab is reading. */
+export type TranscriptLane = "recording" | "voiceover";
 
 /** Gaps between words at least this long are surfaced as a `[silence]` token. */
 export const SILENCE_THRESHOLD_SEC = 0.2;
@@ -104,9 +140,10 @@ export interface ClipWord {
 	trimId: string | null;
 }
 
-/** One clip's contribution to the aggregated flow. */
+/** One placement's contribution to the aggregated flow. */
 export interface ClipSection {
-	clip: AxcutClip;
+	/** Named `clip` for its history, not its type — see {@link TranscriptPlacement}. */
+	clip: TranscriptPlacement;
 	asset: AxcutAsset | null;
 	transcript: AxcutTranscript | null;
 	words: ClipWord[];
@@ -133,7 +170,7 @@ function findCoveringTrim(word: AxcutWord, trimRanges: AxcutTrimRange[]): AxcutT
  * one `TrimRun` (for the trim-duration pill + bin-icon restore).
  */
 export function buildClipSection(
-	clip: AxcutClip,
+	clip: TranscriptPlacement,
 	transcript: AxcutTranscript | null,
 	asset: AxcutAsset | null,
 	trimRanges: AxcutTrimRange[],
@@ -215,7 +252,7 @@ export function buildClipSection(
  * the clip exists but no transcript is available for it yet.
  */
 export function buildAggregatedSections(
-	clips: AxcutClip[],
+	clips: TranscriptPlacement[],
 	transcripts: AxcutTranscript[],
 	assets: AxcutAsset[],
 	trimRanges: AxcutTrimRange[],
@@ -230,6 +267,49 @@ export function buildAggregatedSections(
 			trimRanges,
 		),
 	);
+}
+
+/**
+ * The voiceover lane as placements, in timeline order.
+ *
+ * Music is excluded here rather than filtered downstream: it is not transcribed at
+ * all (STT on a bed is noise we pay for), so a music placement could only ever
+ * produce an empty section that reads as a failed transcription.
+ *
+ * One placement PER FRAGMENT, not per user-visible track. A track that spans a cut
+ * is ventilated into a fragment per clip, each with its own `offsetMs` advanced by
+ * what its predecessors consumed (`anchorAudioTrackFragments`) — so the fragments
+ * already carry exactly the source windows this needs, and collapsing them back
+ * into one pill here would re-read the file from its head at every cut.
+ *
+ * `loop` is ignored on purpose. A looping voiceover would repeat its words, and a
+ * transcript that says the same sentence three times is not a transcript of
+ * anything — the source window is what was said, however many times it plays.
+ */
+export function voiceoverPlacements(audioTracks: AxcutAudioTrack[]): TranscriptPlacement[] {
+	return audioTracks
+		.filter((track) => track.kind === "voiceover")
+		.slice()
+		.sort((a, b) => a.startMs - b.startMs || a.id.localeCompare(b.id))
+		.map((track) => {
+			const offsetSec = track.offsetMs / 1000;
+			return {
+				id: track.id,
+				assetId: track.assetId,
+				sourceStartSec: offsetSec,
+				sourceEndSec: offsetSec + Math.max(0, track.endMs - track.startMs) / 1000,
+				timelineStartSec: track.startMs / 1000,
+			};
+		});
+}
+
+/** The placements a lane contributes, in timeline order. */
+export function lanePlacements(
+	lane: TranscriptLane,
+	clips: AxcutClip[],
+	audioTracks: AxcutAudioTrack[],
+): TranscriptPlacement[] {
+	return lane === "voiceover" ? voiceoverPlacements(audioTracks) : clips;
 }
 
 /** Where the playback head currently is, in source time. */

@@ -77,6 +77,7 @@ function renderPane(
 		<I18nProvider>
 			<TranscriptPane
 				clips={[CLIP]}
+				audioTracks={[]}
 				transcripts={[TRANSCRIPT]}
 				assets={[ASSET]}
 				trimRanges={trimRanges}
@@ -207,6 +208,7 @@ describe("keyboard cut with the caret between words", () => {
 				<I18nProvider>
 					<TranscriptPane
 						clips={[CLIP]}
+						audioTracks={[]}
 						transcripts={[TRANSCRIPT]}
 						assets={[ASSET]}
 						trimRanges={trims}

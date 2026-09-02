@@ -42,7 +42,10 @@ export type TrimAnchor = Pick<AxcutTrimRange, "assetId" | "startSec" | "endSec">
  * keeps those rather than dropping them). It keeps the historical asset-wide meaning, so
  * old documents render exactly as they did.
  */
-export function trimAppliesToClip(trim: TrimAnchor, clip: AxcutClip): boolean {
+export function trimAppliesToClip(
+	trim: TrimAnchor,
+	clip: Pick<AxcutClip, "id" | "assetId">,
+): boolean {
 	if (trim.clipId !== undefined) return trim.clipId === clip.id;
 	return trim.assetId === clip.assetId;
 }
