@@ -30,6 +30,7 @@ import { transcribeAsset, withTranscript } from "../document/transcribe";
 import type { AxcutDocument } from "../schema";
 import {
 	type AssetTranscriptionView,
+	assetCanCarrySpeech,
 	classifyTranscriptionError,
 	deriveAssetStatus,
 	findAssetTranscript,
@@ -130,6 +131,10 @@ export const useTranscriptionStore = create<TranscriptionState>((set, get) => ({
 				if (jobs[asset.id]) continue;
 				if (findAssetTranscript(document, asset.id)) continue;
 				if (asset.transcriptionFailure) continue;
+				// Music is not speech, and finding that out costs a whole inference pass —
+				// 35s at editor open for a four-minute bed. The manual regenerate in the
+				// media stage stays available for anything this refuses.
+				if (!assetCanCarrySpeech(document, asset.id)) continue;
 				patch()[asset.id] = { status: "queued", language: "auto", manual: false };
 			}
 		}
