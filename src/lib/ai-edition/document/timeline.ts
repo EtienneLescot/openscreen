@@ -21,6 +21,8 @@ import type {
  */
 export type PlaybackSegment = AxcutClip & { heldSec?: number };
 
+import { type Interval, subtractInterval } from "../timeline/intervals";
+import { keptRawSpans } from "../timeline/programme-time";
 import {
 	anchoredToRawSpanSec,
 	anchorRegionsWithDerivedMs,
@@ -46,10 +48,10 @@ export function byStart(a: { startSec: number }, b: { startSec: number }): numbe
 	return a.startSec - b.startSec;
 }
 
-export interface Interval {
-	startSec: number;
-	endSec: number;
-}
+// Re-exported, not redefined: `programme-time.ts` needs the same subtraction and cannot
+// import it from here without closing a dependency cycle (this module already imports from
+// `../timeline`). Callers of `Interval` / `subtractInterval` from this module are unaffected.
+export { type Interval, subtractInterval } from "../timeline/intervals";
 
 export function normalizeIntervals(durationSec: number, intervals: Interval[]): Interval[] {
 	const bounded = intervals
@@ -143,23 +145,6 @@ export function resequenceClips(clips: AxcutClip[]): AxcutClip[] {
 		cursor += len;
 		return next;
 	});
-}
-
-export function subtractInterval(intervals: Interval[], cut: Interval): Interval[] {
-	const output: Interval[] = [];
-	for (const interval of intervals) {
-		if (cut.endSec <= interval.startSec || cut.startSec >= interval.endSec) {
-			output.push(interval);
-			continue;
-		}
-		if (cut.startSec > interval.startSec) {
-			output.push({ startSec: interval.startSec, endSec: cut.startSec });
-		}
-		if (cut.endSec < interval.endSec) {
-			output.push({ startSec: cut.endSec, endSec: interval.endSec });
-		}
-	}
-	return output;
 }
 
 /**
@@ -358,43 +343,20 @@ export function projectRawTimelineSecToPlayback(
 	let lastRawEnd = 0; // raw end of the last kept segment, for the trailing overhang
 	let landed: number | null = null; // output(rawSec), once it falls in/before a kept segment
 
-	// Each kept segment as a raw extent `{ rawStart, dur }`. Trims only REMOVE, so a kept
-	// segment's raw length survives here; how long it takes to PLAY is a separate question
-	// that `outputDurationOfRawSpan` answers, because a speed region scales it.
-	const keptSegments = (clip: AxcutClip): Array<{ rawStart: number; dur: number }> => {
-		const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
-		if (sourceEnd <= clip.sourceStartSec) {
-			// Duration not probed yet — the whole raw clip passes through unnarrowed, matching
-			// `resolvePlaybackSegments`' own pass-through branch.
-			return [
-				{ rawStart: clip.timelineStartSec, dur: clip.timelineEndSec - clip.timelineStartSec },
-			];
+	// The kept stretches come from `keptRawSpans`, which is this walk — it was lifted out of
+	// here so the transcript lanes and the audio mix could ask the same question and get the
+	// same answer (issue #560). Trims only REMOVE, so a kept span's RAW length is what
+	// survives; how long it takes to PLAY is a separate question `outputDurationOfRawSpan`
+	// answers, because a speed region scales it.
+	for (const seg of keptRawSpans(ordered, trimRanges)) {
+		if (landed === null && rawSec < seg.endSec) {
+			// `rawSec` is inside this segment, or before it in a trimmed/gap region (then
+			// the span clamps to nothing → the output edge just before the gap).
+			const within = Math.min(Math.max(rawSec, seg.startSec), seg.endSec);
+			landed = outCursor + outputDurationOfRawSpan(seg.startSec, within, speedRegions);
 		}
-		let ivs: Interval[] = [{ startSec: clip.sourceStartSec, endSec: sourceEnd }];
-		for (const trim of trimRanges) {
-			if (!trimAppliesToClip(trim, clip)) continue;
-			ivs = subtractInterval(ivs, { startSec: trim.startSec, endSec: trim.endSec });
-		}
-		// Source time `s` sits at `timelineStartSec + (s − sourceStartSec)` on the raw ruler.
-		return ivs.map((iv) => ({
-			rawStart: clip.timelineStartSec + (iv.startSec - clip.sourceStartSec),
-			dur: iv.endSec - iv.startSec,
-		}));
-	};
-
-	for (const clip of ordered) {
-		for (const seg of keptSegments(clip)) {
-			if (seg.dur <= 0) continue;
-			const rawEnd = seg.rawStart + seg.dur;
-			if (landed === null && rawSec < rawEnd) {
-				// `rawSec` is inside this segment, or before it in a trimmed/gap region (then
-				// the span clamps to nothing → the output edge just before the gap).
-				const within = Math.min(Math.max(rawSec, seg.rawStart), rawEnd);
-				landed = outCursor + outputDurationOfRawSpan(seg.rawStart, within, speedRegions);
-			}
-			outCursor += outputDurationOfRawSpan(seg.rawStart, rawEnd, speedRegions);
-			lastRawEnd = rawEnd;
-		}
+		outCursor += outputDurationOfRawSpan(seg.startSec, seg.endSec, speedRegions);
+		lastRawEnd = seg.endSec;
 	}
 	// Past every kept frame: programme end plus whatever raw time hangs off the end (identity when
 	// there are no clips at all). A value ≥ programme length just means the mixer skips the track.
