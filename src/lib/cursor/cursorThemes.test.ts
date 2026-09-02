@@ -9,8 +9,10 @@ import {
 describe("themePickerPreviewAssets", () => {
 	it("hello-kitty-watermelon exposes distinct arrow and pointer", () => {
 		const theme = CURSOR_THEMES.find((t) => t.id === "hello-kitty-watermelon");
-		expect(theme).toBeTruthy();
-		const preview = themePickerPreviewAssets(theme ?? null);
+		if (!theme) {
+			throw new Error("hello-kitty-watermelon theme is missing from CURSOR_THEMES");
+		}
+		const preview = themePickerPreviewAssets(theme);
 		expect(preview.arrow.length).toBeGreaterThan(0);
 		expect(preview.pointer).toBeTruthy();
 		expect(preview.pointer).not.toBe(preview.arrow);
