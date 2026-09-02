@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -274,6 +275,25 @@ int main() {
         folded = std::abs(static_cast<int>(down[i])) <= 1;
     }
     expect("resample-96k-nyquist-box", folded, "frames=" + std::to_string(downFrames));
+
+    std::vector<BYTE> shortPkt(source96k.blockAlign, 0);
+    auto* shortSamples = reinterpret_cast<int16_t*>(shortPkt.data());
+    shortSamples[0] = 12345;
+    shortSamples[1] = -12345;
+    std::vector<BYTE> shortOut;
+    convertAudioWithGain(
+        shortPkt.data(),
+        static_cast<DWORD>(shortPkt.size()),
+        source96k,
+        target48k,
+        1.0,
+        shortOut);
+    const bool shortOk = !shortOut.empty() && target48k.blockAlign != 0 &&
+        (shortOut.size() % target48k.blockAlign == 0);
+    expect(
+        "resample-96k-short-packet",
+        shortOk,
+        "bytes=" + std::to_string(shortOut.size()));
 
     HRESULT mfHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(mfHr) && mfHr != RPC_E_CHANGED_MODE) {

@@ -214,31 +214,31 @@ void convertAudioWithGain(
         sourceFormat.sampleRate % targetFormat.sampleRate == 0) {
         const UINT32 factor = sourceFormat.sampleRate / targetFormat.sampleRate;
         const size_t targetFrames = sourceFrames / factor;
-        if (targetFrames == 0) {
-            destination.clear();
+        if (targetFrames > 0) {
+            destination.assign(targetFrames * targetFormat.blockAlign, 0);
+            for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
+                for (UINT32 channel = 0; channel < targetFormat.channels; ++channel) {
+                    double sum = 0.0;
+                    for (UINT32 tap = 0; tap < factor; ++tap) {
+                        sum += readMappedChannel(
+                            source,
+                            sourceFormat,
+                            targetFrame * factor + tap,
+                            channel,
+                            targetFormat.channels);
+                    }
+                    writeSampleFromDouble(
+                        destination.data(),
+                        targetFormat,
+                        targetFrame,
+                        channel,
+                        (sum / static_cast<double>(factor)) * gain);
+                }
+            }
             return;
         }
-        destination.assign(targetFrames * targetFormat.blockAlign, 0);
-        for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
-            for (UINT32 channel = 0; channel < targetFormat.channels; ++channel) {
-                double sum = 0.0;
-                for (UINT32 tap = 0; tap < factor; ++tap) {
-                    sum += readMappedChannel(
-                        source,
-                        sourceFormat,
-                        targetFrame * factor + tap,
-                        channel,
-                        targetFormat.channels);
-                }
-                writeSampleFromDouble(
-                    destination.data(),
-                    targetFormat,
-                    targetFrame,
-                    channel,
-                    (sum / static_cast<double>(factor)) * gain);
-            }
-        }
-        return;
+        // Too few source frames for one averaged output frame (tiny WASAPI
+        // packets). Fall through to interpolation instead of dropping them.
     }
 
     const double rateRatio = static_cast<double>(targetFormat.sampleRate) /
