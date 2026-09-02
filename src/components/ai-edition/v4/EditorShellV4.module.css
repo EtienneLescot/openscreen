@@ -1514,6 +1514,44 @@
 /* Imported audio tracks (issue #350). A distinct teal so a BGM/voiceover track
    reads apart from the effect pills, and taller than a lane pill so the waveform
    inside it is legible. */
+/* The rest of an audio pill's tape (audioGhostExtent): where its file's content still
+   sits around the pill. Dimmed and unclickable, BELOW the pill, so the pill reads as a
+   window onto it and an edge drag shows what is still available on each side.
+
+   Height and row are set inline to match the pill exactly. They have to: a ghost that
+   does not line up with the pill reads as a separate object sitting behind it rather
+   than as the rest of the same strip. */
+.lanePillGhost {
+	position: absolute;
+	min-width: 1px;
+	overflow: hidden;
+	border-radius: 6px;
+	/* Faint enough to read as "not the pill". Louder than this and it draws the eye to
+	   the part you are NOT editing — and on a long file it spans the whole ruler. */
+	border: 1px dashed color-mix(in oklch, var(--accent) 18%, transparent);
+	pointer-events: none;
+	z-index: 1;
+}
+.lanePillGhost .tlWave {
+	opacity: 0.18;
+}
+/* Crop readout pinned to the pointer while an audio pill's edge is pulled, or while
+   Alt slips the media under it — in -> out over the file's length. Rendered at the
+   component root (see the JSX note about the canvas transform). */
+.tlDragTip {
+	position: fixed;
+	z-index: 1200;
+	transform: translate(-50%, calc(-100% - 18px));
+	padding: 3px 8px;
+	border-radius: 6px;
+	border: 1px solid var(--border-hi);
+	background: var(--bg);
+	color: var(--fg);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	pointer-events: none;
+}
 .laneAudio {
 	border-color: #14b8a6;
 	background: rgba(20, 184, 166, 0.16);

@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { type AxcutAsset, type AxcutClip, createAudioTrack, createEmptyDocument } from "../schema";
 import {
 	anchorAudioTrackFragments,
+	audioGhostExtent,
 	collapseTracksToPills,
 	packAudioTrackRows,
 	patchAudioTrack,
 	removeAudioTrack,
 	resolveFadeSecs,
+	slipAudioOffsetMs,
 	trackGroupId,
 } from "./audioTracks";
 
@@ -275,5 +277,71 @@ describe("packAudioTrackRows", () => {
 
 	it("always reports at least one row, even with nothing to place", () => {
 		expect(packAudioTrackRows([]).rowCount).toBe(1);
+	});
+});
+
+describe("audioGhostExtent", () => {
+	// A 4s pill starting at ruler 10, showing the file from 2s, on a 60s file.
+	const base = () => audioGhostExtent(2, 4, 60, 10, 14, 100);
+
+	it("reaches back by the in-point and forward by what is left of the file", () => {
+		const g = base();
+		expect(g).not.toBeNull();
+		// 2s of head before the pill, 54s of tail after it.
+		expect(g?.startT).toBeCloseTo(8, 6);
+		expect(g?.endT).toBeCloseTo(68, 6);
+		// And the window it draws is the file's own, not the pill's.
+		expect(g?.sourceStartSec).toBeCloseTo(0, 6);
+		expect(g?.sourceEndSec).toBeCloseTo(60, 6);
+	});
+
+	it("stays inside the programme however long the file is", () => {
+		// A four-minute bed under a short programme would otherwise ask for an element
+		// tens of screens wide. Clamped at both ends.
+		const g = audioGhostExtent(2, 4, 600, 10, 14, 20);
+		expect(g?.startT).toBeCloseTo(8, 6);
+		expect(g?.endT).toBe(20);
+	});
+
+	it("refuses when there is nothing around the pill to show", () => {
+		// The pill already shows the whole file.
+		expect(audioGhostExtent(0, 60, 60, 0, 60, 100)).toBeNull();
+	});
+
+	it("refuses an unknown duration rather than drawing a bound it cannot measure", () => {
+		// Same rule as the edge stops: a failed probe must never invent a limit.
+		expect(audioGhostExtent(0, 4, null, 0, 4, 100)).toBeNull();
+		expect(audioGhostExtent(0, 4, undefined, 0, 4, 100)).toBeNull();
+		expect(audioGhostExtent(0, 4, 0, 0, 4, 100)).toBeNull();
+	});
+});
+
+describe("slipAudioOffsetMs", () => {
+	it("slides the in-point by the delta it is given", () => {
+		expect(slipAudioOffsetMs(10_000, 4_000, 60, 5_000)).toBe(15_000);
+		expect(slipAudioOffsetMs(10_000, 4_000, 60, -5_000)).toBe(5_000);
+	});
+
+	it("never windows past either end of the file", () => {
+		// Past the head is negative source time; past the tail is silence nobody asked
+		// for. The last legal in-point is duration - span.
+		expect(slipAudioOffsetMs(2_000, 4_000, 60, -10_000)).toBe(0);
+		expect(slipAudioOffsetMs(50_000, 4_000, 60, 999_000)).toBe(56_000);
+	});
+
+	it("refuses a file no longer than the window onto it", () => {
+		expect(slipAudioOffsetMs(0, 60_000, 60, 5_000)).toBeNull();
+		expect(slipAudioOffsetMs(0, 90_000, 60, 5_000)).toBeNull();
+	});
+
+	it("refuses an unknown duration", () => {
+		expect(slipAudioOffsetMs(0, 4_000, null, 5_000)).toBeNull();
+		expect(slipAudioOffsetMs(0, 4_000, 0, 5_000)).toBeNull();
+	});
+
+	it("returns whole milliseconds, which is what the schema stores", () => {
+		// `offsetMs` is `z.number().int()`; a fractional slip would fail the parse on
+		// the next save rather than at the gesture.
+		expect(Number.isInteger(slipAudioOffsetMs(0, 4_000, 60, 1234.567) ?? 0)).toBe(true);
 	});
 });

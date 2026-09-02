@@ -33,7 +33,12 @@ import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
-import { collapseTracksToPills, packAudioTrackRows } from "@/lib/ai-edition/document/audioTracks";
+import {
+	audioGhostExtent,
+	collapseTracksToPills,
+	packAudioTrackRows,
+	slipAudioOffsetMs,
+} from "@/lib/ai-edition/document/audioTracks";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutAudioTrack, AxcutClip } from "@/lib/ai-edition/schema";
@@ -376,6 +381,7 @@ const AudioLanePill = memo(function AudioLanePill({
 	onSelect,
 	label,
 	outputGain,
+	ghost,
 }: {
 	track: AxcutAudioTrack;
 	url: string | undefined;
@@ -401,69 +407,106 @@ const AudioLanePill = memo(function AudioLanePill({
 	/** Linear project output gain, applied on top of the track gain — the mixer
 	 *  applies both, so the bars must too or they under-read the exported level. */
 	outputGain: number;
+	/** Where the rest of the file sits around the pill, as percentages of the canvas
+	 *  and the source window it covers. Absent when there is nothing to show. */
+	ghost?: {
+		leftPct: number;
+		widthPct: number;
+		sourceStartSec: number;
+		sourceEndSec: number;
+	} | null;
 }) {
 	const duration = assetDurationSec ?? track.durationSec;
 	return (
-		<div
-			role="button"
-			tabIndex={0}
-			className={`${styles.lanePill} ${styles.laneAudio}${
-				selected ? ` ${styles.lanePillSel}` : ""
-			}`}
-			style={{
-				left: `${leftPct}%`,
-				width: `${widthPct}%`,
-				minWidth: 3,
-				top: AUDIO_LANE_PAD_PX + row * rowHeight,
-				height: AUDIO_ROW_HEIGHT_PX,
-			}}
-			// Body drag moves the track; it also selects and stops the .tlTracks scrub.
-			onPointerDown={(e) => onStartDrag(e, track, "move")}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					e.preventDefault();
-					onSelect(track.id);
-				}
-			}}
-			title={label}
-		>
-			<span
-				className={styles.lanePillHandle}
-				style={{ left: 0 }}
-				onPointerDown={(e) => onStartDrag(e, track, "l")}
-			/>
-			<ClipWaveform
-				videoUrl={url}
-				assetDurationSec={duration}
-				sourceStartSec={sourceStartSec}
-				sourceEndSec={sourceEndSec}
-				// Track gain AND the project output gain — `finish_audio` applies both and
-				// clamps, so scaling by the track gain alone under-read a boosted output.
-				gain={audioGainScalar(track.gainDb) * outputGain}
-			/>
-			{/* Where the file starts over, so a looping bed reads as one deliberate
+		<>
+			{/* The rest of the tape, dimmed and unclickable, behind the pill — so the pill
+			    reads as a window onto it and an edge drag shows what is still available on
+			    each side before it hits the stop. Same height and row as the pill: a ghost
+			    that does not line up reads as a separate object sitting behind it. */}
+			{ghost ? (
+				<div
+					aria-hidden
+					className={styles.lanePillGhost}
+					style={{
+						left: `${ghost.leftPct}%`,
+						width: `${ghost.widthPct}%`,
+						top: AUDIO_LANE_PAD_PX + row * rowHeight,
+						height: AUDIO_ROW_HEIGHT_PX,
+					}}
+				>
+					<ClipWaveform
+						videoUrl={url}
+						assetDurationSec={duration}
+						sourceStartSec={ghost.sourceStartSec}
+						sourceEndSec={ghost.sourceEndSec}
+						gain={audioGainScalar(track.gainDb) * outputGain}
+					/>
+				</div>
+			) : null}
+			<div
+				role="button"
+				tabIndex={0}
+				className={`${styles.lanePill} ${styles.laneAudio}${
+					selected ? ` ${styles.lanePillSel}` : ""
+				}`}
+				style={{
+					left: `${leftPct}%`,
+					width: `${widthPct}%`,
+					minWidth: 3,
+					top: AUDIO_LANE_PAD_PX + row * rowHeight,
+					height: AUDIO_ROW_HEIGHT_PX,
+				}}
+				// Body drag moves the track; it also selects and stops the .tlTracks scrub.
+				onPointerDown={(e) => onStartDrag(e, track, "move")}
+				onKeyDown={(e) => {
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						onSelect(track.id);
+					}
+				}}
+				title={label}
+			>
+				<span
+					className={styles.lanePillHandle}
+					style={{ left: 0 }}
+					onPointerDown={(e) => onStartDrag(e, track, "l")}
+				/>
+				<ClipWaveform
+					videoUrl={url}
+					assetDurationSec={duration}
+					sourceStartSec={sourceStartSec}
+					sourceEndSec={sourceEndSec}
+					// Track gain AND the project output gain — `finish_audio` applies both and
+					// clamps, so scaling by the track gain alone under-read a boosted output.
+					gain={audioGainScalar(track.gainDb) * outputGain}
+				/>
+				{/* Where the file starts over, so a looping bed reads as one deliberate
 			    repeat rather than a mystery. Only drawn when the pill actually
 			    outruns its source — otherwise there is nothing to repeat. */}
-			{track.loop && loopWindowSec > 0
-				? Array.from({ length: Math.min(200, Math.ceil(spanSec / loopWindowSec) - 1) }, (_, i) => (
-						<span
-							key={`loop-${i + 1}`}
-							data-testid="audio-loop-mark"
-							className={styles.laneLoopMark}
-							style={{ left: `${(((i + 1) * loopWindowSec) / spanSec) * 100}%` }}
-						/>
-					))
-				: null}
-			<span className={styles.laneAudioLabel}>
-				<Music size={11} />
-				{label}
-			</span>
-			<span
-				className={styles.lanePillHandle}
-				style={{ right: 0 }}
-				onPointerDown={(e) => onStartDrag(e, track, "r")}
-			/>
-		</div>
+				{track.loop && loopWindowSec > 0
+					? Array.from(
+							{ length: Math.min(200, Math.ceil(spanSec / loopWindowSec) - 1) },
+							(_, i) => (
+								<span
+									key={`loop-${i + 1}`}
+									data-testid="audio-loop-mark"
+									className={styles.laneLoopMark}
+									style={{ left: `${(((i + 1) * loopWindowSec) / spanSec) * 100}%` }}
+								/>
+							),
+						)
+					: null}
+				<span className={styles.laneAudioLabel}>
+					<Music size={11} />
+					{label}
+				</span>
+				<span
+					className={styles.lanePillHandle}
+					style={{ right: 0 }}
+					onPointerDown={(e) => onStartDrag(e, track, "r")}
+				/>
+			</div>
+		</>
 	);
 });
 
@@ -936,6 +979,16 @@ export function V4Timeline({
 		trimEnd: number;
 	} | null>(null);
 	const audioDragRef = useRef<typeof audioDrag>(null);
+	/** `in -> out / length` pinned to the pointer while an audio edge is pulled or the
+	 *  media is slipped under the pill. Rendered at the component root: the lane sits
+	 *  inside the zoomed canvas transform, which would scale a chip placed in it. */
+	const [audioDragTip, setAudioDragTip] = useState<{
+		x: number;
+		y: number;
+		inSec: number;
+		outSec: number;
+		durationSec: number;
+	} | null>(null);
 	// The user-visible tracks and their lane rows. Packed from the STORED spans,
 	// not the live drag geometry: a pill that changed rows halfway through a drag
 	// would jump out from under the pointer.
@@ -969,6 +1022,17 @@ export function V4Timeline({
 			const origStart = track.startMs / 1000;
 			const origTrimStart = track.offsetMs / 1000;
 			const origTrimEnd = origTrimStart + spanSec;
+			// Alt inside the pill slips it: the span stays put and the media slides under
+			// it. On the BODY only — the edges keep their crop semantics.
+			//
+			// An edge drag sets the in-point at TIMELINE scale, which is unusable once the
+			// file is much longer than the pill: reaching 3:00 inside a four-minute bed on
+			// a five-second view means dragging three minutes of ruler. So the slip rate is
+			// derived from the FILE — one viewport width traverses all of it — floored at
+			// the timeline's own scale so a slip is never slower than moving the pill,
+			// which would be its own surprise on a file shorter than the view.
+			const slipping = mode === "move" && e.altKey && sourceLen > 0;
+			const slipSecPerPx = Math.max(total / r.width, sourceLen / Math.max(1, r.width * navSpan));
 			// A looping track may be pulled out PAST the end of its file — that is
 			// the whole point of looping, and capping at the source length is what
 			// made the loop toggle do nothing: the span could never exceed the
@@ -1002,6 +1066,33 @@ export function V4Timeline({
 				return best;
 			};
 			const move = (ev: PointerEvent) => {
+				if (slipping) {
+					const nextOffsetMs = slipAudioOffsetMs(
+						track.offsetMs,
+						track.endMs - track.startMs,
+						sourceLen,
+						(ev.clientX - startX) * slipSecPerPx * 1000,
+					);
+					if (nextOffsetMs == null) return;
+					const nextTrimStart = nextOffsetMs / 1000;
+					setAudioDragTip({
+						x: ev.clientX,
+						y: ev.clientY,
+						inSec: nextTrimStart,
+						outSec: nextTrimStart + spanSec,
+						durationSec: sourceLen,
+					});
+					// The span does not move; only the window onto the file does.
+					const slipState = {
+						id: track.id,
+						start: origStart,
+						trimStart: nextTrimStart,
+						trimEnd: nextTrimStart + spanSec,
+					};
+					audioDragRef.current = slipState;
+					setAudioDrag(slipState);
+					return;
+				}
 				const dxSec = ((ev.clientX - startX) / r.width) * total;
 				let ns = origStart;
 				let nts = origTrimStart;
@@ -1034,12 +1125,25 @@ export function V4Timeline({
 						origTrimStart + Math.max(0, total - origStart),
 					);
 				}
+				// The readout answers "where am I in the file", which is the one thing the
+				// pill cannot show: its edges stop at the content, but nothing said where
+				// that content was.
+				if (mode !== "move") {
+					setAudioDragTip({
+						x: ev.clientX,
+						y: ev.clientY,
+						inSec: nts,
+						outSec: nte,
+						durationSec: sourceLen,
+					});
+				}
 				const next = { id: track.id, start: ns, trimStart: nts, trimEnd: nte };
 				audioDragRef.current = next;
 				setAudioDrag(next);
 			};
 			const up = () => {
 				setSnapPct(null);
+				setAudioDragTip(null);
 				window.removeEventListener("pointermove", move);
 				window.removeEventListener("pointerup", up);
 				const fin = audioDragRef.current;
@@ -1067,7 +1171,10 @@ export function V4Timeline({
 			window.addEventListener("pointermove", move);
 			window.addEventListener("pointerup", up);
 		},
-		[tl, total, clips, pxPerSec],
+		// navSpan: the slip rate is derived from the VISIBLE width, so a zoom that
+		// leaves `total` alone still changes it. Left out, the rate froze at whatever
+		// the zoom was when the callback was last built.
+		[tl, total, clips, pxPerSec, navSpan],
 	);
 
 	const startNavDrag = useCallback(
@@ -1946,6 +2053,24 @@ export function V4Timeline({
 													onSelect={tl.selectAudioTrack}
 													label={track.label || asset?.label || ts("audioTrack.defaultLabel")}
 													outputGain={audioGainScalar(settings.audioGainDb)}
+													ghost={((g) =>
+														g
+															? {
+																	leftPct: pctOf(g.startT),
+																	widthPct: pctOf(g.endT - g.startT),
+																	sourceStartSec: g.sourceStartSec,
+																	sourceEndSec: g.sourceEndSec,
+																}
+															: null)(
+														audioGhostExtent(
+															trimStart,
+															widthSec,
+															duration,
+															start,
+															start + widthSec,
+															total,
+														),
+													)}
 												/>
 											);
 										})
@@ -2117,6 +2242,16 @@ export function V4Timeline({
 					>
 						<span />
 					</div>
+				</div>
+			) : null}
+			{/* The crop readout, at the component ROOT rather than in the lane: the lane
+			    sits inside the zoomed canvas transform, which would scale a chip placed
+			    there. `in -> out / length` — 0:00.0 and out = length are the boundary
+			    states, self-evident without copy, which is why this adds no locale key. */}
+			{audioDragTip ? (
+				<div className={styles.tlDragTip} style={{ left: audioDragTip.x, top: audioDragTip.y }}>
+					{formatSec(audioDragTip.inSec)} → {formatSec(audioDragTip.outSec)}
+					{audioDragTip.durationSec > 0 ? ` / ${formatSec(audioDragTip.durationSec)}` : ""}
 				</div>
 			) : null}
 		</div>
