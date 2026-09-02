@@ -130,13 +130,18 @@ impl CursorTrack {
             if s["interactionType"].as_str() == Some("click") {
                 clicks.push(t);
             }
-            // Seules les TRANSITIONS sont retenues — voir `types`. Les échantillons sans
-            // `cursorType` (macOS ne le tague pas toujours) n'interrompent pas l'état courant :
-            // c'est une absence d'information, pas un retour à la flèche.
-            if let Some(ct) = s["cursorType"].as_str() {
-                if types.last().map(|(_, prev)| prev.as_str()) != Some(ct) {
-                    types.push((t, ct.to_string()));
-                }
+            // Seules les TRANSITIONS sont retenues — voir `types`. Le helper
+            // macOS rend nil hors texte/pointeur pour que le rendu retombe sur
+            // la flèche. Le sidecar stocke ça en JSON null ou omet la clé.
+            // Ignorer ces échantillons gardait le dernier type sémantique
+            // (`pointer`/`text`) : un thème restait collé après le retour à la
+            // flèche. Null / absence = reset vers `arrow`.
+            let ct = match s.get("cursorType") {
+                Some(v) => v.as_str().filter(|label| !label.is_empty()).unwrap_or("arrow"),
+                None => "arrow",
+            };
+            if types.last().map(|(_, prev)| prev.as_str()) != Some(ct) {
+                types.push((t, ct.to_string()));
             }
         }
         samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -290,5 +295,46 @@ mod tests {
         let smoothed = track.smoothed(0.4);
         assert_eq!(smoothed.type_at(0.1), Some("arrow"));
         assert_eq!(smoothed.type_at(0.7), Some("text"));
+    }
+
+    /// JSON null et une clé `cursorType` absente resetent vers la flèche,
+    /// au lieu de garder le dernier `pointer`/`text`.
+    #[test]
+    fn null_cursor_type_resets_to_arrow() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "openscreen-cursor-null-reset-{}-{}.json",
+            std::process::id(),
+            unique
+        ));
+        std::fs::write(
+            &path,
+            r#"{"samples":[
+                {"timeMs":0,"cx":0.1,"cy":0.1,"cursorType":"pointer"},
+                {"timeMs":100,"cx":0.2,"cy":0.2,"cursorType":null},
+                {"timeMs":200,"cx":0.3,"cy":0.3},
+                {"timeMs":300,"cx":0.4,"cy":0.4,"cursorType":"pointer"}
+            ]}"#,
+        )
+        .expect("write temp sidecar");
+        let path_str = path.to_str().expect("utf-8 temp path");
+        let track = CursorTrack::load(path_str, 0.0, 1.0).expect("load sidecar");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(track.type_at(0.00), Some("pointer"));
+        assert_eq!(
+            track.type_at(0.10),
+            Some("arrow"),
+            "JSON null must reset to arrow"
+        );
+        assert_eq!(
+            track.type_at(0.20),
+            Some("arrow"),
+            "omitted cursorType must reset to arrow"
+        );
+        assert_eq!(track.type_at(0.30), Some("pointer"));
     }
 }

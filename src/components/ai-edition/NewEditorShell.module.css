@@ -1159,6 +1159,12 @@
 	transition: border-color 150ms ease, box-shadow 150ms ease;
 	color: var(--muted);
 }
+.cursorCellPreviews {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+}
 .cursorCell:hover { border-color: var(--border-hi); color: var(--fg-2); }
 .cursorCell:disabled { opacity: 0.5; cursor: not-allowed; }
 .cursorCell:disabled:hover { border-color: var(--border); color: var(--muted); }

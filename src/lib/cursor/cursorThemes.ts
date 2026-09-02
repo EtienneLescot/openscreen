@@ -460,6 +460,25 @@ export const CURSOR_THEME_IDS: ReadonlySet<string> = new Set([
 	...CURSOR_THEMES.map((theme) => theme.id),
 ]);
 
+/**
+ * Paths the theme picker should show. `pointer` is set only when that artwork
+ * differs from `arrow`, so a pack like Hello Kitty / Watermelon is not previewed
+ * as arrow-only.
+ */
+export function themePickerPreviewAssets(theme: CursorTheme | null): {
+	arrow: string;
+	pointer: string | null;
+} {
+	if (!theme) {
+		const arrow = DEFAULT_CURSOR_SPRITES.arrow.assetPath;
+		const pointer = DEFAULT_CURSOR_SPRITES.pointer.assetPath;
+		return { arrow, pointer: pointer !== arrow ? pointer : null };
+	}
+	const arrow = theme.assets.arrow?.assetPath ?? theme.assets.pointer?.assetPath ?? "";
+	const pointer = theme.assets.pointer?.assetPath ?? null;
+	return { arrow, pointer: pointer && pointer !== arrow ? pointer : null };
+}
+
 /** Returns the theme for `id`, or null for the default / unknown ids. */
 export function getCursorTheme(id: string | null | undefined): CursorTheme | null {
 	if (!id || id === DEFAULT_CURSOR_THEME_ID) {

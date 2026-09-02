@@ -67,7 +67,11 @@ import type { TranscriptGateReason } from "@/lib/ai-edition/transcription/status
 import { getAssetPath } from "@/lib/assetPath";
 import { resolveWebcamLayoutPreset, supportsWebcamReactiveZoom } from "@/lib/compositeLayout";
 import { supportsCursorClickEffects } from "@/lib/cursor/cursorCapabilities";
-import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
+import {
+	CURSOR_THEMES,
+	DEFAULT_CURSOR_THEME_ID,
+	themePickerPreviewAssets,
+} from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
 import {
 	classifyWallpaper,
@@ -2321,22 +2325,25 @@ export function CursorPane() {
 	// handlers below push diffs live. Sizes are sent as direct scales (1 = fixture default).
 	// Synchro initiale : cf. NativeCompositorOverlay (`pushAllNativeParams`).
 
-	// Built-in "Default" plus each bundled theme. Thumbnails use the theme's
-	// arrow asset; the persisted value is the theme id. Same shape as the
-	// legacy SettingsPanel picker.
+	// Built-in "Default" plus each bundled theme. When arrow and pointer art
+	// differ, both sprites are shown so a pack is not previewed as arrow-only.
 	const cursorThemeOptions = useMemo(
 		() => [
 			{
 				id: DEFAULT_CURSOR_THEME_ID,
 				name: ts("cursor.themeDefault"),
-				previewUrl: defaultCursorPreviewUrl,
+				previewUrls: [defaultCursorPreviewUrl],
 			},
 			...CURSOR_THEMES.map((theme) => {
-				const previewPath = (theme.assets.arrow ?? theme.assets.pointer)?.assetPath;
+				const preview = themePickerPreviewAssets(theme);
+				const urls = [
+					preview.arrow ? safeAssetUrl(preview.arrow) : defaultCursorPreviewUrl,
+					...(preview.pointer ? [safeAssetUrl(preview.pointer)] : []),
+				];
 				return {
 					id: theme.id,
 					name: theme.name,
-					previewUrl: previewPath ? safeAssetUrl(previewPath) : defaultCursorPreviewUrl,
+					previewUrls: urls,
 				};
 			}),
 		],
@@ -2385,14 +2392,19 @@ export function CursorPane() {
 							disabled={!hasDocument}
 							onClick={() => void set({ cursor: { theme: option.id } })}
 						>
-							<img
-								src={option.previewUrl}
-								alt=""
-								width={20}
-								height={20}
-								draggable={false}
-								style={{ objectFit: "contain", pointerEvents: "none" }}
-							/>
+							<span className={styles.cursorCellPreviews}>
+								{option.previewUrls.map((url) => (
+									<img
+										key={url}
+										src={url}
+										alt=""
+										width={option.previewUrls.length > 1 ? 14 : 20}
+										height={option.previewUrls.length > 1 ? 14 : 20}
+										draggable={false}
+										style={{ objectFit: "contain", pointerEvents: "none" }}
+									/>
+								))}
+							</span>
 						</button>
 					);
 				})}
