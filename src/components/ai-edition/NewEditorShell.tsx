@@ -5,6 +5,7 @@ import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { useEditorDialogActions } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
+import { createId } from "@/lib/ai-edition/document/ids";
 import {
 	migrateProjectDataToAxcutDocument,
 	migrateRawDocumentToCurrent,
@@ -33,6 +34,10 @@ import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTi
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { newRegionDurationSec } from "@/lib/ai-edition/timeline/newRegionDuration";
 import { firstTimelineBusyView } from "@/lib/ai-edition/transcription/status";
+import {
+	dropTrimPillsByIds,
+	ventilateTimelineSpanToTrims,
+} from "@/lib/ai-edition/timeline/trim-mapping";
 import { matchesShortcut } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
@@ -49,7 +54,6 @@ import {
 	type UnsavedChoice,
 } from "./Modals";
 import { Preview } from "./Preview";
-import type { TrimTarget } from "./RightPanes";
 import { importPendingRecording } from "./recordingImport";
 import { AddAudioLayerDialog } from "./v4/AddAudioLayerDialog";
 import v4 from "./v4/EditorShellV4.module.css";
@@ -203,7 +207,11 @@ export function NewEditorShell() {
 	// don't race each other's save and overwrite one another in the
 	// store. The hook reads the doc inside the chain (after awaiting the
 	// previous save) — see its source for the race this fixes.
-	const { apply: applyTimelineOp, enqueue: enqueueTimelineWrite } = useSequentialTimelineOps({
+	// Only `enqueue` now: the two trim handlers were the last callers of `apply`, and both
+	// read the document inside the chain so a cut cannot be overwritten by a word edit
+	// landing between the read and the save. The `add_trim_range` / `remove_trim_range` ops
+	// stay for the agent, which addresses clips rather than moments.
+	const { enqueue: enqueueTimelineWrite } = useSequentialTimelineOps({
 		fallbackDocument: document,
 		saveDocument,
 	});
@@ -598,37 +606,71 @@ export function NewEditorShell() {
 	// axcut's `queueAddTrimRange` / `queueRemoveTrimRange` callbacks in
 	// apps/web/src/App.tsx. The serialised save + inside-the-chain doc
 	// read is owned by `useSequentialTimelineOps` above.
-	const handleAddTrimRange = useCallback(
-		(target: TrimTarget, startSec: number, endSec: number, reason: string) => {
-			// `clipId` is what keeps the cut on the block the user typed in: with two clips
-			// over the same media, an asset-only trim showed up on both (see `trimAppliesToClip`).
-			void applyTimelineOp(
-				{
-					type: "add_trim_range",
-					assetId: target.assetId,
-					clipId: target.clipId,
-					startSec,
-					endSec,
+	// transcript-pane → a cut, authored as a stretch of the RAW ruler (issue #560).
+	//
+	// The pane used to hand over the asset and clip the words belonged TO, which is how a
+	// cut made on the voiceover lane came to be anchored on an audio fragment: it removed
+	// nothing from playback or the export while the word turned red. A cut is a moment of
+	// the programme, so the clips that carry it are resolved HERE, from the clips actually
+	// under the span — `ventilateTimelineSpanToTrims`, the same primitive a zoom straddling
+	// a boundary uses, so one gesture can become several rows and stay one pill.
+	//
+	// On `enqueueTimelineWrite`, not `applyTimelineOp`'s convenience or `tl.setTrimEntries`:
+	// the latter reads `useProjectStore.getState().document` unqueued, so correcting a word
+	// and immediately cutting the next one would let the word edit overwrite the cut. That
+	// is exactly the failure this chain exists to prevent.
+	const handleTrimTimelineSpan = useCallback(
+		(startSec: number, endSec: number, reason: string) => {
+			void enqueueTimelineWrite(async () => {
+				const doc = useProjectStore.getState().document;
+				if (!doc) return;
+				const ranges = ventilateTimelineSpanToTrims(startSec, endSec, doc.timeline.clips);
+				if (ranges.length === 0) {
+					// No nearest-clip fallback. A span over a gap, or past the last clip, names
+					// no film — cutting the closest thing instead would remove something the
+					// user never pointed at.
+					toast.error(te("errors.trimNoFilm"));
+					return;
+				}
+				const rows = ranges.map((range) => ({
+					id: createId("trim"),
+					assetId: range.assetId,
+					clipId: range.clipId,
+					startSec: range.sourceStartSec,
+					endSec: range.sourceEndSec,
 					reason,
-				},
-				{ history: true },
-			);
+					origin: "user" as const,
+				}));
+				await saveDocument(
+					{
+						...doc,
+						timeline: { ...doc.timeline, trimRanges: [...doc.timeline.trimRanges, ...rows] },
+					},
+					{ history: true },
+				);
+			});
 		},
-		[applyTimelineOp],
+		[enqueueTimelineWrite, saveDocument, te],
 	);
 
-	const handleRemoveTrimRange = useCallback(
-		(trimId: string) => {
-			void applyTimelineOp(
-				{
-					type: "remove_trim_range",
-					trimId,
-					reason: "Restored from transcript pane.",
-				},
-				{ history: true },
-			);
+	// Every row of the pill at once: a cut ventilated across a clip boundary is several
+	// rows and one pill, and `dropTrimPillsByIds` resolves the rest of the group from any
+	// member. Dropping half would leave the word still cut with nothing on screen to say so.
+	const handleRemoveTrimRanges = useCallback(
+		(trimIds: string[]) => {
+			if (trimIds.length === 0) return;
+			void enqueueTimelineWrite(async () => {
+				const doc = useProjectStore.getState().document;
+				if (!doc) return;
+				const next = dropTrimPillsByIds(doc.timeline.trimRanges, doc.timeline.clips, trimIds);
+				if (next.length === doc.timeline.trimRanges.length) return;
+				await saveDocument(
+					{ ...doc, timeline: { ...doc.timeline, trimRanges: next } },
+					{ history: true },
+				);
+			});
 		},
-		[applyTimelineOp],
+		[enqueueTimelineWrite, saveDocument],
 	);
 
 	// transcript-pane → the word's own text. Unlike Backspace (which writes a trimRange and
@@ -1370,8 +1412,8 @@ export function NewEditorShell() {
 		transcriptions,
 		busyView: timelineBusyView,
 		onSeek: handleSeek,
-		onAddTrimRange: handleAddTrimRange,
-		onRemoveTrimRange: handleRemoveTrimRange,
+		onTrimTimelineSpan: handleTrimTimelineSpan,
+		onRemoveTrimRanges: handleRemoveTrimRanges,
 		onSetWordText: handleSetWordText,
 		onInsertWord: handleInsertWord,
 		onRemoveWords: handleRemoveWords,

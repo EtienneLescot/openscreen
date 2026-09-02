@@ -65,8 +65,8 @@ function renderPane(words: AxcutWord[] = WORDS, busyAssetIds: string[] = []) {
 				trimRanges={[]}
 				busyAssetIds={busyAssetIds}
 				onSeek={vi.fn()}
-				onAddTrimRange={onAddTrimRange}
-				onRemoveTrimRange={vi.fn()}
+				onTrimTimelineSpan={onAddTrimRange}
+				onRemoveTrimRanges={vi.fn()}
 				onSetWordText={vi.fn()}
 				onInsertWord={onInsertWord}
 				onRemoveWords={onRemoveWords}

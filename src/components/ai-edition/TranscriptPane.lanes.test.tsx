@@ -100,8 +100,8 @@ function mount(audioTracks: AxcutAudioTrack[]) {
 				trimRanges={[]}
 				busyAssetIds={[]}
 				onSeek={vi.fn()}
-				onAddTrimRange={vi.fn()}
-				onRemoveTrimRange={vi.fn()}
+				onTrimTimelineSpan={vi.fn()}
+				onRemoveTrimRanges={vi.fn()}
 				onTranscribe={vi.fn()}
 				canTranscribe
 				isTranscribing={false}

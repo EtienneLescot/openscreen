@@ -68,6 +68,8 @@ import {
 	findCueWordId,
 	isInsertedWord,
 	isSilenceWord,
+	placementRawExtent,
+	placementRawSec,
 	type TranscriptLane,
 	type TrimRun,
 	voiceoverPlacements,
@@ -689,14 +691,11 @@ export function WallpaperPicker({
 	);
 }
 
-/** Which clip a transcript cut lands on. The clip id is what makes the cut land on ONE
- *  block: two clips over the same media share an asset and a source range, so an
- *  asset-only target had the trim show up on both of them (and on the wrong one in the
- *  ruler). See `trimAppliesToClip`. */
-export interface TrimTarget {
-	assetId: string;
-	clipId: string;
-}
+// No `TrimTarget`. A cut used to name the thing it belonged to — an asset and a clip —
+// which is how a cut authored from the voiceover lane came to be anchored on an audio
+// FRAGMENT, where it removed precisely nothing while the word turned red (issue #560).
+// A cut names a stretch of the RAW ruler; which clips carry it is worked out at the write
+// site, from the clips actually under it.
 
 // ─── Transcript ────────────────────────────────────────────────────
 // Aggregated transcript view: one contentEditable region per clip on the
@@ -805,8 +804,8 @@ export function TranscriptPane({
 	transcriptions,
 	busyView,
 	onSeek,
-	onAddTrimRange,
-	onRemoveTrimRange,
+	onTrimTimelineSpan,
+	onRemoveTrimRanges,
 	onSetWordText,
 	onInsertWord,
 	onRemoveWords,
@@ -835,8 +834,8 @@ export function TranscriptPane({
 	 *  the gate keeps enabled. */
 	busyView?: AssetTranscriptionView;
 	onSeek: (sec: number) => void;
-	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
-	onRemoveTrimRange: (trimId: string) => void;
+	onTrimTimelineSpan: (startSec: number, endSec: number, reason: string) => void;
+	onRemoveTrimRanges: (trimIds: string[]) => void;
 	/** Rewrite ONE word's text. Takes the bare `AxcutWord.id`, never the clip-scoped
 	 *  `ClipWord.id`: the transcript belongs to the asset, so a correction lands on the
 	 *  media and shows on every clip that plays it — which is the point. */
@@ -993,6 +992,7 @@ export function TranscriptPane({
 			{sections.map((section, idx) => (
 				<TranscriptClipBlock
 					key={section.clip.id}
+					lane={activeLane}
 					index={idx}
 					section={section}
 					busy={busyAssetIds.includes(section.clip.assetId)}
@@ -1002,8 +1002,8 @@ export function TranscriptPane({
 					}
 					cueWordId={cueWordId}
 					onSeek={onSeek}
-					onAddTrimRange={onAddTrimRange}
-					onRemoveTrimRange={onRemoveTrimRange}
+					onTrimTimelineSpan={onTrimTimelineSpan}
+					onRemoveTrimRanges={onRemoveTrimRanges}
 					onSetWordText={onSetWordText}
 					onInsertWord={onInsertWord}
 					onRemoveWords={onRemoveWords}
@@ -1017,7 +1017,7 @@ export function TranscriptPane({
 // range) and a flowing word stream. The stream contains every transcript
 // word inside the clip's source range, color-coded by whether the word
 // is inside any trimRange. Backspace/Delete adds a new trimRange via
-// onAddTrimRange; hover-bin on a skip run removes it via onRemoveTrimRange.
+// onTrimTimelineSpan; hover-bin on a skip run removes it via onRemoveTrimRanges.
 //
 // `memo` matters here: this renders one DOM node per transcript word, and its
 // parent now re-renders on every playhead tick (~60×/s during playback). The only
@@ -1030,10 +1030,11 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	section,
 	busy,
 	busyLabel,
+	lane,
 	cueWordId,
 	onSeek,
-	onAddTrimRange,
-	onRemoveTrimRange,
+	onTrimTimelineSpan,
+	onRemoveTrimRanges,
 	onSetWordText,
 	onInsertWord,
 	onRemoveWords,
@@ -1042,10 +1043,13 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	section: ClipSection;
 	busy: boolean;
 	busyLabel?: string;
+	/** Which lane the block belongs to. Only the insert gesture cares: a pause is a held
+	 *  CLIP frame, and a voiceover placement has no clip to hold. */
+	lane: TranscriptLane;
 	cueWordId: string | null;
 	onSeek: (sec: number) => void;
-	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
-	onRemoveTrimRange: (trimId: string) => void;
+	onTrimTimelineSpan: (startSec: number, endSec: number, reason: string) => void;
+	onRemoveTrimRanges: (trimIds: string[]) => void;
 	onSetWordText: (assetId: string, wordId: string, text: string) => void;
 	onInsertWord: (assetId: string, anchorWordId: string, side: InsertSide, text: string) => void;
 	onRemoveWords: (assetId: string, wordIds: string[]) => void;
@@ -1054,9 +1058,21 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	const { clip, asset, words } = section;
 	// Memoised: `TranscriptWord` renders once per word, so a fresh object literal here
 	// would break referential equality for the whole stream on every parent render.
-	const trimTarget = useMemo<TrimTarget>(
-		() => ({ assetId: clip.assetId, clipId: clip.id }),
-		[clip.assetId, clip.id],
+	// A cut is authored in RAW seconds, CLAMPED to this placement's own extent.
+	// `wordsInRange` admits a word by OVERLAP and consecutive fragments have touching
+	// source windows, so a word straddling an edge would otherwise produce a span reaching
+	// past this placement — and `ventilateTimelineSpanToTrims` walks every clip a span
+	// touches, so the overspill would cut the head of a neighbouring clip that has nothing
+	// to do with the word the user deleted.
+	const toRawSpan = useCallback(
+		(startSec: number, endSec: number): [number, number] => {
+			const extent = placementRawExtent(clip);
+			const lo = extent?.startSec ?? clip.timelineStartSec;
+			const hi = extent?.endSec ?? Number.POSITIVE_INFINITY;
+			const clamp = (sec: number) => Math.min(Math.max(placementRawSec(clip, sec), lo), hi);
+			return [clamp(startSec), clamp(endSec)];
+		},
+		[clip],
 	);
 	const filename = asset?.label ?? clip.assetId;
 	const sourceRangeLabel =
@@ -1135,26 +1151,24 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			pendingCaretWordIdRef.current = keptRange[0].id;
 			const startSec = Math.min(...keptRange.map((w) => w.word.startSec));
 			const endSec = Math.max(...keptRange.map((w) => w.word.endSec));
-			onAddTrimRange(
-				trimTarget,
-				startSec,
-				endSec,
+			onTrimTimelineSpan(
+				...toRawSpan(startSec, endSec),
 				`Skip ${formatMs(startSec * 1000)}-${formatMs(endSec * 1000)} from ${clip.assetId}.`,
 			);
 		},
-		[busy, clip.assetId, trimTarget, onAddTrimRange, onRemoveWords],
+		[busy, clip.assetId, toRawSpan, onTrimTimelineSpan, onRemoveWords],
 	);
 
 	const removeTrimRun = useCallback(
 		(run: TrimRun) => {
 			// An empty set is a gap between clips: removed from the film, but by nothing
-			// there is a pill for. Step 4 of #560 replaces this with a call that drops every
-			// row of the pill at once; today's op takes one id, so overlapping cuts still
-			// need a second click, exactly as before.
+			// there is a pill for. Otherwise every row goes at once — a cut ventilated across
+			// a clip boundary is several rows and ONE pill, and dropping half of it would
+			// leave the word still cut with nothing left on screen to say so.
 			if (busy || run.trimIds.length === 0) return;
-			onRemoveTrimRange(run.trimIds[0]);
+			onRemoveTrimRanges(run.trimIds);
 		},
-		[busy, onRemoveTrimRange],
+		[busy, onRemoveTrimRanges],
 	);
 
 	const cutNativeSelection = useCallback(
@@ -1226,6 +1240,14 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			// timeline time (the pause gesture) it is a silent freeze frame. Drop this gate
 			// when TTS lands.
 			if (!import.meta.env.DEV) return;
+			// Not on the voiceover lane. `insertRangeSchema` has no `clipId`, and the pause an
+			// added word buys is a HELD CLIP FRAME (`heldSec` in `resolvePlaybackSegments`) —
+			// a voiceover placement has no clip to hold. Refused with a reason rather than
+			// left to write a record nothing can read.
+			if (lane === "voiceover") {
+				toast.error(ts("transcript.insertRecordingOnly"));
+				return;
+			}
 			if (busy || !seed.trim()) return;
 			const editor = editorRef.current;
 			const selection = globalThis.getSelection();
@@ -1237,7 +1259,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			if (!anchor) return;
 			setInsertion({ ...anchor, draft: seed });
 		},
-		[busy, words],
+		[busy, lane, ts, words],
 	);
 
 	const commitInsertion = useCallback(() => {
@@ -1486,9 +1508,10 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 									cw={cw}
 									isCue={cw.id === cueWordId}
 									editable={!busy}
-									target={trimTarget}
+									assetId={clip.assetId}
+									toRawSpan={toRawSpan}
 									onRestore={removeTrimRun}
-									onAddTrimRange={onAddTrimRange}
+									onTrimTimelineSpan={onTrimTimelineSpan}
 									onSetWordText={onSetWordText}
 									onRemoveWords={onRemoveWords}
 								/>
@@ -1519,15 +1542,16 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 // the two words whose `isCue` actually flipped re-render.
 //
 // This holds because every other prop is referentially stable across a
-// playhead tick: `cw` comes from the memoised `sections`, `target` from a
+// playhead tick: `cw` comes from the memoised `sections`, `assetId` from a
 // `useMemo`, and both callbacks from `useCallback`s that do not depend on time.
 const TranscriptWord = memo(function TranscriptWord({
 	cw,
 	isCue,
 	editable,
-	target,
+	assetId,
+	toRawSpan,
 	onRestore,
-	onAddTrimRange,
+	onTrimTimelineSpan,
 	onSetWordText,
 	onRemoveWords,
 }: {
@@ -1536,9 +1560,11 @@ const TranscriptWord = memo(function TranscriptWord({
 	/** False while this clip's transcript is being regenerated — the words on screen are
 	 *  about to be replaced, so an edit typed into them would be thrown away. */
 	editable: boolean;
-	target: TrimTarget;
+	assetId: string;
+	/** Clamped source→raw for this word's placement — see `toRawSpan` above. */
+	toRawSpan: (startSec: number, endSec: number) => [number, number];
 	onRestore: (run: TrimRun) => void;
-	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
+	onTrimTimelineSpan: (startSec: number, endSec: number, reason: string) => void;
 	onSetWordText: (assetId: string, wordId: string, text: string) => void;
 	onRemoveWords: (assetId: string, wordIds: string[]) => void;
 }) {
@@ -1565,21 +1591,21 @@ const TranscriptWord = memo(function TranscriptWord({
 		const next = (draft ?? "").trim();
 		setDraft(null);
 		if (next === cw.word.text) return;
-		onSetWordText(target.assetId, cw.word.id, next);
-	}, [draft, cw.word.text, cw.word.id, onSetWordText, target.assetId]);
+		onSetWordText(assetId, cw.word.id, next);
+	}, [draft, cw.word.text, cw.word.id, onSetWordText, assetId]);
 
 	const inserted = isInsertedWord(cw.word);
 
 	const removeInserted = useCallback(() => {
-		onRemoveWords(target.assetId, [cw.word.id]);
-	}, [onRemoveWords, target.assetId, cw.word.id]);
+		onRemoveWords(assetId, [cw.word.id]);
+	}, [onRemoveWords, assetId, cw.word.id]);
 
 	const revert = useCallback(() => {
 		if (original === undefined) return;
 		// Writing the original back through the same path is what clears the provenance
 		// pair — there is no separate "unedit" operation that could fall out of step.
-		onSetWordText(target.assetId, cw.word.id, original);
-	}, [original, cw.word.id, onSetWordText, target.assetId]);
+		onSetWordText(assetId, cw.word.id, original);
+	}, [original, cw.word.id, onSetWordText, assetId]);
 
 	if (isSilenceWord(cw.word)) {
 		const durationSec = cw.word.endSec - cw.word.startSec;
@@ -1632,10 +1658,8 @@ const TranscriptWord = memo(function TranscriptWord({
 				aria-label={ts("transcript.trimSilence", { duration })}
 				onClick={(e) => {
 					e.stopPropagation();
-					onAddTrimRange(
-						target,
-						cw.word.startSec,
-						cw.word.endSec,
+					onTrimTimelineSpan(
+						...toRawSpan(cw.word.startSec, cw.word.endSec),
 						`Skip silence ${formatMs(cw.word.startSec * 1000)}-${formatMs(cw.word.endSec * 1000)}.`,
 					);
 				}}

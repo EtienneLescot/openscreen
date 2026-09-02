@@ -77,8 +77,8 @@ function renderPane(onSeek: (sec: number) => void = vi.fn()) {
 				trimRanges={[]}
 				busyAssetIds={[]}
 				onSeek={onSeek}
-				onAddTrimRange={vi.fn()}
-				onRemoveTrimRange={vi.fn()}
+				onTrimTimelineSpan={vi.fn()}
+				onRemoveTrimRanges={vi.fn()}
 				onSetWordText={vi.fn()}
 				onInsertWord={vi.fn()}
 				onRemoveWords={vi.fn()}
