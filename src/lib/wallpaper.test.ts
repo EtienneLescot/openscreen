@@ -4,6 +4,7 @@ import {
 	BackgroundLoadError,
 	classifyWallpaper,
 	DEFAULT_WALLPAPER,
+	DEFAULT_WEBCAM_WALLPAPER,
 	resolveImageWallpaperUrl,
 	UnsafeImagePrefixError,
 	WALLPAPER_COUNT,
@@ -15,8 +16,9 @@ describe("WALLPAPER_PATHS", () => {
 		expect(WALLPAPER_PATHS).toHaveLength(WALLPAPER_COUNT);
 	});
 
-	it("DEFAULT_WALLPAPER is WALLPAPER_PATHS[0]", () => {
-		expect(DEFAULT_WALLPAPER).toBe(WALLPAPER_PATHS[0]);
+	it("uses the orange second wallpaper as the default", () => {
+		expect(DEFAULT_WALLPAPER).toBe(WALLPAPER_PATHS[1]);
+		expect(DEFAULT_WEBCAM_WALLPAPER).toBe(WALLPAPER_PATHS[0]);
 	});
 });
 

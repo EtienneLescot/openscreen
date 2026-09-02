@@ -267,6 +267,6 @@ describe("wallpaper legacy normalization", () => {
 		const normalized = normalizeProjectEditor({
 			wallpaper: "file:///opt/Openscreen/resources/wallpapers/wallpaper99.jpg",
 		});
-		expect(normalized.wallpaper).toBe("/wallpapers/wallpaper1.jpg");
+		expect(normalized.wallpaper).toBe("/wallpapers/wallpaper2.jpg");
 	});
 });

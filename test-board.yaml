@@ -1,0 +1,66 @@
+version: 1
+project:
+  name: "openscreen"
+  test_command: "npm run test"
+  repo: "nanameru/openscreen"
+
+source_roots:
+  - src
+  - electron
+  - tests
+
+cases:
+  - id: TC-002
+    title: "既定背景は画像一覧の上段左から2番目になる"
+    feature: "コンポジション既定背景"
+    scenario: "新規プロジェクトの既定背景"
+    status: done
+    priority: medium
+    type: regression
+    source: [src/lib/wallpaper.ts]
+    test_file: "src/lib/wallpaper.test.ts"
+    issues: [5]
+
+  - id: TC-003
+    title: "legacy editorの新規状態は余白0で始まる"
+    feature: "コンポジション既定余白"
+    scenario: "legacy editorの新規プロジェクト"
+    status: done
+    priority: medium
+    type: regression
+    source: [src/components/video-editor/editorDefaults.ts]
+    test_file: "src/components/video-editor/editorDefaults.test.ts"
+    issues: [5]
+
+  - id: TC-004
+    title: "AI editorの新規状態はオレンジ背景かつ余白0で始まる"
+    feature: "AI editor既定コンポジション"
+    scenario: "legacyEditorが未設定の新規プロジェクト"
+    status: done
+    priority: medium
+    type: regression
+    source: [src/lib/ai-edition/store/editorSettings.ts]
+    test_file: "src/lib/ai-edition/store/editorSettings.test.ts"
+    issues: [5]
+
+  - id: TC-005
+    title: "録画後の自動生成プロジェクトもオレンジ背景かつ余白0になる"
+    feature: "録画後プロジェクトの既定コンポジション"
+    scenario: "録画セッションの自動インポート"
+    status: done
+    priority: medium
+    type: regression
+    source: [src/components/ai-edition/recordingImport.ts]
+    test_file: "src/components/ai-edition/recordingImport.test.ts"
+    issues: [5]
+
+  - id: TC-006
+    title: "AI編集から通常編集へ切り替えても新規既定値を維持する"
+    feature: "エディタ既定コンポジション"
+    scenario: "legacyEditor未保存の新規ドキュメントを通常編集形式へ変換"
+    status: done
+    priority: medium
+    type: regression
+    source: [src/lib/ai-edition/document/migrate.ts]
+    test_file: "src/lib/ai-edition/document/migrate.test.ts"
+    issues: [5]

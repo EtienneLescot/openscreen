@@ -17,7 +17,8 @@ export const WALLPAPER_THUMB_PATHS: readonly string[] = Array.from(
 	(_, i) => `/wallpapers/thumbs/wallpaper${i + 1}.jpg`,
 );
 
-export const DEFAULT_WALLPAPER = WALLPAPER_PATHS[0];
+export const DEFAULT_WALLPAPER = WALLPAPER_PATHS[1];
+export const DEFAULT_WEBCAM_WALLPAPER = WALLPAPER_PATHS[0];
 
 export type WallpaperClassification =
 	| { kind: "color"; value: string }

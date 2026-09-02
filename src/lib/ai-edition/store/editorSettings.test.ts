@@ -37,6 +37,9 @@ const baseDoc: AxcutDocument = {
 describe("getEditorSettings", () => {
 	it("returns the defaults when the document has no legacyEditor", () => {
 		const snap = getEditorSettings(baseDoc);
+		expect(snap.wallpaper).toBe("/wallpapers/wallpaper2.jpg");
+		expect(snap.padding).toBe(0);
+		expect(snap.webcamWallpaper).toBe("/wallpapers/wallpaper1.jpg");
 		expect(snap.wallpaper).toBe(DEFAULT_EDITOR_SETTINGS.wallpaper);
 		expect(snap.aspectRatio).toBe("16:9");
 		expect(snap.shadowIntensity).toBe(DEFAULT_EDITOR_SETTINGS.shadowIntensity);

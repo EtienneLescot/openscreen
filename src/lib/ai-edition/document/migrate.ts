@@ -9,6 +9,7 @@
 // for AI-edition. (schemaVersion 3->4 upgrades for already-existing v3
 // documents are handled transparently inside documentSchema itself.)
 
+import { DEFAULT_EDITOR_LAYOUT_SETTINGS } from "@/components/video-editor/editorDefaults";
 import {
 	type EditorProjectData,
 	PROJECT_VERSION,
@@ -284,12 +285,12 @@ export function migrateAxcutDocumentToProjectData(input: AxcutDocument): EditorP
 	}));
 
 	const editor: ProjectEditorState = {
-		wallpaper: "",
+		wallpaper: DEFAULT_EDITOR_LAYOUT_SETTINGS.wallpaper,
 		shadowIntensity: 0,
 		showBlur: false,
 		motionBlurAmount: 0,
 		borderRadius: 0,
-		padding: 50,
+		padding: DEFAULT_EDITOR_LAYOUT_SETTINGS.padding,
 		cropRegion: { x: 0, y: 0, width: 1, height: 1 } as CropRegion,
 		zoomRegions: [],
 		cameraFullscreenRegions: [],
