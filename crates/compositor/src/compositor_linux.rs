@@ -4377,8 +4377,9 @@ mod tests {
 /// Le chemin logiciel, lui, DOIT le lire. Les deux ne peuvent donc pas partager
 /// un buffer, et l'export choisit lequel il alloue selon l'encodeur retenu.
 ///
-/// La memoire est demandee HOST_VISIBLE pour que la verification puisse la
-/// relire directement ; un chemin purement GPU pourrait s'en passer.
+/// La memoire est demandee HOST_VISIBLE et HOST_COHERENT pour que la
+/// verification puisse la relire directement et sans invalidation ; un chemin
+/// purement GPU pourrait se passer des deux.
 pub struct ExportableStaging {
     /// Vue wgpu, utilisable comme destination de copie. En `Option` UNIQUEMENT
     /// pour pouvoir la relacher explicitement avant la memoire dans `Drop`, cf.
@@ -4478,12 +4479,17 @@ impl Compositor {
 
                 let req = dev.get_buffer_memory_requirements(raw);
                 let props = instance.get_physical_device_memory_properties(phys);
-                // HOST_VISIBLE pour que `read_back` puisse verifier le contenu.
+                // HOST_VISIBLE pour que `read_back` puisse verifier le contenu,
+                // et COHERENT parce qu'il lit SANS invalider : sur une memoire
+                // seulement visible, le mapping peut rendre des octets perimes et
+                // le test passerait ou echouerait selon le cache, pas selon le
+                // code. Exiger les deux est plus simple qu'un
+                // `vkInvalidateMappedMemoryRanges` correct a chaque lecture.
+                let want = vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT;
                 let mt = (0..props.memory_type_count).find(|i| {
                     req.memory_type_bits & (1 << i) != 0
-                        && props.memory_types[*i as usize]
-                            .property_flags
-                            .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+                        && props.memory_types[*i as usize].property_flags.contains(want)
                 })?;
 
                 let mut export = vk::ExportMemoryAllocateInfo::default()
