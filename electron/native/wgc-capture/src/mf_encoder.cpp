@@ -519,13 +519,15 @@ void setAudioFormat(IMFMediaType* type, UINT32 channels, UINT32 sampleRate, UINT
 // anything is built from it, not after.
 bool buildAacOutputType(
     const AudioInputFormat& audioFormat,
+    bool skipAacRateSnap,
     Microsoft::WRL::ComPtr<IMFMediaType>& outputType) {
     if (audioFormat.sampleRate == 0 || audioFormat.channels == 0 || audioFormat.blockAlign == 0) {
         std::cerr << "ERROR: Invalid audio input format" << std::endl;
         return false;
     }
 
-    const AudioInputFormat encoderFormat = makeAacCompatibleAudioFormat(audioFormat);
+    const AudioInputFormat encoderFormat =
+        skipAacRateSnap ? audioFormat : makeAacCompatibleAudioFormat(audioFormat);
     const UINT32 aacBytesPerSecond = 24'000;
 
     if (!succeeded(MFCreateMediaType(&outputType), "MFCreateMediaType(audio output)")) {
@@ -795,7 +797,7 @@ bool MFEncoder::initialize(
         // a construction argument. Null when the recording has no audio, which
         // is both the common case and a documented one for that call.
         Microsoft::WRL::ComPtr<IMFMediaType> audioOutputType;
-        if (audioFormat && !buildAacOutputType(*audioFormat, audioOutputType)) {
+        if (audioFormat && !buildAacOutputType(*audioFormat, options.skipAacRateSnap, audioOutputType)) {
             return false;
         }
 
@@ -859,7 +861,7 @@ bool MFEncoder::initialize(
             }
         }
 
-        if (audioFormat && !configureAudioStream(*audioFormat)) {
+        if (audioFormat && !configureAudioStream(*audioFormat, options)) {
             return false;
         }
 
@@ -946,12 +948,75 @@ bool MFEncoder::initialize(
 // that used to sit between the two -- now happens before the sink writer
 // exists. What is left is the input type, which is the same on both containers
 // and is set on a stream index the caller has already resolved.
-bool MFEncoder::configureAudioStream(const AudioInputFormat& audioFormat) {
+HRESULT probeAacPcmRate(UINT32 sampleRate) {
+    wchar_t dir[MAX_PATH]{};
+    GetTempPathW(MAX_PATH, dir);
+    const std::wstring path = std::wstring(dir) + L"openscreen-wgc-aac-rate-probe-" +
+        std::to_wstring(GetCurrentProcessId()) + L".mp4";
+    DeleteFileW(path.c_str());
+
+    Microsoft::WRL::ComPtr<IMFSinkWriter> writer;
+    HRESULT hr = MFCreateSinkWriterFromURL(path.c_str(), nullptr, nullptr, &writer);
+    if (FAILED(hr)) {
+        DeleteFileW(path.c_str());
+        return hr;
+    }
+
+    Microsoft::WRL::ComPtr<IMFMediaType> outputType;
+    hr = MFCreateMediaType(&outputType);
+    if (FAILED(hr)) {
+        DeleteFileW(path.c_str());
+        return hr;
+    }
+    outputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    outputType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
+    setAudioFormat(outputType.Get(), 2, sampleRate, 16);
+    outputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 24'000);
+    outputType->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
+
+    DWORD streamIndex = 0;
+    hr = writer->AddStream(outputType.Get(), &streamIndex);
+    if (FAILED(hr)) {
+        writer.Reset();
+        DeleteFileW(path.c_str());
+        return hr;
+    }
+
+    Microsoft::WRL::ComPtr<IMFMediaType> inputType;
+    hr = MFCreateMediaType(&inputType);
+    if (FAILED(hr)) {
+        writer.Reset();
+        DeleteFileW(path.c_str());
+        return hr;
+    }
+    inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    inputType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
+    setAudioFormat(inputType.Get(), 2, sampleRate, 16);
+    inputType->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 4);
+    inputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, sampleRate * 4);
+    inputType->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+    hr = writer->SetInputMediaType(streamIndex, inputType.Get(), nullptr);
+    writer.Reset();
+    DeleteFileW(path.c_str());
+    return hr;
+}
+
+bool MFEncoder::configureAudioStream(const AudioInputFormat& audioFormat, const MFEncoderOptions& options) {
     if (!sinkWriter_) {
         return false;
     }
 
-    const AudioInputFormat encoderFormat = makeAacCompatibleAudioFormat(audioFormat);
+    const AudioInputFormat encoderFormat =
+        options.skipAacRateSnap ? audioFormat : makeAacCompatibleAudioFormat(audioFormat);
+
+    if (options.injectAacRateProbe) {
+        const HRESULT probeHr = probeAacPcmRate(encoderFormat.sampleRate);
+        std::cerr << "TEST-ONLY: AAC rate probe sampleRate=" << encoderFormat.sampleRate
+                  << " hr=0x" << std::hex << probeHr << std::dec << std::endl;
+        if (!succeeded(probeHr, "SetInputMediaType(audio)")) {
+            return false;
+        }
+    }
 
     Microsoft::WRL::ComPtr<IMFMediaType> inputType;
     if (!succeeded(MFCreateMediaType(&inputType), "MFCreateMediaType(audio input)")) {

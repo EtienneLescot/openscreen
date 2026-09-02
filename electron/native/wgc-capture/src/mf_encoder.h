@@ -30,6 +30,17 @@ struct AudioInputFormat {
 struct MFEncoderOptions {
     bool preferSoftwareEncoder = false;
     bool injectDefaultSinkWriterFailureOnce = false;
+    // Test-only. Keep the sample rate passed into initialize() instead of
+    // running makeAacCompatibleAudioFormat again. The DISABLE_AAC_RATE_SNAP env
+    // used to change only the JSON log: buildAacOutputType / configureAudioStream
+    // snapped 96 kHz back to 48 kHz before SetInputMediaType, so the fail path
+    // was unreachable.
+    bool skipAacRateSnap = false;
+    // Test-only. Before the production sink writer sees the audio type, run
+    // MFCreateSinkWriterFromURL + SetInputMediaType on the encoder rate. Illegal
+    // AAC rates fail that probe with MF_E_INVALIDMEDIATYPE (0xc00d36b4). Does
+    // not invent the HRESULT — it calls the API.
+    bool injectAacRateProbe = false;
     // A request, never a requirement. Every step of the GPU path degrades to
     // the CPU readback rather than failing the recording, so a machine without
     // a hardware H.264 encoder, without NV12 video-processor output, or with a
@@ -175,7 +186,7 @@ private:
     // built before the sink writer exists (buildAacOutputType in the .cpp),
     // because MFCreateFMPEG4MediaSink takes both output types at construction:
     // a fragmented sink has all its streams before anything can be added to it.
-    bool configureAudioStream(const AudioInputFormat& audioFormat);
+    bool configureAudioStream(const AudioInputFormat& audioFormat, const MFEncoderOptions& options);
     void releaseSinkWriter();
 
     Microsoft::WRL::ComPtr<IMFSinkWriter> sinkWriter_;

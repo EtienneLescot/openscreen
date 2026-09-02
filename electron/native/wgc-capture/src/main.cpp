@@ -810,17 +810,43 @@ int main(int argc, char* argv[]) {
                       << jsonEscape(wideToUtf8(microphoneCapture.selectedDeviceName())) << "\"";
         }
         std::cout << "}" << std::endl;
-        encoderAudioFormat = makeAacCompatibleAudioFormat(*audioFormat);
+        AudioInputFormat sourceForEncoder = *audioFormat;
+        const int forcedAacSourceRate = readEnvInt("OPENSCREEN_WGC_FORCE_AAC_SOURCE_RATE", 0);
+        if (forcedAacSourceRate > 0) {
+            sourceForEncoder.sampleRate = static_cast<UINT32>(forcedAacSourceRate);
+            sourceForEncoder.avgBytesPerSec =
+                sourceForEncoder.sampleRate * sourceForEncoder.blockAlign;
+        }
+        if (readEnvInt("OPENSCREEN_WGC_DISABLE_AAC_RATE_SNAP", 0) == 1) {
+            encoderAudioFormat = sourceForEncoder;
+            encoderAudioFormat.subtype = MFAudioFormat_PCM;
+            encoderAudioFormat.channels = 2;
+            encoderAudioFormat.bitsPerSample = 16;
+            encoderAudioFormat.blockAlign = 4;
+            encoderAudioFormat.avgBytesPerSec = encoderAudioFormat.sampleRate * 4;
+        } else {
+            encoderAudioFormat = makeAacCompatibleAudioFormat(sourceForEncoder);
+        }
+
         std::cout << "{\"event\":\"encoder-audio-format\",\"schemaVersion\":2,\"sampleRate\":"
                   << encoderAudioFormat.sampleRate
                   << ",\"channels\":" << encoderAudioFormat.channels
                   << ",\"bitsPerSample\":" << encoderAudioFormat.bitsPerSample
+                  << ",\"forcedSourceRate\":" << forcedAacSourceRate
+                  << ",\"snapDisabled\":"
+                  << (readEnvInt("OPENSCREEN_WGC_DISABLE_AAC_RATE_SNAP", 0) == 1 ? "true" : "false")
+                  << ",\"aacRateProbe\":"
+                  << (readEnvInt("OPENSCREEN_WGC_TEST_INJECT_AAC_RATE_PROBE", 0) == 1 ? "true"
+                                                                                   : "false")
                   << "}" << std::endl;
     }
 
     MFEncoderOptions encoderOptions{};
     encoderOptions.preferSoftwareEncoder = config.preferSoftwareEncoder;
     encoderOptions.injectDefaultSinkWriterFailureOnce = injectDefaultSinkWriterFailureOnce;
+    encoderOptions.skipAacRateSnap = readEnvInt("OPENSCREEN_WGC_DISABLE_AAC_RATE_SNAP", 0) == 1;
+    encoderOptions.injectAacRateProbe =
+        readEnvInt("OPENSCREEN_WGC_TEST_INJECT_AAC_RATE_PROBE", 0) == 1;
     // OFF by default. The GPU path exists to dodge a Map() that wedges inside
     // the display driver on the machine in #252, and it demonstrably fixed
     // display and window capture there. It also broke recording outright for
