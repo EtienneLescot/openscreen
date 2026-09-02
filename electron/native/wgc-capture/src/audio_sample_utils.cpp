@@ -87,6 +87,21 @@ double readMappedChannel(const BYTE* source, const AudioInputFormat& format, siz
     return readSampleAsDouble(source, format, frameIndex, std::min(targetChannel, format.channels - 1));
 }
 
+UINT32 aacCompatibleSampleRate(UINT32 sampleRate) {
+    constexpr UINT32 kAacSampleRates[] = {
+        8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000,
+    };
+    if (sampleRate == 0) {
+        return 48000;
+    }
+    for (UINT32 rate : kAacSampleRates) {
+        if (sampleRate == rate) {
+            return rate;
+        }
+    }
+    return 48000;
+}
+
 } // namespace
 
 constexpr int64_t HnsPerSecond = 10'000'000;
@@ -100,10 +115,16 @@ bool sameAudioFormatForMixing(const AudioInputFormat& left, const AudioInputForm
            left.avgBytesPerSec == right.avgBytesPerSec;
 }
 
+// Microsoft AAC encoder (MFAudioFormat_AAC) sample rates. WASAPI loopback
+// often reports 96000 or 192000; those are legal PCM mix rates but not AAC
+// input rates, and SetInputMediaType then fails with MF_E_INVALIDMEDIATYPE
+// (0xc00d36b4). Keep legal rates as-is so a working 44100/48000 path is
+// unchanged; snap everything else (including 0) to 48000. The mixer already
+// resamples through convertAudioWithGain when the source rate differs.
 AudioInputFormat makeAacCompatibleAudioFormat(const AudioInputFormat& source) {
     AudioInputFormat format{};
     format.subtype = MFAudioFormat_PCM;
-    format.sampleRate = source.sampleRate > 0 ? source.sampleRate : 48000;
+    format.sampleRate = aacCompatibleSampleRate(source.sampleRate);
     format.channels = 2;
     format.bitsPerSample = 16;
     format.blockAlign = format.channels * (format.bitsPerSample / 8);
