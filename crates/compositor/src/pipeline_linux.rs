@@ -1390,6 +1390,17 @@ impl VaapiEncoder {
         (*me.ctx).time_base = AVRational { num: 1, den: fps };
         (*me.ctx).framerate = AVRational { num: fps, den: 1 };
         (*me.ctx).bit_rate = bit_rate;
+        // MEME INTERVALLE D'IMAGES CLES QUE LE CHEMIN SOFTWARE, et pour la meme
+        // raison : deux secondes est le compromis choisi pour un fichier de
+        // sortie, il n'a pas a dependre de l'encodeur qui se trouve disponible.
+        //
+        // Sans cette ligne le resultat est correct A 60 FPS ET NULLE PART
+        // AILLEURS : `h264_vaapi` a un defaut de 120 frames (mesure), qui vaut
+        // deux secondes a 60 fps par coincidence. A 30 fps ca donnerait quatre
+        // secondes, a 120 fps une seule. Le defaut de `libopenh264` est -1, ce
+        // qui est un autre probleme encore (une seule image cle pour tout le
+        // fichier) traite dans `try_open`.
+        (*me.ctx).gop_size = (fps * 2).max(1);
         // MP4 veut SPS/PPS dans l'extradata, pas repetes devant chaque image
         // cle. Le chemin software le pose depuis toujours (`try_open`) ; l'avoir
         // oublie ici produisait un fichier qui se lit quand meme, parce que le
@@ -1582,6 +1593,8 @@ mod vaapi_tests {
             let mut p = pkt;
             crate::ffi::av_packet_free(&mut p);
         }
+    }
+}
 
 #[cfg(test)]
 mod tests {
