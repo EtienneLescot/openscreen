@@ -2045,6 +2045,119 @@ describe("buildSceneDescription.audioTracks", () => {
 		expect(buildSceneDescription(doc).audioTracks[0]?.trimEndSec).toBe(30);
 	});
 
+	// ─── A cut under a voiceover ────────────────────────────────────────────────
+	// Issue #560. A trim removes the moment it covers; the transcript pane strikes the
+	// words said there through. If the mix played them anyway, shifted earlier, the red
+	// would be a lie — so a voiceover is SLICED by the cuts. Music is not: a bed plays
+	// through and ends early, deliberately, and has no words whose redness must be true.
+
+	/** One 10s clip, cut over raw 4..6. */
+	function cutDoc(tracks: Array<Omit<typeof track, "kind"> & { kind: "music" | "voiceover" }>) {
+		return makeDoc({
+			assets: [
+				audioAsset,
+				makeAsset({ id: "scr", kind: "video", originalPath: "/screen.mp4", durationSec: 10 }),
+			],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "scr",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				trimRanges: [
+					{
+						id: "t1",
+						assetId: "scr",
+						clipId: "c1",
+						startSec: 4,
+						endSec: 6,
+						reason: "",
+						origin: "user",
+					},
+				],
+			},
+			audioTracks: tracks,
+		});
+	}
+
+	/** A voiceover over the whole 10s, reading its file from the head. */
+	const voice = {
+		...track,
+		kind: "voiceover" as const,
+		startMs: 0,
+		endMs: 10_000,
+		offsetMs: 0,
+		gainDb: 0,
+	};
+
+	it("splits a voiceover at the cut, skipping exactly the seconds the film lost", () => {
+		const entries = buildSceneDescription(cutDoc([voice])).audioTracks;
+		expect(entries).toHaveLength(2);
+		// Before the cut: raw 0..4 of the take, at output 0.
+		expect(entries[0]).toMatchObject({ startSec: 0, trimStartSec: 0, trimEndSec: 4 });
+		// After it: raw 6..10 of the take, at output 4 — the source jumps the two seconds
+		// the cut took. Today's music path would instead play 0..8 and stop early.
+		expect(entries[1]).toMatchObject({ startSec: 4, trimStartSec: 6, trimEndSec: 10 });
+	});
+
+	it("keeps the fades on the take's outer edges across a split", () => {
+		const entries = buildSceneDescription(
+			cutDoc([{ ...voice, fadeInMs: 500, fadeOutMs: 500 }]),
+		).audioTracks;
+		expect(entries.map((e) => [e.fadeInSec, e.fadeOutSec])).toEqual([
+			[0.5, 0],
+			[0, 0.5],
+		]);
+	});
+
+	it("drops a voiceover buried inside a cut, and keeps one that hangs past the film", () => {
+		expect(
+			buildSceneDescription(cutDoc([{ ...voice, startMs: 4200, endMs: 5800 }])).audioTracks,
+		).toEqual([]);
+		// Raw time past the last clip is unfilmed, not removed: the narration plays on.
+		const over = buildSceneDescription(
+			cutDoc([{ ...voice, startMs: 10_000, endMs: 14_000 }]),
+		).audioTracks;
+		expect(over).toHaveLength(1);
+		expect(over[0]).toMatchObject({ trimStartSec: 0, trimEndSec: 4 });
+	});
+
+	it("leaves a music bed under the same cut exactly as it was", () => {
+		const entries = buildSceneDescription(cutDoc([{ ...voice, kind: "music" }])).audioTracks;
+		// One contiguous entry, shortened at the tail by what the cut took — the behaviour
+		// `VirtualPreview` and `mix_external_tracks` have always had for a bed.
+		expect(entries).toEqual([
+			{
+				path: "/music.mp3",
+				startSec: 0,
+				gainDb: 0,
+				trimStartSec: 0,
+				trimEndSec: 8,
+				fadeInSec: 0,
+				fadeOutSec: 0,
+			},
+		]);
+	});
+
+	it("leaves a LOOPING voiceover on the music path, which step 6 will forbid outright", () => {
+		// The window comes from the ASSET's duration, so the short file has to be there.
+		const doc = cutDoc([{ ...voice, loop: true, endMs: 10_000 }]);
+		const short = {
+			...doc,
+			assets: doc.assets.map((a) => (a.id === "aud" ? { ...a, durationSec: 3 } : a)),
+		};
+		const entries = buildSceneDescription(short).audioTracks;
+		// Repeats, not slices: inventing semantics for a combination about to be banned
+		// would be the worse answer.
+		expect(entries.length).toBeGreaterThan(1);
+		expect(entries.every((e) => e.trimStartSec === 0)).toBe(true);
+	});
+
 	it("drops a muted track from the mix list", () => {
 		const doc = makeDoc({ assets: [audioAsset], audioTracks: [{ ...track, muted: true }] });
 		expect(buildSceneDescription(doc).audioTracks).toEqual([]);
