@@ -12,6 +12,7 @@ import { applyTimelineOperation } from "@/lib/ai-edition/document/operations";
 import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
 import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema";
 import { buildAggregatedSections } from "@/lib/ai-edition/timeline/aggregated-transcript";
+import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
 
 function doc(): AxcutDocument {
@@ -73,7 +74,7 @@ describe("repro: trim on clip 2 of two clips sharing one media", () => {
 			next.timeline.clips,
 			next.transcripts,
 			next.assets,
-			next.timeline.trimRanges,
+			removedRawSpans(next.timeline.clips, next.timeline.trimRanges),
 		);
 		expect(sections[0].trimRuns).toHaveLength(0);
 		expect(sections[1].trimRuns).toHaveLength(1);

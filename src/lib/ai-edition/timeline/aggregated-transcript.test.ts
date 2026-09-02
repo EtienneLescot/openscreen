@@ -7,6 +7,7 @@ import {
 	findCueWordId,
 	isSilenceWord,
 } from "./aggregated-transcript";
+import { removedRawSpans } from "./programme-time";
 
 function makeClip(overrides: Partial<AxcutClip> = {}): AxcutClip {
 	return {
@@ -78,18 +79,23 @@ describe("buildClipSection", () => {
 		]);
 		const trim = makeTrim({ id: "trim_a", startSec: 1, endSec: 4 });
 
-		const section = buildClipSection(clip, transcript, makeAsset(), [trim]);
+		const section = buildClipSection(
+			clip,
+			transcript,
+			makeAsset(),
+			removedRawSpans([clip], [trim]),
+		);
 		expect(section.words.map((cw) => cw.kept)).toEqual([true, false, false, false, true]);
-		expect(section.words.map((cw) => cw.trimId)).toEqual([
-			null,
-			"trim_a",
-			"trim_a",
-			"trim_a",
-			null,
+		expect(section.words.map((cw) => cw.trimIds)).toEqual([
+			[],
+			["trim_a"],
+			["trim_a"],
+			["trim_a"],
+			[],
 		]);
 		expect(section.trimRuns).toHaveLength(1);
 		expect(section.trimRuns[0]).toMatchObject({
-			trimId: "trim_a",
+			trimIds: ["trim_a"],
 			startWordIndex: 1,
 			endWordIndex: 3,
 			durationSec: 3,
@@ -111,15 +117,15 @@ describe("buildClipSection", () => {
 			makeTrim({ id: "trim_b", startSec: 3, endSec: 4 }),
 		];
 
-		const section = buildClipSection(clip, transcript, makeAsset(), trims);
+		const section = buildClipSection(clip, transcript, makeAsset(), removedRawSpans([clip], trims));
 		expect(section.trimRuns).toHaveLength(2);
 		expect(section.trimRuns[0]).toMatchObject({
-			trimId: "trim_a",
+			trimIds: ["trim_a"],
 			startWordIndex: 1,
 			endWordIndex: 1,
 		});
 		expect(section.trimRuns[1]).toMatchObject({
-			trimId: "trim_b",
+			trimIds: ["trim_b"],
 			startWordIndex: 3,
 			endWordIndex: 3,
 		});
@@ -146,29 +152,31 @@ describe("buildClipSection", () => {
 
 		it("marks the words removed only in the clip the trim is anchored to", () => {
 			const trim = makeTrim({ id: "trim_c2", clipId: "clip_2", startSec: 1, endSec: 2 });
+			const clips = [clip1(), clip2()];
 			const sections = buildAggregatedSections(
-				[clip1(), clip2()],
+				clips,
 				[makeTranscript(words())],
 				[makeAsset()],
-				[trim],
+				removedRawSpans(clips, [trim]),
 			);
 
 			expect(sections[0].words.map((cw) => cw.kept)).toEqual([true, true, true]);
 			expect(sections[0].trimRuns).toHaveLength(0);
 			expect(sections[1].words.map((cw) => cw.kept)).toEqual([true, false, true]);
 			expect(sections[1].trimRuns).toHaveLength(1);
-			expect(sections[1].trimRuns[0]).toMatchObject({ trimId: "trim_c2", startWordIndex: 1 });
+			expect(sections[1].trimRuns[0]).toMatchObject({ trimIds: ["trim_c2"], startWordIndex: 1 });
 		});
 
 		it("still marks both clips for a pre-v7 trim that names no clip", () => {
 			// Back-compat: an un-anchored row keeps the asset-wide meaning it had, so an
 			// existing document reads exactly as it did before the anchor was introduced.
 			const trim = makeTrim({ id: "trim_legacy", startSec: 1, endSec: 2 });
+			const clips = [clip1(), clip2()];
 			const sections = buildAggregatedSections(
-				[clip1(), clip2()],
+				clips,
 				[makeTranscript(words())],
 				[makeAsset()],
-				[trim],
+				removedRawSpans(clips, [trim]),
 			);
 			expect(sections[0].trimRuns).toHaveLength(1);
 			expect(sections[1].trimRuns).toHaveLength(1);
@@ -183,7 +191,12 @@ describe("buildClipSection", () => {
 		]);
 		const trim = makeTrim({ id: "trim_x", assetId: "asset_2", startSec: 0.5, endSec: 2.5 });
 
-		const section = buildClipSection(clip, transcript, makeAsset(), [trim]);
+		const section = buildClipSection(
+			clip,
+			transcript,
+			makeAsset(),
+			removedRawSpans([clip], [trim]),
+		);
 		// Trailing gap 2s→3s is a silence — the different-asset trim doesn't
 		// cover any of the three entries, so all stay kept.
 		expect(section.words.map((cw) => cw.kept)).toEqual([true, true, true]);
@@ -201,7 +214,7 @@ describe("buildClipSection", () => {
 		// ponytail: the LLM (not the renderer) decides what is a filler. Every
 		// word renders as plain text in the right pane.
 		expect(section.words.map((cw) => cw.kept)).toEqual([true, true, true]);
-		expect(section.words.map((cw) => cw.trimId)).toEqual([null, null, null]);
+		expect(section.words.map((cw) => cw.trimIds)).toEqual([[], [], []]);
 	});
 
 	it("returns an empty words list when the clip has no matching transcript", () => {
@@ -261,10 +274,15 @@ describe("silence gaps", () => {
 		]);
 		const trim = makeTrim({ id: "trim_silence", startSec: 1, endSec: 2 });
 
-		const section = buildClipSection(clip, transcript, makeAsset(), [trim]);
+		const section = buildClipSection(
+			clip,
+			transcript,
+			makeAsset(),
+			removedRawSpans([clip], [trim]),
+		);
 		const silence = section.words.find((cw) => isSilenceWord(cw.word));
 		expect(silence?.kept).toBe(false);
-		expect(silence?.trimId).toBe("trim_silence");
+		expect(silence?.trimIds).toEqual(["trim_silence"]);
 	});
 });
 
@@ -323,114 +341,164 @@ describe("buildAggregatedSections", () => {
 });
 
 describe("findCueWordId", () => {
+	// Takes a RAW ruler second. It used to take a clip id plus a source second, which only
+	// the recording lane could ever produce — so the voiceover lane never highlighted a
+	// word at all. Raw time is the coordinate both lanes share, and it settles the
+	// duplicated-clip case the clip id was introduced for: two sections over one media
+	// have identical source ranges but different raw extents.
 	function makeSection(
 		clipId: string,
 		assetId: string,
 		wordTimes: Array<[string, number, number]>,
+		clipOverrides: Partial<AxcutClip> = {},
 	) {
 		return {
-			clip: makeClip({ id: clipId, assetId, sourceStartSec: 0, sourceEndSec: 100 }),
+			clip: makeClip({
+				id: clipId,
+				assetId,
+				sourceStartSec: 0,
+				sourceEndSec: 100,
+				timelineStartSec: 0,
+				timelineEndSec: 100,
+				...clipOverrides,
+			}),
 			asset: makeAsset({ id: assetId }),
 			transcript: null,
 			words: wordTimes.map(([id, start, end]) => ({
 				id: clipWordId(clipId, id),
 				word: { id, segmentId: "s1", startSec: start, endSec: end, text: id },
 				kept: true,
-				trimId: null,
+				trimIds: [],
 			})),
 			trimRuns: [],
 		};
 	}
 
-	it("returns null when cue is null", () => {
+	it("returns null when there is no playhead", () => {
 		const section = makeSection("c1", "asset_1", [["w1", 0, 1]]);
 		expect(findCueWordId([section], null)).toBeNull();
 	});
 
-	it("returns null when no section matches the cue asset", () => {
-		const section = makeSection("c1", "asset_1", [["w1", 0, 1]]);
-		const cue = { assetId: "asset_2", sourceTimeSec: 0.5 };
-		expect(findCueWordId([section], cue)).toBeNull();
+	it("returns null when the head is before every section", () => {
+		const section = makeSection("c1", "asset_1", [["w1", 0, 1]], {
+			timelineStartSec: 10,
+			timelineEndSec: 110,
+		});
+		expect(findCueWordId([section], 2)).toBeNull();
 	});
 
-	it("returns the word containing the cue time", () => {
+	it("returns the word containing the head", () => {
 		const section = makeSection("c1", "asset_1", [
 			["w1", 0, 1],
 			["w2", 1, 2],
 			["w3", 2, 3],
 		]);
-		expect(findCueWordId([section], { assetId: "asset_1", sourceTimeSec: 1.5 })).toBe("c1:w2");
+		expect(findCueWordId([section], 1.5)).toBe("c1:w2");
 	});
 
-	it("returns the previous word when the cue is between two words", () => {
+	it("returns the previous word when the head is between two words", () => {
 		const section = makeSection("c1", "asset_1", [
 			["w1", 0, 1],
 			["w2", 2, 3],
 		]);
-		expect(findCueWordId([section], { assetId: "asset_1", sourceTimeSec: 1.5 })).toBe("c1:w1");
+		expect(findCueWordId([section], 1.5)).toBe("c1:w1");
 	});
 
-	it("returns the previous word when the cue is before the first word", () => {
+	it("returns null when the head is before the first word", () => {
 		const section = makeSection("c1", "asset_1", [
 			["w1", 5, 6],
 			["w2", 7, 8],
 		]);
-		expect(findCueWordId([section], { assetId: "asset_1", sourceTimeSec: 0.5 })).toBeNull();
+		expect(findCueWordId([section], 0.5)).toBeNull();
 	});
 
-	it("returns the last word when the cue is after the last word", () => {
+	it("returns the last word when the head is past the last word", () => {
 		const section = makeSection("c1", "asset_1", [
 			["w1", 0, 1],
 			["w2", 1, 2],
 		]);
-		expect(findCueWordId([section], { assetId: "asset_1", sourceTimeSec: 99 })).toBe("c1:w2");
+		expect(findCueWordId([section], 99)).toBe("c1:w2");
+	});
+
+	it("reads the head through the section's own source clock", () => {
+		// A clip that starts 20s along the ruler and 5s into its media: raw 22 is source 7.
+		const section = makeSection("c1", "asset_1", [["w1", 6, 8]], {
+			sourceStartSec: 5,
+			sourceEndSec: 15,
+			timelineStartSec: 20,
+			timelineEndSec: 30,
+		});
+		expect(findCueWordId([section], 22)).toBe("c1:w1");
+		expect(findCueWordId([section], 2)).toBeNull();
 	});
 
 	// Two clips over the same media project the SAME transcript words twice, so the cue
-	// has to be resolved against the clip that is actually playing. Matching on assetId
-	// alone always returned the first section — the highlight tracked clip 1 forever.
+	// has to be resolved against the one that is actually playing.
 	describe("two clips over the same media", () => {
 		const sections = () => [
-			makeSection("c1", "asset_1", [
-				["w1", 0, 1],
-				["w2", 1, 2],
-			]),
-			makeSection("c2", "asset_1", [
-				["w1", 0, 1],
-				["w2", 1, 2],
-			]),
+			makeSection(
+				"c1",
+				"asset_1",
+				[
+					["w1", 0, 1],
+					["w2", 1, 2],
+				],
+				{ sourceEndSec: 3, timelineStartSec: 0, timelineEndSec: 3 },
+			),
+			makeSection(
+				"c2",
+				"asset_1",
+				[
+					["w1", 0, 1],
+					["w2", 1, 2],
+				],
+				{ sourceEndSec: 3, timelineStartSec: 3, timelineEndSec: 6 },
+			),
 		];
 
-		it("resolves the cue against the clip that is playing", () => {
-			expect(
-				findCueWordId(sections(), { assetId: "asset_1", clipId: "c2", sourceTimeSec: 1.5 }),
-			).toBe("c2:w2");
-			expect(
-				findCueWordId(sections(), { assetId: "asset_1", clipId: "c1", sourceTimeSec: 1.5 }),
-			).toBe("c1:w2");
+		it("resolves the head against the clip that is playing", () => {
+			// Source 1.5 in both, but raw 4.5 is only inside c2.
+			expect(findCueWordId(sections(), 4.5)).toBe("c2:w2");
+			expect(findCueWordId(sections(), 1.5)).toBe("c1:w2");
 		});
 
 		it("returns an id that cannot match the other clip's copy of the same word", () => {
-			const cue = findCueWordId(sections(), {
-				assetId: "asset_1",
-				clipId: "c2",
-				sourceTimeSec: 1.5,
-			});
+			const cue = findCueWordId(sections(), 4.5);
 			// The whole point: `word.id` is "w2" in BOTH sections, so a bare word id lit up
 			// both blocks. Exactly one rendered word may claim the cue.
 			const claiming = sections().flatMap((s) => s.words.filter((cw) => cw.id === cue));
 			expect(claiming).toHaveLength(1);
 		});
 
-		it("falls back to the asset when the caller names no clip", () => {
-			expect(findCueWordId(sections(), { assetId: "asset_1", sourceTimeSec: 1.5 })).toBe("c1:w2");
+		it("returns null rather than another clip's words when the playing clip has none", () => {
+			const withEmptyC2 = [
+				sections()[0],
+				makeSection("c2", "asset_1", [], {
+					sourceEndSec: 3,
+					timelineStartSec: 3,
+					timelineEndSec: 6,
+				}),
+			];
+			// c2 has no words, and borrowing c1's would point at the wrong text.
+			expect(findCueWordId(withEmptyC2, 4.5)).toBeNull();
 		});
 
-		it("returns null rather than another clip's words when the playing clip has none", () => {
-			const withEmptyC2 = [sections()[0], makeSection("c2", "asset_1", [])];
-			expect(
-				findCueWordId(withEmptyC2, { assetId: "asset_1", clipId: "c2", sourceTimeSec: 1.5 }),
-			).toBeNull();
+		it("runs an open-ended placement up to the next one", () => {
+			// An unprobed clip has no raw extent of its own; it ends where the next begins.
+			const open = [
+				makeSection("c1", "asset_1", [["w1", 0, 1]], {
+					sourceEndSec: undefined,
+					timelineStartSec: 0,
+					timelineEndSec: 3,
+				}),
+				makeSection("c2", "asset_1", [["w1", 0, 1]], {
+					sourceEndSec: 3,
+					timelineStartSec: 3,
+					timelineEndSec: 6,
+				}),
+			];
+			expect(findCueWordId(open, 2)).toBe("c1:w1");
+			expect(findCueWordId(open, 3.5)).toBe("c2:w1");
 		});
 	});
 });
