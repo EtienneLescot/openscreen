@@ -70,7 +70,7 @@ const W2_TRIMMED: AxcutTrimRange = {
 
 function renderPane(
 	trimRanges: AxcutTrimRange[],
-	onAddTrimRange = vi.fn(),
+	onTrimTimelineSpan = vi.fn(),
 	busyAssetIds: string[] = [],
 ) {
 	const view = render(
@@ -83,8 +83,8 @@ function renderPane(
 				trimRanges={trimRanges}
 				busyAssetIds={busyAssetIds}
 				onSeek={vi.fn()}
-				onAddTrimRange={onAddTrimRange}
-				onRemoveTrimRange={vi.fn()}
+				onTrimTimelineSpan={onTrimTimelineSpan}
+				onRemoveTrimRanges={vi.fn()}
 				onSetWordText={vi.fn()}
 				onInsertWord={vi.fn()}
 				onRemoveWords={vi.fn()}
@@ -96,7 +96,7 @@ function renderPane(
 	);
 	const editor = view.container.querySelector<HTMLElement>('[role="textbox"]');
 	if (!editor) throw new Error("transcript editor not rendered");
-	return { ...view, editor, onAddTrimRange };
+	return { ...view, editor, onTrimTimelineSpan };
 }
 
 /**
@@ -113,10 +113,11 @@ function caretBeforeWordAt(editor: HTMLElement, index: number) {
 	selection?.addRange(range);
 }
 
-/** The words the pane cut, as `[startSec, endSec]` — what `onAddTrimRange` was asked for. */
-function cutRange(onAddTrimRange: ReturnType<typeof vi.fn>): [number, number] | null {
-	const call = onAddTrimRange.mock.calls.at(-1);
-	return call ? [call[1] as number, call[2] as number] : null;
+/** The RAW span the pane cut — what `onTrimTimelineSpan` was asked for. There is no
+ *  leading target any more: a cut names a moment of the programme, not an owner. */
+function cutRange(onTrimTimelineSpan: ReturnType<typeof vi.fn>): [number, number] | null {
+	const call = onTrimTimelineSpan.mock.calls.at(-1);
+	return call ? [call[0] as number, call[1] as number] : null;
 }
 
 beforeEach(() => {
@@ -131,29 +132,29 @@ afterEach(() => {
 describe("keyboard cut with the caret between words", () => {
 	it("Backspace cuts the word before the caret", () => {
 		// The ordinary case, and the one that already worked: nothing trimmed yet.
-		const { editor, onAddTrimRange } = renderPane([]);
+		const { editor, onTrimTimelineSpan } = renderPane([]);
 		caretBeforeWordAt(editor, 3); // before "quatre"
 		fireEvent.keyDown(editor, { key: "Backspace" });
-		expect(cutRange(onAddTrimRange)).toEqual([2, 3]); // "trois"
+		expect(cutRange(onTrimTimelineSpan)).toEqual([2, 3]); // "trois"
 	});
 
 	it("keeps cutting while ANOTHER asset is being transcribed", () => {
 		// The background pass runs on its own now, so a run on some other media must
 		// not quietly turn this block into an editor that ignores Backspace — the
 		// read-only state is scoped to the asset whose transcript is being rewritten.
-		const { editor, onAddTrimRange } = renderPane([], vi.fn(), ["asset_other"]);
+		const { editor, onTrimTimelineSpan } = renderPane([], vi.fn(), ["asset_other"]);
 		caretBeforeWordAt(editor, 3);
 		fireEvent.keyDown(editor, { key: "Backspace" });
-		expect(cutRange(onAddTrimRange)).toEqual([2, 3]);
+		expect(cutRange(onTrimTimelineSpan)).toEqual([2, 3]);
 	});
 
 	it("stops cutting, visibly, while THIS asset is being transcribed", () => {
 		// Its transcript is about to be replaced, so the block is read-only — and it
 		// says so, instead of swallowing the keystroke in silence.
-		const { editor, onAddTrimRange, getByText } = renderPane([], vi.fn(), ["asset_1"]);
+		const { editor, onTrimTimelineSpan, getByText } = renderPane([], vi.fn(), ["asset_1"]);
 		caretBeforeWordAt(editor, 3);
 		fireEvent.keyDown(editor, { key: "Backspace" });
-		expect(cutRange(onAddTrimRange)).toBeNull();
+		expect(cutRange(onTrimTimelineSpan)).toBeNull();
 		expect(editor).toHaveAttribute("aria-busy", "true");
 		expect(getByText("Transcribing…")).toBeInTheDocument();
 	});
@@ -163,36 +164,36 @@ describe("keyboard cut with the caret between words", () => {
 		// immediately before the caret has nothing left to cut. The keystroke used to
 		// resolve to it anyway, `skipWordRange` dropped it as not-kept, and the user got
 		// silence — they had to click elsewhere to carry on.
-		const { editor, onAddTrimRange } = renderPane([W2_TRIMMED]);
+		const { editor, onTrimTimelineSpan } = renderPane([W2_TRIMMED]);
 		caretBeforeWordAt(editor, 2); // before "trois", i.e. right after the trimmed "deux"
 		fireEvent.keyDown(editor, { key: "Backspace" });
-		expect(cutRange(onAddTrimRange)).toEqual([0, 1]); // "un" — the nearest word still there
+		expect(cutRange(onTrimTimelineSpan)).toEqual([0, 1]); // "un" — the nearest word still there
 	});
 
 	it("Delete skips over an already-trimmed word instead of doing nothing", () => {
 		// The mirror case going forward. It had no guard at all: the candidate walk simply
 		// returned the first word it met, trimmed or not.
-		const { editor, onAddTrimRange } = renderPane([W2_TRIMMED]);
+		const { editor, onTrimTimelineSpan } = renderPane([W2_TRIMMED]);
 		caretBeforeWordAt(editor, 1); // before the trimmed "deux"
 		fireEvent.keyDown(editor, { key: "Delete" });
-		expect(cutRange(onAddTrimRange)).toEqual([2, 3]); // "trois"
+		expect(cutRange(onTrimTimelineSpan)).toEqual([2, 3]); // "trois"
 	});
 
 	it("does nothing when every word in that direction is already trimmed", () => {
 		// Not a regression — there is genuinely nothing left to cut, so no document write.
-		const { editor, onAddTrimRange } = renderPane([
+		const { editor, onTrimTimelineSpan } = renderPane([
 			{ ...W2_TRIMMED, id: "t_head", startSec: 0, endSec: 2 },
 		]);
 		caretBeforeWordAt(editor, 2); // before "trois"; "un" and "deux" are both gone
 		fireEvent.keyDown(editor, { key: "Backspace" });
-		expect(onAddTrimRange).not.toHaveBeenCalled();
+		expect(onTrimTimelineSpan).not.toHaveBeenCalled();
 	});
 
 	it("cuts nothing when the caret is at the very start and Backspace is pressed", () => {
-		const { editor, onAddTrimRange } = renderPane([]);
+		const { editor, onTrimTimelineSpan } = renderPane([]);
 		caretBeforeWordAt(editor, 0);
 		fireEvent.keyDown(editor, { key: "Backspace" });
-		expect(onAddTrimRange).not.toHaveBeenCalled();
+		expect(onTrimTimelineSpan).not.toHaveBeenCalled();
 	});
 
 	// The story the whole thing exists for, in the shape the user meets it: the tests above
@@ -217,7 +218,7 @@ describe("keyboard cut with the caret between words", () => {
 						trimRanges={trims}
 						busyAssetIds={[]}
 						onSeek={vi.fn()}
-						onAddTrimRange={(_target, startSec, endSec) =>
+						onTrimTimelineSpan={(startSec: number, endSec: number) =>
 							setTrims((prev) => [
 								...prev,
 								{
@@ -231,7 +232,7 @@ describe("keyboard cut with the caret between words", () => {
 								},
 							])
 						}
-						onRemoveTrimRange={vi.fn()}
+						onRemoveTrimRanges={vi.fn()}
 						onSetWordText={vi.fn()}
 						onInsertWord={vi.fn()}
 						onRemoveWords={vi.fn()}

@@ -135,6 +135,11 @@ const DECLARED: WritePath[] = [
 	// own edits to the transcript; neither touches the timeline.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleInsertWord", "save", "gesture"),
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleRemoveWords", "save", "gesture"),
+	// A cut made in the transcript pane, and its restore. Both moved off `applyTimelineOp`
+	// onto the write chain in #560: they read the document inside it, so a word edit landing
+	// between the read and the save can no longer overwrite the cut.
+	w("src/components/ai-edition/NewEditorShell.tsx", "handleRemoveTrimRanges", "save", "gesture"),
+	w("src/components/ai-edition/NewEditorShell.tsx", "handleTrimTimelineSpan", "save", "gesture"),
 	// A word rewritten in the transcript pane. A correction, not a cut: it writes
 	// `transcript.words[].text` and leaves the timeline alone.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleSetWordText", "save", "gesture"),
