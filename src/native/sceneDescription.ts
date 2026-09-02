@@ -39,6 +39,7 @@ import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
+import { removedRawSpans, subtractRemoved } from "@/lib/ai-edition/timeline/programme-time";
 import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	computeCompositeLayout,
@@ -560,6 +561,9 @@ export function buildSceneDescription(
 			| PlaybackSpeedRegion[]
 			| undefined) ?? []
 	).filter((r) => Number.isFinite(r.speed) && r.speed > 0);
+	// The one removed set, hoisted out of the map: every voiceover asks it the same
+	// question, and it does not depend on the track.
+	const removed = removedRawSpans(projectedClips, document.timeline.trimRanges);
 	const audioTracks = document.audioTracks.flatMap((track) => {
 		if (track.muted) return [];
 		const asset = assetById.get(track.assetId);
@@ -605,6 +609,44 @@ export function buildSceneDescription(
 		// span itself is the window — the mixer stops at the real end of the file.
 		const windowSec = sourceDurationSec > 0 ? Math.max(0, sourceDurationSec - offsetSec) : spanSec;
 		if (windowSec <= 0) return [];
+
+		// A cut under a VOICEOVER removes the words that were said there, not the tail of
+		// the take (issue #560). The transcript pane strikes those words through; if the
+		// mix went on playing them, shifted earlier, the red would be a lie.
+		//
+		// Music deliberately keeps the branch below: a bed plays through a cut and ends
+		// early, because slicing it at every edit is a musical regression, and a bed has no
+		// words whose redness has to be true. A LOOPING voiceover keeps it too — step 6 of
+		// #560 refuses that combination outright, and inventing semantics for something
+		// about to be banned would be the worse answer.
+		if (track.kind === "voiceover" && !track.loop) {
+			const trackRawStart = track.startMs / 1000;
+			const rawSpanSec = Math.max(0, track.endMs / 1000 - trackRawStart);
+			// Unprobed assets have no real duration to cap with; the RAW span is how much
+			// file the take covers, which is the honest fallback once the cuts are taken out.
+			const voWindowSec =
+				sourceDurationSec > 0 ? Math.max(0, sourceDurationSec - offsetSec) : rawSpanSec;
+			const pieces = subtractRemoved(trackRawStart, track.endMs / 1000, removed);
+			const kept = pieces
+				.map((piece) => ({
+					...base,
+					startSec: projectRawTimelineSecToPlayback(
+						projectedClips,
+						document.timeline.trimRanges,
+						piece.startSec,
+						rawSpeedRegions,
+					),
+					trimStartSec: offsetSec + (piece.startSec - trackRawStart),
+					trimEndSec: Math.min(offsetSec + voWindowSec, offsetSec + (piece.endSec - trackRawStart)),
+				}))
+				.filter((entry) => entry.trimEndSec > entry.trimStartSec);
+			// The fades belong to the TAKE's edges, not to every piece a cut left behind.
+			return kept.map((entry, i) => ({
+				...entry,
+				fadeInSec: i === 0 ? base.fadeInSec : 0,
+				fadeOutSec: i === kept.length - 1 ? base.fadeOutSec : 0,
+			}));
+		}
 		if (!track.loop) {
 			return [
 				{

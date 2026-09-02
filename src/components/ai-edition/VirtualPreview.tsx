@@ -19,6 +19,11 @@ import type {
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
+import {
+	type RemovedRawSpan,
+	removalAt,
+	removedRawSpans,
+} from "@/lib/ai-edition/timeline/programme-time";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
 	clampVirtualTime,
@@ -124,6 +129,42 @@ export function resolveTimelineAudioPlayback(
 		// A file shorter than its span goes silent at the end rather than
 		// restarting: seeking a finished element back would stutter it every frame.
 		shouldPlay: active && local < windowLen,
+	};
+}
+
+/**
+ * Where a VOICEOVER should be, asked in RAW ruler seconds (issue #560).
+ *
+ * A cut under a voiceover removes the words that were said there, not the tail of the
+ * take: the transcript pane has already struck those words through, so a mix that went on
+ * playing them — shifted earlier, as a contiguous block does — would make the red a lie.
+ *
+ * Raw is the simpler question and the exact one. `resolveTimelineAudioPlayback` works in
+ * output seconds because a bed is one contiguous block laid on the finished programme, and
+ * getting there means projecting the playhead through the trims. A sliced take needs no
+ * projection at all: its source position is its own offset plus however far raw time has
+ * carried it, and it falls silent wherever the film did. That is the same question
+ * `removedRawSpans` answers for the words themselves, so the two cannot drift.
+ *
+ * Music does NOT come through here. A bed plays through a cut and ends early, on purpose.
+ */
+export function resolveVoiceoverPlayback(
+	track: AxcutAudioTrack,
+	rawSec: number,
+	removed: RemovedRawSpan[],
+) {
+	const startSec = track.startMs / 1000;
+	const offset = Math.max(0, track.offsetMs / 1000);
+	const sourceEnd = track.durationSec > 0 ? track.durationSec : Number.POSITIVE_INFINITY;
+	const local = rawSec - startSec;
+	const targetTimeSec = Math.min(Math.max(offset, offset + local), sourceEnd);
+	return {
+		targetTimeSec,
+		shouldPlay:
+			rawSec >= startSec &&
+			rawSec < track.endMs / 1000 &&
+			offset + local < sourceEnd &&
+			removalAt(removed, rawSec) === null,
 	};
 }
 
@@ -547,6 +588,10 @@ export function VirtualPreview({
 	// must see the live trims, not the set captured when the loop was created.
 	const trimRangesRef = useRef(trimRanges);
 	trimRangesRef.current = trimRanges;
+	// What the film no longer contains, recomputed only when the cuts move — the rAF asks
+	// it once per voiceover per frame, and walking every trim there would be wasteful.
+	const removedRef = useRef(removedRawSpans(clips, trimRanges));
+	removedRef.current = useMemo(() => removedRawSpans(clips, trimRanges), [clips, trimRanges]);
 	// Trim-narrowed (`resolvePlaybackSegments`) — used ONLY to detect "has the <video>'s own
 	// currentTime drifted into a trim" and where to jump it back out to. Everything ELSE in
 	// this component (`clips`/`clipsRef` above, virtualTimeSec, zoom/speed region lookups,
@@ -678,12 +723,13 @@ export function VirtualPreview({
 							track.startMs / 1000,
 						),
 				);
-				const trackTarget = resolveTimelineAudioPlayback(
-					outputTimeSec,
-					outputStartSec,
-					track,
-					spanSec,
-				);
+				// A voiceover follows the cuts; a bed plays through them. Step 6 of #560
+				// refuses `loop` on a voiceover outright, so until then a looping one keeps
+				// the bed's treatment rather than getting semantics invented for it.
+				const trackTarget =
+					track.kind === "voiceover" && !track.loop
+						? resolveVoiceoverPlayback(track, virtualTimeSecRef.current, removedRef.current)
+						: resolveTimelineAudioPlayback(outputTimeSec, outputStartSec, track, spanSec);
 				const fade = timelineAudioFadeAt(track, outputTimeSec - outputStartSec, spanSec);
 				// Imported audio plays at its natural 1× rate, NOT the video's. The export
 				// sums it into the programme at 1× — speed regions stretch clip PCM only,

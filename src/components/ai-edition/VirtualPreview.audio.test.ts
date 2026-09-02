@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { projectRawTimelineSecToPlayback } from "@/lib/ai-edition/document/timeline";
 import type { AxcutAudioTrack, AxcutClip, AxcutTrimRange } from "@/lib/ai-edition/schema";
+import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import {
 	applyPreviewAudioSettings,
 	type PreviewAudioGraph,
 	resolveAudioTrackPlayback,
 	resolveTimelineAudioPlayback,
+	resolveVoiceoverPlayback,
 	timelineAudioFadeAt,
 } from "./VirtualPreview";
 
@@ -306,5 +308,100 @@ describe("timelineAudioFadeAt", () => {
 		// Unreduced, the ramp never completes and the track plays near-silent.
 		const long = { ...track, fadeInMs: 20_000, fadeOutMs: 0 };
 		expect(timelineAudioFadeAt(long, 2, 2)).toBe(1);
+	});
+});
+
+// ─── A cut under a voiceover ──────────────────────────────────────────────────
+// Issue #560. The preview and the export have to agree about this, or a word the
+// transcript pane shows struck through is still audible in one of them.
+
+describe("resolveVoiceoverPlayback", () => {
+	const CLIPS = [
+		{
+			id: "c1",
+			assetId: "scr",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+			wordRefs: [],
+			origin: "user" as const,
+			reason: "",
+		},
+	];
+	/** Raw 4..6 is out of the film. */
+	const TRIMS = [
+		{
+			id: "t1",
+			assetId: "scr",
+			clipId: "c1",
+			startSec: 4,
+			endSec: 6,
+			reason: "",
+			origin: "user" as const,
+		},
+	];
+	const removed = removedRawSpans(CLIPS, TRIMS);
+
+	const voice = {
+		id: "vo",
+		assetId: "aud",
+		kind: "voiceover" as const,
+		startMs: 0,
+		endMs: 10_000,
+		durationSec: 30,
+		offsetMs: 0,
+		gainDb: 0,
+		loop: false,
+		fadeInMs: 0,
+		fadeOutMs: 0,
+		muted: false,
+		label: "",
+		origin: "user" as const,
+	} as unknown as AxcutAudioTrack;
+
+	it("goes silent exactly where the film lost its moment", () => {
+		expect(resolveVoiceoverPlayback(voice, 3.9, removed).shouldPlay).toBe(true);
+		expect(resolveVoiceoverPlayback(voice, 4.5, removed).shouldPlay).toBe(false);
+		expect(resolveVoiceoverPlayback(voice, 6.1, removed).shouldPlay).toBe(true);
+	});
+
+	it("keeps the take's own clock running through the cut", () => {
+		// It does NOT rewind or skip: raw 7 is second 7 of the take either way, which is
+		// what makes the words after the cut still line up with the ones on screen.
+		expect(resolveVoiceoverPlayback(voice, 7, removed).targetTimeSec).toBeCloseTo(7, 6);
+		expect(
+			resolveVoiceoverPlayback({ ...voice, offsetMs: 2000 }, 7, removed).targetTimeSec,
+		).toBeCloseTo(9, 6);
+	});
+
+	it("stays silent outside its own span, and past the end of its file", () => {
+		expect(resolveVoiceoverPlayback({ ...voice, startMs: 2000 }, 1, removed).shouldPlay).toBe(
+			false,
+		);
+		expect(resolveVoiceoverPlayback(voice, 11, removed).shouldPlay).toBe(false);
+		// A 3s file under a 10s span: silent after its own end rather than seeking past it.
+		const short = { ...voice, durationSec: 3 } as AxcutAudioTrack;
+		expect(resolveVoiceoverPlayback(short, 2.5, removed).shouldPlay).toBe(true);
+		expect(resolveVoiceoverPlayback(short, 3.5, removed).shouldPlay).toBe(false);
+	});
+
+	it("schedules the same source seconds the export writes into the mix", () => {
+		// Walk the take frame by frame and collect the contiguous runs of source time the
+		// preview would play; they must be the export's entries, piece for piece.
+		const runs: Array<{ from: number; to: number }> = [];
+		for (let raw = 0; raw < 10; raw += 0.05) {
+			const at = resolveVoiceoverPlayback(voice, raw, removed);
+			if (!at.shouldPlay) continue;
+			const last = runs.at(-1);
+			if (last && Math.abs(at.targetTimeSec - last.to) < 0.06) last.to = at.targetTimeSec;
+			else runs.push({ from: at.targetTimeSec, to: at.targetTimeSec });
+		}
+		expect(runs).toHaveLength(2);
+		expect(runs[0].from).toBeCloseTo(0, 1);
+		expect(runs[0].to).toBeCloseTo(4, 1);
+		// The second run resumes at source 6 — the two seconds the cut took are never heard.
+		expect(runs[1].from).toBeCloseTo(6, 1);
+		expect(runs[1].to).toBeCloseTo(10, 1);
 	});
 });
