@@ -12,7 +12,10 @@
 		"failedToSaveExport": "Error al guardar la exportación",
 		"failedToSaveExportedVideo": "Error al guardar el video exportado",
 		"failedToRevealInFolder": "Error al mostrar en la carpeta: {{error}}",
-		"previewCompositorUnavailable": "Vista previa no disponible en este equipo"
+		"previewCompositorUnavailable": "Vista previa no disponible en este equipo",
+		"wordEditFailed": "No se pudo cambiar esa palabra",
+		"wordInsertFailed": "No se pudo añadir esa palabra",
+		"wordRemoveFailed": "No se pudo eliminar esa palabra"
 	},
 	"export": {
 		"canceled": "Exportación cancelada",

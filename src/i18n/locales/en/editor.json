@@ -20,7 +20,10 @@
 		"failedToSaveExport": "Failed to save export",
 		"failedToSaveExportedVideo": "Failed to save exported video",
 		"failedToRevealInFolder": "Error revealing in folder: {{error}}",
-		"previewCompositorUnavailable": "Preview unavailable on this machine"
+		"previewCompositorUnavailable": "Preview unavailable on this machine",
+		"wordEditFailed": "Could not change that word",
+		"wordInsertFailed": "Could not add that word",
+		"wordRemoveFailed": "Could not delete that word"
 	},
 	"export": {
 		"canceled": "Export canceled",

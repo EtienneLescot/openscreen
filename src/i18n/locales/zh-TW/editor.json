@@ -20,7 +20,10 @@
 		"failedToSaveExport": "儲存匯出檔案失敗",
 		"failedToSaveExportedVideo": "儲存匯出的影片失敗",
 		"failedToRevealInFolder": "在資料夾中顯示時出錯：{{error}}",
-		"previewCompositorUnavailable": "此裝置無法使用預覽"
+		"previewCompositorUnavailable": "此裝置無法使用預覽",
+		"wordEditFailed": "無法修改這個字",
+		"wordInsertFailed": "無法加入這個字詞",
+		"wordRemoveFailed": "無法刪除這個字詞"
 	},
 	"export": {
 		"canceled": "匯出已取消",

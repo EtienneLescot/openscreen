@@ -265,7 +265,7 @@
 	"transcript": {
 		"clipLabel": "クリップ {{index}}",
 		"editorAria": "{{filename}} の文字起こし",
-		"help": "タイムライン上のすべてのクリップをまとめた文字起こしです。単語や選択範囲を Backspace / Delete でスキップ（赤色）にできます。赤い部分にカーソルを合わせると元に戻せます。",
+		"help": "タイムライン上のすべてのクリップをまとめた文字起こしです。単語や選択範囲を Backspace / Delete で映像から切り取れます（赤色）。単語をダブルクリックすると文字を修正できます。字幕にだけ入り、映像は変わりません。印の付いた単語にカーソルを合わせると取り消せます。",
 		"laneLabel": "文字起こしの読み込み元",
 		"laneRecording": "録画",
 		"laneVoiceover": "ナレーション",
@@ -280,11 +280,21 @@
 		"transcribeNow": "今すぐ文字起こし",
 		"transcribing": "文字起こし中…",
 		"trimSilence": "無音をトリム（{{duration}} 秒）",
-		"whisperHint": "文字起こしはローカルの Whisper を使用します。お使いのパソコン上で実行され、データが端末外に出ることはありません。"
+		"whisperHint": "文字起こしはローカルの Whisper を使用します。お使いのパソコン上で実行され、データが端末外に出ることはありません。",
+		"editingHint": "ダブルクリックで単語を修正、Backspace で映像からカット。",
+		"editingHintDev": "ダブルクリックで単語を修正、Backspace で映像からカット、2つの単語の間に入力して新しい単語を追加。",
+		"helpInsert": "単語と単語の間で入力すると、琥珀色の新しい単語を追加できます。",
+		"editWord": "「{{word}}」を編集",
+		"correctedWord": "修正済み — 文字起こしでは「{{original}}」でした",
+		"revertWord": "「{{original}}」に戻す",
+		"blankedWord": "空欄",
+		"insertAria": "新しい単語",
+		"insertedWord": "あなたが追加した単語 — 音声はありません",
+		"removeInserted": "「{{word}}」を削除"
 	},
 	"captions": {
 		"show": "字幕を表示",
-		"noTranscript": "字幕はメディアの文字起こしから読み込まれます。この動画が文字起こしされると有効になります。",
+		"noTranscript": "字幕はメディアの文字起こしから読み込まれます。有効にするにはこの動画を文字起こししてください。",
 		"transcribing": "文字起こし中…",
 		"derivedFromTranscript": "文字起こしからリアルタイムに生成された字幕 {{count}} 行。",
 		"hiddenHint": "字幕はこのメディアの文字起こしから生成されます。オンにするとプレビューと書き出しに表示されます。",
@@ -322,7 +332,8 @@
 		"alignRight": "右",
 		"lineLength": "行の長さ",
 		"minWords": "1 行の最小単語数",
-		"maxWords": "1 行の最大単語数"
+		"maxWords": "1 行の最大単語数",
+		"transcribe": "動画を文字起こし"
 	},
 	"audio": {
 		"title": "オーディオ",

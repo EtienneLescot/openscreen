@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "This media has no audio",
 		"smartCutsNoSpeech": "No speech detected",
 		"smartCutsFailed": "Transcription failed — retry it from Media",
-		"addAudioTooltip": "Add audio"
+		"addAudioTooltip": "Add audio",
+		"addedWord": "Added word: \"{{word}}\" — no audio behind it"
 	},
 	"audio": {
 		"addVoiceover": "Add Voiceover",

@@ -152,18 +152,6 @@ export async function transcribeAsset(
 	};
 }
 
-export function withTranscript(
-	document: AxcutDocument,
-	transcript: AxcutTranscript,
-): AxcutDocument {
-	const transcripts = [
-		...document.transcripts.filter((t) => t.assetId !== transcript.assetId),
-		transcript,
-	];
-	return {
-		...document,
-		transcript:
-			document.project.primaryAssetId === transcript.assetId ? transcript : document.transcript,
-		transcripts,
-	};
-}
+// `withTranscript` used to live here. It moved to `document/transcript.ts`, next to
+// the other writers of the same object: it is a pure document operation, and the
+// Whisper adapter is not where a caller should have to look for it.

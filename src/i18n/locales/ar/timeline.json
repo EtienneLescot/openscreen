@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "لا يحتوي هذا الملف على صوت",
 		"smartCutsNoSpeech": "لم يتم اكتشاف كلام",
 		"smartCutsFailed": "فشل النسخ — أعد المحاولة من قسم الوسائط",
-		"addAudioTooltip": "إضافة صوت"
+		"addAudioTooltip": "إضافة صوت",
+		"addedWord": "كلمة مضافة: \"{{word}}\" — لا صوت خلفها"
 	},
 	"audio": {
 		"addVoiceover": "إضافة تعليق صوتي",

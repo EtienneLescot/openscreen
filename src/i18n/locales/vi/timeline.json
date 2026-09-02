@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "Media này không có âm thanh",
 		"smartCutsNoSpeech": "Không phát hiện giọng nói",
 		"smartCutsFailed": "Phiên âm thất bại — thử lại trong Media",
-		"addAudioTooltip": "Thêm âm thanh"
+		"addAudioTooltip": "Thêm âm thanh",
+		"addedWord": "Từ đã thêm: \"{{word}}\" — không có âm thanh phía sau"
 	},
 	"audio": {
 		"addVoiceover": "Thêm thuyết minh",

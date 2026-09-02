@@ -265,7 +265,7 @@
 	"transcript": {
 		"clipLabel": "Clip {{index}}",
 		"editorAria": "Bản chép lời của {{filename}}",
-		"help": "Bản chép lời gộp của mọi clip trên dòng thời gian. Nhấn Backspace / Delete trên một từ hoặc vùng chọn để đánh dấu là bỏ qua (màu đỏ). Di chuột lên đoạn màu đỏ để khôi phục.",
+		"help": "Bản chép lời gộp của mọi clip trên dòng thời gian. Nhấn Backspace / Delete trên một từ hoặc vùng chọn để cắt nó khỏi video (màu đỏ). Nhấp đúp vào một từ để sửa văn bản. Di chuột lên từ được đánh dấu để hoàn tác.",
 		"laneLabel": "Đọc bản chép lời từ",
 		"laneRecording": "Bản ghi",
 		"laneVoiceover": "Lời thuyết minh",
@@ -280,11 +280,21 @@
 		"transcribeNow": "Chép lời ngay",
 		"transcribing": "Đang chép lời…",
 		"trimSilence": "Cắt khoảng lặng ({{duration}} giây)",
-		"whisperHint": "Việc chép lời dùng Whisper cục bộ — chạy ngay trên máy của bạn, không dữ liệu nào rời khỏi thiết bị."
+		"whisperHint": "Việc chép lời dùng Whisper cục bộ — chạy ngay trên máy của bạn, không dữ liệu nào rời khỏi thiết bị.",
+		"editingHint": "Nhấp đúp vào một từ để sửa nó, Backspace cắt nó khỏi video.",
+		"editingHintDev": "Nhấp đúp vào một từ để sửa nó, Backspace cắt nó khỏi video, gõ giữa hai từ để thêm một từ mới.",
+		"helpInsert": "Gõ giữa hai từ để thêm một từ mới, màu hổ phách: nó vào phụ đề và không đụng tới video.",
+		"editWord": "Sửa \"{{word}}\"",
+		"correctedWord": "Đã sửa — bản chép lời ghi \"{{original}}\"",
+		"revertWord": "Khôi phục \"{{original}}\"",
+		"blankedWord": "đã xoá",
+		"insertAria": "Từ mới",
+		"insertedWord": "Bạn thêm vào — không có âm thanh phía sau",
+		"removeInserted": "Xoá \"{{word}}\""
 	},
 	"captions": {
 		"show": "Hiện phụ đề",
-		"noTranscript": "Phụ đề được đọc từ bản chép lời của media. Chúng bật lên khi video đã được chép lời.",
+		"noTranscript": "Phụ đề được lấy từ bản chép lời của media. Hãy chép lời video này để bật phụ đề.",
 		"transcribing": "Đang chép lời…",
 		"derivedFromTranscript": "{{count}} dòng phụ đề, được tạo trực tiếp từ bản chép lời.",
 		"hiddenHint": "Phụ đề đến từ bản chép lời của media này. Bật lên để thấy chúng trong bản xem trước và khi xuất.",
@@ -322,7 +332,8 @@
 		"alignRight": "Phải",
 		"lineLength": "Độ dài dòng",
 		"minWords": "Số từ tối thiểu mỗi dòng",
-		"maxWords": "Số từ tối đa mỗi dòng"
+		"maxWords": "Số từ tối đa mỗi dòng",
+		"transcribe": "Chép lời video"
 	},
 	"audio": {
 		"title": "Âm thanh",

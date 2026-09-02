@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "В этом медиафайле нет звука",
 		"smartCutsNoSpeech": "Речь не обнаружена",
 		"smartCutsFailed": "Не удалось расшифровать — повторите из раздела «Медиа»",
-		"addAudioTooltip": "Добавить аудио"
+		"addAudioTooltip": "Добавить аудио",
+		"addedWord": "Добавленное слово: «{{word}}» — за ним нет звука"
 	},
 	"audio": {
 		"addVoiceover": "Добавить озвучку",

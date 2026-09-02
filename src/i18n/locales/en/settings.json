@@ -283,7 +283,7 @@
 	"transcript": {
 		"clipLabel": "Clip {{index}}",
 		"editorAria": "Transcript for {{filename}}",
-		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to mark it as skipped (red). Hover a red span to restore it.",
+		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to cut it out of the film (red). Double-click a word to correct its text. Hover a marked word to undo it.",
 		"laneLabel": "Read the transcript from",
 		"laneRecording": "Recording",
 		"laneVoiceover": "Voice-over",
@@ -298,11 +298,21 @@
 		"transcribeNow": "Transcribe now",
 		"transcribing": "Transcribing…",
 		"trimSilence": "Trim silence ({{duration}}s)",
-		"whisperHint": "Transcribe uses local Whisper — runs on your computer, no data leaves the device."
+		"whisperHint": "Transcribe uses local Whisper — runs on your computer, no data leaves the device.",
+		"editingHint": "Double-click a word to correct it, Backspace cuts it from the film.",
+		"editingHintDev": "Double-click a word to correct it, Backspace cuts it from the film, type between two words to add one.",
+		"helpInsert": "Type between two words to add one, in amber: it reaches the captions and leaves the film alone.",
+		"editWord": "Edit \"{{word}}\"",
+		"correctedWord": "Corrected — the transcriber heard \"{{original}}\"",
+		"revertWord": "Restore \"{{original}}\"",
+		"blankedWord": "blanked",
+		"insertAria": "New word",
+		"insertedWord": "Added by you — no audio behind it",
+		"removeInserted": "Delete \"{{word}}\""
 	},
 	"captions": {
 		"show": "Show captions",
-		"noTranscript": "Captions are read from the media transcript. They turn on once this video has been transcribed.",
+		"noTranscript": "Captions are read from the media transcript. Transcribe this video to turn them on.",
 		"transcribing": "Transcribing…",
 		"derivedFromTranscript": "{{count}} caption lines, derived live from the transcript.",
 		"hiddenHint": "Captions come from this media's transcript. Turn them on to see them in the preview and in exports.",
@@ -340,6 +350,7 @@
 		"alignRight": "Right",
 		"lineLength": "Line length",
 		"minWords": "Min words per line",
-		"maxWords": "Max words per line"
+		"maxWords": "Max words per line",
+		"transcribe": "Transcribe video"
 	}
 }

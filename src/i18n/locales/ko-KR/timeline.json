@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "이 미디어에는 오디오가 없습니다",
 		"smartCutsNoSpeech": "음성이 감지되지 않음",
 		"smartCutsFailed": "받아쓰기에 실패했습니다 — 미디어에서 다시 시도하세요",
-		"addAudioTooltip": "오디오 추가"
+		"addAudioTooltip": "오디오 추가",
+		"addedWord": "추가한 단어: \"{{word}}\" — 뒤에 오디오가 없습니다"
 	},
 	"audio": {
 		"addVoiceover": "내레이션 추가",

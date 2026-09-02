@@ -265,7 +265,7 @@
 	"transcript": {
 		"clipLabel": "片段 {{index}}",
 		"editorAria": "{{filename}} 的转录",
-		"help": "时间轴上所有片段的合并转录。对某个词或选区按退格 / Delete 会将其标记为跳过（红色）。将鼠标悬停在红色片段上可恢复。",
+		"help": "时间轴上所有片段的合并转录。对某个词或选区按退格 / Delete 会将其从画面中剪掉（红色）。双击某个词可修改文字。将鼠标悬停在带标记的词上可撤销。",
 		"laneLabel": "转写文本读取自",
 		"laneRecording": "录制",
 		"laneVoiceover": "配音",
@@ -280,11 +280,21 @@
 		"transcribeNow": "立即转录",
 		"transcribing": "转录中…",
 		"trimSilence": "修剪静音（{{duration}} 秒）",
-		"whisperHint": "转录使用本地 Whisper — 在您的电脑上运行，数据不会离开本设备。"
+		"whisperHint": "转录使用本地 Whisper — 在您的电脑上运行，数据不会离开本设备。",
+		"editingHint": "双击单词即可修正，Backspace 将其从影片中剪掉。",
+		"editingHintDev": "双击单词即可修正，Backspace 将其从影片中剪掉，在两个单词之间输入即可添加新词。",
+		"helpInsert": "在两个词之间输入即可添加一个琥珀色的新词：它只进入字幕，不改动画面。",
+		"editWord": "编辑“{{word}}”",
+		"correctedWord": "已更正 — 转录原文为“{{original}}”",
+		"revertWord": "还原为“{{original}}”",
+		"blankedWord": "已清空",
+		"insertAria": "新词",
+		"insertedWord": "你添加的词 — 背后没有声音",
+		"removeInserted": "删除“{{word}}”"
 	},
 	"captions": {
 		"show": "显示字幕",
-		"noTranscript": "字幕读取自媒体转写文本。视频转写完成后即可启用。",
+		"noTranscript": "字幕来自媒体的转录。请先转录此视频以启用字幕。",
 		"transcribing": "转录中…",
 		"derivedFromTranscript": "{{count}} 行字幕，实时由转录生成。",
 		"hiddenHint": "字幕来自此媒体的转录。开启后可在预览和导出中看到。",
@@ -322,7 +332,8 @@
 		"alignRight": "右对齐",
 		"lineLength": "行长",
 		"minWords": "每行最少词数",
-		"maxWords": "每行最多词数"
+		"maxWords": "每行最多词数",
+		"transcribe": "转录视频"
 	},
 	"audio": {
 		"title": "音频",

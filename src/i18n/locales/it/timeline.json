@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "Questo contenuto non ha audio",
 		"smartCutsNoSpeech": "Nessun parlato rilevato",
 		"smartCutsFailed": "Trascrizione non riuscita: riprova da Contenuti multimediali",
-		"addAudioTooltip": "Aggiungi audio"
+		"addAudioTooltip": "Aggiungi audio",
+		"addedWord": "Parola aggiunta: «{{word}}» — nessun audio dietro"
 	},
 	"audio": {
 		"addVoiceover": "Aggiungi voce fuori campo",

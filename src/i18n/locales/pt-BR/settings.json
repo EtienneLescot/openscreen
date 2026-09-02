@@ -265,7 +265,7 @@
 	"transcript": {
 		"clipLabel": "Clipe {{index}}",
 		"editorAria": "Transcrição de {{filename}}",
-		"help": "Transcrição agregada de todos os clipes da linha do tempo. Backspace / Delete em uma palavra ou seleção marca como ignorada (em vermelho). Passe o mouse sobre um trecho vermelho para restaurá-lo.",
+		"help": "Transcrição agregada de todos os clipes da linha do tempo. Backspace / Delete em uma palavra ou seleção a corta do vídeo (em vermelho). Clique duas vezes em uma palavra para corrigir o texto. Passe o mouse sobre uma palavra marcada para desfazer.",
 		"laneLabel": "Ler a transcrição de",
 		"laneRecording": "Gravação",
 		"laneVoiceover": "Narração",
@@ -280,11 +280,21 @@
 		"transcribeNow": "Transcrever agora",
 		"transcribing": "Transcrevendo…",
 		"trimSilence": "Cortar silêncio ({{duration}} s)",
-		"whisperHint": "A transcrição usa o Whisper local — roda no seu computador, nenhum dado sai do dispositivo."
+		"whisperHint": "A transcrição usa o Whisper local — roda no seu computador, nenhum dado sai do dispositivo.",
+		"editingHint": "Clique duas vezes em uma palavra para corrigi-la, Backspace a corta do vídeo.",
+		"editingHintDev": "Clique duas vezes em uma palavra para corrigi-la, Backspace a corta do vídeo, digite entre duas palavras para adicionar uma.",
+		"helpInsert": "Digite entre duas palavras para adicionar uma, em âmbar: ela vai para as legendas e não mexe no vídeo.",
+		"editWord": "Editar \"{{word}}\"",
+		"correctedWord": "Corrigida — a transcrição dizia \"{{original}}\"",
+		"revertWord": "Restaurar \"{{original}}\"",
+		"blankedWord": "apagada",
+		"insertAria": "Nova palavra",
+		"insertedWord": "Adicionada por você — sem áudio por trás",
+		"removeInserted": "Excluir \"{{word}}\""
 	},
 	"captions": {
 		"show": "Mostrar legendas",
-		"noTranscript": "As legendas são lidas da transcrição da mídia. Elas são ativadas assim que o vídeo for transcrito.",
+		"noTranscript": "As legendas são lidas da transcrição da mídia. Transcreva este vídeo para ativá-las.",
 		"transcribing": "Transcrevendo…",
 		"derivedFromTranscript": "{{count}} linhas de legenda, derivadas ao vivo da transcrição.",
 		"hiddenHint": "As legendas vêm da transcrição desta mídia. Ative-as para vê-las na prévia e nas exportações.",
@@ -322,7 +332,8 @@
 		"alignRight": "Direita",
 		"lineLength": "Comprimento da linha",
 		"minWords": "Mín. de palavras por linha",
-		"maxWords": "Máx. de palavras por linha"
+		"maxWords": "Máx. de palavras por linha",
+		"transcribe": "Transcrever vídeo"
 	},
 	"audio": {
 		"title": "Áudio",

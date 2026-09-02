@@ -97,6 +97,8 @@ beforeAll(() => {
 function renderBars(atGainDb: number): string[] {
 	gainDb = atGainDb;
 	const tl = {
+		// Marks for added words come from the transcript; this project has none.
+		transcripts: [],
 		clips: [
 			{
 				id: "c0",

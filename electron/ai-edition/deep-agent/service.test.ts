@@ -57,7 +57,9 @@ const PHANTOM_TOOLS: readonly string[] = PHANTOM_TOOL_NAMES;
 const ARGS: Record<string, unknown> = {
 	getCurrentDocument: {},
 	getTranscript: {},
+	getTranscriptWords: {},
 	getCursorTrack: {},
+	setWordText: { wordId: "word_1", text: "Hullo" },
 	addTrim: { startSec: 1, endSec: 2 },
 	addTrims: { ranges: [{ startSec: 1, endSec: 2 }] },
 	setTrim: { trimRangeId: "trim_1", startSec: 1, endSec: 2 },
@@ -113,9 +115,18 @@ function fixtureDocument(): AxcutDocument {
 				assetId: "asset_1",
 				language: "en",
 				segments: [
-					{ id: "seg_1", kind: "speech", startSec: 0, endSec: 5, text: "Hello", wordIds: [] },
+					{
+						id: "seg_1",
+						kind: "speech",
+						startSec: 0,
+						endSec: 5,
+						text: "Hello",
+						// A real word, so `setWordText` lands on its WRITE branch in the table
+						// below — a tool refused for an unknown id would look non-mutating.
+						wordIds: ["word_1"],
+					},
 				],
-				words: [],
+				words: [{ id: "word_1", segmentId: "seg_1", startSec: 0, endSec: 5, text: "Hello" }],
 			},
 		],
 		timeline: {
@@ -355,6 +366,7 @@ describe("one description of the tools, not two", () => {
 		expect(OPENSCREEN_TOOLS.filter((n) => !isMutatingTool(n))).toEqual([
 			"getCurrentDocument",
 			"getTranscript",
+			"getTranscriptWords",
 			"getCursorTrack",
 		]);
 	});

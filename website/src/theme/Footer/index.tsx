@@ -35,6 +35,7 @@ export default function Footer(): ReactNode {
 						<div className={styles.colLinks}>
 							<Link href="https://github.com/getopenscreen/openscreen">GitHub</Link>
 							<Link href="https://github.com/getopenscreen/openscreen/releases">Releases</Link>
+							<Link to="/blog">Blog</Link>
 						</div>
 					</div>
 
@@ -47,7 +48,7 @@ export default function Footer(): ReactNode {
 							<Link href="https://github.com/getopenscreen/openscreen/blob/main/LICENSE">
 								License (MIT)
 							</Link>
-							<Link href="https://discord.gg/VvT6Vtnyh">Discord</Link>
+							<Link href="https://getopenscreen.com/discord">Discord</Link>
 						</div>
 					</div>
 				</div>

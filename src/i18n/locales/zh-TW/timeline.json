@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "此媒體沒有音訊",
 		"smartCutsNoSpeech": "未偵測到語音",
 		"smartCutsFailed": "轉錄失敗 — 請在「媒體」中重試",
-		"addAudioTooltip": "新增音訊"
+		"addAudioTooltip": "新增音訊",
+		"addedWord": "已加入的字詞：「{{word}}」— 背後沒有聲音"
 	},
 	"audio": {
 		"addVoiceover": "新增旁白",

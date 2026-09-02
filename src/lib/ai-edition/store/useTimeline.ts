@@ -1443,11 +1443,18 @@ export function useTimeline() {
 		zoomRegions: document?.zoomRanges ?? [],
 		trimRanges: document?.timeline.trimRanges ?? [],
 		audioTracks: document?.audioTracks ?? [],
+		// The pauses added words created. The ruler counts them; nothing else in the
+		// timeline store writes them (see `document/transcript.ts`).
+		insertRanges: document?.timeline.insertRanges ?? [],
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
 		speedRegions,
 		cameraFullscreenRegions,
 		clips: document?.timeline.clips ?? [],
 		assets: document?.assets ?? [],
+		// The timeline marks where the user has ADDED words — text with no audio behind it.
+		// Read straight off the transcript: the word is the only record of an insert, and a
+		// mark derived from it can never disagree with the pane that shows the same word.
+		transcripts: document?.transcripts ?? [],
 		hasDoc,
 		selection,
 		multiSelection,

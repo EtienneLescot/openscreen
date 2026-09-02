@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "Ce média n'a pas d'audio",
 		"smartCutsNoSpeech": "Aucune parole détectée",
 		"smartCutsFailed": "Échec de la transcription — relancez-la depuis Médias",
-		"addAudioTooltip": "Ajouter un audio"
+		"addAudioTooltip": "Ajouter un audio",
+		"addedWord": "Mot ajouté : « {{word}} » — aucun son derrière"
 	},
 	"audio": {
 		"addVoiceover": "Ajouter une voix off",

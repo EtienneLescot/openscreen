@@ -57,6 +57,9 @@ function renderPane(
 				onSeek={vi.fn()}
 				onAddTrimRange={vi.fn()}
 				onRemoveTrimRange={vi.fn()}
+				onSetWordText={vi.fn()}
+				onInsertWord={vi.fn()}
+				onRemoveWords={vi.fn()}
 				onTranscribe={vi.fn()}
 				canTranscribe
 				isTranscribing={overrides.isTranscribing ?? false}

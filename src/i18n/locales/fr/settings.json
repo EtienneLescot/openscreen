@@ -265,7 +265,7 @@
 	"transcript": {
 		"clipLabel": "Clip {{index}}",
 		"editorAria": "Transcription de {{filename}}",
-		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le marque comme ignoré (en rouge). Survolez un passage rouge pour le restaurer.",
+		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le coupe du film (en rouge). Double-cliquez sur un mot pour corriger son texte. Survolez un mot marqué pour annuler.",
 		"laneLabel": "Lire la transcription depuis",
 		"laneRecording": "Enregistrement",
 		"laneVoiceover": "Voix off",
@@ -280,11 +280,21 @@
 		"transcribeNow": "Transcrire maintenant",
 		"transcribing": "Transcription…",
 		"trimSilence": "Couper le silence ({{duration}} s)",
-		"whisperHint": "La transcription utilise Whisper en local — tout s'exécute sur votre ordinateur, aucune donnée ne quitte l'appareil."
+		"whisperHint": "La transcription utilise Whisper en local — tout s'exécute sur votre ordinateur, aucune donnée ne quitte l'appareil.",
+		"editingHint": "Double-cliquez sur un mot pour le corriger, Retour arrière le coupe du film.",
+		"editingHintDev": "Double-cliquez sur un mot pour le corriger, Retour arrière le coupe du film, tapez entre deux mots pour en ajouter un.",
+		"helpInsert": "Tapez entre deux mots pour en ajouter un, en ambre : il va dans les sous-titres et ne touche pas au film.",
+		"editWord": "Modifier « {{word}} »",
+		"correctedWord": "Corrigé — la transcription disait « {{original}} »",
+		"revertWord": "Rétablir « {{original}} »",
+		"blankedWord": "vidé",
+		"insertAria": "Nouveau mot",
+		"insertedWord": "Ajouté par vous — aucun son derrière",
+		"removeInserted": "Supprimer « {{word}} »"
 	},
 	"captions": {
 		"show": "Afficher les sous-titres",
-		"noTranscript": "Les sous-titres sont lus dans la transcription du média. Ils s’activent une fois la vidéo transcrite.",
+		"noTranscript": "Les sous-titres sont issus de la transcription du média. Transcrivez cette vidéo pour les activer.",
 		"transcribing": "Transcription…",
 		"derivedFromTranscript": "{{count}} lignes de sous-titres, dérivées de la transcription en direct.",
 		"hiddenHint": "Les sous-titres proviennent de la transcription de ce média. Activez-les pour les voir dans l'aperçu et à l'export.",
@@ -322,7 +332,8 @@
 		"alignRight": "Droite",
 		"lineLength": "Longueur des lignes",
 		"minWords": "Mots min. par ligne",
-		"maxWords": "Mots max. par ligne"
+		"maxWords": "Mots max. par ligne",
+		"transcribe": "Transcrire la vidéo"
 	},
 	"audio": {
 		"title": "Audio",

@@ -13,6 +13,12 @@ import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
+import {
+	type InsertSide,
+	insertDocumentWord,
+	removeDocumentWords,
+	setDocumentWordText,
+} from "@/lib/ai-edition/document/transcript";
 import { isModalOpen } from "@/lib/ai-edition/modalGuard";
 import { type AxcutAudioTrack, type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -616,6 +622,72 @@ export function NewEditorShell() {
 			);
 		},
 		[applyTimelineOp],
+	);
+
+	// transcript-pane → the word's own text. Unlike Backspace (which writes a trimRange and
+	// cuts the media), this writes only `transcript.words[].text`: the captions follow, the
+	// film is untouched. Queued on the SAME chain as the trims so correcting a word and
+	// cutting the next one cannot overwrite each other's save.
+	const handleSetWordText = useCallback(
+		(assetId: string, wordId: string, text: string) => {
+			void enqueueTimelineWrite(async () => {
+				// Read inside the chain: the previous save has resolved by now, so the store
+				// holds the document this edit has to be applied to.
+				const doc = useProjectStore.getState().document;
+				if (!doc) return;
+				try {
+					await saveDocument(setDocumentWordText(doc, assetId, wordId, text), { history: true });
+				} catch (err) {
+					// The word or its transcript vanished under the edit (a regeneration landed
+					// mid-typing). Nothing to retry — say so rather than dropping it silently.
+					toast.error(te("errors.wordEditFailed"), {
+						description: err instanceof Error ? err.message : String(err),
+					});
+				}
+			});
+		},
+		[enqueueTimelineWrite, saveDocument, te],
+	);
+
+	// transcript-pane → a word nobody said. It takes the silence it is dropped into and no
+	// audio at all, so unlike a cut it changes nothing about the film; today it reaches the
+	// captions and stops there.
+	const handleInsertWord = useCallback(
+		(assetId: string, anchorWordId: string, side: InsertSide, text: string) => {
+			void enqueueTimelineWrite(async () => {
+				const doc = useProjectStore.getState().document;
+				if (!doc) return;
+				try {
+					await saveDocument(insertDocumentWord(doc, assetId, anchorWordId, side, text), {
+						history: true,
+					});
+				} catch (err) {
+					toast.error(te("errors.wordInsertFailed"), {
+						description: err instanceof Error ? err.message : String(err),
+					});
+				}
+			});
+		},
+		[enqueueTimelineWrite, saveDocument, te],
+	);
+
+	// Deleting inserted words. One save for the whole set, so a Backspace over several of
+	// them is one Ctrl+Z, and the document layer refuses anything that was actually spoken.
+	const handleRemoveWords = useCallback(
+		(assetId: string, wordIds: string[]) => {
+			void enqueueTimelineWrite(async () => {
+				const doc = useProjectStore.getState().document;
+				if (!doc || wordIds.length === 0) return;
+				try {
+					await saveDocument(removeDocumentWords(doc, assetId, wordIds), { history: true });
+				} catch (err) {
+					toast.error(te("errors.wordRemoveFailed"), {
+						description: err instanceof Error ? err.message : String(err),
+					});
+				}
+			});
+		},
+		[enqueueTimelineWrite, saveDocument, te],
 	);
 
 	const handleSelectProject = useCallback(
@@ -1291,6 +1363,9 @@ export function NewEditorShell() {
 		onSeek: handleSeek,
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,
+		onSetWordText: handleSetWordText,
+		onInsertWord: handleInsertWord,
+		onRemoveWords: handleRemoveWords,
 		onTranscribe: handleTranscribe,
 		canTranscribe: hasAsset,
 		isTranscribing: transcriptGate.state === "pending",
@@ -1390,6 +1465,7 @@ export function NewEditorShell() {
 									speedRegions={tl.speedRegions}
 									cameraFullscreenRegions={tl.cameraFullscreenRegions}
 									trimRanges={tl.trimRanges}
+									insertRanges={document?.timeline?.insertRanges ?? []}
 									selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
 									onZoomFocusChange={tl.updateZoomFocusLive}
 									onZoomFocusCommit={() => void tl.commitZoomFocus()}

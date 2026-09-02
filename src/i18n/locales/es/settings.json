@@ -265,7 +265,7 @@
 	"transcript": {
 		"clipLabel": "Clip {{index}}",
 		"editorAria": "Transcripción de {{filename}}",
-		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la marca como omitida (en rojo). Pasa el cursor sobre un fragmento rojo para restaurarlo.",
+		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la corta del vídeo (en rojo). Haz doble clic en una palabra para corregir su texto. Pasa el cursor sobre una palabra marcada para deshacer.",
 		"laneLabel": "Leer la transcripción desde",
 		"laneRecording": "Grabación",
 		"laneVoiceover": "Voz en off",
@@ -280,11 +280,21 @@
 		"transcribeNow": "Transcribir ahora",
 		"transcribing": "Transcribiendo…",
 		"trimSilence": "Recortar silencio ({{duration}} s)",
-		"whisperHint": "La transcripción usa Whisper local: se ejecuta en tu equipo y ningún dato sale del dispositivo."
+		"whisperHint": "La transcripción usa Whisper local: se ejecuta en tu equipo y ningún dato sale del dispositivo.",
+		"editingHint": "Haz doble clic en una palabra para corregirla, Retroceso la corta del vídeo.",
+		"editingHintDev": "Haz doble clic en una palabra para corregirla, Retroceso la corta del vídeo, escribe entre dos palabras para añadir una.",
+		"helpInsert": "Escribe entre dos palabras para añadir una, en ámbar: llega a los subtítulos y no toca el vídeo.",
+		"editWord": "Editar «{{word}}»",
+		"correctedWord": "Corregida: la transcripción decía «{{original}}»",
+		"revertWord": "Restaurar «{{original}}»",
+		"blankedWord": "vaciada",
+		"insertAria": "Palabra nueva",
+		"insertedWord": "Añadida por ti: no hay audio detrás",
+		"removeInserted": "Eliminar «{{word}}»"
 	},
 	"captions": {
 		"show": "Mostrar subtítulos",
-		"noTranscript": "Los subtítulos se leen de la transcripción del medio. Se activan una vez transcrito el vídeo.",
+		"noTranscript": "Los subtítulos se leen de la transcripción del recurso. Transcribe este vídeo para activarlos.",
 		"transcribing": "Transcribiendo…",
 		"derivedFromTranscript": "{{count}} líneas de subtítulos, derivadas en vivo de la transcripción.",
 		"hiddenHint": "Los subtítulos provienen de la transcripción de este recurso. Actívalos para verlos en la vista previa y en las exportaciones.",
@@ -322,7 +332,8 @@
 		"alignRight": "Derecha",
 		"lineLength": "Longitud de línea",
 		"minWords": "Mín. palabras por línea",
-		"maxWords": "Máx. palabras por línea"
+		"maxWords": "Máx. palabras por línea",
+		"transcribe": "Transcribir vídeo"
 	},
 	"audio": {
 		"title": "Audio",

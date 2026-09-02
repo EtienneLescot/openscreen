@@ -265,7 +265,7 @@
 	"transcript": {
 		"clipLabel": "Klip {{index}}",
 		"editorAria": "{{filename}} dökümü",
-		"help": "Zaman çizelgesindeki tüm kliplerin birleşik dökümü. Bir kelimede veya seçimde Backspace / Delete tuşuna basmak onu atlanmış (kırmızı) olarak işaretler. Kırmızı bölümün üzerine gelerek geri alabilirsiniz.",
+		"help": "Zaman çizelgesindeki tüm kliplerin birleşik dökümü. Bir kelimede veya seçimde Backspace / Delete tuşu onu videodan keser (kırmızı). Bir kelimeye çift tıklayarak metnini düzeltebilirsiniz. İşaretli bir kelimenin üzerine gelerek geri alabilirsiniz.",
 		"laneLabel": "Deşifreyi şuradan oku",
 		"laneRecording": "Kayıt",
 		"laneVoiceover": "Dış ses",
@@ -280,11 +280,21 @@
 		"transcribeNow": "Şimdi dökümünü çıkar",
 		"transcribing": "Döküm çıkarılıyor…",
 		"trimSilence": "Sessizliği kırp ({{duration}} sn)",
-		"whisperHint": "Döküm yerel Whisper kullanır — bilgisayarınızda çalışır, hiçbir veri cihazdan çıkmaz."
+		"whisperHint": "Döküm yerel Whisper kullanır — bilgisayarınızda çalışır, hiçbir veri cihazdan çıkmaz.",
+		"editingHint": "Bir kelimeye çift tıklayarak düzeltin, Backspace onu videodan keser.",
+		"editingHintDev": "Bir kelimeye çift tıklayarak düzeltin, Backspace onu videodan keser, iki kelimenin arasına yazarak yeni kelime ekleyin.",
+		"helpInsert": "İki kelimenin arasına yazarak kehribar renginde yeni bir kelime ekleyebilirsiniz: altyazılara girer, videoya dokunmaz.",
+		"editWord": "\"{{word}}\" kelimesini düzenle",
+		"correctedWord": "Düzeltildi — dökümde \"{{original}}\" yazıyordu",
+		"revertWord": "\"{{original}}\" haline getir",
+		"blankedWord": "boşaltıldı",
+		"insertAria": "Yeni kelime",
+		"insertedWord": "Sizin eklediğiniz — arkasında ses yok",
+		"removeInserted": "\"{{word}}\" kelimesini sil"
 	},
 	"captions": {
 		"show": "Altyazıları göster",
-		"noTranscript": "Altyazılar medyanın deşifresinden okunur. Video deşifre edildiğinde etkinleşirler.",
+		"noTranscript": "Altyazılar medyanın dökümünden okunur. Açmak için bu videonun dökümünü çıkarın.",
 		"transcribing": "Döküm çıkarılıyor…",
 		"derivedFromTranscript": "{{count}} altyazı satırı, dökümden canlı olarak türetildi.",
 		"hiddenHint": "Altyazılar bu medyanın dökümünden gelir. Önizlemede ve dışa aktarımlarda görmek için açın.",
@@ -322,7 +332,8 @@
 		"alignRight": "Sağ",
 		"lineLength": "Satır uzunluğu",
 		"minWords": "Satır başına en az kelime",
-		"maxWords": "Satır başına en çok kelime"
+		"maxWords": "Satır başına en çok kelime",
+		"transcribe": "Videonun dökümünü çıkar"
 	},
 	"audio": {
 		"title": "Ses",

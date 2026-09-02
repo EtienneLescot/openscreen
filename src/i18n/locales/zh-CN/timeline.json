@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "此媒体没有音频",
 		"smartCutsNoSpeech": "未检测到语音",
 		"smartCutsFailed": "转录失败 — 请在“媒体”中重试",
-		"addAudioTooltip": "添加音频"
+		"addAudioTooltip": "添加音频",
+		"addedWord": "已添加的词：“{{word}}” — 背后没有声音"
 	},
 	"audio": {
 		"addVoiceover": "添加配音",

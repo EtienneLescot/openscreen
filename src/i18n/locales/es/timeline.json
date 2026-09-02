@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "Este medio no tiene audio",
 		"smartCutsNoSpeech": "No se detectó voz",
 		"smartCutsFailed": "La transcripción falló: reinténtala desde Medios",
-		"addAudioTooltip": "Añadir audio"
+		"addAudioTooltip": "Añadir audio",
+		"addedWord": "Palabra añadida: «{{word}}» — sin audio detrás"
 	},
 	"audio": {
 		"addVoiceover": "Añadir voz en off",

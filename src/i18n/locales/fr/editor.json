@@ -18,7 +18,10 @@
 		"failedToSaveExport": "Échec de l'enregistrement de l'export",
 		"failedToSaveExportedVideo": "Échec de l'enregistrement de la vidéo exportée",
 		"failedToRevealInFolder": "Erreur lors de l'affichage dans le dossier : {{error}}",
-		"previewCompositorUnavailable": "Aperçu indisponible sur cette machine"
+		"previewCompositorUnavailable": "Aperçu indisponible sur cette machine",
+		"wordEditFailed": "Impossible de modifier ce mot",
+		"wordInsertFailed": "Impossible d'ajouter ce mot",
+		"wordRemoveFailed": "Impossible de supprimer ce mot"
 	},
 	"export": {
 		"canceled": "Export annulé",

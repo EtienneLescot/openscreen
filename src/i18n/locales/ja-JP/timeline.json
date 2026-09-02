@@ -87,7 +87,8 @@
 		"smartCutsNoAudio": "このメディアには音声がありません",
 		"smartCutsNoSpeech": "音声が検出されませんでした",
 		"smartCutsFailed": "文字起こしに失敗しました — メディアから再試行してください",
-		"addAudioTooltip": "音声を追加"
+		"addAudioTooltip": "音声を追加",
+		"addedWord": "追加した単語:「{{word}}」— 音声はありません"
 	},
 	"audio": {
 		"addVoiceover": "ナレーションを追加",

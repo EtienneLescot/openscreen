@@ -8,7 +8,7 @@ const SITE_URL = "https://getopenscreen.com";
 const REPO_SLUG = "getopenscreen/openscreen";
 const REPO_URL = `https://github.com/${REPO_SLUG}`;
 const UPSTREAM_REPO_URL = "https://github.com/siddharthvaddem/openscreen";
-const DISCORD_URL = "https://discord.gg/VvT6Vtnyh";
+const DISCORD_URL = "https://getopenscreen.com/discord";
 
 // Kept under ~155 characters: past that, Google truncates the snippet mid-word.
 const SITE_DESCRIPTION =
@@ -210,7 +210,24 @@ export default async function createConfig(): Promise<Config> {
 						sidebarPath: "./sidebars.ts",
 						editUrl: `${REPO_URL}/tree/main/website/`,
 					},
-					blog: false,
+					// A development journal, not a marketing blog. Each post is dated to
+					// the milestone it covers, so the list reads as a timeline.
+					blog: {
+						routeBasePath: "blog",
+						blogTitle: "OpenScreen development journal",
+						blogDescription:
+							"Release notes with the reasoning attached, from the maintainer of the community-maintained OpenScreen continuation.",
+						showReadingTime: true,
+						postsPerPage: "ALL",
+						blogSidebarCount: "ALL",
+						blogSidebarTitle: "All posts",
+						feedOptions: {
+							type: "all",
+							title: "OpenScreen development journal",
+							description:
+								"What I have shipped since picking OpenScreen up in June 2026, and what broke along the way.",
+						},
+					},
 					theme: {
 						customCss: "./src/css/custom.css",
 					},
@@ -280,6 +297,14 @@ export default async function createConfig(): Promise<Config> {
 						sidebarId: "mainSidebar",
 						position: "left",
 						label: "Docs",
+						className: "navbar-link-strong",
+					},
+					{
+						// A router link (not href) so it gets SPA navigation and route
+						// prefetch, like the Download CTA below.
+						to: "/blog",
+						label: "Blog",
+						position: "left",
 						className: "navbar-link-strong",
 					},
 					{

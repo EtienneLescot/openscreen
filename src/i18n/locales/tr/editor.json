@@ -12,7 +12,10 @@
 		"failedToSaveExport": "Dışa aktarım kaydedilemedi",
 		"failedToSaveExportedVideo": "Dışa aktarılan video kaydedilemedi",
 		"failedToRevealInFolder": "Klasörde gösterme hatası: {{error}}",
-		"previewCompositorUnavailable": "Bu makinede önizleme kullanılamıyor"
+		"previewCompositorUnavailable": "Bu makinede önizleme kullanılamıyor",
+		"wordEditFailed": "Bu kelime değiştirilemedi",
+		"wordInsertFailed": "Bu kelime eklenemedi",
+		"wordRemoveFailed": "Bu kelime silinemedi"
 	},
 	"export": {
 		"canceled": "Dışa aktarım iptal edildi",

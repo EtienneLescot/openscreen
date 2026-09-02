@@ -265,7 +265,7 @@
 	"transcript": {
 		"clipLabel": "Clip {{index}}",
 		"editorAria": "Trascrizione di {{filename}}",
-		"help": "Trascrizione aggregata di tutti i clip sulla timeline. Backspace / Canc su una parola o selezione la segna come saltata (in rosso). Passa sopra un tratto rosso per ripristinarlo.",
+		"help": "Trascrizione aggregata di tutti i clip sulla timeline. Backspace / Canc su una parola o selezione la taglia dal video (in rosso). Fai doppio clic su una parola per correggerne il testo. Passa sopra una parola contrassegnata per annullare.",
 		"laneLabel": "Leggi la trascrizione da",
 		"laneRecording": "Registrazione",
 		"laneVoiceover": "Voce fuori campo",
@@ -280,11 +280,21 @@
 		"transcribeNow": "Trascrivi ora",
 		"transcribing": "Trascrizione…",
 		"trimSilence": "Taglia silenzio ({{duration}} s)",
-		"whisperHint": "La trascrizione usa Whisper in locale: gira sul tuo computer, nessun dato lascia il dispositivo."
+		"whisperHint": "La trascrizione usa Whisper in locale: gira sul tuo computer, nessun dato lascia il dispositivo.",
+		"editingHint": "Fai doppio clic su una parola per correggerla, Backspace la taglia dal video.",
+		"editingHintDev": "Fai doppio clic su una parola per correggerla, Backspace la taglia dal video, scrivi tra due parole per aggiungerne una.",
+		"helpInsert": "Scrivi tra due parole per aggiungerne una, in ambra: finisce nei sottotitoli e non tocca il video.",
+		"editWord": "Modifica «{{word}}»",
+		"correctedWord": "Corretta — la trascrizione diceva «{{original}}»",
+		"revertWord": "Ripristina «{{original}}»",
+		"blankedWord": "svuotata",
+		"insertAria": "Nuova parola",
+		"insertedWord": "Aggiunta da te — nessun audio dietro",
+		"removeInserted": "Elimina «{{word}}»"
 	},
 	"captions": {
 		"show": "Mostra sottotitoli",
-		"noTranscript": "I sottotitoli vengono letti dalla trascrizione del media. Si attivano una volta trascritto il video.",
+		"noTranscript": "I sottotitoli vengono letti dalla trascrizione del media. Trascrivi questo video per attivarli.",
 		"transcribing": "Trascrizione…",
 		"derivedFromTranscript": "{{count}} righe di sottotitoli, derivate dal vivo dalla trascrizione.",
 		"hiddenHint": "I sottotitoli provengono dalla trascrizione di questo media. Attivali per vederli nell'anteprima e nelle esportazioni.",
@@ -322,7 +332,8 @@
 		"alignRight": "Destra",
 		"lineLength": "Lunghezza riga",
 		"minWords": "Parole min. per riga",
-		"maxWords": "Parole max. per riga"
+		"maxWords": "Parole max. per riga",
+		"transcribe": "Trascrivi video"
 	},
 	"audio": {
 		"title": "Audio",
