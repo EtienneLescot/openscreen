@@ -808,7 +808,16 @@ pub fn run_composited_multi(
     // un pilote sans VAAPI, un device wgpu ouvert sans les extensions de memoire
     // externe. Aucun de ces cas n'est une erreur — l'export doit juste rester
     // celui d'avant.
-    let hw = if matches!(params.codec, ExportCodec::H264) {
+    // L'ECHAPPATOIRE DOIT AUSSI COUVRIR CE CHOIX. `OPENSCREEN_EXPORT_ENCODER`
+    // existe pour forcer un encodeur ; si le chemin materiel l'ignorait, demander
+    // `libopenh264` donnerait quand meme du VAAPI — et le reglage servirait
+    // surtout a diagnostiquer, donc mentir ici est pire qu'ailleurs.
+    let forced = std::env::var("OPENSCREEN_EXPORT_ENCODER").ok();
+    let hw_allowed = match forced.as_deref() {
+        None => true,
+        Some(name) => name.contains("vaapi"),
+    };
+    let hw = if hw_allowed && matches!(params.codec, ExportCodec::H264) {
         unsafe { VaapiEncoder::open(out_w as i32, out_h as i32, out_fps, bit_rate) }
             .and_then(|v| comp.create_exportable_staging(comp.nv12_geometry().3).map(|st| (v, st)))
     } else {
