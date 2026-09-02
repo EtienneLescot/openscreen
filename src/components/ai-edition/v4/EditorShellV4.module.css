@@ -1483,16 +1483,22 @@
 .lanePillGhost {
 	position: absolute;
 	top: 1px;
-	height: 22px;
+	/* 30px, not 22: the same height as .laneAudio / .laneVoiceover. The pill is a
+	   window onto this tape, so a ghost 8px shorter reads as a separate, misaligned
+	   object sitting behind it rather than as the rest of the same strip. */
+	height: 30px;
 	min-width: 1px;
 	overflow: hidden;
 	border-radius: 6px;
-	border: 1px dashed color-mix(in oklch, var(--accent) 55%, transparent);
+	/* Faint enough to read as "not the pill". The dashed outline at 55% accent was
+	   the loudest thing in the lane — it drew the eye to the part you are NOT
+	   editing, and on a long file that outline runs off both edges of the screen. */
+	border: 1px dashed color-mix(in oklch, var(--accent) 18%, transparent);
 	pointer-events: none;
 	z-index: 1;
 }
 .lanePillGhost .tlWave {
-	opacity: 0.4;
+	opacity: 0.18;
 }
 /* Crop readout pinned to the pointer while an audio pill's edge is being pulled —
    in → out over the file's length. Rendered at the component root (see the JSX note
