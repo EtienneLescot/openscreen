@@ -48,7 +48,7 @@ export default function Footer(): ReactNode {
 							<Link href="https://github.com/getopenscreen/openscreen/blob/main/LICENSE">
 								License (MIT)
 							</Link>
-							<Link href="https://discord.gg/VvT6Vtnyh">Discord</Link>
+							<Link href="https://getopenscreen.com/discord">Discord</Link>
 						</div>
 					</div>
 				</div>

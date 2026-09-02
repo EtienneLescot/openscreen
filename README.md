@@ -14,7 +14,7 @@
   <a href="https://github.com/getopenscreen/openscreen/blob/main/LICENSE"><img src="https://img.shields.io/github/license/getopenscreen/openscreen?style=for-the-badge&label=License" alt="License" /></a>
   <a href="https://github.com/getopenscreen/openscreen/releases/latest"><img src="https://img.shields.io/github/v/release/getopenscreen/openscreen?style=for-the-badge&label=Release" alt="Latest Release" /></a>
   <a href="https://github.com/getopenscreen/openscreen/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/getopenscreen/openscreen/ci.yml?style=for-the-badge&label=CI" alt="CI Status" /></a>
-  <a href="https://discord.gg/VvT6Vtnyh"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://getopenscreen.com/discord"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=for-the-badge" alt="Platform" />
 </p>
 
@@ -194,7 +194,7 @@ For safety, download OpenScreen only from the official GitHub Releases linked fr
 
 OpenScreen is community-driven. If you need help, want to report a bug, or just want to chat with other users and contributors:
 
-- 💬 **Discord** — [Join the OpenScreen Discord](https://discord.gg/VvT6Vtnyh) for real-time help, showcase, and discussion
+- 💬 **Discord** — [Join the OpenScreen Discord](https://getopenscreen.com/discord) for real-time help, showcase, and discussion
 - 🐞 **[GitHub Issues](https://github.com/getopenscreen/openscreen/issues)** — bug reports and feature requests
 - 🗺️ **[Roadmap](./ROADMAP.md)** — see what we're building next
 

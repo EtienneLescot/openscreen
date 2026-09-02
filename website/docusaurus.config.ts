@@ -8,7 +8,7 @@ const SITE_URL = "https://getopenscreen.com";
 const REPO_SLUG = "getopenscreen/openscreen";
 const REPO_URL = `https://github.com/${REPO_SLUG}`;
 const UPSTREAM_REPO_URL = "https://github.com/siddharthvaddem/openscreen";
-const DISCORD_URL = "https://discord.gg/VvT6Vtnyh";
+const DISCORD_URL = "https://getopenscreen.com/discord";
 
 // Kept under ~155 characters: past that, Google truncates the snippet mid-word.
 const SITE_DESCRIPTION =
