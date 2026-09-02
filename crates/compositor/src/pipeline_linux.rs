@@ -718,6 +718,70 @@ impl Drop for EncodeWorker {
 /// La marche de timeline est PARTAGEE (`walk_composited_timeline`) : elle compose
 /// chaque frame de sortie (vitesse/fenetrage/curseur inclus) puis appelle
 /// `on_frame(n)`, ou on relit + encode + draine.
+
+/// Fin de marche du chemin SOFTWARE : vider la ring de relecture, puis rendre au
+/// compositeur sa profondeur par defaut.
+///
+/// Le drain doit avoir lieu AVANT de fermer la file : les `depth - 1` dernieres
+/// copies sont encore en vol, et sans lui la derniere frame composee ne serait
+/// jamais encodee — video amputee d'une frame.
+fn hw_none_tail(
+    comp: &crate::compositor::Compositor,
+    worker: &mut EncodeWorker,
+    out_w: u32,
+    out_h: u32,
+    encoded_pts: &mut i64,
+) -> Result<()> {
+    unsafe {
+        loop {
+            let frame = worker.take_free()?;
+            let mut filled = false;
+            let got = comp.readback_take_yuv_with(|rw, rh, planes| {
+                VideoEncoder::copy_into(frame, planes, rw as i32, rh as i32, out_w as i32, out_h as i32)?;
+                filled = true;
+                Ok(())
+            })?;
+            if filled {
+                worker.submit(frame, *encoded_pts)?;
+                *encoded_pts += 1;
+            } else {
+                worker.give_back(frame);
+            }
+            if !got {
+                break;
+            }
+        }
+        // Le compositeur peut survivre a l'export (l'appelant le possede) : on lui
+        // rend sa profondeur par defaut plutot que de lui laisser une ring a 2 et
+        // le buffer qui va avec.
+        comp.set_readback_yuv_depth(1)?;
+    }
+    Ok(())
+}
+
+/// Ou partent les frames composees. Voir le commentaire au point de choix.
+enum Sink {
+    /// Encodage software, deporte sur un thread.
+    Software(Box<EncodeWorker>),
+    /// Encodage materiel depuis un dmabuf, sur place.
+    Hardware {
+        enc: VaapiEncoder,
+        mux: Muxer,
+        staging: crate::compositor::ExportableStaging,
+    },
+}
+
+impl Sink {
+    /// Le worker software. Ne doit etre appele qu'apres avoir ecarte le cas
+    /// materiel — le chemin materiel n'en a pas.
+    fn worker(&mut self) -> &mut EncodeWorker {
+        match self {
+            Sink::Software(w) => w,
+            Sink::Hardware { .. } => unreachable!("worker() sur le chemin materiel"),
+        }
+    }
+}
+
 pub fn run_composited_multi(
     clips: &[ClipSource],
     out: &str,
@@ -736,6 +800,20 @@ pub fn run_composited_multi(
     let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
     let t0 = std::time::Instant::now();
 
+    // L'ENCODEUR SE CHOISIT AVANT LE MUXER, parce que c'est lui qui decrit le
+    // flux video. `h264_vaapi` s'il s'ouvre et que le compositeur sait exporter
+    // sa memoire ; sinon l'encodeur software, inchange.
+    //
+    // Le repli couvre plus que l'absence de GPU : pas de `/dev/dri/renderD128`,
+    // un pilote sans VAAPI, un device wgpu ouvert sans les extensions de memoire
+    // externe. Aucun de ces cas n'est une erreur — l'export doit juste rester
+    // celui d'avant.
+    let hw = if matches!(params.codec, ExportCodec::H264) {
+        unsafe { VaapiEncoder::open(out_w as i32, out_h as i32, out_fps, bit_rate) }
+            .and_then(|v| comp.create_exportable_staging(comp.nv12_geometry().3).map(|st| (v, st)))
+    } else {
+        None
+    };
     let enc = VideoEncoder::open(&params.codec, out_w as i32, out_h as i32, out_fps, bit_rate)?;
     // ALIAS LU UNIQUEMENT AVANT LE DEMARRAGE DU WORKER. Il ne sert qu'a decrire
     // le flux au muxer, juste en dessous ; passe `EncodeWorker::spawn`, le
@@ -743,7 +821,14 @@ pub fn run_composited_multi(
     // etre touchee. S'en resservir apres serait un `Sync` officieux :
     // `VideoEncoder` est `Send` et volontairement pas `Sync`, et un
     // `*mut AVCodecContext` recopie efface exactement cette distinction.
-    let ectx = enc.ctx;
+    let ectx = match &hw {
+        Some((v, _)) => v.ctx(),
+        None => enc.ctx,
+    };
+    eprintln!(
+        "[pipeline] encodeur video : {}",
+        if hw.is_some() { "h264_vaapi (materiel, dmabuf)" } else { "software" }
+    );
 
     let mut screen_decs: HashMap<String, Decoder> = HashMap::new();
     let mut webcam_decs: HashMap<String, Decoder> = HashMap::new();
@@ -789,7 +874,14 @@ pub fn run_composited_multi(
     // Profondeur 3 : deux frames en vol suffisent a couvrir l'encodeur, la
     // troisieme absorbe les a-coups de la marche (une fin de clip y decode tout
     // l'audio du clip d'un coup, cf. `on_clip_end`).
-    let mut worker = EncodeWorker::spawn(enc, mux, 3)?;
+    // Deux formes, pas deux variantes d'une meme : le chemin software encode sur
+    // un thread (l'encodeur y coute ~8 ms/frame, il faut le sortir du chemin
+    // critique), le chemin materiel encode sur place (~3 ms) et garde le muxer
+    // sous la main. Les melanger rendrait les deux illisibles.
+    let mut sink = match hw {
+        Some((venc, staging)) => Sink::Hardware { enc: venc, mux, staging },
+        None => Sink::Software(Box::new(EncodeWorker::spawn(enc, mux, 3)?)),
+    };
 
     // Un PCM par clip, assemble apres la marche video (elle seule dit combien de
     // frames chaque clip a produit, donc combien d'audio lui revient).
@@ -822,6 +914,22 @@ pub fn run_composited_multi(
                 // precedente : c'est tout le pipelining GPU. L'encodage, lui,
                 // n'est plus ici du tout — il tourne sur `worker` pendant que
                 // cette closure compose deja la frame suivante.
+                match &mut sink {
+                    Sink::Hardware { enc, mux, staging } => {
+                        // Synchrone : la frame est composee dans la memoire
+                        // exportable, puis encodee depuis son fd. Pas de ring —
+                        // personne n'a besoin de la relire cote CPU.
+                        comp.compose_into_dmabuf(staging)?;
+                        let (bpr_y, bpr_uv, off_uv, _) = comp.nv12_geometry();
+                        enc.send_dmabuf(staging.fd, bpr_y, bpr_uv, off_uv, encoded_pts)?;
+                        encoded_pts += 1;
+                        mux.drain(enc.ctx())?;
+                        progress(n + 1);
+                        return Ok(());
+                    }
+                    Sink::Software(_) => {}
+                }
+                let worker = sink.worker();
                 let frame = worker.take_free()?;
                 let mut filled = false;
                 comp.readback_submit_yuv(|rw, rh, planes| {
@@ -878,43 +986,23 @@ pub fn run_composited_multi(
         )?
     };
 
-    unsafe {
-        // Drain de la ring AVANT de fermer la file : les `depth - 1` dernieres
-        // copies sont encore en vol, et sans ce drain la derniere frame composee
-        // ne serait jamais encodee (video amputee d'une frame).
-        loop {
-            let frame = worker.take_free()?;
-            let mut filled = false;
-            let got = comp.readback_take_yuv_with(|rw, rh, planes| {
-                VideoEncoder::copy_into(
-                    frame,
-                    planes,
-                    rw as i32,
-                    rh as i32,
-                    out_w as i32,
-                    out_h as i32,
-                )?;
-                filled = true;
-                Ok(())
-            })?;
-            if filled {
-                worker.submit(frame, encoded_pts)?;
-                encoded_pts += 1;
-            } else {
-                worker.give_back(frame);
-            }
-            if !got {
-                break;
-            }
+    // Le chemin materiel n'a ni ring ni file : il ne reste qu'a vider l'encodeur.
+    if let Sink::Hardware { enc, mux, .. } = &mut sink {
+        unsafe {
+            crate::ffi::avcodec_send_frame(enc.ctx(), ptr::null_mut());
+            mux.drain(enc.ctx())?;
         }
-        // Le compositeur peut survivre a l'export (l'appelant le possede) : on
-        // lui rend sa profondeur par defaut plutot que de lui laisser une ring
-        // a 2 et le buffer de 8 Mo qui va avec.
-        comp.set_readback_yuv_depth(1)?;
-        // Fermer la file fait sortir le worker de sa boucle ; il vide l'encodeur
-        // et rend le muxer. Le `join` interne est l'arete de synchronisation qui
-        // rend `octx` de nouveau utilisable ici.
-        let mut mux = worker.finish()?;
+    }
+    let mut mux = match sink {
+        Sink::Hardware { mux, .. } => mux,
+        Sink::Software(worker) => {
+            let mut worker = worker;
+            hw_none_tail(comp, &mut worker, out_w, out_h, &mut encoded_pts)?;
+            worker.finish()?
+        }
+    };
+
+    unsafe {
         // Audio : le plan part des frames REELLEMENT produites par clip (un clip
         // raccourci voit son audio raccourci d'autant), puis un seul encode AAC.
         // Récupération des jobs audio lancés pendant le parcours. `spawn` en admet quatre
