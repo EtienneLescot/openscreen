@@ -428,14 +428,27 @@ struct YuvLayout {
 }
 
 impl YuvLayout {
+    /// DERIVE de `Compositor::yuv_layout_for`, jamais recalculee. Cette
+    /// arithmetique existait ici en double, et c'est precisement le genre de
+    /// duplication qui ne casse rien tant qu'elle est identique : le producteur
+    /// (le compositeur, qui remplit le buffer) et le consommateur (l'AVFrame du
+    /// pool) doivent s'accorder A L'OCTET, et un ecart ne donnerait pas une
+    /// panne mais une image decalee.
     fn for_size(w: i32, h: i32) -> YuvLayout {
-        let (w, h) = (w as usize, h as usize);
-        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
-        let bpr_y = w.div_ceil(256) * 256;
-        let bpr_uv = cw.div_ceil(256) * 256;
-        let off_u = bpr_y * h;
-        let off_v = off_u + bpr_uv * ch;
-        YuvLayout { bpr_y, bpr_uv, off_u, off_v, total: off_v + bpr_uv * ch }
+        let (bpr_y, bpr_uv, off_u, total) = crate::compositor::Compositor::yuv_layout_for(
+            w.max(0) as u32,
+            h.max(0) as u32,
+            crate::compositor::YuvFormat::I420,
+        );
+        let ch = (h.max(0) as u64).div_ceil(2);
+        let size_uv = u64::from(bpr_uv) * ch;
+        YuvLayout {
+            bpr_y: bpr_y as usize,
+            bpr_uv: bpr_uv as usize,
+            off_u: off_u as usize,
+            off_v: (off_u + size_uv) as usize,
+            total: total as usize,
+        }
     }
 }
 
@@ -861,16 +874,30 @@ pub fn run_composited_multi(
     } else {
         None
     };
-    let enc = VideoEncoder::open(&params.codec, out_w as i32, out_h as i32, out_fps, bit_rate)?;
+    // N'OUVRE PAS L'ENCODEUR SOFTWARE SI LE MATERIEL A GAGNE. Il etait construit
+    // dans tous les cas, donc alloue puis jamais utilise — visible par deux
+    // lignes « encodeur video » dans le log, et par un AVFrame de 3,1 Mo qui ne
+    // sert a rien.
+    let enc = match &hw {
+        Some(_) => None,
+        None => Some(VideoEncoder::open(
+            &params.codec,
+            out_w as i32,
+            out_h as i32,
+            out_fps,
+            bit_rate,
+        )?),
+    };
     // ALIAS LU UNIQUEMENT AVANT LE DEMARRAGE DU WORKER. Il ne sert qu'a decrire
     // le flux au muxer, juste en dessous ; passe `EncodeWorker::spawn`, le
     // contexte appartient au thread d'encodage et cette variable ne doit plus
     // etre touchee. S'en resservir apres serait un `Sync` officieux :
     // `VideoEncoder` est `Send` et volontairement pas `Sync`, et un
     // `*mut AVCodecContext` recopie efface exactement cette distinction.
-    let ectx = match &hw {
-        Some((v, _)) => v.ctx(),
-        None => enc.ctx,
+    let ectx = match (&hw, &enc) {
+        (Some((v, _)), _) => v.ctx(),
+        (None, Some(e)) => e.ctx,
+        (None, None) => bail!("aucun encodeur video disponible"),
     };
     eprintln!(
         "[pipeline] encodeur video : {}",
@@ -934,7 +961,10 @@ pub fn run_composited_multi(
             in_flight: None,
             next: 0,
         },
-        None => Sink::Software(Box::new(EncodeWorker::spawn(enc, mux, 3)?)),
+        None => {
+            let enc = enc.ok_or_else(|| anyhow::anyhow!("aucun encodeur video disponible"))?;
+            Sink::Software(Box::new(EncodeWorker::spawn(enc, mux, 3)?))
+        }
     };
 
     // Un PCM par clip, assemble apres la marche video (elle seule dit combien de
@@ -1099,6 +1129,11 @@ pub fn run_composited_multi(
                 let mut f = f;
                 crate::ffi::av_frame_free(&mut f);
             }
+            // Le compositeur survit a l'export : lui rendre sa profondeur par
+            // defaut vaut pour LES DEUX chemins. Le chemin materiel n'utilise pas
+            // la ring, mais `ensure_yuv_fmt` a pu la vider et la redimensionner,
+            // et la preview qui suit n'a pas a heriter de cet etat.
+            comp.set_readback_yuv_depth(1)?;
         }
     }
     let mut mux = match sink {
