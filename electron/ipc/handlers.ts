@@ -77,6 +77,7 @@ import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { toHelperRect } from "../native-bridge/helperCoordinates";
 import { scoreDeviceNameMatch } from "../recording/deviceNameMatching";
+import { resolveNativeMacCaptureStop } from "../recording/nativeMacCaptureStop";
 import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
@@ -1524,6 +1525,35 @@ function waitForNativeMacCaptureStop(proc: ChildProcessWithoutNullStreams) {
 		proc.once("close", onClose);
 		proc.once("error", onError);
 		inspectNativeMacCaptureOutput();
+	});
+}
+
+function hasNativeMacCaptureExited(proc: ChildProcessWithoutNullStreams) {
+	return proc.exitCode !== null || proc.signalCode !== null;
+}
+
+function waitForNativeMacCaptureExit(proc: ChildProcessWithoutNullStreams, timeoutMs = 5_000) {
+	if (hasNativeMacCaptureExited(proc)) {
+		return Promise.resolve(true);
+	}
+
+	return new Promise<boolean>((resolve) => {
+		const timer = setTimeout(() => {
+			cleanup();
+			resolve(false);
+		}, timeoutMs);
+		const onExit = () => {
+			cleanup();
+			resolve(true);
+		};
+		const cleanup = () => {
+			clearTimeout(timer);
+			proc.off("close", onExit);
+			proc.off("exit", onExit);
+		};
+
+		proc.once("close", onExit);
+		proc.once("exit", onExit);
 	});
 }
 
@@ -3087,11 +3117,21 @@ export function registerIpcHandlers(
 			completeNativeMacCursorPauseRange();
 			const stoppedPathPromise = waitForNativeMacCaptureStop(proc);
 			proc.stdin.write("stop\n");
-			const stoppedPath = await stoppedPathPromise;
-			const screenVideoPath = stoppedPath || preferredPath;
-			if (!screenVideoPath) {
-				throw new Error("Native macOS capture did not return an output path.");
+			const stopResolution = await resolveNativeMacCaptureStop({
+				preferredPath,
+				waitForStop: () => stoppedPathPromise,
+				waitForExit: () => waitForNativeMacCaptureExit(proc),
+			});
+			if (stopResolution.recovered) {
+				console.warn("[native-sck] stop failed but the completed MP4 was recovered", {
+					error:
+						stopResolution.stopError instanceof Error
+							? stopResolution.stopError.message
+							: String(stopResolution.stopError),
+					path: preferredPath,
+				});
 			}
+			const { path: screenVideoPath, recovered } = stopResolution;
 
 			if (cursorCaptureMode === "editable-overlay") {
 				await stopCursorRecording();
@@ -3132,7 +3172,10 @@ export function registerIpcHandlers(
 				success: true,
 				path: screenVideoPath,
 				session,
-				message: "Native macOS recording session stored successfully",
+				recovered,
+				message: recovered
+					? "Native macOS recording recovered from a failed stop"
+					: "Native macOS recording session stored successfully",
 			};
 		} catch (error) {
 			console.error("Failed to stop native macOS recording:", error);

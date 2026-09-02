@@ -1,0 +1,22 @@
+version: 1
+project:
+  name: "openscreen"
+  test_command: "npm run test"
+  repo: "nanameru/openscreen"
+
+source_roots:
+  - src
+  - electron
+  - tests
+
+cases:
+  - id: TC-001
+    title: "macOS録画の保存救済: helper停止通知失敗時に完成済みMP4を救済する"
+    feature: "macOS録画の保存救済"
+    scenario: "helper停止通知失敗時に完成済みMP4を救済する"
+    status: pass
+    priority: medium
+    type: regression
+    source: [electron/recording/nativeMacCaptureStop.ts]
+    test_file: "electron/recording/nativeMacCaptureStop.test.ts"
+    issues: [4]
