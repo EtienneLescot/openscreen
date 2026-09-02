@@ -3603,6 +3603,37 @@ mod tests {
         (0..w * h).map(|i| if i % w < w / 2 { 0u8 } else { 255u8 }).collect()
     }
 
+    /// Le buffer de staging exportable doit etre une VRAIE zone partagee : ce que
+    /// wgpu y ecrit, notre propre mapping doit le relire a l'identique.
+    ///
+    /// C'est le seul point reellement incertain de l'export dmabuf, et il se
+    /// verifie sans encodeur. Si ce test passe, la memoire qu'on remettra a VAAPI
+    /// est bien celle que le compositeur remplit ; s'il echoue, tout ce qui est
+    /// bati dessus produirait une image fausse plutot qu'une panne.
+    #[test]
+    fn exportable_staging_round_trips_through_wgpu() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        const N: u64 = 4096;
+        let Some(st) = comp.create_exportable_staging(N) else {
+            eprintln!("pas d'extensions de memoire externe — test saute");
+            return;
+        };
+        assert!(st.fd >= 0, "descripteur dmabuf invalide");
+        assert_eq!(st.size, N);
+
+        // Un motif non trivial : un remplissage constant passerait meme si les
+        // deux cotes regardaient deux zones differentes mais nulles.
+        let pattern: Vec<u8> = (0..N as usize).map(|i| (i * 31 + 7) as u8).collect();
+        gpu.context.write_buffer(st.buffer(), 0, &pattern);
+        gpu.context.submit(std::iter::empty());
+        gpu.device.poll(wgpu::Maintain::Wait);
+
+        let got = st.read_back().expect("read_back");
+        assert_eq!(got.len(), N as usize);
+        assert_eq!(got, pattern, "la memoire exportee ne porte pas ce que wgpu y a ecrit");
+    }
+
     /// La disposition NV12 doit etre EXACTEMENT celle que le pilote produit pour
     /// une image NV12 lineaire, parce que c'est elle qu'on decrira a VAAPI dans
     /// un `AVDRMFrameDescriptor`. Les valeurs ci-dessous ne sont pas devinees :
@@ -4326,6 +4357,165 @@ mod tests {
                 .expect("compose_frame");
             let (_, _, rgba) = comp.readback_direct().expect("readback_direct");
             rgba
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Staging exportable en dmabuf
+// ---------------------------------------------------------------------------
+
+/// Un buffer de staging dont la MEMOIRE est exportable en dmabuf, pour qu'un
+/// encodeur materiel puisse la lire sans repasser par le CPU.
+///
+/// POURQUOI IL EN FAUT UN DEUXIEME, ET PAS UN DRAPEAU SUR L'EXISTANT. wgpu
+/// n'expose aucun moyen de demander une allocation exportable : il faut la
+/// fabriquer soi-meme et la lui confier. Or `buffer_from_raw` construit un
+/// `Buffer { block: None }` -- wgpu accepte d'y ECRIRE (c'est une cible de
+/// `copy_texture_to_buffer` comme une autre) mais ne peut pas le faire lire par
+/// le CPU, sa mecanique de mapping passant par ce bloc qu'il ne possede pas.
+/// Le chemin logiciel, lui, DOIT le lire. Les deux ne peuvent donc pas partager
+/// un buffer, et l'export choisit lequel il alloue selon l'encodeur retenu.
+///
+/// La memoire est demandee HOST_VISIBLE pour que la verification puisse la
+/// relire directement ; un chemin purement GPU pourrait s'en passer.
+pub struct ExportableStaging {
+    /// Vue wgpu, utilisable comme destination de copie. En `Option` UNIQUEMENT
+    /// pour pouvoir la relacher explicitement avant la memoire dans `Drop`, cf.
+    /// l'ordre impose la-bas.
+    buffer: Option<wgpu::Buffer>,
+    /// Le descripteur a passer au consommateur. Possede : ferme dans `Drop`.
+    pub fd: i32,
+    pub size: u64,
+    device: ash::Device,
+    memory: ash::vk::DeviceMemory,
+}
+
+impl ExportableStaging {
+    /// La cible de copie a passer a wgpu.
+    pub fn buffer(&self) -> &wgpu::Buffer {
+        self.buffer.as_ref().expect("buffer relache")
+    }
+}
+
+impl ExportableStaging {
+    /// Relit la memoire exportee telle que le GPU l'a laissee.
+    ///
+    /// Passe par `vkMapMemory` et NON par wgpu, pour la raison ci-dessus. C'est
+    /// ce qui permet de verifier le contenu sans encodeur : si ces octets sont
+    /// ceux du chemin de relecture normal, la memoire exportee porte bien
+    /// l'image composee.
+    pub fn read_back(&self) -> Result<Vec<u8>> {
+        unsafe {
+            let p = self
+                .device
+                .map_memory(self.memory, 0, self.size, ash::vk::MemoryMapFlags::empty())
+                .map_err(|e| anyhow::anyhow!("vkMapMemory: {e}"))?;
+            let out = std::slice::from_raw_parts(p as *const u8, self.size as usize).to_vec();
+            self.device.unmap_memory(self.memory);
+            Ok(out)
+        }
+    }
+}
+
+impl Drop for ExportableStaging {
+    fn drop(&mut self) {
+        // L'ORDRE EST LE FOND DU SUJET, et le premier jet le faisait a l'envers :
+        // il detruisait le `VkBuffer` puis liberait la memoire, alors que wgpu
+        // detruit DEJA le buffer quand son wrapper tombe -- double liberation,
+        // et par-dessus, memoire liberee alors qu'un buffer y etait encore lie.
+        //
+        // Le partage est donc : wgpu possede le HANDLE (il l'a recu par
+        // `buffer_from_raw` et le detruira), nous possedons la MEMOIRE (son
+        // `block` est `None`, personne d'autre ne la liberera). D'ou : relacher
+        // le wrapper d'abord, liberer la memoire ensuite.
+        drop(self.buffer.take());
+        unsafe {
+            self.device.free_memory(self.memory, None);
+        }
+        // Le fd est un handle a part : l'exporter duplique la propriete, donc le
+        // fermer ne libere pas la memoire -- mais l'oublier fuirait un
+        // descripteur par frame.
+        if self.fd >= 0 {
+            let _ = nix_close(self.fd);
+        }
+    }
+}
+
+fn nix_close(fd: i32) -> std::io::Result<()> {
+    // `libc::close` sans dependance supplementaire : la libc est deja liee.
+    extern "C" {
+        fn close(fd: i32) -> i32;
+    }
+    if unsafe { close(fd) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+impl Compositor {
+    /// Alloue un buffer de staging exportable de `size` octets, ou `None` si le
+    /// device n'a pas ete ouvert avec les extensions de memoire externe (cf.
+    /// `d3d_linux::open_device_with_dmabuf_export`).
+    pub fn create_exportable_staging(&self, size: u64) -> Option<ExportableStaging> {
+        use ash::vk;
+        unsafe {
+            self.gpu.device.as_hal::<wgpu_hal::api::Vulkan, _, _>(|hal| {
+                let hal = hal?;
+                let dev = hal.raw_device().clone();
+                let phys = hal.raw_physical_device();
+                let instance = hal.shared_instance().raw_instance();
+
+                let mut ext_info = vk::ExternalMemoryBufferCreateInfo::default()
+                    .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+                let bci = vk::BufferCreateInfo::default()
+                    .push_next(&mut ext_info)
+                    .size(size)
+                    .usage(vk::BufferUsageFlags::TRANSFER_DST)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                let raw = dev.create_buffer(&bci, None).ok()?;
+
+                let req = dev.get_buffer_memory_requirements(raw);
+                let props = instance.get_physical_device_memory_properties(phys);
+                // HOST_VISIBLE pour que `read_back` puisse verifier le contenu.
+                let mt = (0..props.memory_type_count).find(|i| {
+                    req.memory_type_bits & (1 << i) != 0
+                        && props.memory_types[*i as usize]
+                            .property_flags
+                            .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+                })?;
+
+                let mut export = vk::ExportMemoryAllocateInfo::default()
+                    .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+                let mai = vk::MemoryAllocateInfo::default()
+                    .push_next(&mut export)
+                    .allocation_size(req.size)
+                    .memory_type_index(mt);
+                let memory = dev.allocate_memory(&mai, None).ok()?;
+                dev.bind_buffer_memory(raw, memory, 0).ok()?;
+
+                let getter = ash::khr::external_memory_fd::Device::new(instance, &dev);
+                let fd = getter
+                    .get_memory_fd(
+                        &vk::MemoryGetFdInfoKHR::default()
+                            .memory(memory)
+                            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT),
+                    )
+                    .ok()?;
+
+                let hal_buf = wgpu_hal::vulkan::Device::buffer_from_raw(raw);
+                let buffer = self.gpu.device.create_buffer_from_hal::<wgpu_hal::api::Vulkan>(
+                    hal_buf,
+                    &wgpu::BufferDescriptor {
+                        label: Some("staging-exportable"),
+                        size,
+                        usage: wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    },
+                );
+                Some(ExportableStaging { buffer: Some(buffer), fd, size, device: dev, memory })
+            })
         }
     }
 }
