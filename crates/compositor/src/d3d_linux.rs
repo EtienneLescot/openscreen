@@ -146,8 +146,9 @@ async fn create_async(want: Backend) -> Result<Gpu> {
         memory_hints: wgpu::MemoryHints::default(),
     };
     // Ouvre le device AVEC les extensions de memoire externe si la machine les a,
-    // et retombe sur le chemin standard sinon. Le repli n'est pas theorique : le
-    // rasteriseur logiciel n'expose pas `VK_EXT_image_drm_format_modifier`.
+    // et retombe sur le chemin standard sinon. Le repli couvre un hote sans
+    // pilote Vulkan utilisable, ou un pilote sans memoire externe ; sur cette
+    // machine il n'est plus atteint depuis qu'on n'exige que deux extensions.
     let (device, queue, dmabuf_export) = match open_device_with_dmabuf_export(&adapter, &desc) {
         Some((d, q)) => (d, q, true),
         None => {
@@ -473,7 +474,15 @@ fn open_device_with_dmabuf_export(
             let ext_ptrs: Vec<*const std::os::raw::c_char> =
                 exts.iter().map(|e| e.as_ptr()).collect();
 
-            let family_index = 0u32;
+            // La famille 0 n'est PAS garantie graphique. Elle l'est sur la
+            // plupart des pilotes, ce qui rend l'erreur invisible jusqu'a la
+            // machine ou elle ne l'est pas — et la panne serait alors un device
+            // qui s'ouvre puis ne sait rien dessiner.
+            let families = instance.get_physical_device_queue_family_properties(phys);
+            let family_index = families
+                .iter()
+                .position(|f| f.queue_flags.contains(ash::vk::QueueFlags::GRAPHICS))?
+                as u32;
             let queue_prio = [1.0f32];
             let queue_info = ash::vk::DeviceQueueCreateInfo::default()
                 .queue_family_index(family_index)
