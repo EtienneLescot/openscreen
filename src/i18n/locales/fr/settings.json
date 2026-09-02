@@ -281,8 +281,7 @@
 	},
 	"captions": {
 		"show": "Afficher les sous-titres",
-		"noTranscript": "Les sous-titres sont issus de la transcription du média. Transcrivez cette vidéo pour les activer.",
-		"transcribe": "Transcrire la vidéo",
+		"noTranscript": "Les sous-titres sont lus dans la transcription du média. Ils s’activent une fois la vidéo transcrite.",
 		"transcribing": "Transcription…",
 		"derivedFromTranscript": "{{count}} lignes de sous-titres, dérivées de la transcription en direct.",
 		"hiddenHint": "Les sous-titres proviennent de la transcription de ce média. Activez-les pour les voir dans l'aperçu et à l'export.",

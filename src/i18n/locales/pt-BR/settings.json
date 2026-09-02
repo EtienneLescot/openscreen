@@ -281,8 +281,7 @@
 	},
 	"captions": {
 		"show": "Mostrar legendas",
-		"noTranscript": "As legendas são lidas da transcrição da mídia. Transcreva este vídeo para ativá-las.",
-		"transcribe": "Transcrever vídeo",
+		"noTranscript": "As legendas são lidas da transcrição da mídia. Elas são ativadas assim que o vídeo for transcrito.",
 		"transcribing": "Transcrevendo…",
 		"derivedFromTranscript": "{{count}} linhas de legenda, derivadas ao vivo da transcrição.",
 		"hiddenHint": "As legendas vêm da transcrição desta mídia. Ative-as para vê-las na prévia e nas exportações.",

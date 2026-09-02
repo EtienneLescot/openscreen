@@ -2122,6 +2122,25 @@
 .iconBtn:hover { background: var(--surface-3); color: var(--fg); }
 .iconBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* A labelled sibling of .iconBtn. Captions lost their own tab (issue #560), so the
+   control that replaces it cannot be an icon you must hover to identify: the whole
+   point of folding it in here was that people find it. */
+.paneHeadBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-2);
+  font: 500 12px/1 var(--font-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.paneHeadBtn:hover { background: var(--surface-3); color: var(--fg); }
+
 .backBtn {
   display: inline-flex;
   align-items: center;

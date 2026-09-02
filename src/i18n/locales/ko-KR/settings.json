@@ -281,8 +281,7 @@
 	},
 	"captions": {
 		"show": "자막 표시",
-		"noTranscript": "자막은 미디어 전사에서 읽어옵니다. 켜려면 이 동영상을 전사하세요.",
-		"transcribe": "동영상 전사하기",
+		"noTranscript": "자막은 미디어 전사본에서 읽어옵니다. 이 영상이 전사되면 켜집니다.",
 		"transcribing": "전사 중…",
 		"derivedFromTranscript": "전사에서 실시간으로 생성된 자막 {{count}}줄.",
 		"hiddenHint": "자막은 이 미디어의 전사에서 만들어집니다. 켜면 미리보기와 내보내기에서 볼 수 있습니다.",

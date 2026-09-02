@@ -281,8 +281,7 @@
 	},
 	"captions": {
 		"show": "Altyazıları göster",
-		"noTranscript": "Altyazılar medyanın dökümünden okunur. Açmak için bu videonun dökümünü çıkarın.",
-		"transcribe": "Videonun dökümünü çıkar",
+		"noTranscript": "Altyazılar medyanın deşifresinden okunur. Video deşifre edildiğinde etkinleşirler.",
 		"transcribing": "Döküm çıkarılıyor…",
 		"derivedFromTranscript": "{{count}} altyazı satırı, dökümden canlı olarak türetildi.",
 		"hiddenHint": "Altyazılar bu medyanın dökümünden gelir. Önizlemede ve dışa aktarımlarda görmek için açın.",

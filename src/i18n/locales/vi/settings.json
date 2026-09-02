@@ -281,8 +281,7 @@
 	},
 	"captions": {
 		"show": "Hiện phụ đề",
-		"noTranscript": "Phụ đề được lấy từ bản chép lời của media. Hãy chép lời video này để bật phụ đề.",
-		"transcribe": "Chép lời video",
+		"noTranscript": "Phụ đề được đọc từ bản chép lời của media. Chúng bật lên khi video đã được chép lời.",
 		"transcribing": "Đang chép lời…",
 		"derivedFromTranscript": "{{count}} dòng phụ đề, được tạo trực tiếp từ bản chép lời.",
 		"hiddenHint": "Phụ đề đến từ bản chép lời của media này. Bật lên để thấy chúng trong bản xem trước và khi xuất.",

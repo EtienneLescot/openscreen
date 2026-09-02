@@ -281,8 +281,7 @@
 	},
 	"captions": {
 		"show": "Mostrar subtítulos",
-		"noTranscript": "Los subtítulos se leen de la transcripción del recurso. Transcribe este vídeo para activarlos.",
-		"transcribe": "Transcribir vídeo",
+		"noTranscript": "Los subtítulos se leen de la transcripción del medio. Se activan una vez transcrito el vídeo.",
 		"transcribing": "Transcribiendo…",
 		"derivedFromTranscript": "{{count}} líneas de subtítulos, derivadas en vivo de la transcripción.",
 		"hiddenHint": "Los subtítulos provienen de la transcripción de este recurso. Actívalos para verlos en la vista previa y en las exportaciones.",

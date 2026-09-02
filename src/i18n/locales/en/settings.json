@@ -299,8 +299,7 @@
 	},
 	"captions": {
 		"show": "Show captions",
-		"noTranscript": "Captions are read from the media transcript. Transcribe this video to turn them on.",
-		"transcribe": "Transcribe video",
+		"noTranscript": "Captions are read from the media transcript. They turn on once this video has been transcribed.",
 		"transcribing": "Transcribing…",
 		"derivedFromTranscript": "{{count}} caption lines, derived live from the transcript.",
 		"hiddenHint": "Captions come from this media's transcript. Turn them on to see them in the preview and in exports.",

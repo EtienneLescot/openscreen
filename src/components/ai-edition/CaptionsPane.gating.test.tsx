@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
-// Captions are a view of the transcript, so the pane's "Transcribe video"
-// button is a retry, not a first step — the background pass has already tried.
-// On a media with no audio track that retry can only fail again, so the button
-// has to be dead and the pane has to say what is wrong instead of inviting a
-// pointless click.
+// Captions are a view of the transcript, and since issue #560 they are reached from
+// the transcript tab rather than owning one. So this pane no longer STARTS a
+// transcription — the transcript tab's empty state carries the single gate. Two
+// buttons for one background pass is what made people believe captions were
+// transcribed separately.
+//
+// What the pane still owes the reader is a status: whether a pass is already
+// running, and why there will never be one on a media with no audio track.
 
 import "@testing-library/jest-dom";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -76,6 +79,14 @@ function load(document: AxcutDocument) {
 	});
 }
 
+function mount() {
+	render(
+		<I18nProvider>
+			<CaptionsPane />
+		</I18nProvider>,
+	);
+}
+
 beforeEach(() => {
 	useTranscriptionStore.getState().reset();
 	useProjectStore.getState().clear();
@@ -86,43 +97,35 @@ afterEach(() => {
 });
 
 describe("captions pane gating", () => {
-	it("offers the retry while the media might still yield a transcript", () => {
+	it("does not offer a second way to start a transcription", () => {
 		load(documentWith(ASSET));
-		render(
-			<I18nProvider>
-				<CaptionsPane />
-			</I18nProvider>,
-		);
-		expect(screen.getByRole("button", { name: "Transcribe video" })).toBeEnabled();
+		mount();
+		expect(screen.queryByRole("button", { name: "Transcribe video" })).toBeNull();
+		expect(
+			screen.getByText("Captions are read from the media transcript.", { exact: false }),
+		).toBeInTheDocument();
 	});
 
-	it("shows the queued background run instead of an idle button", () => {
+	it("reports a background run that is already going", () => {
 		load(documentWith(ASSET));
 		useTranscriptionStore.setState({
 			projectId: "proj_1",
 			jobs: { asset_1: { status: "running", language: "auto", manual: false } },
 		});
-		render(
-			<I18nProvider>
-				<CaptionsPane />
-			</I18nProvider>,
-		);
-		expect(screen.getByRole("button", { name: "Transcribing…" })).toBeDisabled();
+		mount();
+		expect(screen.getByText("Transcribing…")).toBeInTheDocument();
+		// Still not a control: a running pass is news, not something to press.
+		expect(screen.queryByRole("button", { name: "Transcribing…" })).toBeNull();
 	});
 
-	it("kills the retry on a media with no audio track and explains it", () => {
+	it("explains a media with no audio track, where no pass will ever help", () => {
 		load(
 			documentWith({
 				...ASSET,
 				transcriptionFailure: { kind: "no-audio", message: "No audio track found in this video." },
 			}),
 		);
-		render(
-			<I18nProvider>
-				<CaptionsPane />
-			</I18nProvider>,
-		);
-		expect(screen.getByRole("button", { name: "Transcribe video" })).toBeDisabled();
+		mount();
 		expect(
 			screen.getByText("This media has no audio track — there is nothing to transcribe."),
 		).toBeInTheDocument();

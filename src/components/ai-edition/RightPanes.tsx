@@ -7,6 +7,7 @@
 
 import {
 	AudioLines,
+	Captions as CaptionsIcon,
 	ChevronDown,
 	FileText,
 	HelpCircle,
@@ -85,6 +86,7 @@ import {
 	getAspectRatioLabel,
 } from "@/utils/aspectRatioUtils";
 import { useCanSegmentCamera } from "../../native/hooks/useSegmentationSupport";
+import { CaptionsPane } from "./CaptionsPane";
 import styles from "./NewEditorShell.module.css";
 
 interface PaneProps {
@@ -92,10 +94,13 @@ interface PaneProps {
 	icon: ReactNode;
 	// P3.3 — contextual help shown in a popover when the ? button is clicked.
 	helpText: string;
+	// A control that belongs to the pane as a whole rather than to any one of its
+	// rows, sitting left of the Help button.
+	actions?: ReactNode;
 	children: ReactNode;
 }
 
-function Pane({ title, icon, helpText, children }: PaneProps) {
+function Pane({ title, icon, helpText, actions, children }: PaneProps) {
 	const ts = useScopedT("settings");
 	const helpLabel = ts("panes.help");
 	const [helpOpen, setHelpOpen] = useState(false);
@@ -103,7 +108,8 @@ function Pane({ title, icon, helpText, children }: PaneProps) {
 		<div className={`${styles.pane} ${styles.isActive}`}>
 			<header className={styles.paneHead} style={{ position: "relative" }}>
 				<h2>{title}</h2>
-				<span style={{ marginLeft: "auto", display: "inline-flex", gap: 4 }}>
+				<span style={{ marginLeft: "auto", display: "inline-flex", gap: 4, alignItems: "center" }}>
+					{actions}
 					<button
 						type="button"
 						className={styles.iconBtn}
@@ -698,6 +704,37 @@ export interface TrimTarget {
 // needed no change beyond the ids they are handed.
 //
 // Mirrors axcut's apps/web/src/components/CurrentTranscriptView.tsx.
+/**
+ * Caption settings, reached from the transcript tab (issue #560).
+ *
+ * The pane is reused VERBATIM rather than rebuilt into a popover body: it is ~600
+ * lines of settings that already work, and "make it a popover" is a question about
+ * where it is mounted, not about what it contains. Rebuilding it would have been the
+ * one reliable way to arrive at a popover that is not at parity with the tab it
+ * replaces.
+ *
+ * Safe inside a Popover specifically because nothing in it takes focus away — no file
+ * input, no OS dialog. That is the trap `useWallpaperFileInput` documents above, and
+ * it is worth re-checking if a picker is ever added to captions.
+ */
+function CaptionSettingsButton() {
+	const ts = useScopedT("settings");
+	const [open, setOpen] = useState(false);
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<button type="button" className={styles.paneHeadBtn} aria-expanded={open}>
+					<CaptionsIcon size={14} />
+					{ts("facets.captions")}
+				</button>
+			</PopoverTrigger>
+			<PopoverContent align="start" style={{ width: 340, maxHeight: 520, overflowY: "auto" }}>
+				<CaptionsPane />
+			</PopoverContent>
+		</Popover>
+	);
+}
+
 export function TranscriptPane({
 	clips,
 	transcripts,
@@ -776,6 +813,7 @@ export function TranscriptPane({
 				title={ts("transcript.title")}
 				icon={<FileText size={14} />}
 				helpText={ts("transcript.help")}
+				actions={<CaptionSettingsButton />}
 			>
 				<div
 					style={{
@@ -823,6 +861,9 @@ export function TranscriptPane({
 		<div className={`${styles.pane} ${styles.isActive}`}>
 			<header className={styles.paneHead}>
 				<h2>{ts("transcript.title")}</h2>
+				<span style={{ marginLeft: "auto" }}>
+					<CaptionSettingsButton />
+				</span>
 			</header>
 			<div className={styles.paneBody}>
 				{sections.map((section, idx) => (

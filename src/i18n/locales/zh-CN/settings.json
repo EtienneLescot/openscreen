@@ -281,8 +281,7 @@
 	},
 	"captions": {
 		"show": "显示字幕",
-		"noTranscript": "字幕来自媒体的转录。请先转录此视频以启用字幕。",
-		"transcribe": "转录视频",
+		"noTranscript": "字幕读取自媒体转写文本。视频转写完成后即可启用。",
 		"transcribing": "转录中…",
 		"derivedFromTranscript": "{{count}} 行字幕，实时由转录生成。",
 		"hiddenHint": "字幕来自此媒体的转录。开启后可在预览和导出中看到。",
