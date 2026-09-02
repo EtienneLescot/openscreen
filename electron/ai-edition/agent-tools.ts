@@ -16,6 +16,12 @@
 // described are gone (see `MUTATING_TOOL_NAMES`).
 
 import { z } from "zod";
+import {
+	anchorAudioTrackFragments,
+	collapseTracksToPills,
+	patchAudioTrack,
+	trackGroupId,
+} from "../../src/lib/ai-edition/document/audioTracks";
 import { createId } from "../../src/lib/ai-edition/document/ids";
 import {
 	moveClip,
@@ -337,6 +343,11 @@ function droppedByEdit(before: AxcutDocument, after: AxcutDocument) {
 // private — callers only ever need the composed `*Args`.)
 const secondsSchema = z.number().finite().nonnegative();
 
+/** Span given to an agent-placed audio track when the asset has no probed duration
+ *  yet. Short on purpose: a wrong guess the user has to lengthen beats one that
+ *  silently covers the whole programme. */
+const DEFAULT_AGENT_AUDIO_SEC = 10;
+
 export const addTrimArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
@@ -479,6 +490,26 @@ export const setAnnotationArgs = z.object({
 	text: z.string().optional(),
 });
 
+export const addAudioArgs = z.object({
+	assetId: z.string().min(1),
+	startSec: secondsSchema,
+	endSec: secondsSchema.optional(),
+	kind: z.enum(["voiceover", "music"]).default("music"),
+	offsetSec: secondsSchema.default(0),
+	gainDb: z.number().min(-60).max(12).default(0),
+});
+
+export const setAudioArgs = z.object({
+	audioId: z.string().min(1),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	kind: z.enum(["voiceover", "music"]).optional(),
+	offsetSec: secondsSchema.optional(),
+	gainDb: z.number().min(-60).max(12).optional(),
+	muted: z.boolean().optional(),
+	loop: z.boolean().optional(),
+});
+
 export const addCameraFullscreenArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
@@ -541,6 +572,8 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"setAnnotation",
 	"addCameraFullscreen",
 	"setCameraFullscreen",
+	"addAudio",
+	"setAudio",
 	"removeTrim",
 	"removeModifier",
 	"removeClip",
@@ -607,6 +640,8 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"setAnnotation",
 	"addCameraFullscreen",
 	"setCameraFullscreen",
+	"addAudio",
+	"setAudio",
 	"removeTrim",
 	"removeModifier",
 	"removeClip",
@@ -665,7 +700,9 @@ export function documentSnapshotForModel(
 	const autoFocusAll = legacy?.autoFocusAll === true;
 	return {
 		timeBaseNote:
-			"clips and trims are in source-time seconds; zooms, speedRegions, annotations and cameraFullscreenRegions are in virtual (edited-timeline) seconds.",
+			"clips and trims are in source-time seconds; zooms, speedRegions, annotations, cameraFullscreenRegions and audioTracks are in virtual (edited-timeline) seconds.",
+		audioNote:
+			"audioTracks are imported voiceover / music files laid over the recording. They are clip-anchored like every other region, so they travel with their clip through reorder and trim, and they play at 1x whatever a speed region does to the picture under them. addAudio places an EXISTING asset of kind 'audio'; nothing here can import a file from disk or record one, so if the project has no audio asset, say so rather than inventing an id.",
 		zoomNote:
 			`renderedScale is what the viewer sees (depth is an ordinal, not a factor: ${ZOOM_DEPTH_LEGEND}). ` +
 			"When a zoom carries customScale it wins over depth and depthIsOverridden is true — " +
@@ -683,6 +720,10 @@ export function documentSnapshotForModel(
 		assets: document.assets.map((a) => ({
 			id: a.id,
 			label: a.label,
+			// "audio" is an imported voiceover / music file: it is never a clip, it is
+			// played by an audio track. Without this the model sees an asset it cannot
+			// explain and tries to place it on the timeline as footage.
+			kind: a.kind,
 			durationSec: a.durationSec ?? null,
 			hasCameraTrack: a.cameraTrack != null,
 			cameraVisible: a.cameraTrack?.visible ?? false,
@@ -754,6 +795,22 @@ export function documentSnapshotForModel(
 			id: c.id,
 			startSec: roundSec(c.startMs),
 			endSec: roundSec(c.endMs),
+		})),
+		// Imported audio, collapsed to the pills the ruler draws — a track ventilated
+		// across a clip boundary is several fragments the user sees as one thing, and
+		// the model has to name what the user sees.
+		audioTracks: collapseTracksToPills(document.audioTracks).map((t) => ({
+			id: trackGroupId(t),
+			startSec: roundSec(t.startMs),
+			endSec: roundSec(t.endMs),
+			assetId: t.assetId,
+			// Which lane it sits on. Also decides whether it is transcribed at all.
+			kind: t.kind,
+			// Where in the FILE the track starts playing, in that file's own seconds.
+			offsetSec: roundSec(t.offsetMs),
+			gainDb: t.gainDb,
+			muted: t.muted,
+			loop: t.loop,
 		})),
 		hasTranscript: document.transcripts.length > 0 || document.transcript !== null,
 	};
@@ -1843,6 +1900,168 @@ export function executeAgentTool(
 			};
 		}
 
+		case "addAudio": {
+			const parsed = addAudioArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { assetId, kind, offsetSec, gainDb } = parsed.data;
+			const asset = document.assets.find((a) => a.id === assetId);
+			// Two distinct refusals, because they need two different corrections: an
+			// unknown id is a hallucinated asset, a video id is the model reaching for
+			// footage. Naming the audio the project HAS is what stops the retry loop.
+			if (!asset) {
+				const available = document.assets.filter((a) => a.kind === "audio");
+				return failure(
+					`Unknown asset: ${assetId}.` +
+						(available.length
+							? ` Imported audio in this project: ${available.map((a) => `${a.id} (${a.label})`).join(", ")}.`
+							: " This project has no imported audio; a file can only be imported or recorded from the editor, not from here."),
+				);
+			}
+			if (asset.kind !== "audio") {
+				return failure(
+					`Asset ${assetId} is video, not audio. addAudio plays an imported audio file over the recording; to place footage use replaceTimeline.`,
+				);
+			}
+			const durationSec = asset.durationSec ?? 0;
+			// "Start the file at offsetSec" is only answerable when there is file left
+			// there. Past the end it yields a track that plays silence, which the model
+			// then reports as having placed audio. Unknown duration is not a refusal: an
+			// import whose probe failed carries 0 until the renderer re-probes it.
+			if (durationSec > 0 && offsetSec >= durationSec) {
+				return failure(
+					`offsetSec ${offsetSec}s is at or past the end of ${assetId} (${durationSec}s), so the track would play nothing. Pick an offset inside the file.`,
+				);
+			}
+			// No endSec means "as long as the file is" — the natural span, and the one
+			// the editor's own add uses, so the model never has to compute it.
+			const startSec = parsed.data.startSec;
+			const endSec =
+				parsed.data.endSec ??
+				startSec + Math.max(0.1, (durationSec || DEFAULT_AGENT_AUDIO_SEC) - offsetSec);
+			const startMs = toMs(Math.min(startSec, endSec));
+			const endMs = toMs(Math.max(startSec, endSec));
+			const trackId = createId("audio");
+			const placed = anchorAudioTrackFragments(
+				{
+					id: trackId,
+					trackId,
+					startMs,
+					endMs,
+					assetId,
+					kind,
+					durationSec,
+					offsetMs: toMs(offsetSec),
+					gainDb,
+					loop: false,
+					fadeInMs: 0,
+					fadeOutMs: 0,
+					muted: false,
+					label: asset.label,
+					origin: "agent",
+				} as AxcutDocument["audioTracks"][number],
+				document.timeline.clips,
+				() => createId("audio"),
+			);
+			if (placed.length === 0) {
+				return coversNoClip("audio", startMs / 1000, endMs / 1000, document);
+			}
+			const next: AxcutDocument = {
+				...document,
+				audioTracks: [...document.audioTracks, ...placed],
+			};
+			const landing = landingOf(placed, document);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					audioId: trackId,
+					...landingReport(landing, startMs / 1000, endMs / 1000),
+				}),
+				summary:
+					`added ${kind} "${asset.label}" ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
+			};
+		}
+
+		case "setAudio": {
+			const parsed = setAudioArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { audioId } = parsed.data;
+			const pill = collapseTracksToPills(document.audioTracks).find(
+				(t) => trackGroupId(t) === audioId,
+			);
+			if (!pill) return failure(`Unknown audio track: ${audioId}`);
+
+			if (parsed.data.offsetSec !== undefined) {
+				const asset = document.assets.find((a) => a.id === pill.assetId);
+				const durationSec = asset?.durationSec ?? 0;
+				if (durationSec > 0 && parsed.data.offsetSec >= durationSec) {
+					return failure(
+						`offsetSec ${parsed.data.offsetSec}s is at or past the end of ${pill.assetId} (${durationSec}s), so the track would play nothing.`,
+					);
+				}
+			}
+
+			// Payload first, through the helper that keeps every fragment of the group in
+			// agreement — gain, mute, loop and the offset are all track-wide, and a patch
+			// that reached only one fragment would split the pill in two.
+			let next = patchAudioTrack(document, audioId, {
+				...(parsed.data.gainDb !== undefined ? { gainDb: parsed.data.gainDb } : {}),
+				...(parsed.data.muted !== undefined ? { muted: parsed.data.muted } : {}),
+				...(parsed.data.loop !== undefined ? { loop: parsed.data.loop } : {}),
+				...(parsed.data.offsetSec !== undefined ? { offsetMs: toMs(parsed.data.offsetSec) } : {}),
+			});
+
+			// A span or lane change re-anchors: drop the group and lay it down again, so
+			// the fragments are re-cut against the clips the new span covers rather than
+			// patched in place against the old ones.
+			const wantsRespan =
+				parsed.data.startSec !== undefined ||
+				parsed.data.endSec !== undefined ||
+				parsed.data.kind !== undefined;
+			if (wantsRespan) {
+				const current =
+					collapseTracksToPills(next.audioTracks).find((t) => trackGroupId(t) === audioId) ?? pill;
+				const { startMs, endMs } = resolveSpanMs(current, parsed.data.startSec, parsed.data.endSec);
+				const replaced = anchorAudioTrackFragments(
+					{
+						...current,
+						id: audioId,
+						trackId: audioId,
+						startMs,
+						endMs,
+						...(parsed.data.kind !== undefined ? { kind: parsed.data.kind } : {}),
+					},
+					document.timeline.clips,
+					() => createId("audio"),
+				);
+				if (replaced.length === 0) {
+					return coversNoClip("audio", startMs / 1000, endMs / 1000, document);
+				}
+				next = {
+					...next,
+					audioTracks: [
+						...next.audioTracks.filter((t) => trackGroupId(t) !== audioId),
+						...replaced,
+					],
+				};
+			}
+
+			const after = collapseTracksToPills(next.audioTracks).find(
+				(t) => trackGroupId(t) === audioId,
+			);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					audioId,
+					startSec: roundSec(after?.startMs ?? pill.startMs),
+					endSec: roundSec(after?.endMs ?? pill.endMs),
+				}),
+				summary: `updated audio ${audioId} ${formatSec(roundSec(after?.startMs ?? pill.startMs))} – ${formatSec(roundSec(after?.endMs ?? pill.endMs))}`,
+			};
+		}
+
 		case "removeTrim": {
 			const parsed = removeTrimArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
@@ -1872,6 +2091,7 @@ export function executeAgentTool(
 			else if (document.annotations.some((a) => a.id === id)) kind = "annotation";
 			else if (speedRegions.some((s) => s.id === id)) kind = "speed";
 			else if (cameraFullscreenRegions.some((c) => c.id === id)) kind = "cameraFullscreen";
+			else if (document.audioTracks.some((t) => trackGroupId(t) === id)) kind = "audio";
 			if (!kind) {
 				return failure(
 					`No zoom / speed / annotation / full-camera modifier with id ${id}. ` +
