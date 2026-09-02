@@ -5,6 +5,7 @@ import {
 	audioGhostExtent,
 	placeAudioRegions,
 	resolveAudioPlayback,
+	slipAudioOffset,
 } from "./audio-placement";
 
 function clip(over: Partial<AxcutClip> = {}): AxcutClip {
@@ -288,5 +289,43 @@ describe("audioGhostExtent — the rest of the tape around the pill", () => {
 
 	it("is null while the duration is unknown", () => {
 		expect(audioGhostExtent(4, 10, null, 10, 20, 300)).toBeNull();
+	});
+});
+
+describe("slipAudioOffset", () => {
+	it("slides the in-point by the delta it is given", () => {
+		expect(slipAudioOffset(10, 4, 60, 5)).toBe(15);
+		expect(slipAudioOffset(10, 4, 60, -5)).toBe(5);
+	});
+
+	it("never windows past the head of the file", () => {
+		// Dragging further left than there is material parks at 0 rather than asking
+		// the mixer for negative source time.
+		expect(slipAudioOffset(2, 4, 60, -10)).toBe(0);
+	});
+
+	it("never windows past the tail", () => {
+		// The last legal in-point is duration - span; beyond it the window would run
+		// off the end and the pill would play silence nobody asked for.
+		expect(slipAudioOffset(50, 4, 60, 999)).toBe(56);
+	});
+
+	it("refuses a file no longer than the window onto it", () => {
+		// Nothing to slip: the pill already shows everything there is.
+		expect(slipAudioOffset(0, 60, 60, 5)).toBeNull();
+		expect(slipAudioOffset(0, 90, 60, 5)).toBeNull();
+	});
+
+	it("refuses an unknown duration rather than guessing one", () => {
+		// Same rule as the crop stops: a failed probe must never freeze the pill or
+		// invent a bound for it.
+		expect(slipAudioOffset(0, 4, null, 5)).toBeNull();
+		expect(slipAudioOffset(0, 4, undefined, 5)).toBeNull();
+		expect(slipAudioOffset(0, 4, 0, 5)).toBeNull();
+	});
+
+	it("is a no-op for a zero delta, at either bound", () => {
+		expect(slipAudioOffset(0, 4, 60, 0)).toBe(0);
+		expect(slipAudioOffset(56, 4, 60, 0)).toBe(56);
 	});
 });

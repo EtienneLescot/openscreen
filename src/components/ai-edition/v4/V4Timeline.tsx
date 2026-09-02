@@ -39,7 +39,11 @@ import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionS
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
-import { audioContentBounds, audioGhostExtent } from "@/lib/ai-edition/timeline/audio-placement";
+import {
+	audioContentBounds,
+	audioGhostExtent,
+	slipAudioOffset,
+} from "@/lib/ai-edition/timeline/audio-placement";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
@@ -710,6 +714,10 @@ export function V4Timeline({
 		end: number;
 		mode: "move" | "l" | "r";
 		audio?: AudioDragContext;
+		/** Set only by a slip (Alt + body drag on an audio pill): the in-point the
+		 *  media has been slid to. Its presence is what tells the commit to write
+		 *  `offsetSec` instead of a span. */
+		slipOffsetSec?: number;
 	} | null>(null);
 	const activePillDragRef = useRef<{
 		id: string;
@@ -718,6 +726,10 @@ export function V4Timeline({
 		end: number;
 		mode: "move" | "l" | "r";
 		audio?: AudioDragContext;
+		/** Set only by a slip (Alt + body drag on an audio pill): the in-point the
+		 *  media has been slid to. Its presence is what tells the commit to write
+		 *  `offsetSec` instead of a span. */
+		slipOffsetSec?: number;
 	} | null>(null);
 
 	// The crop readout while an audio edge is being pulled: where the played window now
@@ -780,6 +792,20 @@ export function V4Timeline({
 			// `trimOwned` only grows; ids past the current fragment count are handed
 			// to `setTrimEntries` as `dropIds` so a shrinking span deletes the entries
 			// it no longer needs.
+			// Alt inside an audio pill slips it: the span stays put and the media slides
+			// under it. Held on the BODY only — the edges keep their crop semantics, and
+			// every other pill kind has no media to slip, so nothing else looks at this.
+			const slipping = dragMode === "move" && e.altKey && audioCtx != null;
+			// The rate is deliberately NOT the timeline's. At timeline scale a slip is as
+			// unusable as the edge drag it exists to replace; here one viewport width
+			// traverses the whole file, floored at the timeline's own scale so slip is
+			// never SLOWER than dragging the pill would be (which would be its own
+			// surprise on a file shorter than the view).
+			const slipSecPerPx = Math.max(
+				total / r.width,
+				(audioCtx?.durationSec ?? 0) / Math.max(1, r.width * navSpan),
+			);
+
 			const trimOwned: string[] = [...pill.sourceIds];
 			// Snap targets: clip boundaries + timeline ends. Within PILL_SNAP_PX of
 			// one on screen, an edge snaps and a vertical guide is shown.
@@ -864,6 +890,34 @@ export function V4Timeline({
 				}
 			};
 			const move = (ev: PointerEvent) => {
+				if (slipping && audioCtx) {
+					const nextOffset = slipAudioOffset(
+						audioCtx.offsetSec,
+						pill.end - pill.start,
+						audioCtx.durationSec,
+						(ev.clientX - startX) * slipSecPerPx,
+					);
+					if (nextOffset == null) return;
+					setAudioDragTip({
+						x: ev.clientX,
+						y: ev.clientY,
+						inSec: nextOffset,
+						outSec: nextOffset + (pill.end - pill.start),
+						durationSec: audioCtx.durationSec ?? 0,
+					});
+					const slipState = {
+						id: pill.id,
+						kind: pill.kind,
+						start: pill.start,
+						end: pill.end,
+						mode: dragMode,
+						audio: audioCtx,
+						slipOffsetSec: nextOffset,
+					};
+					activePillDragRef.current = slipState;
+					setActivePillDrag(slipState);
+					return;
+				}
 				const dxSec = ((ev.clientX - startX) / r.width) * total;
 				let ns = pill.start;
 				let ne = pill.end;
@@ -919,7 +973,19 @@ export function V4Timeline({
 				window.removeEventListener("pointermove", move);
 				window.removeEventListener("pointerup", up);
 				const finalDrag = activePillDragRef.current;
-				if (finalDrag) {
+				if (finalDrag?.slipOffsetSec != null) {
+					// A slip moved no span, so it commits through the payload patch rather
+					// than through updateAudioSpan — `offsetSec` is pill-wide, and every
+					// fragment under the pill has to carry the same value or the merge rule
+					// splits it in two.
+					const offsetSec = finalDrag.slipOffsetSec;
+					void tl.updateAudioRegion(pill.id, { offsetSec }).finally(() => {
+						if (activePillDragRef.current === finalDrag) {
+							activePillDragRef.current = null;
+							setActivePillDrag(null);
+						}
+					});
+				} else if (finalDrag) {
 					void apply(finalDrag.start, finalDrag.end).finally(() => {
 						if (activePillDragRef.current === finalDrag) {
 							activePillDragRef.current = null;
@@ -934,7 +1000,10 @@ export function V4Timeline({
 			window.addEventListener("pointermove", move);
 			window.addEventListener("pointerup", up);
 		},
-		[tl, selectPill, total, clips, pxPerSec],
+		// navSpan: the slip rate is derived from the VISIBLE width, so a zoom that does
+		// not change `total` still changes it. Left out, the rate froze at whatever the
+		// zoom was when the callback was last built.
+		[tl, selectPill, total, clips, pxPerSec, navSpan],
 	);
 
 	const startNavDrag = useCallback(
@@ -1382,7 +1451,20 @@ export function V4Timeline({
 	const renderPills = (pills: LanePill[], emptyLabel: string) => {
 		const effectivePills = pills.map((p) => {
 			if (activePillDrag && activePillDrag.id === p.id) {
-				return { ...p, start: activePillDrag.start, end: activePillDrag.end };
+				const next = { ...p, start: activePillDrag.start, end: activePillDrag.end };
+				// A slip changes what the pill SHOWS, not where it is: re-window the
+				// waveform (and with it the ghost, which derives from the same in-point) so
+				// the media visibly slides under a stationary frame. Without this the
+				// gesture would produce no feedback at all until the commit.
+				if (activePillDrag.slipOffsetSec != null && next.waveform) {
+					const span = next.end - next.start;
+					next.waveform = {
+						...next.waveform,
+						sourceStartSec: activePillDrag.slipOffsetSec,
+						sourceEndSec: activePillDrag.slipOffsetSec + span,
+					};
+				}
+				return next;
 			}
 			return p;
 		});

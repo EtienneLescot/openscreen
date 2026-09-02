@@ -78,6 +78,37 @@ export function audioGhostExtent(
 	};
 }
 
+/**
+ * Slip: slide the media under a pill whose span does not move.
+ *
+ * The gesture the crop affordances made necessary rather than optional. An edge drag
+ * sets the in-point at TIMELINE scale, which is unusable the moment the file is much
+ * longer than the region it fills — reaching 3:00 inside a four-minute bed on a
+ * five-second view means dragging three minutes of ruler. Slip decouples the two
+ * questions the pill conflates: *where it plays* (the span) and *what plays*
+ * (`offsetSec`).
+ *
+ * `secPerPx` is the caller's business, not this function's: the timeline's own scale
+ * is the wrong one here (that is the whole point), so the caller passes a rate derived
+ * from the file's length. What belongs here is the clamp — an offset outside
+ * `[0, duration - span]` would window past one end of the file or the other, which is
+ * silence the user did not ask for.
+ *
+ * Returns null when there is nothing to slip: no known duration (a failed probe must
+ * not freeze the pill), or a file no longer than the window onto it.
+ */
+export function slipAudioOffset(
+	offsetSec: number,
+	spanSec: number,
+	durationSec: number | null | undefined,
+	deltaSourceSec: number,
+): number | null {
+	if (durationSec == null || !(durationSec > 0)) return null;
+	const slack = durationSec - spanSec;
+	if (!(slack > 0)) return null;
+	return Math.min(slack, Math.max(0, offsetSec + deltaSourceSec));
+}
+
 /** One fragment of one audio pill, resolved onto the output programme. */
 export interface AudioPlacement {
 	/** The pill the fragment belongs to — the id the ruler, the inspector and the agent
