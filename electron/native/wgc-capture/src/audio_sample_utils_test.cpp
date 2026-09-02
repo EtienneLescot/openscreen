@@ -276,10 +276,21 @@ int main() {
     }
     expect("resample-96k-nyquist-box", folded, "frames=" + std::to_string(downFrames));
 
+    auto fillStereoFrame = [](std::vector<BYTE>& packet, int16_t left, int16_t right) {
+        auto* samples = reinterpret_cast<int16_t*>(packet.data());
+        samples[0] = left;
+        samples[1] = right;
+    };
+    const auto destFrames = [&](const std::vector<BYTE>& out) -> size_t {
+        return target48k.blockAlign == 0 ? 0 : out.size() / target48k.blockAlign;
+    };
+    const auto remainderFrames = [&](const std::vector<BYTE>& rem) -> size_t {
+        return source96k.blockAlign == 0 ? 0 : rem.size() / source96k.blockAlign;
+    };
+
+    std::vector<BYTE> remainder;
     std::vector<BYTE> shortPkt(source96k.blockAlign, 0);
-    auto* shortSamples = reinterpret_cast<int16_t*>(shortPkt.data());
-    shortSamples[0] = 12345;
-    shortSamples[1] = -12345;
+    fillStereoFrame(shortPkt, 12345, -12345);
     std::vector<BYTE> shortOut;
     convertAudioWithGain(
         shortPkt.data(),
@@ -287,13 +298,61 @@ int main() {
         source96k,
         target48k,
         1.0,
-        shortOut);
-    const bool shortOk = !shortOut.empty() && target48k.blockAlign != 0 &&
-        (shortOut.size() % target48k.blockAlign == 0);
+        shortOut,
+        remainder);
     expect(
         "resample-96k-short-packet",
-        shortOk,
-        "bytes=" + std::to_string(shortOut.size()));
+        shortOut.empty() && remainderFrames(remainder) == 1,
+        "dest=" + std::to_string(shortOut.size()) + " rem=" + std::to_string(remainder.size()));
+
+    remainder.clear();
+    std::vector<BYTE> oneA(source96k.blockAlign, 0);
+    std::vector<BYTE> oneB(source96k.blockAlign, 0);
+    fillStereoFrame(oneA, 1000, 2000);
+    fillStereoFrame(oneB, 3000, 4000);
+    std::vector<BYTE> outA;
+    std::vector<BYTE> outB;
+    convertAudioWithGain(oneA.data(), static_cast<DWORD>(oneA.size()), source96k, target48k, 1.0, outA, remainder);
+    convertAudioWithGain(oneB.data(), static_cast<DWORD>(oneB.size()), source96k, target48k, 1.0, outB, remainder);
+    expect(
+        "resample-96k-one-frame-packets",
+        destFrames(outA) == 0 && destFrames(outB) == 1 && remainder.empty(),
+        "a=" + std::to_string(destFrames(outA)) + " b=" + std::to_string(destFrames(outB)) +
+            " rem=" + std::to_string(remainderFrames(remainder)));
+
+    remainder.clear();
+    std::vector<BYTE> threePkt(3 * source96k.blockAlign, 0);
+    std::vector<BYTE> onePkt(source96k.blockAlign, 0);
+    fillStereoFrame(onePkt, 5000, 6000);
+    std::vector<BYTE> threeOut;
+    std::vector<BYTE> oneOut;
+    convertAudioWithGain(
+        threePkt.data(), static_cast<DWORD>(threePkt.size()), source96k, target48k, 1.0, threeOut, remainder);
+    convertAudioWithGain(
+        onePkt.data(), static_cast<DWORD>(onePkt.size()), source96k, target48k, 1.0, oneOut, remainder);
+    expect(
+        "resample-96k-remainder-three-then-one",
+        destFrames(threeOut) == 1 && destFrames(oneOut) == 1 && remainder.empty(),
+        "three=" + std::to_string(destFrames(threeOut)) + " one=" + std::to_string(destFrames(oneOut)) +
+            " rem=" + std::to_string(remainderFrames(remainder)));
+
+    remainder.clear();
+    std::vector<BYTE> remainderFullOut;
+    convertAudioWithGain(
+        source.data(),
+        static_cast<DWORD>(source.size()),
+        source96k,
+        target48k,
+        1.0,
+        remainderFullOut,
+        remainder);
+    const size_t remainderFullFrames = destFrames(remainderFullOut);
+    const bool remainderFullOk =
+        remainderFullFrames == 48000 || remainderFullFrames == 47999 || remainderFullFrames == 48001;
+    expect(
+        "resample-96k-remainder-full",
+        remainderFullOk && remainder.empty(),
+        "frames=" + std::to_string(remainderFullFrames) + " rem=" + std::to_string(remainder.size()));
 
     HRESULT mfHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(mfHr) && mfHr != RPC_E_CHANGED_MODE) {
