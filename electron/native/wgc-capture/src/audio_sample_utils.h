@@ -27,6 +27,14 @@ void convertAudioWithGain(
     const AudioInputFormat& targetFormat,
     double gain,
     std::vector<BYTE>& destination);
+void convertAudioWithGain(
+    const BYTE* source,
+    DWORD byteCount,
+    const AudioInputFormat& sourceFormat,
+    const AudioInputFormat& targetFormat,
+    double gain,
+    std::vector<BYTE>& destination,
+    std::vector<BYTE>& remainder);
 void mixAudioInPlace(
     std::vector<BYTE>& destination,
     const BYTE* source,
@@ -63,7 +71,8 @@ private:
         const BYTE* data,
         DWORD byteCount,
         const AudioInputFormat& sourceFormat,
-        double gain);
+        double gain,
+        std::vector<BYTE>& remainder);
     bool pop(std::vector<BYTE>& queue, std::vector<BYTE>& chunk, size_t byteCount);
     void mixLoop();
 
@@ -78,6 +87,8 @@ private:
     std::condition_variable cv_;
     std::vector<BYTE> systemQueue_;
     std::vector<BYTE> microphoneQueue_;
+    std::vector<BYTE> systemResampleRemainder_;
+    std::vector<BYTE> microphoneResampleRemainder_;
     std::vector<BYTE> gainBuffer_;
     std::thread thread_;
     std::atomic<bool> stopRequested_ = false;
