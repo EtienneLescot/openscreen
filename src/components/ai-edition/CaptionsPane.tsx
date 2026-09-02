@@ -22,7 +22,6 @@ import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
 	useTimelineTranscriptGate,
-	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { useCaptions } from "@/lib/ai-edition/store/useCaptions";
 import { firstTimelineBusyView } from "@/lib/ai-edition/transcription/status";
@@ -94,14 +93,14 @@ export function CaptionsPane() {
 	// Captions are a view of the transcript, and the transcript arrives on its
 	// own (transcriptionStore's background pass). The pane reads that state
 	// straight from the store rather than being handed a busy flag: it is the
-	// same answer everywhere, and "Transcribe" here is only ever a retry.
+	// same answer everywhere, and this pane only ever reports on the pass —
+	// starting one is the transcript tab's job.
 	//
 	// Resolved over the timeline's assets, not the primary one: `hasTranscript`
 	// below is already timeline-scoped (useCaptions), and mixing the two scopes
 	// is what let a silent primary asset dead-end this button for a project whose
 	// actual footage had speech.
 	const gate = useTimelineTranscriptGate();
-	const requestTimelineTranscripts = useTranscriptionStore((s) => s.requestTimelineTranscripts);
 	const transcriptions = useAssetTranscriptions();
 	const transcriptionLabel = useTranscriptionLabel();
 	const isTranscribing = gate.state === "pending";
@@ -237,17 +236,26 @@ export function CaptionsPane() {
 								{engineError}
 							</p>
 						) : null}
-						<button
-							type="button"
-							className={`${styles.btn} ${styles.btnPrimary}`}
-							// A media with no audio track has nothing to transcribe — the
-							// button would fail the same way every time it is pressed.
-							disabled={disabled || isTranscribing || silentMedia}
-							onClick={() => void requestTimelineTranscripts()}
-						>
-							{isTranscribing ? <Loader2 size={14} className="animate-spin" /> : null}
-							{busyLabel ?? t("captions.transcribe")}
-						</button>
+						{/* No transcribe button here. This pane is reached from the transcript
+						    tab, whose empty state carries the one gate — and two buttons for
+						    one background pass is what made people believe captions were
+						    transcribed separately from the transcript (issue #560). What is
+						    worth saying here is whether a run is already going. */}
+						{isTranscribing ? (
+							<p
+								style={{
+									margin: 0,
+									display: "inline-flex",
+									alignItems: "center",
+									gap: 6,
+									font: "400 12px/1.5 var(--font-body)",
+									color: "var(--muted)",
+								}}
+							>
+								<Loader2 size={14} className="animate-spin" />
+								{busyLabel ?? t("captions.transcribing")}
+							</p>
+						) : null}
 					</div>
 				) : (
 					<p

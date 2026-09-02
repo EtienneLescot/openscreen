@@ -1,6 +1,5 @@
 import {
 	AudioLines,
-	Captions as CaptionsIcon,
 	ChevronRight,
 	FileText,
 	Layout as LayoutIcon,
@@ -39,7 +38,6 @@ import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { formatSeconds } from "@/lib/ai-edition/timeline/format";
 import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
-import { CaptionsPane } from "../CaptionsPane";
 import { ColorField } from "../ColorField";
 import {
 	AudioPane,
@@ -55,7 +53,11 @@ import styles from "./EditorShellV4.module.css";
 
 type TimelineApi = ReturnType<typeof useTimeline>;
 
-export type Facet = "effects" | "layout" | "audio" | "cursor" | "captions" | "transcript";
+// No "captions" facet: caption settings are a popover on the transcript tab now.
+// They were never a separate concern from the transcript — they RENDER it — and two
+// tabs meant two entry points to transcription, one of which ("transcribe video",
+// on the caption tab) was the only one many users ever found. See issue #560.
+export type Facet = "effects" | "layout" | "audio" | "cursor" | "transcript";
 
 const FACETS: Array<{ id: Facet; labelKey: string; icon: typeof SlidersHorizontal }> = [
 	// Background is a SECTION of this facet now, not a facet of its own — see
@@ -64,7 +66,6 @@ const FACETS: Array<{ id: Facet; labelKey: string; icon: typeof SlidersHorizonta
 	{ id: "layout", labelKey: "layout.title", icon: LayoutIcon },
 	{ id: "audio", labelKey: "audio.title", icon: AudioLines },
 	{ id: "cursor", labelKey: "cursor.title", icon: MousePointer2 },
-	{ id: "captions", labelKey: "facets.captions", icon: CaptionsIcon },
 	{ id: "transcript", labelKey: "facets.transcript", icon: FileText },
 ];
 
@@ -1071,12 +1072,14 @@ function FacetBody({
 		</button>
 	);
 
-	if (facet === "effects") return wrap(collapse, <VideoEffectsPane />);
 	if (facet === "layout") return wrap(collapse, <LayoutPane />);
 	if (facet === "audio") return wrap(collapse, <AudioPane />);
 	if (facet === "cursor") return wrap(collapse, <CursorPane />);
 	if (facet === "transcript") return wrap(collapse, <TranscriptPane {...transcriptProps} />);
-	return wrap(collapse, <CaptionsPane />);
+	// `effects` is the fallthrough rather than a branch of its own: the union has no
+	// tail left now that captions is a popover, and a `never` check here would only
+	// restate what the type already says.
+	return wrap(collapse, <VideoEffectsPane />);
 }
 
 function wrap(collapse: React.ReactNode, body: React.ReactNode) {
