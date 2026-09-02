@@ -216,6 +216,73 @@ export function resolveFadeSecs(
  *
  * Returns the row index per track id, plus how many rows the lane needs.
  */
+/**
+ * The rest of the tape a pill is a window onto: where the file's own content still
+ * sits to the left and right of it, in timeline seconds.
+ *
+ * An audio pill is the only timeline object that edits media you cannot see. Every
+ * other pill holds a value over a span, and a clip's crop produces a clip that is
+ * right there on screen; resizing an audio pill crops an invisible file, and nothing
+ * said where in that file the edges had landed. The edges already stop at the
+ * content (see the `lowerLeft` / `maxEnd` clamps in the lane drag) — this is what
+ * makes the stop legible before you hit it.
+ *
+ * Clamped to the programme, so the element stays bounded however long the file is:
+ * a four-minute bed under a five-second view would otherwise ask for a box tens of
+ * screens wide. Returns null when there is nothing to show — no known duration (a
+ * failed probe must never draw a bound it cannot measure), or a file no longer than
+ * the window onto it.
+ */
+export function audioGhostExtent(
+	offsetSec: number,
+	spanSec: number,
+	durationSec: number | null | undefined,
+	pillStartT: number,
+	pillEndT: number,
+	totalT: number,
+): { startT: number; endT: number; sourceStartSec: number; sourceEndSec: number } | null {
+	if (durationSec == null || !(durationSec > 0)) return null;
+	const startT = Math.max(0, pillStartT - Math.max(0, offsetSec));
+	const endT = Math.min(totalT, pillEndT + Math.max(0, durationSec - (offsetSec + spanSec)));
+	if (endT - startT <= pillEndT - pillStartT + 1e-6) return null;
+	return {
+		startT,
+		endT,
+		sourceStartSec: offsetSec - (pillStartT - startT),
+		sourceEndSec: offsetSec + (endT - pillStartT),
+	};
+}
+
+/**
+ * Slip: slide the media under a pill whose span does not move.
+ *
+ * The gesture the ghost makes necessary rather than optional. An edge drag sets the
+ * in-point at TIMELINE scale, which is unusable the moment the file is much longer
+ * than the region it fills — reaching 3:00 inside a four-minute bed on a five-second
+ * view means dragging three minutes of ruler. Slip separates the two questions a
+ * pill conflates: *where it plays* (the span) and *what plays* (`offsetMs`).
+ *
+ * The RATE is the caller's business, not this function's — it takes a delta already
+ * in source ms, because the timeline's own scale is the wrong one here and that is
+ * the whole point. What belongs here is the clamp: an offset outside
+ * `[0, duration - span]` windows past one end of the file, which is silence nobody
+ * asked for.
+ *
+ * Returns null when there is nothing to slip, on the same two conditions the ghost
+ * refuses on.
+ */
+export function slipAudioOffsetMs(
+	offsetMs: number,
+	spanMs: number,
+	durationSec: number | null | undefined,
+	deltaMs: number,
+): number | null {
+	if (durationSec == null || !(durationSec > 0)) return null;
+	const slackMs = durationSec * 1000 - spanMs;
+	if (!(slackMs > 0)) return null;
+	return Math.round(Math.min(slackMs, Math.max(0, offsetMs + deltaMs)));
+}
+
 export function packAudioTrackRows(tracks: Array<{ id: string; startMs: number; endMs: number }>): {
 	rowOf: Map<string, number>;
 	rowCount: number;
