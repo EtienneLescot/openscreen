@@ -764,10 +764,19 @@ enum Sink {
     /// Encodage software, deporte sur un thread.
     Software(Box<EncodeWorker>),
     /// Encodage materiel depuis un dmabuf, sur place.
+    ///
+    /// PLUSIEURS TAMPONS, PAS UN. Avec un seul, composer et encoder se
+    /// serialisent : le GPU compose, on l'attend, on encode, et rien ne se
+    /// recouvre. Deux tampons suffisent a decaler d'une frame — on compose la
+    /// n pendant que la n-1 s'encode — et c'est le meme raisonnement que la
+    /// profondeur 2 de la ring de relecture software.
     Hardware {
         enc: VaapiEncoder,
         mux: Muxer,
-        staging: crate::compositor::ExportableStaging,
+        staging: Vec<crate::compositor::ExportableStaging>,
+        /// Frame soumise mais pas encore encodee : (slot, soumission, pts).
+        pending: Option<(usize, wgpu::SubmissionIndex, i64)>,
+        next: usize,
     },
 }
 
@@ -819,7 +828,13 @@ pub fn run_composited_multi(
     };
     let hw = if hw_allowed && matches!(params.codec, ExportCodec::H264) {
         unsafe { VaapiEncoder::open(out_w as i32, out_h as i32, out_fps, bit_rate) }
-            .and_then(|v| comp.create_exportable_staging(comp.nv12_geometry().3).map(|st| (v, st)))
+            .and_then(|v| {
+                // Deux tampons : un en composition, un en encodage.
+                let total = comp.nv12_geometry().3;
+                let a = comp.create_exportable_staging(total)?;
+                let b = comp.create_exportable_staging(total)?;
+                Some((v, vec![a, b]))
+            })
     } else {
         None
     };
@@ -888,7 +903,13 @@ pub fn run_composited_multi(
     // critique), le chemin materiel encode sur place (~3 ms) et garde le muxer
     // sous la main. Les melanger rendrait les deux illisibles.
     let mut sink = match hw {
-        Some((venc, staging)) => Sink::Hardware { enc: venc, mux, staging },
+        Some((venc, staging)) => Sink::Hardware {
+            enc: venc,
+            mux,
+            staging,
+            pending: None,
+            next: 0,
+        },
         None => Sink::Software(Box::new(EncodeWorker::spawn(enc, mux, 3)?)),
     };
 
@@ -924,15 +945,22 @@ pub fn run_composited_multi(
                 // n'est plus ici du tout — il tourne sur `worker` pendant que
                 // cette closure compose deja la frame suivante.
                 match &mut sink {
-                    Sink::Hardware { enc, mux, staging } => {
-                        // Synchrone : la frame est composee dans la memoire
-                        // exportable, puis encodee depuis son fd. Pas de ring —
-                        // personne n'a besoin de la relire cote CPU.
-                        comp.compose_into_dmabuf(staging)?;
-                        let (bpr_y, bpr_uv, off_uv, _) = comp.nv12_geometry();
-                        enc.send_dmabuf(staging.fd, bpr_y, bpr_uv, off_uv, encoded_pts)?;
+                    Sink::Hardware { enc, mux, staging, pending, next } => {
+                        // Soumet la frame n SANS l'attendre, puis encode la
+                        // precedente : le GPU compose pendant que l'encodeur
+                        // travaille. La toute premiere passe n'a rien a encoder,
+                        // comme l'amorcage de la ring software.
+                        let slot = *next;
+                        let idx = comp.compose_into_dmabuf(&staging[slot])?;
+                        if let Some((prev, prev_idx, pts)) = pending.take() {
+                            comp.wait_submission(prev_idx);
+                            let (bpr_y, bpr_uv, off_uv, _) = comp.nv12_geometry();
+                            enc.send_dmabuf(staging[prev].fd, bpr_y, bpr_uv, off_uv, pts)?;
+                            mux.drain(enc.ctx())?;
+                        }
+                        *pending = Some((slot, idx, encoded_pts));
                         encoded_pts += 1;
-                        mux.drain(enc.ctx())?;
+                        *next = (slot + 1) % staging.len();
                         progress(n + 1);
                         return Ok(());
                     }
@@ -996,8 +1024,17 @@ pub fn run_composited_multi(
     };
 
     // Le chemin materiel n'a ni ring ni file : il ne reste qu'a vider l'encodeur.
-    if let Sink::Hardware { enc, mux, .. } = &mut sink {
+    if let Sink::Hardware { enc, mux, staging, pending, .. } = &mut sink {
         unsafe {
+            // La derniere frame composee est encore en vol : sans ca la video
+            // sortirait amputee d'une frame, exactement comme le drain de la
+            // ring cote software.
+            if let Some((prev, prev_idx, pts)) = pending.take() {
+                comp.wait_submission(prev_idx);
+                let (bpr_y, bpr_uv, off_uv, _) = comp.nv12_geometry();
+                enc.send_dmabuf(staging[prev].fd, bpr_y, bpr_uv, off_uv, pts)?;
+                mux.drain(enc.ctx())?;
+            }
             crate::ffi::avcodec_send_frame(enc.ctx(), ptr::null_mut());
             mux.drain(enc.ctx())?;
         }
