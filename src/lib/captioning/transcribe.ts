@@ -70,12 +70,40 @@ interface RendererSttApi {
  */
 export function transcribeMono16kToSegments(
 	samples: Float32Array,
-	options?: {
-		trimRegions?: TrimRegion[];
-		onStatus?: (status: SttRendererStatus) => void;
-		signal?: AbortSignal;
-		language?: string;
-	},
+	options?: TranscribeOptions,
+): Promise<TranscribeMono16kResult> {
+	return runTranscription({ samples }, options);
+}
+
+/**
+ * Same recognition, from a FILE the main process decodes itself.
+ *
+ * Preferred over `transcribeMono16kToSegments` wherever there is a path to point at.
+ * The samples entry point decodes in the renderer — whole file into memory, an
+ * `arrayBuffer()` copy, a `slice(0)` copy, then a resample loop on the UI thread —
+ * which is what froze the editor at open on a long import. Here the renderer sends a
+ * string and gets segments back.
+ *
+ * Rejects with a message carrying `STT_NATIVE_EXTRACTION_UNAVAILABLE` when the
+ * install has no ffmpeg, so the caller can fall back rather than lose the transcript.
+ */
+export function transcribeSourceFileToSegments(
+	sourcePath: string,
+	options?: TranscribeOptions,
+): Promise<TranscribeMono16kResult> {
+	return runTranscription({ sourcePath }, options);
+}
+
+export interface TranscribeOptions {
+	trimRegions?: TrimRegion[];
+	onStatus?: (status: SttRendererStatus) => void;
+	signal?: AbortSignal;
+	language?: string;
+}
+
+function runTranscription(
+	payload: { samples: Float32Array } | { sourcePath: string },
+	options?: TranscribeOptions,
 ): Promise<TranscribeMono16kResult> {
 	if (options?.signal?.aborted) {
 		return Promise.reject(new DOMException("Aborted", "AbortError"));
@@ -104,7 +132,7 @@ export function transcribeMono16kToSegments(
 	// iteration trimmed leading silence with a peak detector and got false
 	// positives on quiet music intros / room tone. VAD or nothing.
 	return api
-		.transcribe({ samples, language: forcedLanguage })
+		.transcribe({ ...payload, language: forcedLanguage })
 		.then((result) => {
 			const words = result.wordSegments ?? [];
 			let segments: CaptionSegment[];

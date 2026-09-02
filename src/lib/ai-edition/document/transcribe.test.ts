@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { STT_NATIVE_EXTRACTION_UNAVAILABLE } from "../../../../electron/stt/transcriptionContract";
 import { type AxcutDocument, axcutSchemaVersion } from "../schema";
 import { transcribeAsset } from "./transcribe";
 
@@ -12,10 +13,17 @@ vi.mock("@/lib/captioning", () => ({
 		sampleRate: 16_000,
 	})),
 	transcribeMono16kToSegments: vi.fn(),
+	transcribeSourceFileToSegments: vi.fn(),
 }));
 
-const { transcribeMono16kToSegments } = await import("@/lib/captioning");
-const transcribeMock = vi.mocked(transcribeMono16kToSegments);
+const { extractMono16kFromVideoUrl, transcribeMono16kToSegments, transcribeSourceFileToSegments } =
+	await import("@/lib/captioning");
+// `transcribeAsset` sends the PATH now and lets the main process decode; the samples
+// entry point is only reached when no ffmpeg can be resolved. The assertions below
+// therefore target the native call, and the fallback has tests of its own at the end.
+const transcribeMock = vi.mocked(transcribeSourceFileToSegments);
+const rendererMock = vi.mocked(transcribeMono16kToSegments);
+const extractMock = vi.mocked(extractMono16kFromVideoUrl);
 
 function makeDoc(): AxcutDocument {
 	return {
@@ -119,5 +127,54 @@ describe("transcribeAsset language handling", () => {
 		const t = await transcribeAsset(doc, "asset_1");
 
 		expect(t.language).toBe("auto");
+	});
+});
+
+describe("transcribeAsset native extraction", () => {
+	// Call counts are the assertion here, so they start from zero every test —
+	// `mockResolvedValueOnce` queues a result, it does not clear the history.
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("hands the main process a path instead of decoding in the renderer", async () => {
+		// The point of the change: the renderer must not touch the audio at all on the
+		// happy path. `extractMono16kFromVideoUrl` reads the whole file, copies it twice
+		// and resamples on the UI thread — that is the freeze this avoids.
+		transcribeMock.mockResolvedValueOnce({
+			segments: [{ startSec: 0, endSec: 1, text: "hi" }],
+			granularity: "word",
+			detectedLanguage: "en",
+		});
+		await transcribeAsset(makeDoc(), "asset_1");
+		expect(transcribeMock).toHaveBeenCalledWith("/tmp/demo.mp4", expect.anything());
+		expect(extractMock).not.toHaveBeenCalled();
+		expect(rendererMock).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the renderer decode when the install has no ffmpeg", async () => {
+		// A dev checkout that never fetched ffmpeg, or a platform build missing it, must
+		// still transcribe rather than lose the feature.
+		transcribeMock.mockRejectedValueOnce(
+			new Error(`${STT_NATIVE_EXTRACTION_UNAVAILABLE}: no ffmpeg binary`),
+		);
+		rendererMock.mockResolvedValueOnce({
+			segments: [{ startSec: 0, endSec: 1, text: "hi" }],
+			granularity: "word",
+			detectedLanguage: "en",
+		});
+		const transcript = await transcribeAsset(makeDoc(), "asset_1");
+		expect(extractMock).toHaveBeenCalled();
+		expect(rendererMock).toHaveBeenCalled();
+		expect(transcript.segments.length).toBeGreaterThan(0);
+	});
+
+	it("does NOT fall back on any other failure", async () => {
+		// "This file has no audio" is a verdict. Re-deriving it in the renderer would buy
+		// the same answer for the price of the decode this change exists to avoid.
+		transcribeMock.mockRejectedValueOnce(new Error("No decodable audio in /tmp/demo.mp4"));
+		await expect(transcribeAsset(makeDoc(), "asset_1")).rejects.toThrow("No decodable audio");
+		expect(extractMock).not.toHaveBeenCalled();
+		expect(rendererMock).not.toHaveBeenCalled();
 	});
 });

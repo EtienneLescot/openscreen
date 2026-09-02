@@ -12,4 +12,4 @@ export type {
 	CaptionTimestampGranularity,
 	TranscribeMono16kResult,
 } from "./transcribe";
-export { transcribeMono16kToSegments } from "./transcribe";
+export { transcribeMono16kToSegments, transcribeSourceFileToSegments } from "./transcribe";
