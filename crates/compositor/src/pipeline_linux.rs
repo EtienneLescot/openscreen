@@ -355,11 +355,19 @@ impl VideoEncoder {
         if planes.len() < lay.total {
             bail!("plans YUV tronques : {} octets pour {}", planes.len(), lay.total);
         }
-        // Pas de `av_frame_make_writable` : la frame vient du pool, elle n'est
-        // jamais partagee, et son refcount est retombe a 1 des le retour
-        // d'`avcodec_send_frame`. L'appeler ici serait au mieux un no-op, au pire
-        // — si le buffer portait `AV_BUFFER_FLAG_READONLY` — une reallocation et
-        // une copie de plus.
+        // REND LA FRAME ECRIVABLE AVANT DE LA REECRIRE. `avcodec_send_frame`
+        // prend une reference sur le buffer ; un encodeur qui garde la frame —
+        // parce qu'il a du delai, ou parce que `OPENSCREEN_EXPORT_ENCODER` en a
+        // choisi un autre — la tiendrait encore quand le pool la recycle, et on
+        // ecrirait dans une image en cours d'encodage.
+        //
+        // J'avais retire cet appel en le jugeant inutile : avec `libopenh264` le
+        // refcount EST retombe a 1 au retour, mesure. Mais c'est une propriete de
+        // CET encodeur-la, pas du pool, et rien dans le code ne la maintenait.
+        // Ici l'appel est gratuit quand elle tient (refcount 1 = no-op) et
+        // correct quand elle ne tient pas. Le buffer ne porte pas
+        // `AV_BUFFER_FLAG_READONLY`, donc pas de branche recopie a redouter.
+        crate::ffi::averr(crate::ffi::av_frame_make_writable(dst_frame), "make_writable")?;
         debug_assert_eq!((*dst_frame).linesize[0] as usize, lay.bpr_y);
         debug_assert_eq!((*dst_frame).linesize[1] as usize, lay.bpr_uv);
         std::ptr::copy_nonoverlapping(planes.as_ptr(), (*dst_frame).data[0], lay.total);
@@ -776,6 +784,9 @@ enum Sink {
         staging: Vec<crate::compositor::ExportableStaging>,
         /// Frame soumise mais pas encore encodee : (slot, soumission, pts).
         pending: Option<(usize, wgpu::SubmissionIndex, i64)>,
+        /// Frame mappee remise a l'encodeur pour le slot precedent, gardee VIVANTE
+        /// tant qu'il peut la lire. `(slot, frame)`.
+        in_flight: Option<(usize, *mut AVFrame)>,
         next: usize,
     },
 }
@@ -829,11 +840,23 @@ pub fn run_composited_multi(
     let hw = if hw_allowed && matches!(params.codec, ExportCodec::H264) {
         unsafe { VaapiEncoder::open(out_w as i32, out_h as i32, out_fps, bit_rate) }
             .and_then(|v| {
-                // Deux tampons : un en composition, un en encodage.
+                // PLUS DE TAMPONS QUE L'ENCODEUR N'A DE LATENCE. Deux suffisaient
+                // pour recouvrir composition et encodage, mais pas pour la
+                // question de propriete : `h264_vaapi` garde plusieurs frames
+                // avant d'emettre le premier paquet, donc a deux tampons on
+                // revenait sur le slot 0 alors que la surface qui le mappe etait
+                // encore detenue. Le garde-fou de `frame_released` le prouve —
+                // avec deux, il declenche des la premiere boucle.
+                //
+                // Six, pas deux : c'est au-dessus de la latence observee, ca
+                // coute 6 x 3,3 Mo, et le garde-fou reste en place pour le cas ou
+                // un pilote irait plus loin.
                 let total = comp.nv12_geometry().3;
-                let a = comp.create_exportable_staging(total)?;
-                let b = comp.create_exportable_staging(total)?;
-                Some((v, vec![a, b]))
+                let mut v_st = Vec::new();
+                for _ in 0..6 {
+                    v_st.push(comp.create_exportable_staging(total)?);
+                }
+                Some((v, v_st))
             })
     } else {
         None
@@ -908,6 +931,7 @@ pub fn run_composited_multi(
             mux,
             staging,
             pending: None,
+            in_flight: None,
             next: 0,
         },
         None => Sink::Software(Box::new(EncodeWorker::spawn(enc, mux, 3)?)),
@@ -945,18 +969,45 @@ pub fn run_composited_multi(
                 // n'est plus ici du tout — il tourne sur `worker` pendant que
                 // cette closure compose deja la frame suivante.
                 match &mut sink {
-                    Sink::Hardware { enc, mux, staging, pending, next } => {
+                    Sink::Hardware { enc, mux, staging, pending, in_flight, next } => {
                         // Soumet la frame n SANS l'attendre, puis encode la
                         // precedente : le GPU compose pendant que l'encodeur
                         // travaille. La toute premiere passe n'a rien a encoder,
                         // comme l'amorcage de la ring software.
                         let slot = *next;
+                        // AVANT d'ecrire dans ce slot : s'assurer que l'encodeur
+                        // ne lit plus la surface qui le mappait. Draine tant qu'il
+                        // la retient — c'est le drain qui fait sortir les paquets
+                        // et relache les references, donc la boucle progresse.
+                        if let Some((busy, frame)) = in_flight.take() {
+                            if busy == slot {
+                                let mut spins = 0;
+                                while !VaapiEncoder::frame_released(frame) {
+                                    mux.drain(enc.ctx())?;
+                                    spins += 1;
+                                    if spins > 1000 {
+                                        bail!("l'encodeur retient la surface du slot {slot}");
+                                    }
+                                }
+                                let mut f = frame;
+                                crate::ffi::av_frame_free(&mut f);
+                            } else {
+                                *in_flight = Some((busy, frame));
+                            }
+                        }
                         let idx = comp.compose_into_dmabuf(&staging[slot])?;
                         if let Some((prev, prev_idx, pts)) = pending.take() {
                             comp.wait_submission(prev_idx);
                             let (bpr_y, bpr_uv, off_uv, _) = comp.nv12_geometry();
-                            enc.send_dmabuf(staging[prev].fd, bpr_y, bpr_uv, off_uv, pts)?;
+                            let f = enc.send_dmabuf(staging[prev].fd, bpr_y, bpr_uv, off_uv, pts)?;
                             mux.drain(enc.ctx())?;
+                            // Remplace le precedent : il a ete relache plus haut
+                            // si son slot revenait, sinon il l'est par ce drain.
+                            if let Some((_, old)) = in_flight.take() {
+                                let mut o = old;
+                                crate::ffi::av_frame_free(&mut o);
+                            }
+                            *in_flight = Some((prev, f));
                         }
                         *pending = Some((slot, idx, encoded_pts));
                         encoded_pts += 1;
@@ -1024,7 +1075,7 @@ pub fn run_composited_multi(
     };
 
     // Le chemin materiel n'a ni ring ni file : il ne reste qu'a vider l'encodeur.
-    if let Sink::Hardware { enc, mux, staging, pending, .. } = &mut sink {
+    if let Sink::Hardware { enc, mux, staging, pending, in_flight, .. } = &mut sink {
         unsafe {
             // La derniere frame composee est encore en vol : sans ca la video
             // sortirait amputee d'une frame, exactement comme le drain de la
@@ -1032,11 +1083,22 @@ pub fn run_composited_multi(
             if let Some((prev, prev_idx, pts)) = pending.take() {
                 comp.wait_submission(prev_idx);
                 let (bpr_y, bpr_uv, off_uv, _) = comp.nv12_geometry();
-                enc.send_dmabuf(staging[prev].fd, bpr_y, bpr_uv, off_uv, pts)?;
+                let f = enc.send_dmabuf(staging[prev].fd, bpr_y, bpr_uv, off_uv, pts)?;
                 mux.drain(enc.ctx())?;
+                if let Some((_, old)) = in_flight.take() {
+                    let mut o = old;
+                    crate::ffi::av_frame_free(&mut o);
+                }
+                *in_flight = Some((prev, f));
             }
             crate::ffi::avcodec_send_frame(enc.ctx(), ptr::null_mut());
             mux.drain(enc.ctx())?;
+            // Le flush a fait sortir tout ce qui restait : plus rien ne reference
+            // les surfaces, on peut liberer la derniere.
+            if let Some((_, f)) = in_flight.take() {
+                let mut f = f;
+                crate::ffi::av_frame_free(&mut f);
+            }
         }
     }
     let mut mux = match sink {
@@ -1212,7 +1274,7 @@ impl VaapiEncoder {
         bpr_uv: u32,
         off_uv: u64,
         pts: i64,
-    ) -> Result<()> {
+    ) -> Result<*mut AVFrame> {
         use crate::ffi::*;
         let desc = av_mallocz(std::mem::size_of::<AVDRMFrameDescriptor>())
             as *mut AVDRMFrameDescriptor;
@@ -1267,15 +1329,32 @@ impl VaapiEncoder {
             let mut d = dst;
             av_frame_free(&mut s);
             av_frame_free(&mut d);
-            return averr(mapped, "av_hwframe_map(DRM -> VAAPI)");
+            averr(mapped, "av_hwframe_map(DRM -> VAAPI)")?;
+            unreachable!("averr rend une erreur pour mapped < 0");
         }
         (*dst).pts = pts;
         let r = averr(avcodec_send_frame(self.ctx, dst), "send_frame(vaapi)");
+        // `src` a fini son role : `av_hwframe_map` a copie ce qu'il fallait dans
+        // `dst`, et le descripteur DRM meurt avec lui.
         let mut s = src;
-        let mut d = dst;
         av_frame_free(&mut s);
-        av_frame_free(&mut d);
-        r
+        // `dst` PAS libere ici. `avcodec_send_frame` en a pris une reference, et
+        // cette frame mappe le dmabuf du slot : tant qu'elle vit, l'encodeur peut
+        // encore lire cette memoire. L'appelant la garde et ne la relache — donc
+        // ne recycle le slot — qu'apres avoir draine le paquet correspondant.
+        r.map(|()| dst)
+    }
+
+    /// Vrai si l'encodeur ne detient plus la frame mappee, donc si le slot qu'elle
+    /// couvre peut etre reecrit.
+    ///
+    /// C'est la SEULE question qui compte pour reutiliser un slot. Un `drain` qui
+    /// rend `EAGAIN` ne dit rien la-dessus : il signale qu'aucun paquet n'est
+    /// pret, pas que la surface est relachee.
+    pub unsafe fn frame_released(frame: *mut AVFrame) -> bool {
+        frame.is_null()
+            || (*frame).buf[0].is_null()
+            || crate::ffi::av_buffer_get_ref_count((*frame).buf[0]) <= 1
     }
 
     pub fn ctx(&self) -> *mut crate::ffi::AVCodecContext {
