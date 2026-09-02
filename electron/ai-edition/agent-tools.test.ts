@@ -172,6 +172,7 @@ describe("the mutating-tool table", () => {
 		expect([...MUTATING_TOOL_NAMES].sort()).toEqual(
 			[
 				"addAnnotation",
+				"addAudio",
 				"addCameraFullscreen",
 				"addSpeed",
 				"addTrim",
@@ -184,6 +185,7 @@ describe("the mutating-tool table", () => {
 				"removeTrim",
 				"replaceTimeline",
 				"setAnnotation",
+				"setAudio",
 				"setCameraFullscreen",
 				"setClipRange",
 				"setSpeed",
@@ -2052,5 +2054,135 @@ describe("setZoom answers for the focus it kept", () => {
 		);
 		expect(result.ok).toBe(true);
 		expect(result.resultJson).not.toContain("cursorAnchor");
+	});
+});
+
+// Issue #350 / #560 — the audio tools. #561 landed the timeline audio without any
+// agent surface, so these cover both that the model can see it and that it cannot
+// invent an asset to place.
+describe("addAudio / setAudio", () => {
+	/** The fixture plus one imported audio asset. */
+	function withAudioAsset(durationSec: number | null = 30): AxcutDocument {
+		const doc = fixtureDocument();
+		return documentSchema.parse({
+			...doc,
+			assets: [
+				...doc.assets,
+				{
+					id: "audio_1",
+					kind: "audio",
+					label: "bed.mp3",
+					originalPath: "C:/audio/bed.mp3",
+					...(durationSec == null ? {} : { durationSec }),
+				},
+			],
+		});
+	}
+
+	const place = (doc: AxcutDocument, args: Record<string, unknown>) =>
+		executeAgentTool(doc, "addAudio", JSON.stringify(args));
+
+	it("reports imported audio in the snapshot, with the asset kind beside it", () => {
+		// Without `kind` the model sees an asset it cannot explain and tries to place it
+		// as footage; without `audioTracks` it cannot see the lanes at all.
+		const placed = place(withAudioAsset(), {
+			assetId: "audio_1",
+			startSec: 2,
+			endSec: 6,
+			kind: "voiceover",
+		});
+		expect(placed.ok).toBe(true);
+		const snapshot = executeAgentTool(placed.document as AxcutDocument, "getCurrentDocument", "");
+		const parsed = JSON.parse(snapshot.resultJson);
+		expect(parsed.assets.find((a: { id: string }) => a.id === "audio_1").kind).toBe("audio");
+		expect(parsed.audioTracks).toHaveLength(1);
+		expect(parsed.audioTracks[0]).toMatchObject({
+			assetId: "audio_1",
+			kind: "voiceover",
+			startSec: 2,
+			endSec: 6,
+		});
+	});
+
+	it("anchors the placed track to the clip under it", () => {
+		const result = place(withAudioAsset(), { assetId: "audio_1", startSec: 2, endSec: 6 });
+		expect(result.ok).toBe(true);
+		const track = (result.document as AxcutDocument).audioTracks[0];
+		// The anchor is what makes it travel with its clip; a bare startMs/endMs would not.
+		expect(track.clipId).toBe("clip_1");
+		expect(track.origin).toBe("agent");
+	});
+
+	it("plays the whole file when endSec is omitted", () => {
+		const result = place(withAudioAsset(20), { assetId: "audio_1", startSec: 0, offsetSec: 5 });
+		expect(result.ok).toBe(true);
+		const track = (result.document as AxcutDocument).audioTracks[0];
+		// 20s file from an in-point of 5s = 15s of span, so the model never computes it.
+		expect(track.endMs - track.startMs).toBe(15_000);
+	});
+
+	it("refuses an offset at or past the end of a known file", () => {
+		// Otherwise the omitted-end fallback mints a 0.1s track that plays silence, and
+		// the model reports it as having placed audio.
+		const result = place(withAudioAsset(20), { assetId: "audio_1", startSec: 0, offsetSec: 20 });
+		expect(result.ok).toBe(false);
+		expect(result.resultJson).toContain("offsetSec");
+	});
+
+	it("allows any offset while the duration is unknown", () => {
+		// A failed probe leaves no duration; refusing on that would block a legitimate call.
+		expect(place(withAudioAsset(null), { assetId: "audio_1", startSec: 0, offsetSec: 99 }).ok).toBe(
+			true,
+		);
+	});
+
+	it("refuses an unknown asset and names the audio the project actually has", () => {
+		const result = place(withAudioAsset(), { assetId: "nope", startSec: 0, endSec: 4 });
+		expect(result.ok).toBe(false);
+		expect(result.resultJson).toContain("audio_1");
+	});
+
+	it("refuses a video asset, pointing at the tool that does place footage", () => {
+		const result = place(withAudioAsset(), { assetId: "asset_1", startSec: 0, endSec: 4 });
+		expect(result.ok).toBe(false);
+		expect(result.resultJson).toContain("replaceTimeline");
+	});
+
+	it("setAudio re-levels and re-lanes the track it names", () => {
+		const placed = place(withAudioAsset(), { assetId: "audio_1", startSec: 2, endSec: 6 });
+		const id = JSON.parse(placed.resultJson).audioId;
+		const result = executeAgentTool(
+			placed.document as AxcutDocument,
+			"setAudio",
+			JSON.stringify({ audioId: id, gainDb: -6, kind: "voiceover" }),
+		);
+		expect(result.ok).toBe(true);
+		expect((result.document as AxcutDocument).audioTracks[0]).toMatchObject({
+			gainDb: -6,
+			kind: "voiceover",
+		});
+	});
+
+	it("setAudio applies the same offset guard as addAudio", () => {
+		const placed = place(withAudioAsset(20), { assetId: "audio_1", startSec: 2, endSec: 6 });
+		const id = JSON.parse(placed.resultJson).audioId;
+		const result = executeAgentTool(
+			placed.document as AxcutDocument,
+			"setAudio",
+			JSON.stringify({ audioId: id, offsetSec: 25 }),
+		);
+		expect(result.ok).toBe(false);
+	});
+
+	it("removeModifier deletes an audio track by id, like every other kind", () => {
+		const placed = place(withAudioAsset(), { assetId: "audio_1", startSec: 2, endSec: 6 });
+		const id = JSON.parse(placed.resultJson).audioId;
+		const result = executeAgentTool(
+			placed.document as AxcutDocument,
+			"removeModifier",
+			JSON.stringify({ id }),
+		);
+		expect(result.ok).toBe(true);
+		expect((result.document as AxcutDocument).audioTracks).toEqual([]);
 	});
 });
