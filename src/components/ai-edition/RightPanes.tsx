@@ -74,7 +74,7 @@ import {
 } from "@/lib/ai-edition/timeline/aggregated-transcript";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
-import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
+import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import type { TranscriptGateReason } from "@/lib/ai-edition/transcription/status";
 import { getAssetPath } from "@/lib/assetPath";
 import { resolveWebcamLayoutPreset, supportsWebcamReactiveZoom } from "@/lib/compositeLayout";
@@ -858,29 +858,24 @@ export function TranscriptPane({
 		lane === "voiceover" && voiceover.length === 0 ? "recording" : lane;
 	const placements = activeLane === "voiceover" ? voiceover : clips;
 
+	// From the RECORDING clips and the whole trim set, never from `placements`: the
+	// programme is one thing, and the voiceover lane is asking whether the film still
+	// contains a moment — not whether some trim happens to name an audio fragment.
+	const removed = useMemo(() => removedRawSpans(clips, trimRanges), [clips, trimRanges]);
 	const sections = useMemo(
-		() => buildAggregatedSections(placements, transcripts, assets, trimRanges),
-		[placements, transcripts, assets, trimRanges],
+		() => buildAggregatedSections(placements, transcripts, assets, removed),
+		[placements, transcripts, assets, removed],
 	);
 
-	// the cue position is the playback head's location in the current clip's source time.
 	// `currentTimeSec` is the RAW/document timeline (same referential as the ruler, see
-	// NewEditorShell) — looked up against the raw `clips`, matching that referential.
-	// `clipId` is what `findCueWordId` keys on — do NOT drop it as unused: source time is
-	// per asset, so without it the resolver falls back to the first section of the asset
-	// and the cue tracks clip 1 forever on a timeline that plays one media twice.
-	const cue = useMemo(() => {
-		if (clips.length === 0) return null;
-		const position = locateVirtualPosition(clips, currentTimeSec);
-		if (!position) return null;
-		return {
-			assetId: position.clip.assetId,
-			clipId: position.clip.id,
-			sourceTimeSec: position.sourceTimeSec,
-		};
-	}, [clips, currentTimeSec]);
-
-	const cueWordId = useMemo(() => findCueWordId(sections, cue), [sections, cue]);
+	// NewEditorShell), which is exactly what `findCueWordId` now takes. It used to be
+	// resolved through `locateVirtualPosition` into a clip id + source second, and a clip
+	// id is something only the recording lane has — so the voiceover lane never
+	// highlighted. Raw seconds are the coordinate both lanes share.
+	const cueWordId = useMemo(
+		() => findCueWordId(sections, currentTimeSec),
+		[sections, currentTimeSec],
+	);
 
 	const laneSwitch =
 		voiceover.length > 0 ? <TranscriptLaneSwitch lane={activeLane} onChange={setLane} /> : null;
@@ -1123,8 +1118,12 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 
 	const removeTrimRun = useCallback(
 		(run: TrimRun) => {
-			if (busy || !run.trimId) return;
-			onRemoveTrimRange(run.trimId);
+			// An empty set is a gap between clips: removed from the film, but by nothing
+			// there is a pill for. Step 4 of #560 replaces this with a call that drops every
+			// row of the pill at once; today's op takes one id, so overlapping cuts still
+			// need a second click, exactly as before.
+			if (busy || run.trimIds.length === 0) return;
+			onRemoveTrimRange(run.trimIds[0]);
 		},
 		[busy, onRemoveTrimRange],
 	);
@@ -1569,7 +1568,7 @@ const TranscriptWord = memo(function TranscriptWord({
 					onClick={(e) => {
 						e.stopPropagation();
 						onRestore({
-							trimId: cw.trimId ?? "",
+							trimIds: cw.trimIds,
 							assetId: "",
 							startWordIndex: 0,
 							endWordIndex: 0,
@@ -1696,7 +1695,7 @@ const TranscriptWord = memo(function TranscriptWord({
 				data-start-sec={cw.word.startSec}
 				data-end-sec={cw.word.endSec}
 				data-inserted="true"
-				data-skip-id={cw.trimId ?? undefined}
+				data-skip-id={cw.trimIds[0] ?? undefined}
 				style={{ display: "inline", opacity: removed ? 0.6 : 1 }}
 				onMouseEnter={() => setHover(true)}
 				onMouseLeave={() => setHover(false)}
@@ -1786,7 +1785,7 @@ const TranscriptWord = memo(function TranscriptWord({
 			data-word-id={cw.id}
 			data-start-sec={cw.word.startSec}
 			data-end-sec={cw.word.endSec}
-			data-skip-id={cw.trimId ?? undefined}
+			data-skip-id={cw.trimIds[0] ?? undefined}
 			data-corrected={corrected ? "true" : undefined}
 			data-cue={isCue ? "true" : undefined}
 			title={corrected ? ts("transcript.correctedWord", { original }) : undefined}
@@ -1819,7 +1818,7 @@ const TranscriptWord = memo(function TranscriptWord({
 			    the LLM is the only place that names a word a filler (via the
 			    filler_or_hesitation reason when generating suggestions). */}
 			{cw.word.text}{" "}
-			{removed && hover && cw.trimId ? (
+			{removed && hover && cw.trimIds.length > 0 ? (
 				<button
 					type="button"
 					contentEditable={false}
@@ -1827,10 +1826,10 @@ const TranscriptWord = memo(function TranscriptWord({
 					aria-label={ts("transcript.restoreWord", { word: cw.word.text })}
 					onClick={(e) => {
 						e.stopPropagation();
-						// build a minimal TrimRun stub — only trimId is
+						// build a minimal TrimRun stub — only the ids are
 						// read by onRestore.
 						onRestore({
-							trimId: cw.trimId ?? "",
+							trimIds: cw.trimIds,
 							assetId: "",
 							startWordIndex: 0,
 							endWordIndex: 0,
@@ -2012,7 +2011,7 @@ function findCollapsedDeletionWordId(
 ): string | null {
 	// read the kept/skip state from the words array, not the
 	// DOM's data-skip-id. The DOM may be lagging a render behind (its
-	// trimId is only set on the next React commit), so a DOM check would
+	// skip id is only set on the next React commit), so a DOM check would
 	// re-trim an already-trimmed word. The words array is the React state
 	// captured at the call site — always current.
 	const skippedIds = new Set(words.filter((w) => !w.kept).map((w) => w.id));
