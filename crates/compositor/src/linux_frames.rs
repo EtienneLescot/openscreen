@@ -261,9 +261,17 @@ impl CpuFrames {
             Some(t) => t,
             None => bail!("upload avant ensure_textures"),
         };
-        let (cw, chh) = (tex.width / 2, tex.height / 2);
+        // LES DIMENSIONS DE TEXTURE SONT ARRONDIES AU PAIR, PAS LES PLANS.
+        // `ensure_textures` arrondit pour que le chroma 4:2:0 tombe juste, mais
+        // le decodeur, lui, alloue au visible : lire `stride * hauteur_arrondie`
+        // depasse le plan d'une ligne sur une source de hauteur impaire. On lit
+        // donc le VISIBLE et on laisse la derniere ligne de la texture telle
+        // qu'elle est — elle n'existe que pour l'alignement.
+        let (vw, vh) = ((*f).width.max(0) as u32, (*f).height.max(0) as u32);
+        let (vw, vh) = (vw.min(tex.width), vh.min(tex.height));
+        let (cw, chh) = (vw.div_ceil(2), vh.div_ceil(2));
         for (plane, texture, pw, ph) in [
-            (0usize, &tex.y, tex.width, tex.height),
+            (0usize, &tex.y, vw, vh),
             (1, &tex.u, cw, chh),
             (2, &tex.v, cw, chh),
         ] {
