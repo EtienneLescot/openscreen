@@ -4519,3 +4519,99 @@ impl Compositor {
         }
     }
 }
+
+impl Compositor {
+    /// Compose la frame courante en NV12 et la depose dans `staging`, dont la
+    /// memoire est exportable en dmabuf. Rend la main quand le GPU a fini.
+    ///
+    /// PAS DE RING, PAS DE `map_async`, CONTRAIREMENT A `readback_submit_yuv`.
+    /// Cette variante-ci n'a rien a faire relire par le CPU : le consommateur est
+    /// l'encodeur materiel, qui lit la meme memoire par son fd. Toute la
+    /// mecanique de staging mappe et de recolte differee n'aurait donc personne a
+    /// servir.
+    ///
+    /// L'attente est SYNCHRONE et c'est un choix de premiere version : le travail
+    /// GPU par frame se compte en millisecondes et l'encodage materiel aussi, la
+    /// ou l'encodeur logiciel qui a justifie le worker en demandait 8. Recouvrir
+    /// les deux demanderait plusieurs tampons exportables en rotation ; ca se
+    /// mesure avant de se decider, et ca ne change pas l'image produite.
+    pub unsafe fn compose_into_dmabuf(&self, staging: &ExportableStaging) -> Result<()> {
+        self.ensure_yuv_fmt(YuvFormat::Nv12)?;
+        let (bpr_y, bpr_uv, off_uv, total) = {
+            let g = self.yuv.borrow();
+            let t = g.as_ref().expect("ensure_yuv");
+            (t.bpr_y, t.bpr_uv, t.off_u, t.total)
+        };
+        if staging.size < total {
+            anyhow::bail!("staging de {} octets pour {total} attendus", staging.size);
+        }
+        let (w, h) = (self.render_w, self.render_h);
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("yuv-dmabuf") });
+        {
+            let g = self.yuv.borrow();
+            let t = g.as_ref().expect("ensure_yuv");
+            let (uv_view, pipe_uv, _uv) = match &t.chroma {
+                Chroma::Interleaved { uv_view, pipe_uv, _uv } => (uv_view, pipe_uv, _uv),
+                Chroma::Planar { .. } => {
+                    anyhow::bail!("compose_into_dmabuf attend des cibles NV12")
+                }
+            };
+            for (view, pipe) in [(&t.y_view, &t.pipe_y), (uv_view, pipe_uv)] {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("yuv-dmabuf-plane"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(pipe);
+                pass.set_bind_group(0, &t.bind, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            for (tex, off, bpr, pw, ph) in
+                [(&t._y, 0u64, bpr_y, w, h), (_uv, off_uv, bpr_uv, cw, ch)]
+            {
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: staging.buffer(),
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: off,
+                            bytes_per_row: Some(bpr),
+                            rows_per_image: Some(ph),
+                        },
+                    },
+                    wgpu::Extent3d { width: pw, height: ph, depth_or_array_layers: 1 },
+                );
+            }
+        }
+        let idx = self.gpu.context.submit(std::iter::once(encoder.finish()));
+        // L'encodeur va lire cette memoire par un autre chemin que wgpu : rien
+        // d'autre ne garantirait que la copie est terminee quand on lui passe
+        // le fd.
+        self.gpu.device.poll(wgpu::Maintain::WaitForSubmissionIndex(idx));
+        Ok(())
+    }
+
+    /// La geometrie NV12 courante, pour decrire le dmabuf au consommateur.
+    pub fn nv12_geometry(&self) -> (u32, u32, u64, u64) {
+        Compositor::yuv_layout_for(self.render_w, self.render_h, YuvFormat::Nv12)
+    }
+}
