@@ -28,7 +28,7 @@ Forking a popular archived project is a good way to quietly turn it into somethi
 - Stability before features. The recorder has to work on macOS, Windows and Linux. Bugs from real users go first.
 - It's not production-grade, and I'll keep saying so. Expect rough edges and breaking changes, including to the project format.
 
-The [roadmap](https://github.com/getopenscreen/openscreen/blob/main/ROADMAP.md) is public: record, edit, export, plus an optional AI editing layer that's off by default and never required. There's a [Discord](https://discord.gg/VvT6Vtnyh) with a roadmap channel if you want to argue about any of it.
+The [roadmap](https://github.com/getopenscreen/openscreen/blob/main/ROADMAP.md) is public: record, edit, export, plus an optional AI editing layer that's off by default and never required. There's a [Discord](https://getopenscreen.com/discord) with a roadmap channel if you want to argue about any of it.
 
 ## It already had contributors
 

@@ -57,4 +57,4 @@ Webcam background effects have landed on all three compositor backends. Blur or 
 
 Still open: hardware encode on Linux, and measurements on discrete GPUs and QSV. It is still pre-1.x, so rough edges are expected and bug reports are welcome.
 
-Three months, ten releases. [Discord](https://discord.gg/VvT6Vtnyh) is open if you want to argue with any of it.
+Three months, ten releases. [Discord](https://getopenscreen.com/discord) is open if you want to argue with any of it.
