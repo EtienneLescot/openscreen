@@ -100,5 +100,8 @@ const audioUtilsTestPath = path.join(BUILD_DIR, "audio_sample_utils_test.exe");
 if (!fs.existsSync(audioUtilsTestPath)) {
 	throw new Error(`WGC helper build completed but ${audioUtilsTestPath} was not found.`);
 }
+// Snap/resample unit tests must pass. Media Foundation AAC probes skip on
+// hosts without the stock encoder (Windows N/KN, Server without Media Feature
+// Pack) instead of failing this packaging command.
 await run(audioUtilsTestPath, [], { cwd: BUILD_DIR });
 console.log(`Passed ${audioUtilsTestPath}`);

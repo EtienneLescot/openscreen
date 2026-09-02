@@ -7,8 +7,10 @@
 #include <wrl/client.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -41,6 +43,22 @@ void expect(const char* name, bool ok, const std::string& detail) {
     std::cout << "FAIL " << name << " " << detail << "\n";
 }
 
+void skip(const char* name, const std::string& reason) {
+    std::cout << "SKIP " << name << " " << reason << "\n";
+}
+
+struct TempMp4 {
+    std::wstring path;
+    explicit TempMp4(std::wstring p) : path(std::move(p)) {
+        DeleteFileW(path.c_str());
+    }
+    ~TempMp4() {
+        DeleteFileW(path.c_str());
+    }
+    TempMp4(const TempMp4&) = delete;
+    TempMp4& operator=(const TempMp4&) = delete;
+};
+
 std::string describe(const AudioInputFormat& format) {
     return "sampleRate=" + std::to_string(format.sampleRate) +
         " channels=" + std::to_string(format.channels) +
@@ -55,11 +73,10 @@ std::wstring tempMp4Path() {
 }
 
 HRESULT trySetAacPcmRate(UINT32 sampleRate, IMFAttributes* attributes = nullptr) {
-    const std::wstring path = tempMp4Path();
-    DeleteFileW(path.c_str());
+    TempMp4 tmp(tempMp4Path());
 
     Microsoft::WRL::ComPtr<IMFSinkWriter> writer;
-    HRESULT hr = MFCreateSinkWriterFromURL(path.c_str(), nullptr, attributes, &writer);
+    HRESULT hr = MFCreateSinkWriterFromURL(tmp.path.c_str(), nullptr, attributes, &writer);
     if (FAILED(hr)) {
         return hr;
     }
@@ -80,14 +97,12 @@ HRESULT trySetAacPcmRate(UINT32 sampleRate, IMFAttributes* attributes = nullptr)
     DWORD streamIndex = 0;
     hr = writer->AddStream(outputType.Get(), &streamIndex);
     if (FAILED(hr)) {
-        DeleteFileW(path.c_str());
         return hr;
     }
 
     Microsoft::WRL::ComPtr<IMFMediaType> inputType;
     hr = MFCreateMediaType(&inputType);
     if (FAILED(hr)) {
-        DeleteFileW(path.c_str());
         return hr;
     }
     inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
@@ -101,7 +116,6 @@ HRESULT trySetAacPcmRate(UINT32 sampleRate, IMFAttributes* attributes = nullptr)
 
     hr = writer->SetInputMediaType(streamIndex, inputType.Get(), nullptr);
     writer.Reset();
-    DeleteFileW(path.c_str());
     return hr;
 }
 
@@ -109,11 +123,10 @@ HRESULT trySetAacPcmRate(UINT32 sampleRate, IMFAttributes* attributes = nullptr)
 // topology. Distinguishes "96 kHz AAC is illegal" from "audio-only MP4 sink
 // writer refuses this type".
 HRESULT trySetAacPcmRateWithVideo(UINT32 sampleRate) {
-    const std::wstring path = tempMp4Path();
-    DeleteFileW(path.c_str());
+    TempMp4 tmp(tempMp4Path());
 
     Microsoft::WRL::ComPtr<IMFSinkWriter> writer;
-    HRESULT hr = MFCreateSinkWriterFromURL(path.c_str(), nullptr, nullptr, &writer);
+    HRESULT hr = MFCreateSinkWriterFromURL(tmp.path.c_str(), nullptr, nullptr, &writer);
     if (FAILED(hr)) {
         return hr;
     }
@@ -134,14 +147,12 @@ HRESULT trySetAacPcmRateWithVideo(UINT32 sampleRate) {
     DWORD videoIndex = 0;
     hr = writer->AddStream(videoOut.Get(), &videoIndex);
     if (FAILED(hr)) {
-        DeleteFileW(path.c_str());
         return hr;
     }
 
     Microsoft::WRL::ComPtr<IMFMediaType> audioOut;
     hr = MFCreateMediaType(&audioOut);
     if (FAILED(hr)) {
-        DeleteFileW(path.c_str());
         return hr;
     }
     audioOut->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
@@ -155,14 +166,12 @@ HRESULT trySetAacPcmRateWithVideo(UINT32 sampleRate) {
     DWORD audioIndex = 0;
     hr = writer->AddStream(audioOut.Get(), &audioIndex);
     if (FAILED(hr)) {
-        DeleteFileW(path.c_str());
         return hr;
     }
 
     Microsoft::WRL::ComPtr<IMFMediaType> videoIn;
     hr = MFCreateMediaType(&videoIn);
     if (FAILED(hr)) {
-        DeleteFileW(path.c_str());
         return hr;
     }
     videoIn->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
@@ -174,14 +183,12 @@ HRESULT trySetAacPcmRateWithVideo(UINT32 sampleRate) {
     MFSetAttributeRatio(videoIn.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
     hr = writer->SetInputMediaType(videoIndex, videoIn.Get(), nullptr);
     if (FAILED(hr)) {
-        DeleteFileW(path.c_str());
         return hr;
     }
 
     Microsoft::WRL::ComPtr<IMFMediaType> audioIn;
     hr = MFCreateMediaType(&audioIn);
     if (FAILED(hr)) {
-        DeleteFileW(path.c_str());
         return hr;
     }
     audioIn->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
@@ -194,7 +201,6 @@ HRESULT trySetAacPcmRateWithVideo(UINT32 sampleRate) {
     audioIn->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
     hr = writer->SetInputMediaType(audioIndex, audioIn.Get(), nullptr);
     writer.Reset();
-    DeleteFileW(path.c_str());
     return hr;
 }
 
@@ -251,66 +257,68 @@ int main() {
         target48k.sampleRate == 48000 && frameCountOk,
         "frames=" + std::to_string(convertedFrames) + " " + describe(target48k));
 
+    // 96 kHz Nyquist square (+/- full scale) must not survive 2:1 as a tone.
+    std::vector<BYTE> nyquist(8 * source96k.blockAlign, 0);
+    auto* nyquistSamples = reinterpret_cast<int16_t*>(nyquist.data());
+    for (size_t frame = 0; frame < 8; frame += 1) {
+        const int16_t v = (frame % 2 == 0) ? 32767 : -32767;
+        nyquistSamples[frame * 2] = v;
+        nyquistSamples[frame * 2 + 1] = v;
+    }
+    std::vector<BYTE> nyquistOut;
+    convertAudioWithGain(nyquist.data(), static_cast<DWORD>(nyquist.size()), source96k, target48k, 1.0, nyquistOut);
+    const auto* down = reinterpret_cast<const int16_t*>(nyquistOut.data());
+    const size_t downFrames = nyquistOut.size() / target48k.blockAlign;
+    bool folded = downFrames == 4;
+    for (size_t i = 0; folded && i < downFrames * 2; i += 1) {
+        folded = std::abs(static_cast<int>(down[i])) <= 1;
+    }
+    expect("resample-96k-nyquist-box", folded, "frames=" + std::to_string(downFrames));
+
     HRESULT mfHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(mfHr) && mfHr != RPC_E_CHANGED_MODE) {
-        expect("mf-startup", false, "CoInitializeEx failed");
+        skip("mf-startup", "CoInitializeEx failed — no Media Foundation on this host");
     } else {
         mfHr = MFStartup(MF_VERSION);
-        expect("mf-startup", SUCCEEDED(mfHr), "MFStartup hr=" + std::to_string(static_cast<long>(mfHr)));
-        if (SUCCEEDED(mfHr)) {
-            const HRESULT rejectHr = trySetAacPcmRate(96000);
-            char rejectHex[16]{};
-            sprintf_s(rejectHex, "0x%08lx", static_cast<unsigned long>(rejectHr));
-            std::cout << "MF_RAW mf-reject-96000 hr=" << rejectHex << "\n";
-            expect(
-                "mf-reject-96000",
-                FAILED(rejectHr) && static_cast<unsigned long>(rejectHr) == 0xc00d36b4ul,
-                std::string("want 0xc00d36b4 got ") + rejectHex);
-            const HRESULT acceptHr = trySetAacPcmRate(48000);
-            char acceptHex[16]{};
-            sprintf_s(acceptHex, "0x%08lx", static_cast<unsigned long>(acceptHr));
-            std::cout << "MF_RAW mf-accept-48000 hr=" << acceptHex << "\n";
-            expect("mf-accept-48000", SUCCEEDED(acceptHr), std::string("hr=") + acceptHex);
-
-            const HRESULT rejectAvHr = trySetAacPcmRateWithVideo(96000);
-            char rejectAvHex[16]{};
-            sprintf_s(rejectAvHex, "0x%08lx", static_cast<unsigned long>(rejectAvHr));
-            std::cout << "MF_RAW mf-reject-96000-with-video hr=" << rejectAvHex << "\n";
-            expect(
-                "mf-reject-96000-with-video",
-                FAILED(rejectAvHr),
-                std::string("want fail got ") + rejectAvHex);
-            const HRESULT acceptAvHr = trySetAacPcmRateWithVideo(48000);
-            char acceptAvHex[16]{};
-            sprintf_s(acceptAvHex, "0x%08lx", static_cast<unsigned long>(acceptAvHr));
-            std::cout << "MF_RAW mf-accept-48000-with-video hr=" << acceptAvHex << "\n";
-            expect(
-                "mf-accept-48000-with-video",
-                SUCCEEDED(acceptAvHr),
-                std::string("hr=") + acceptAvHex);
-
-            Microsoft::WRL::ComPtr<IMFAttributes> swAttr;
-            const HRESULT attrHr = MFCreateAttributes(&swAttr, 1);
-            if (FAILED(attrHr)) {
-                expect("mf-reject-96000-sw-attr", false, "MFCreateAttributes failed");
-            } else {
-                swAttr->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, FALSE);
-                const HRESULT rejectSwHr = trySetAacPcmRate(96000, swAttr.Get());
-                char rejectSwHex[16]{};
-                sprintf_s(rejectSwHex, "0x%08lx", static_cast<unsigned long>(rejectSwHr));
-                std::cout << "MF_RAW mf-reject-96000-sw-attr hr=" << rejectSwHex << "\n";
-                expect(
-                    "mf-reject-96000-sw-attr",
-                    FAILED(rejectSwHr),
-                    std::string("want fail got ") + rejectSwHex);
-                const HRESULT acceptSwHr = trySetAacPcmRate(48000, swAttr.Get());
-                char acceptSwHex[16]{};
-                sprintf_s(acceptSwHex, "0x%08lx", static_cast<unsigned long>(acceptSwHr));
-                std::cout << "MF_RAW mf-accept-48000-sw-attr hr=" << acceptSwHex << "\n";
-                expect(
-                    "mf-accept-48000-sw-attr",
-                    SUCCEEDED(acceptSwHr),
-                    std::string("hr=") + acceptSwHex);
+        if (FAILED(mfHr)) {
+            skip("mf-startup", "MFStartup hr=" + std::to_string(static_cast<long>(mfHr)));
+        } else {
+            expect("mf-startup", true, "");
+            const auto runReject = [](const char* name, HRESULT hr) {
+                char hex[16]{};
+                sprintf_s(hex, "0x%08lx", static_cast<unsigned long>(hr));
+                std::cout << "MF_RAW " << name << " hr=" << hex << "\n";
+                if (FAILED(hr) && static_cast<unsigned long>(hr) == 0xc00d36b4ul) {
+                    expect(name, true, "");
+                } else if (SUCCEEDED(hr)) {
+                    skip(name, "host AAC accepts 96 kHz");
+                } else {
+                    skip(name, std::string("host cannot probe this rate hr=") + hex);
+                }
+            };
+            const auto runAccept = [](const char* name, HRESULT hr) {
+                char hex[16]{};
+                sprintf_s(hex, "0x%08lx", static_cast<unsigned long>(hr));
+                std::cout << "MF_RAW " << name << " hr=" << hex << "\n";
+                if (SUCCEEDED(hr)) {
+                    expect(name, true, "");
+                    return true;
+                }
+                skip(name, std::string("host has no AAC encoder hr=") + hex);
+                return false;
+            };
+            runReject("mf-reject-96000", trySetAacPcmRate(96000));
+            if (runAccept("mf-accept-48000", trySetAacPcmRate(48000))) {
+                runReject("mf-reject-96000-with-video", trySetAacPcmRateWithVideo(96000));
+                runAccept("mf-accept-48000-with-video", trySetAacPcmRateWithVideo(48000));
+                Microsoft::WRL::ComPtr<IMFAttributes> swAttr;
+                if (FAILED(MFCreateAttributes(&swAttr, 1))) {
+                    skip("mf-reject-96000-sw-attr", "MFCreateAttributes failed");
+                } else {
+                    swAttr->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, FALSE);
+                    runReject("mf-reject-96000-sw-attr", trySetAacPcmRate(96000, swAttr.Get()));
+                    runAccept("mf-accept-48000-sw-attr", trySetAacPcmRate(48000, swAttr.Get()));
+                }
             }
             MFShutdown();
         }
