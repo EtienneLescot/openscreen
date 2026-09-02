@@ -207,6 +207,40 @@ void convertAudioWithGain(
         return;
     }
 
+    // Integer-factor downsample (96 kHz / 192 kHz -> 48 kHz): average each
+    // group of source frames instead of picking one. Nearest-neighbour
+    // decimation aliases content above the new Nyquist into the recording.
+    if (sourceFormat.sampleRate > targetFormat.sampleRate &&
+        sourceFormat.sampleRate % targetFormat.sampleRate == 0) {
+        const UINT32 factor = sourceFormat.sampleRate / targetFormat.sampleRate;
+        const size_t targetFrames = sourceFrames / factor;
+        if (targetFrames == 0) {
+            destination.clear();
+            return;
+        }
+        destination.assign(targetFrames * targetFormat.blockAlign, 0);
+        for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
+            for (UINT32 channel = 0; channel < targetFormat.channels; ++channel) {
+                double sum = 0.0;
+                for (UINT32 tap = 0; tap < factor; ++tap) {
+                    sum += readMappedChannel(
+                        source,
+                        sourceFormat,
+                        targetFrame * factor + tap,
+                        channel,
+                        targetFormat.channels);
+                }
+                writeSampleFromDouble(
+                    destination.data(),
+                    targetFormat,
+                    targetFrame,
+                    channel,
+                    (sum / static_cast<double>(factor)) * gain);
+            }
+        }
+        return;
+    }
+
     const double rateRatio = static_cast<double>(targetFormat.sampleRate) /
         static_cast<double>(sourceFormat.sampleRate);
     const size_t targetFrames = std::max<size_t>(1, static_cast<size_t>(std::llround(sourceFrames * rateRatio)));
@@ -214,17 +248,20 @@ void convertAudioWithGain(
 
     for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
         const double sourcePosition = static_cast<double>(targetFrame) / rateRatio;
-        const size_t sourceFrame = std::min(
-            sourceFrames - 1,
-            static_cast<size_t>(std::llround(sourcePosition)));
+        const size_t sourceFrame = std::min(sourceFrames - 1, static_cast<size_t>(sourcePosition));
+        const size_t nextFrame = std::min(sourceFrames - 1, sourceFrame + 1);
+        const double frac = sourcePosition - static_cast<double>(sourceFrame);
         for (UINT32 channel = 0; channel < targetFormat.channels; ++channel) {
-            const double sample = readMappedChannel(
-                source,
-                sourceFormat,
-                sourceFrame,
+            const double a = readMappedChannel(
+                source, sourceFormat, sourceFrame, channel, targetFormat.channels);
+            const double b = readMappedChannel(
+                source, sourceFormat, nextFrame, channel, targetFormat.channels);
+            writeSampleFromDouble(
+                destination.data(),
+                targetFormat,
+                targetFrame,
                 channel,
-                targetFormat.channels);
-            writeSampleFromDouble(destination.data(), targetFormat, targetFrame, channel, sample * gain);
+                (a + (b - a) * frac) * gain);
         }
     }
 }

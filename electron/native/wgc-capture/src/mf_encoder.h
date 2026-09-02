@@ -31,7 +31,7 @@ struct MFEncoderOptions {
     bool preferSoftwareEncoder = false;
     bool injectDefaultSinkWriterFailureOnce = false;
     // Test-only. Keep the sample rate passed into initialize() instead of
-    // running makeAacCompatibleAudioFormat again. The DISABLE_AAC_RATE_SNAP env
+    // running makeAacCompatibleAudioFormat again. OPENSCREEN_WGC_DISABLE_AAC_RATE_SNAP
     // used to change only the JSON log: buildAacOutputType / configureAudioStream
     // snapped 96 kHz back to 48 kHz before SetInputMediaType, so the fail path
     // was unreachable.
