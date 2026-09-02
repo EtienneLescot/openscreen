@@ -185,6 +185,33 @@ Each cost hours and each produced a confident, wrong conclusion.
    launch exit 0 and report nothing. The installed app
    (`openscreen.exe`) resolves a different `userData` path and does not
    conflict.
+10. **`libopenh264` accepts a bitrate and does not control it**
+    ([#572](https://github.com/getopenscreen/openscreen/issues/572)). Not a
+    wiring mistake: ffmpeg *does* forward `bit_rate` into `iTargetBitrate`
+    and `sSpatialLayers[0].iSpatialBitrate`, and it reads back correctly
+    after `avcodec_open2`. The wrapper simply leaves `bEnableFrameSkip = 0`,
+    and openh264 says so out loud at open time — *"bitrate can't be
+    controlled for RC_QUALITY_MODE, RC_BITRATE_MODE and RC_TIMESTAMP_MODE
+    without enabling skip frame"*. The only option that restores a real
+    ceiling is `allow_skip_frames`, which pays for it in dropped frames (3
+    of 120 survived on incompressible input), so it stays off. `rc_mode`,
+    `rc_max_rate`, `rc_buffer_size`, `max_nal_size` and `level` were each
+    measured and each do nothing. What the requested bitrate *is*, on this
+    encoder, is a weak input to a complexity→QP model clamped to [12, 51]:
+    an approximate ceiling on dense content, and nothing at all on a static
+    screen, where it pins to QP 12 and spends the same 0.68 Mbps whether
+    you ask for 8 or 40. Two knobs do work and are set in
+    `VideoEncoder::tune_openh264` — see that doc comment before reaching
+    for a third.
+11. **A missing `gop_size` cost every Linux export its keyframes.** Most
+    encoders inherit the generic `AVCodecContext` default of 12, so leaving
+    the field unset is survivable; `libopenh264` overrides it to `-1` in its
+    `FFCodecDefault` table, which openh264 reads as `uiIntraPeriod = 0` —
+    *one* IDR for the whole file. Measured 1 I-frame in 300 before the fix.
+    Nothing warns, nothing fails, and the MP4 plays fine: the damage is that
+    every seek redecodes from frame 0 and one bad packet takes the rest of
+    the video with it. Set `gop_size` explicitly rather than trusting any
+    encoder's default.
 
 ## A truncated project file is unopenable, not partially readable
 
