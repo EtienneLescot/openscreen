@@ -14,6 +14,12 @@
 //! (`timeline_walk::walk_composited_timeline`) et le muxer passe par le shim C
 //! `sn_fmt_set_pb` (comme Windows/macOS). **L'audio AAC n'est pas encore muxé**
 //! (increment suivant : `audio.rs` + `AacEncoder` sont déjà partagés).
+//!
+//! **Le débit demandé n'est pas un contrat sur ce chemin.** `libopenh264` n'a pas
+//! de contrôle de débit utilisable — la cause est en amont, pas ici, et elle est
+//! documentée avec ce qui a été mesuré dans `VideoEncoder::tune_openh264`. À lire
+//! avant de toucher au calcul de `bit_rate` ou d'ajouter une option d'encodage :
+//! la moitié des réglages qui semblent évidents ont été essayés et ne font rien.
 
 use anyhow::{bail, Result};
 use std::collections::HashMap;
@@ -261,6 +267,19 @@ impl VideoEncoder {
         (*ctx).time_base = AVRational { num: 1, den: fps };
         (*ctx).framerate = AVRational { num: fps, den: 1 };
         (*ctx).bit_rate = bit_rate;
+        // Une image clé toutes les 2 s. SANS ce réglage le MP4 exporté n'en contient
+        // qu'UNE SEULE : le wrapper ffmpeg de `libopenh264` pose `g = -1` dans ses
+        // `FFCodecDefault`, et `try_open` ne touchait pas `gop_size`, donc openh264
+        // recevait `uiIntraPeriod = 0` — mesuré 1 image I pour 300 frames. Le fichier
+        // reste lisible mais tout seek doit redécoder depuis le début, et un paquet
+        // abîmé emporte le reste de la vidéo. 2 s est le compromis usuel pour un
+        // fichier de sortie ; mesuré sur un vrai enregistrement 1080p60 il coûte
+        // +5,7 % de débit sur du contenu dense et +14,6 % sur un écran statique.
+        // Le défaut générique d'`AVCodecContext` (12 frames, soit 0,2 s à 60 fps)
+        // serait bien plus cher : on le pose donc explicitement pour tous les
+        // encodeurs, pas seulement pour celui qui a le défaut cassé.
+        (*ctx).gop_size = (fps * 2).max(1);
+        Self::tune_openh264(ctx, name);
         // MP4 : header global dans l'extradata (pas par-paquet).
         (*ctx).flags |= AV_CODEC_FLAG_GLOBAL_HEADER as i32;
         if let Err(e) = averr(avcodec_open2(ctx, enc, ptr::null_mut()), "avcodec_open2(enc)") {
@@ -274,6 +293,81 @@ impl VideoEncoder {
                 Err(e)
             }
         }
+    }
+
+    /// Réglages propres à `libopenh264`, à poser AVANT `avcodec_open2` (openh264 fige
+    /// ses `SEncParamExt` à l'ouverture). No-op pour tout autre encodeur.
+    ///
+    /// **`libopenh264` n'a pas de contrôle de débit utilisable, et ce n'est pas
+    /// réparable ici** (issue #572). Le wrapper ffmpeg laisse `bEnableFrameSkip = 0`,
+    /// et openh264 le dit lui-même à l'ouverture :
+    ///
+    /// > `bEnableFrameSkip = 0, bitrate can't be controlled for RC_QUALITY_MODE,`
+    /// > `RC_BITRATE_MODE and RC_TIMESTAMP_MODE without enabling skip frame.`
+    ///
+    /// La seule option qui rétablit un vrai plafond est `allow_skip_frames`, et elle
+    /// le paie en frames jetées — mesuré 3 frames sur 120 conservées sur du contenu
+    /// incompressible. Inacceptable pour un export, donc on n'y touche pas. Sont
+    /// aussi des impasses vérifiées à la mesure : `rc_max_rate` et `rc_buffer_size`
+    /// (que ce wrapper ne lit pas, ou dont openh264 ne se sert que dans le chemin
+    /// frame-skip), `rc_mode`, `max_nal_size` et `level`.
+    ///
+    /// Restent deux réglages qui, eux, se mesurent :
+    ///
+    /// 1. **Ouvrir la fenêtre de QP.** Le wrapper ne transmet `iMinQp`/`iMaxQp` que
+    ///    si `qmin`/`qmax` sont >= 0, et ses `FFCodecDefault` les posent à -1.
+    ///    openh264 part alors sur ses propres défauts (0, 51) — puis sa
+    ///    `ParamValidation()` juge `iMinQp = 0` invalide et REMPLACE toute la fenêtre
+    ///    par (12, 42) (`GOM_MIN_QP_MODE`, `MAX_LOW_BR_QP`). Un `qmin` >= 1 évite la
+    ///    substitution et rend le QP 51 atteignable. La borne basse, elle, reste
+    ///    clampée à 12 quoi qu'on demande, donc `qmin = 1` ne fait qu'éviter le piège.
+    ///
+    ///    L'intérêt premier est de ne plus subir une fenêtre qu'on n'a pas choisie :
+    ///    (12, 42) n'est pas une décision, c'est ce qu'openh264 substitue en silence.
+    ///
+    ///    Sur les quatre classes de contenu réel essayées, le changement est INERTE —
+    ///    sortie identique à l'octet sur un écran statique, sur une capture dense, sur
+    ///    du mixte (UI + fenêtre vidéo sur un tiers de l'image) et sur de la webcam
+    ///    plein cadre. Sur ces mêmes clips le débit demandé est d'ailleurs plutôt bien
+    ///    suivi (mixte 1080p30 : 1 -> 0,98, 2 -> 1,94, 4 -> 3,67 Mbps ; webcam :
+    ///    2 -> 1,99, 8 -> 7,51), ce qui vaut d'être su avant de conclure du titre de
+    ///    #572 que l'export Linux serait à l'abandon.
+    ///
+    ///    La fenêtre ne mord que sur du contenu que l'encodeur ne sait pas comprimer,
+    ///    et là elle échange de la qualité contre de la taille : sur 120 frames de
+    ///    bruit incompressible 720p30 à 2 Mbps demandés, 113,2 -> 65,5 Mbps mais
+    ///    SSIM 0,949 -> 0,652. C'est le bon sens de l'échange pour un export (le
+    ///    fichier restait 56x au-dessus de la cible), mais si on le regrettait,
+    ///    `qmin = 12 ; qmax = 42` fige exactement le comportement d'avant tout en
+    ///    gardant le réglage explicite.
+    /// 2. **Profil High.** Par défaut ce wrapper produit du Constrained Baseline en
+    ///    CAVLC (`profile_idc = 66`, `entropy_coding_mode_flag = 0`). Le profil High
+    ///    active CABAC. Mesuré à qualité égale sur un vrai enregistrement 1080p60
+    ///    (VMAF 96,2 dans les deux cas) : -3,8 % de débit sur du contenu dense,
+    ///    -8,0 % sur un écran statique.
+    ///
+    /// Ce qu'il reste de cassé après ça, et qui ne se règle pas depuis l'application :
+    /// le débit demandé n'est qu'une entrée faible d'un modèle complexité -> QP, borné
+    /// à [12, 51]. Sur un écran statique l'encodeur se colle à QP 12 et ne dépense pas
+    /// plus, quel que soit le `bit_rate` (mesuré 0,68 Mbps pour 8 comme pour 40 Mbps
+    /// demandés) ; sur du contenu qu'il ne sait pas comprimer il dépasse la cible sans
+    /// borne. Le mode `SCREEN_CONTENT_REAL_TIME` d'openh264 — celui qui conviendrait à
+    /// un enregistreur d'écran — n'est atteignable par aucune option ffmpeg.
+    /// Suivi en amont : cisco/openh264#3259 (fermé sans correctif).
+    unsafe fn tune_openh264(ctx: *mut crate::ffi::AVCodecContext, name: &str) {
+        use crate::ffi::*;
+        if name != "libopenh264" {
+            return;
+        }
+        (*ctx).qmin = 1;
+        (*ctx).qmax = 51;
+        // L'encodeur expose AUSSI `profile` en option privée, mais le wrapper lit
+        // `avctx->profile` quand la privée vaut `AV_PROFILE_UNKNOWN` (son défaut,
+        // -99). Les deux chemins produisent le même SPS — vérifié, `profile_idc`
+        // passe à 100 dans les deux cas — donc on prend le champ : il est typé,
+        // vérifié à la compilation, et n'a pas besoin d'une `CString` ni d'une
+        // branche d'erreur, contrairement à `av_opt_set` sur `priv_data`.
+        (*ctx).profile = AV_PROFILE_H264_HIGH as i32;
     }
 
     /// Envoie une frame composee DEJA RELUE (RGBA) a l'encodeur, en YUV420P.
@@ -829,7 +923,16 @@ pub fn run_composited_multi(
     }
     let (out_w, out_h) = (params.width, params.height);
     let out_fps = params.fps.unwrap_or(30) as i32;
-    // bitrate proportionnel a la surface (reference : 8 Mbps @ 1920x1080).
+    // bitrate proportionnel a la surface (reference : 8 Mbps @ 1920x1080). Formule
+    // IDENTIQUE a celle de `pipeline_macos.rs` et `pipeline_windows.rs` : la garder
+    // alignee est ce qui fait que les trois plateformes exportent au meme poids.
+    //
+    // Sur `libopenh264` ce nombre n'est qu'indicatif : c'est une entree d'un modele
+    // complexite -> QP, pas un contrat. Il agit comme un plafond APPROXIMATIF sur du
+    // contenu dense (mesure sur un vrai enregistrement 1080p60 : 1 Mbps demande ->
+    // 0,97 produit, 2 -> 1,72, 4 -> 2,86, 8 -> 3,85) et n'a aucun effet sur un ecran
+    // statique, ou l'encodeur sature son plancher de QP. Voir
+    // `VideoEncoder::tune_openh264` pour le pourquoi et ce qui a ete tente.
     let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
     let t0 = std::time::Instant::now();
 
@@ -1479,5 +1582,146 @@ mod vaapi_tests {
             let mut p = pkt;
             crate::ffi::av_packet_free(&mut p);
         }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const W: i32 = 320;
+    const H: i32 = 180;
+
+    /// Sortie d'un encodage de test : les drapeaux « image clé » paquet par paquet,
+    /// et l'extradata (le SPS, en Annex-B, puisque `try_open` pose
+    /// `AV_CODEC_FLAG_GLOBAL_HEADER`).
+    struct Encoded {
+        keyframes: Vec<bool>,
+        extradata: Vec<u8>,
+        qmin: i32,
+        qmax: i32,
+        gop_size: i32,
+    }
+
+    /// Encode `n` images 320x180 par le chemin RÉEL de l'export — `VideoEncoder::open`,
+    /// donc `try_open`, donc toute la configuration que ce fichier pose. Un contexte
+    /// monté à la main dans le test ne prouverait rien.
+    ///
+    /// Rend `None` quand l'encodeur n'est pas ouvrable (build ffmpeg sans
+    /// `libopenh264`), pour que le test se saute proprement au lieu d'échouer sur
+    /// l'environnement.
+    fn encode(fps: i32, n: usize) -> Option<Encoded> {
+        // Un dev qui force un autre encodeur ne doit pas voir ce test rougir : il ne
+        // décrit que `libopenh264`.
+        match std::env::var("OPENSCREEN_EXPORT_ENCODER") {
+            Ok(name) if name != "libopenh264" => return None,
+            _ => {}
+        }
+        let mut enc = VideoEncoder::open(&ExportCodec::H264, W, H, fps, 1_000_000).ok()?;
+
+        let mut out = Encoded {
+            keyframes: Vec::new(),
+            extradata: Vec::new(),
+            qmin: 0,
+            qmax: 0,
+            gop_size: 0,
+        };
+        unsafe {
+            use crate::ffi::*;
+            out.qmin = (*enc.ctx).qmin;
+            out.qmax = (*enc.ctx).qmax;
+            out.gop_size = (*enc.ctx).gop_size;
+            let (ptr, len) = ((*enc.ctx).extradata, (*enc.ctx).extradata_size);
+            if !ptr.is_null() && len > 0 {
+                out.extradata = std::slice::from_raw_parts(ptr, len as usize).to_vec();
+            }
+
+            let pkt = av_packet_alloc();
+            let mut rgba = vec![0u8; (W * H * 4) as usize];
+            // Copie du pointeur AVANT la closure : la capturer via `enc.ctx`
+            // emprunterait `enc` en lecture pour toute la durée du drain, et
+            // `send_rgba` en veut un emprunt mutable juste après.
+            let ectx = enc.ctx;
+            let mut drain = |pkt: *mut AVPacket, out: &mut Encoded| loop {
+                let r = avcodec_receive_packet(ectx, pkt);
+                if r == AVERROR_EOF || r == AVERROR_EAGAIN {
+                    return;
+                }
+                out.keyframes.push((*pkt).flags & AV_PKT_FLAG_KEY as i32 != 0);
+                av_packet_unref(pkt);
+            };
+            for i in 0..n {
+                // Un dégradé qui glisse : de quoi donner du résidu à coder, sans quoi
+                // l'encodeur travaille sur une image morte.
+                for (p, px) in rgba.chunks_exact_mut(4).enumerate() {
+                    px[0] = ((p + i * 7) % 251) as u8;
+                    px[1] = ((p / W as usize + i * 3) % 253) as u8;
+                    px[2] = (i * 5 % 257) as u8;
+                    px[3] = 255;
+                }
+                enc.send_rgba(&rgba, W, H, i as i64).expect("send_rgba");
+                drain(pkt, &mut out);
+            }
+            enc.flush().expect("flush");
+            drain(pkt, &mut out);
+            let mut pkt = pkt;
+            av_packet_free(&mut pkt);
+        }
+        Some(out)
+    }
+
+    /// `profile_idc` porté par le SPS de l'extradata (Annex-B : `00 00 00 01 67 <idc>`).
+    fn profile_idc(extradata: &[u8]) -> Option<u8> {
+        extradata
+            .windows(6)
+            .find(|w| w[..4] == [0, 0, 0, 1] && w[4] & 0x1f == 7)
+            .map(|w| w[5])
+    }
+
+    /// L'export doit porter des images clés PÉRIODIQUES.
+    ///
+    /// Sans `(*ctx).gop_size`, le wrapper ffmpeg de `libopenh264` pose `g = -1` dans
+    /// ses `FFCodecDefault`, openh264 reçoit `uiIntraPeriod = 0` et n'émet qu'UNE
+    /// image clé pour tout le fichier — mesuré 1 image I sur 300 avant ce correctif.
+    /// Le MP4 reste lisible, mais tout seek redécode depuis le début et un paquet
+    /// abîmé emporte le reste. C'est le test qui aurait attrapé ça.
+    #[test]
+    fn l_export_h264_emet_des_images_cles_periodiques() {
+        let Some(enc) = encode(10, 45) else {
+            eprintln!("libopenh264 indisponible — test sauté");
+            return;
+        };
+        assert_eq!(enc.gop_size, 20, "gop_size doit valoir fps * 2");
+        let keys: Vec<usize> = enc
+            .keyframes
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            keys,
+            vec![0, 20, 40],
+            "images clés attendues toutes les {} frames, obtenu {keys:?} sur {} paquets",
+            enc.gop_size,
+            enc.keyframes.len()
+        );
+    }
+
+    /// `tune_openh264` doit atteindre l'encodeur : fenêtre de QP explicite (sans quoi
+    /// openh264 remplace la sienne par (12, 42), cf. la doc de la fonction) et profil
+    /// High dans le SPS (sans quoi on expédie du Constrained Baseline en CAVLC).
+    #[test]
+    fn l_export_h264_configure_openh264() {
+        let Some(enc) = encode(10, 3) else {
+            eprintln!("libopenh264 indisponible — test sauté");
+            return;
+        };
+        assert_eq!((enc.qmin, enc.qmax), (1, 51), "fenêtre de QP non transmise");
+        assert_eq!(
+            profile_idc(&enc.extradata),
+            Some(100),
+            "le SPS doit annoncer le profil High (100) ; 66 = Constrained Baseline, \
+             le défaut du wrapper. extradata={:02x?}",
+            &enc.extradata[..enc.extradata.len().min(12)]
+        );
     }
 }
