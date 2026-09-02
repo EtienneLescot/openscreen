@@ -272,6 +272,38 @@ export function resolveTranscriptGate(views: AssetTranscriptionView[]): Transcri
  * make it look ready when the clip on screen has no transcript. Falls back to
  * the whole bin while the timeline is still empty.
  */
+/**
+ * Can this asset plausibly carry speech?
+ *
+ * The background pass transcribes every asset in the document, which was harmless
+ * while every asset was footage. Imported audio broke that: a music bed is speech to
+ * nobody, and whisper spends real time discovering it. Measured on a four-minute bed:
+ * 35s of GPU inference at editor open, for 164 segments of transcribed music.
+ *
+ * "Can carry speech" is NOT a property of the asset — `AxcutAsset.kind` only knows
+ * `video | audio`. The voiceover/music distinction lives on the TRACK, so the question
+ * is answered from the timeline: an audio asset qualifies exactly when some track
+ * playing it sits on the voiceover lane.
+ *
+ * Stable under a lane change, which matters because the track's `kind` is editable:
+ *
+ *   - music -> voiceover queues it, which is right: it is speech now.
+ *   - voiceover -> music discards nothing. The transcript already exists, and the
+ *     caller skips an asset that has one, so the round trip is lossless rather than
+ *     paid for twice.
+ *
+ * An audio asset no track plays is not transcribed either: nothing is asking for it.
+ * See issue #560, where this rule was settled.
+ */
+export function assetCanCarrySpeech(document: AxcutDocument, assetId: string): boolean {
+	const asset = document.assets.find((a) => a.id === assetId);
+	if (!asset) return false;
+	if (asset.kind !== "audio") return true;
+	return document.audioTracks.some(
+		(track) => track.assetId === assetId && track.kind === "voiceover",
+	);
+}
+
 export function transcriptRelevantAssetIds(document: AxcutDocument | null): string[] {
 	if (!document) return [];
 	const onTimeline: string[] = [];

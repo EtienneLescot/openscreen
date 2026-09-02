@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import {
 	type AssetTranscriptionView,
+	assetCanCarrySpeech,
 	classifyTranscriptionError,
 	deriveAssetStatus,
 	isCpuBackend,
@@ -349,5 +350,56 @@ describe("deriveAssetStatus carries the engine's own report", () => {
 		expect(derived.status).toBe("ready");
 		expect(derived.backend).toBeUndefined();
 		expect(derived.rtf).toBeUndefined();
+	});
+});
+
+describe("assetCanCarrySpeech", () => {
+	/** A document with one video asset and one imported audio asset. */
+	const doc = (audioTracks: Array<Record<string, unknown>>) =>
+		({
+			assets: [
+				{ id: "vid", kind: "video" },
+				{ id: "aud", kind: "audio" },
+			],
+			audioTracks,
+		}) as unknown as Parameters<typeof assetCanCarrySpeech>[0];
+
+	const track = (kind: "voiceover" | "music", assetId = "aud") => ({
+		id: `t_${kind}`,
+		assetId,
+		kind,
+	});
+
+	it("says yes to footage without consulting the timeline", () => {
+		// Video is the case that always carried speech; the guard must not regress it.
+		expect(assetCanCarrySpeech(doc([]), "vid")).toBe(true);
+	});
+
+	it("says yes to an audio asset played on a voiceover lane", () => {
+		expect(assetCanCarrySpeech(doc([track("voiceover")]), "aud")).toBe(true);
+	});
+
+	it("says no to a music bed", () => {
+		// The whole point: 35s of inference at editor open, to transcribe music.
+		expect(assetCanCarrySpeech(doc([track("music")]), "aud")).toBe(false);
+	});
+
+	it("says yes when the same file is on both lanes", () => {
+		// One voiceover placement is enough — the file demonstrably carries speech,
+		// whatever else it is also used for.
+		expect(assetCanCarrySpeech(doc([track("music"), track("voiceover")]), "aud")).toBe(true);
+	});
+
+	it("says no to an audio asset no region plays", () => {
+		// Nothing is asking for it, so nothing should pay for it.
+		expect(assetCanCarrySpeech(doc([]), "aud")).toBe(false);
+	});
+
+	it("ignores regions playing a different file", () => {
+		expect(assetCanCarrySpeech(doc([track("voiceover", "other")]), "aud")).toBe(false);
+	});
+
+	it("says no to an asset that is not in the document", () => {
+		expect(assetCanCarrySpeech(doc([]), "ghost")).toBe(false);
 	});
 });
