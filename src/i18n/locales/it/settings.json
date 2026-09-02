@@ -263,21 +263,24 @@
 		"help": "Aiuto"
 	},
 	"transcript": {
-		"title": "Trascrizione corrente",
+		"clipLabel": "Clip {{index}}",
+		"editorAria": "Trascrizione di {{filename}}",
 		"help": "Trascrizione aggregata di tutti i clip sulla timeline. Backspace / Canc su una parola o selezione la segna come saltata (in rosso). Passa sopra un tratto rosso per ripristinarlo.",
+		"laneLabel": "Leggi la trascrizione da",
+		"laneRecording": "Registrazione",
+		"laneVoiceover": "Voce fuori campo",
+		"noAudio": "Questo contenuto non ha una traccia audio",
+		"noClipTranscript": "Nessuna trascrizione per questo clip: apri la scheda della risorsa e rigenerala.",
 		"noClips": "Ancora nessun clip",
 		"noTranscript": "Ancora nessuna trascrizione",
-		"whisperHint": "La trascrizione usa Whisper in locale: gira sul tuo computer, nessun dato lascia il dispositivo.",
+		"restoreSilence": "Ripristina silenzio ({{duration}} s)",
+		"restoreWord": "Ripristina «{{word}}»",
+		"silence": "[silenzio {{duration}} s]",
+		"title": "Trascrizione corrente",
 		"transcribeNow": "Trascrivi ora",
 		"transcribing": "Trascrizione…",
-		"clipLabel": "Clip {{index}}",
-		"noClipTranscript": "Nessuna trascrizione per questo clip: apri la scheda della risorsa e rigenerala.",
-		"editorAria": "Trascrizione di {{filename}}",
-		"silence": "[silenzio {{duration}} s]",
-		"restoreSilence": "Ripristina silenzio ({{duration}} s)",
 		"trimSilence": "Taglia silenzio ({{duration}} s)",
-		"restoreWord": "Ripristina «{{word}}»",
-		"noAudio": "Questo contenuto non ha una traccia audio"
+		"whisperHint": "La trascrizione usa Whisper in locale: gira sul tuo computer, nessun dato lascia il dispositivo."
 	},
 	"captions": {
 		"show": "Mostra sottotitoli",

@@ -49,6 +49,7 @@ function renderPane(
 		<I18nProvider>
 			<TranscriptPane
 				clips={CLIPS}
+				audioTracks={[]}
 				transcripts={[]}
 				assets={[ASSET]}
 				trimRanges={[]}

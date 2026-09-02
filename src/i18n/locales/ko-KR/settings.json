@@ -263,21 +263,24 @@
 		"help": "도움말"
 	},
 	"transcript": {
-		"title": "현재 전사",
+		"clipLabel": "클립 {{index}}",
+		"editorAria": "{{filename}}의 전사",
 		"help": "타임라인의 모든 클립을 합친 전사입니다. 단어나 선택 영역에서 Backspace / Delete를 누르면 건너뛴 것으로 표시됩니다(빨간색). 빨간 부분에 마우스를 올리면 복원할 수 있습니다.",
+		"laneLabel": "전사본을 읽어올 소스",
+		"laneRecording": "녹화",
+		"laneVoiceover": "내레이션",
+		"noAudio": "이 미디어에는 오디오 트랙이 없습니다",
+		"noClipTranscript": "이 클립에는 전사가 없습니다. 에셋 카드를 열고 다시 생성하세요.",
 		"noClips": "아직 클립이 없습니다",
 		"noTranscript": "아직 전사가 없습니다",
-		"whisperHint": "전사는 로컬 Whisper를 사용합니다. 이 컴퓨터에서 실행되며 데이터가 기기를 벗어나지 않습니다.",
+		"restoreSilence": "무음 복원 ({{duration}}초)",
+		"restoreWord": "\"{{word}}\" 복원",
+		"silence": "[무음 {{duration}}초]",
+		"title": "현재 전사",
 		"transcribeNow": "지금 전사하기",
 		"transcribing": "전사 중…",
-		"clipLabel": "클립 {{index}}",
-		"noClipTranscript": "이 클립에는 전사가 없습니다. 에셋 카드를 열고 다시 생성하세요.",
-		"editorAria": "{{filename}}의 전사",
-		"silence": "[무음 {{duration}}초]",
-		"restoreSilence": "무음 복원 ({{duration}}초)",
 		"trimSilence": "무음 자르기 ({{duration}}초)",
-		"restoreWord": "\"{{word}}\" 복원",
-		"noAudio": "이 미디어에는 오디오 트랙이 없습니다"
+		"whisperHint": "전사는 로컬 Whisper를 사용합니다. 이 컴퓨터에서 실행되며 데이터가 기기를 벗어나지 않습니다."
 	},
 	"captions": {
 		"show": "자막 표시",

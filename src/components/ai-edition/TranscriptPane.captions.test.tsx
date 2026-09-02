@@ -59,6 +59,7 @@ function mount(transcripts: AxcutTranscript[]) {
 		<I18nProvider>
 			<TranscriptPane
 				clips={CLIPS}
+				audioTracks={[]}
 				transcripts={transcripts}
 				assets={[ASSET]}
 				trimRanges={[]}

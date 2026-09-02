@@ -263,21 +263,24 @@
 		"help": "帮助"
 	},
 	"transcript": {
-		"title": "当前转录",
+		"clipLabel": "片段 {{index}}",
+		"editorAria": "{{filename}} 的转录",
 		"help": "时间轴上所有片段的合并转录。对某个词或选区按退格 / Delete 会将其标记为跳过（红色）。将鼠标悬停在红色片段上可恢复。",
+		"laneLabel": "转写文本读取自",
+		"laneRecording": "录制",
+		"laneVoiceover": "配音",
+		"noAudio": "此媒体没有音频轨道",
+		"noClipTranscript": "该片段没有转录 — 请打开素材卡片并重新生成。",
 		"noClips": "暂无片段",
 		"noTranscript": "暂无转录",
-		"whisperHint": "转录使用本地 Whisper — 在您的电脑上运行，数据不会离开本设备。",
+		"restoreSilence": "恢复静音（{{duration}} 秒）",
+		"restoreWord": "恢复“{{word}}”",
+		"silence": "[静音 {{duration}} 秒]",
+		"title": "当前转录",
 		"transcribeNow": "立即转录",
 		"transcribing": "转录中…",
-		"clipLabel": "片段 {{index}}",
-		"noClipTranscript": "该片段没有转录 — 请打开素材卡片并重新生成。",
-		"editorAria": "{{filename}} 的转录",
-		"silence": "[静音 {{duration}} 秒]",
-		"restoreSilence": "恢复静音（{{duration}} 秒）",
 		"trimSilence": "修剪静音（{{duration}} 秒）",
-		"restoreWord": "恢复“{{word}}”",
-		"noAudio": "此媒体没有音频轨道"
+		"whisperHint": "转录使用本地 Whisper — 在您的电脑上运行，数据不会离开本设备。"
 	},
 	"captions": {
 		"show": "显示字幕",

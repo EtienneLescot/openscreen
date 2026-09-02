@@ -263,21 +263,24 @@
 		"help": "Yardım"
 	},
 	"transcript": {
-		"title": "Geçerli döküm",
+		"clipLabel": "Klip {{index}}",
+		"editorAria": "{{filename}} dökümü",
 		"help": "Zaman çizelgesindeki tüm kliplerin birleşik dökümü. Bir kelimede veya seçimde Backspace / Delete tuşuna basmak onu atlanmış (kırmızı) olarak işaretler. Kırmızı bölümün üzerine gelerek geri alabilirsiniz.",
+		"laneLabel": "Deşifreyi şuradan oku",
+		"laneRecording": "Kayıt",
+		"laneVoiceover": "Dış ses",
+		"noAudio": "Bu medyada ses parçası yok",
+		"noClipTranscript": "Bu klip için döküm yok — medya kartını açıp yeniden oluşturun.",
 		"noClips": "Henüz klip yok",
 		"noTranscript": "Henüz döküm yok",
-		"whisperHint": "Döküm yerel Whisper kullanır — bilgisayarınızda çalışır, hiçbir veri cihazdan çıkmaz.",
+		"restoreSilence": "Sessizliği geri al ({{duration}} sn)",
+		"restoreWord": "\"{{word}}\" kelimesini geri al",
+		"silence": "[sessizlik {{duration}} sn]",
+		"title": "Geçerli döküm",
 		"transcribeNow": "Şimdi dökümünü çıkar",
 		"transcribing": "Döküm çıkarılıyor…",
-		"clipLabel": "Klip {{index}}",
-		"noClipTranscript": "Bu klip için döküm yok — medya kartını açıp yeniden oluşturun.",
-		"editorAria": "{{filename}} dökümü",
-		"silence": "[sessizlik {{duration}} sn]",
-		"restoreSilence": "Sessizliği geri al ({{duration}} sn)",
 		"trimSilence": "Sessizliği kırp ({{duration}} sn)",
-		"restoreWord": "\"{{word}}\" kelimesini geri al",
-		"noAudio": "Bu medyada ses parçası yok"
+		"whisperHint": "Döküm yerel Whisper kullanır — bilgisayarınızda çalışır, hiçbir veri cihazdan çıkmaz."
 	},
 	"captions": {
 		"show": "Altyazıları göster",

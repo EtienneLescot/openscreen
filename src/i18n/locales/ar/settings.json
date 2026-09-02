@@ -263,21 +263,24 @@
 		"help": "مساعدة"
 	},
 	"transcript": {
-		"title": "النص الحالي",
+		"clipLabel": "المقطع {{index}}",
+		"editorAria": "نص {{filename}}",
 		"help": "نص مجمّع لكل المقاطع على المخطط الزمني. اضغط Backspace / Delete على كلمة أو تحديد لتمييزه كمتخطّى (بالأحمر). مرّر المؤشر فوق المقطع الأحمر لاستعادته.",
+		"laneLabel": "اقرأ النص من",
+		"laneRecording": "التسجيل",
+		"laneVoiceover": "التعليق الصوتي",
+		"noAudio": "لا يحتوي هذا الملف على مسار صوتي",
+		"noClipTranscript": "لا يوجد نص لهذا المقطع — افتح بطاقة الوسيط وأعد التوليد.",
 		"noClips": "لا توجد مقاطع بعد",
 		"noTranscript": "لا يوجد نص بعد",
-		"whisperHint": "يستخدم التفريغ النصي Whisper محليًا — يعمل على حاسوبك، ولا تغادر أي بيانات جهازك.",
+		"restoreSilence": "استعادة الصمت ({{duration}} ث)",
+		"restoreWord": "استعادة \"{{word}}\"",
+		"silence": "[صمت {{duration}} ث]",
+		"title": "النص الحالي",
 		"transcribeNow": "فرّغ النص الآن",
 		"transcribing": "جارٍ التفريغ…",
-		"clipLabel": "المقطع {{index}}",
-		"noClipTranscript": "لا يوجد نص لهذا المقطع — افتح بطاقة الوسيط وأعد التوليد.",
-		"editorAria": "نص {{filename}}",
-		"silence": "[صمت {{duration}} ث]",
-		"restoreSilence": "استعادة الصمت ({{duration}} ث)",
 		"trimSilence": "قص الصمت ({{duration}} ث)",
-		"restoreWord": "استعادة \"{{word}}\"",
-		"noAudio": "لا يحتوي هذا الملف على مسار صوتي"
+		"whisperHint": "يستخدم التفريغ النصي Whisper محليًا — يعمل على حاسوبك، ولا تغادر أي بيانات جهازك."
 	},
 	"captions": {
 		"show": "إظهار الترجمة",

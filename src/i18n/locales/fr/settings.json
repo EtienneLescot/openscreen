@@ -263,21 +263,24 @@
 		"help": "Aide"
 	},
 	"transcript": {
-		"title": "Transcription actuelle",
+		"clipLabel": "Clip {{index}}",
+		"editorAria": "Transcription de {{filename}}",
 		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le marque comme ignoré (en rouge). Survolez un passage rouge pour le restaurer.",
+		"laneLabel": "Lire la transcription depuis",
+		"laneRecording": "Enregistrement",
+		"laneVoiceover": "Voix off",
+		"noAudio": "Ce média n'a pas de piste audio",
+		"noClipTranscript": "Aucune transcription pour ce clip — ouvrez la fiche du média et relancez la génération.",
 		"noClips": "Aucun clip pour l'instant",
 		"noTranscript": "Aucune transcription pour l'instant",
-		"whisperHint": "La transcription utilise Whisper en local — tout s'exécute sur votre ordinateur, aucune donnée ne quitte l'appareil.",
+		"restoreSilence": "Restaurer le silence ({{duration}} s)",
+		"restoreWord": "Restaurer « {{word}} »",
+		"silence": "[silence {{duration}} s]",
+		"title": "Transcription actuelle",
 		"transcribeNow": "Transcrire maintenant",
 		"transcribing": "Transcription…",
-		"clipLabel": "Clip {{index}}",
-		"noClipTranscript": "Aucune transcription pour ce clip — ouvrez la fiche du média et relancez la génération.",
-		"editorAria": "Transcription de {{filename}}",
-		"silence": "[silence {{duration}} s]",
-		"restoreSilence": "Restaurer le silence ({{duration}} s)",
 		"trimSilence": "Couper le silence ({{duration}} s)",
-		"restoreWord": "Restaurer « {{word}} »",
-		"noAudio": "Ce média n'a pas de piste audio"
+		"whisperHint": "La transcription utilise Whisper en local — tout s'exécute sur votre ordinateur, aucune donnée ne quitte l'appareil."
 	},
 	"captions": {
 		"show": "Afficher les sous-titres",

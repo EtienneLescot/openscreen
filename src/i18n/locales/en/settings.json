@@ -281,21 +281,24 @@
 		"help": "Help"
 	},
 	"transcript": {
-		"title": "Current transcription",
+		"clipLabel": "Clip {{index}}",
+		"editorAria": "Transcript for {{filename}}",
 		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to mark it as skipped (red). Hover a red span to restore it.",
+		"laneLabel": "Read the transcript from",
+		"laneRecording": "Recording",
+		"laneVoiceover": "Voice-over",
+		"noAudio": "This media has no audio track",
+		"noClipTranscript": "No transcript for this clip — open the asset card and regenerate.",
 		"noClips": "No clips yet",
 		"noTranscript": "No transcript yet",
-		"whisperHint": "Transcribe uses local Whisper — runs on your computer, no data leaves the device.",
+		"restoreSilence": "Restore silence ({{duration}}s)",
+		"restoreWord": "Restore \"{{word}}\"",
+		"silence": "[silence {{duration}}s]",
+		"title": "Current transcription",
 		"transcribeNow": "Transcribe now",
 		"transcribing": "Transcribing…",
-		"clipLabel": "Clip {{index}}",
-		"noClipTranscript": "No transcript for this clip — open the asset card and regenerate.",
-		"editorAria": "Transcript for {{filename}}",
-		"silence": "[silence {{duration}}s]",
-		"restoreSilence": "Restore silence ({{duration}}s)",
 		"trimSilence": "Trim silence ({{duration}}s)",
-		"restoreWord": "Restore \"{{word}}\"",
-		"noAudio": "This media has no audio track"
+		"whisperHint": "Transcribe uses local Whisper — runs on your computer, no data leaves the device."
 	},
 	"captions": {
 		"show": "Show captions",

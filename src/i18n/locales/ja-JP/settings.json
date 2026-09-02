@@ -263,21 +263,24 @@
 		"help": "ヘルプ"
 	},
 	"transcript": {
-		"title": "現在の文字起こし",
+		"clipLabel": "クリップ {{index}}",
+		"editorAria": "{{filename}} の文字起こし",
 		"help": "タイムライン上のすべてのクリップをまとめた文字起こしです。単語や選択範囲を Backspace / Delete でスキップ（赤色）にできます。赤い部分にカーソルを合わせると元に戻せます。",
+		"laneLabel": "文字起こしの読み込み元",
+		"laneRecording": "録画",
+		"laneVoiceover": "ナレーション",
+		"noAudio": "このメディアには音声トラックがありません",
+		"noClipTranscript": "このクリップには文字起こしがありません。アセットカードを開いて再生成してください。",
 		"noClips": "クリップがまだありません",
 		"noTranscript": "文字起こしがまだありません",
-		"whisperHint": "文字起こしはローカルの Whisper を使用します。お使いのパソコン上で実行され、データが端末外に出ることはありません。",
+		"restoreSilence": "無音を元に戻す（{{duration}} 秒）",
+		"restoreWord": "「{{word}}」を元に戻す",
+		"silence": "[無音 {{duration}} 秒]",
+		"title": "現在の文字起こし",
 		"transcribeNow": "今すぐ文字起こし",
 		"transcribing": "文字起こし中…",
-		"clipLabel": "クリップ {{index}}",
-		"noClipTranscript": "このクリップには文字起こしがありません。アセットカードを開いて再生成してください。",
-		"editorAria": "{{filename}} の文字起こし",
-		"silence": "[無音 {{duration}} 秒]",
-		"restoreSilence": "無音を元に戻す（{{duration}} 秒）",
 		"trimSilence": "無音をトリム（{{duration}} 秒）",
-		"restoreWord": "「{{word}}」を元に戻す",
-		"noAudio": "このメディアには音声トラックがありません"
+		"whisperHint": "文字起こしはローカルの Whisper を使用します。お使いのパソコン上で実行され、データが端末外に出ることはありません。"
 	},
 	"captions": {
 		"show": "字幕を表示",

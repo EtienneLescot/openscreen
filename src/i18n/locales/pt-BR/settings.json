@@ -263,21 +263,24 @@
 		"help": "Ajuda"
 	},
 	"transcript": {
-		"title": "Transcrição atual",
+		"clipLabel": "Clipe {{index}}",
+		"editorAria": "Transcrição de {{filename}}",
 		"help": "Transcrição agregada de todos os clipes da linha do tempo. Backspace / Delete em uma palavra ou seleção marca como ignorada (em vermelho). Passe o mouse sobre um trecho vermelho para restaurá-lo.",
+		"laneLabel": "Ler a transcrição de",
+		"laneRecording": "Gravação",
+		"laneVoiceover": "Narração",
+		"noAudio": "Esta mídia não tem faixa de áudio",
+		"noClipTranscript": "Sem transcrição para este clipe — abra o cartão do recurso e gere novamente.",
 		"noClips": "Nenhum clipe ainda",
 		"noTranscript": "Nenhuma transcrição ainda",
-		"whisperHint": "A transcrição usa o Whisper local — roda no seu computador, nenhum dado sai do dispositivo.",
+		"restoreSilence": "Restaurar silêncio ({{duration}} s)",
+		"restoreWord": "Restaurar \"{{word}}\"",
+		"silence": "[silêncio {{duration}} s]",
+		"title": "Transcrição atual",
 		"transcribeNow": "Transcrever agora",
 		"transcribing": "Transcrevendo…",
-		"clipLabel": "Clipe {{index}}",
-		"noClipTranscript": "Sem transcrição para este clipe — abra o cartão do recurso e gere novamente.",
-		"editorAria": "Transcrição de {{filename}}",
-		"silence": "[silêncio {{duration}} s]",
-		"restoreSilence": "Restaurar silêncio ({{duration}} s)",
 		"trimSilence": "Cortar silêncio ({{duration}} s)",
-		"restoreWord": "Restaurar \"{{word}}\"",
-		"noAudio": "Esta mídia não tem faixa de áudio"
+		"whisperHint": "A transcrição usa o Whisper local — roda no seu computador, nenhum dado sai do dispositivo."
 	},
 	"captions": {
 		"show": "Mostrar legendas",

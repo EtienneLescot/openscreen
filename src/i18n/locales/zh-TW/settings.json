@@ -264,21 +264,24 @@
 		"help": "說明"
 	},
 	"transcript": {
-		"title": "目前的逐字稿",
+		"clipLabel": "片段 {{index}}",
+		"editorAria": "{{filename}} 的逐字稿",
 		"help": "時間軸上所有片段的合併逐字稿。對某個字或選取範圍按 Backspace / Delete 會標記為略過（紅色）。將滑鼠移到紅色片段上即可還原。",
+		"laneLabel": "轉錄文字讀取自",
+		"laneRecording": "錄影",
+		"laneVoiceover": "旁白",
+		"noAudio": "此媒體沒有音訊軌道",
+		"noClipTranscript": "此片段沒有逐字稿 — 請開啟素材卡片並重新產生。",
 		"noClips": "尚無片段",
 		"noTranscript": "尚無逐字稿",
-		"whisperHint": "逐字稿使用本機 Whisper — 在您的電腦上執行，資料不會離開本裝置。",
+		"restoreSilence": "還原靜音（{{duration}} 秒）",
+		"restoreWord": "還原「{{word}}」",
+		"silence": "[靜音 {{duration}} 秒]",
+		"title": "目前的逐字稿",
 		"transcribeNow": "立即產生逐字稿",
 		"transcribing": "轉錄中…",
-		"clipLabel": "片段 {{index}}",
-		"noClipTranscript": "此片段沒有逐字稿 — 請開啟素材卡片並重新產生。",
-		"editorAria": "{{filename}} 的逐字稿",
-		"silence": "[靜音 {{duration}} 秒]",
-		"restoreSilence": "還原靜音（{{duration}} 秒）",
 		"trimSilence": "修剪靜音（{{duration}} 秒）",
-		"restoreWord": "還原「{{word}}」",
-		"noAudio": "此媒體沒有音訊軌道"
+		"whisperHint": "逐字稿使用本機 Whisper — 在您的電腦上執行，資料不會離開本裝置。"
 	},
 	"captions": {
 		"show": "顯示字幕",

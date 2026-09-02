@@ -263,21 +263,24 @@
 		"help": "Ayuda"
 	},
 	"transcript": {
-		"title": "Transcripción actual",
+		"clipLabel": "Clip {{index}}",
+		"editorAria": "Transcripción de {{filename}}",
 		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la marca como omitida (en rojo). Pasa el cursor sobre un fragmento rojo para restaurarlo.",
+		"laneLabel": "Leer la transcripción desde",
+		"laneRecording": "Grabación",
+		"laneVoiceover": "Voz en off",
+		"noAudio": "Este medio no tiene pista de audio",
+		"noClipTranscript": "Este clip no tiene transcripción: abre la ficha del recurso y vuelve a generarla.",
 		"noClips": "Aún no hay clips",
 		"noTranscript": "Aún no hay transcripción",
-		"whisperHint": "La transcripción usa Whisper local: se ejecuta en tu equipo y ningún dato sale del dispositivo.",
+		"restoreSilence": "Restaurar silencio ({{duration}} s)",
+		"restoreWord": "Restaurar «{{word}}»",
+		"silence": "[silencio {{duration}} s]",
+		"title": "Transcripción actual",
 		"transcribeNow": "Transcribir ahora",
 		"transcribing": "Transcribiendo…",
-		"clipLabel": "Clip {{index}}",
-		"noClipTranscript": "Este clip no tiene transcripción: abre la ficha del recurso y vuelve a generarla.",
-		"editorAria": "Transcripción de {{filename}}",
-		"silence": "[silencio {{duration}} s]",
-		"restoreSilence": "Restaurar silencio ({{duration}} s)",
 		"trimSilence": "Recortar silencio ({{duration}} s)",
-		"restoreWord": "Restaurar «{{word}}»",
-		"noAudio": "Este medio no tiene pista de audio"
+		"whisperHint": "La transcripción usa Whisper local: se ejecuta en tu equipo y ningún dato sale del dispositivo."
 	},
 	"captions": {
 		"show": "Mostrar subtítulos",
