@@ -1559,6 +1559,12 @@
 	top: 1px;
 	cursor: pointer;
 }
+/* Alt is held: the next drag on this pill slides the file under it rather than
+   moving the pill. The cursor is the confirmation, not the lesson — the tooltip
+   carries the words. */
+.laneAudioSlip {
+	cursor: ew-resize;
+}
 .laneAudio:active {
 	cursor: pointer;
 }

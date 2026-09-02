@@ -380,6 +380,8 @@ const AudioLanePill = memo(function AudioLanePill({
 	onStartDrag,
 	onSelect,
 	label,
+	slipHint,
+	slipArmed,
 	outputGain,
 	ghost,
 }: {
@@ -404,6 +406,13 @@ const AudioLanePill = memo(function AudioLanePill({
 	onStartDrag: (e: ReactPointerEvent, track: AxcutAudioTrack, mode: "move" | "l" | "r") => void;
 	onSelect: (id: string) => void;
 	label: string;
+	/** Appended to the pill's tooltip. A modifier is never discoverable on its own —
+	 *  you either read it somewhere or you never find it — and the tooltip is where a
+	 *  user already looks to ask what a thing does. */
+	slipHint: string;
+	/** True while Alt is held, so the pill can say the next drag will slip rather than
+	 *  move. Confirms the modifier; the tooltip is what teaches it. */
+	slipArmed: boolean;
 	/** Linear project output gain, applied on top of the track gain — the mixer
 	 *  applies both, so the bars must too or they under-read the exported level. */
 	outputGain: number;
@@ -448,7 +457,7 @@ const AudioLanePill = memo(function AudioLanePill({
 				tabIndex={0}
 				className={`${styles.lanePill} ${styles.laneAudio}${
 					selected ? ` ${styles.lanePillSel}` : ""
-				}`}
+				}${slipArmed ? ` ${styles.laneAudioSlip}` : ""}`}
 				style={{
 					left: `${leftPct}%`,
 					width: `${widthPct}%`,
@@ -464,7 +473,7 @@ const AudioLanePill = memo(function AudioLanePill({
 						onSelect(track.id);
 					}
 				}}
-				title={label}
+				title={`${label} — ${slipHint}`}
 			>
 				<span
 					className={styles.lanePillHandle}
@@ -994,6 +1003,25 @@ export function V4Timeline({
 	// would jump out from under the pointer.
 	const audioPills = useMemo(() => collapseTracksToPills(tl.audioTracks), [tl.audioTracks]);
 	const audioRows = useMemo(() => packAudioTrackRows(audioPills), [audioPills]);
+
+	// Whether Alt is held, so an audio pill can show that the next drag slips. Window
+	// listeners rather than per-pill handlers: the key is pressed BEFORE the pointer
+	// reaches the pill as often as after it, so a pill-local listener would miss the
+	// case the affordance exists for. `blur` clears it because a modifier held while
+	// the window loses focus never sends its keyup.
+	const [slipArmed, setSlipArmed] = useState(false);
+	useEffect(() => {
+		const sync = (e: KeyboardEvent) => setSlipArmed(e.altKey);
+		const clear = () => setSlipArmed(false);
+		window.addEventListener("keydown", sync);
+		window.addEventListener("keyup", sync);
+		window.addEventListener("blur", clear);
+		return () => {
+			window.removeEventListener("keydown", sync);
+			window.removeEventListener("keyup", sync);
+			window.removeEventListener("blur", clear);
+		};
+	}, []);
 
 	// Drag an audio track: "move" slides the head (both edges together), "l"/"r"
 	// trim the in/out points. The left edge moves the head AND the in-point so the
@@ -2052,6 +2080,8 @@ export function V4Timeline({
 													onStartDrag={startAudioDrag}
 													onSelect={tl.selectAudioTrack}
 													label={track.label || asset?.label || ts("audioTrack.defaultLabel")}
+													slipHint={ts("audioTrack.slipHint")}
+													slipArmed={slipArmed}
 													outputGain={audioGainScalar(settings.audioGainDb)}
 													ghost={((g) =>
 														g

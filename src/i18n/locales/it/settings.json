@@ -330,13 +330,14 @@
 	},
 	"audioTrack": {
 		"add": "Aggiungi traccia audio",
-		"importFailed": "Impossibile aggiungere l’audio",
 		"defaultLabel": "Traccia audio",
-		"help": "Volume, dissolvenze e ripetizione di questa traccia audio. Si mixa sopra la registrazione nell'anteprima e nell'esportazione. Trascina la traccia sulla timeline per spostarla o ridimensionarla.",
 		"fadeIn": "Dissolvenza in entrata",
 		"fadeOut": "Dissolvenza in uscita",
-		"mute": "Muto",
+		"help": "Volume, dissolvenze e ripetizione di questa traccia audio. Si mixa sopra la registrazione nell'anteprima e nell'esportazione. Trascina la traccia sulla timeline per spostarla o ridimensionarla.",
+		"importFailed": "Impossibile aggiungere l’audio",
 		"loop": "Ripeti",
-		"remove": "Elimina traccia"
+		"mute": "Muto",
+		"remove": "Elimina traccia",
+		"slipHint": "Alt + trascina per far scorrere l’audio all’interno"
 	}
 }
