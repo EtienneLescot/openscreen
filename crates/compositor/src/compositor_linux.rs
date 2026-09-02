@@ -4530,12 +4530,15 @@ impl Compositor {
     /// mecanique de staging mappe et de recolte differee n'aurait donc personne a
     /// servir.
     ///
-    /// L'attente est SYNCHRONE et c'est un choix de premiere version : le travail
-    /// GPU par frame se compte en millisecondes et l'encodage materiel aussi, la
-    /// ou l'encodeur logiciel qui a justifie le worker en demandait 8. Recouvrir
-    /// les deux demanderait plusieurs tampons exportables en rotation ; ca se
-    /// mesure avant de se decider, et ca ne change pas l'image produite.
-    pub unsafe fn compose_into_dmabuf(&self, staging: &ExportableStaging) -> Result<()> {
+    /// NE BLOQUE PAS. Rend l'index de soumission ; l'appelant attend dessus juste
+    /// avant de donner le fd a l'encodeur, ce qui lui laisse la fenetre pour
+    /// composer la frame suivante pendant que celle-ci finit. C'est le meme
+    /// pipelining que la ring de relecture software, avec des tampons
+    /// exportables a la place des buffers mappes.
+    pub unsafe fn compose_into_dmabuf(
+        &self,
+        staging: &ExportableStaging,
+    ) -> Result<wgpu::SubmissionIndex> {
         self.ensure_yuv_fmt(YuvFormat::Nv12)?;
         let (bpr_y, bpr_uv, off_uv, total) = {
             let g = self.yuv.borrow();
@@ -4602,12 +4605,16 @@ impl Compositor {
                 );
             }
         }
-        let idx = self.gpu.context.submit(std::iter::once(encoder.finish()));
-        // L'encodeur va lire cette memoire par un autre chemin que wgpu : rien
-        // d'autre ne garantirait que la copie est terminee quand on lui passe
-        // le fd.
+        Ok(self.gpu.context.submit(std::iter::once(encoder.finish())))
+    }
+
+    /// Attend qu'une soumission soit terminee.
+    ///
+    /// INDISPENSABLE AVANT DE PASSER LE FD. L'encodeur lit cette memoire par un
+    /// chemin que wgpu ignore : rien d'autre ne garantirait que la copie a bien
+    /// atterri.
+    pub fn wait_submission(&self, idx: wgpu::SubmissionIndex) {
         self.gpu.device.poll(wgpu::Maintain::WaitForSubmissionIndex(idx));
-        Ok(())
     }
 
     /// La geometrie NV12 courante, pour decrire le dmabuf au consommateur.
