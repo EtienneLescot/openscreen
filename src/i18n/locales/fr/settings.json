@@ -263,6 +263,11 @@
 		"help": "Aide"
 	},
 	"transcript": {
+		"modeLabel": "Mode d’interaction de la transcription",
+		"textEditMode": "Modifier le texte",
+		"cutVideoMode": "Couper la vidéo sélectionnée",
+		"textEditHelp": "Modifiez uniquement le texte de la transcription sans changer la timeline vidéo.",
+		"cutVideoHelp": "Sélectionnez du texte ou un silence pour couper la portion vidéo correspondante.",
 		"title": "Transcription actuelle",
 		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le marque comme ignoré (en rouge). Survolez un passage rouge pour le restaurer.",
 		"noClips": "Aucun clip pour l'instant",

@@ -263,6 +263,11 @@
 		"help": "Ajuda"
 	},
 	"transcript": {
+		"modeLabel": "Modo de interação da transcrição",
+		"textEditMode": "Editar texto da legenda",
+		"cutVideoMode": "Cortar vídeo selecionado",
+		"textEditHelp": "Edite apenas o texto da transcrição sem alterar a linha do tempo do vídeo.",
+		"cutVideoHelp": "Selecione texto ou uma pausa para cortar o trecho correspondente do vídeo.",
 		"title": "Transcrição atual",
 		"help": "Transcrição agregada de todos os clipes da linha do tempo. Backspace / Delete em uma palavra ou seleção marca como ignorada (em vermelho). Passe o mouse sobre um trecho vermelho para restaurá-lo.",
 		"noClips": "Nenhum clipe ainda",

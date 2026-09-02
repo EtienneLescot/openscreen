@@ -13,12 +13,15 @@ import {
 	Layout as LayoutIcon,
 	Loader2,
 	MousePointerClick,
+	Pencil,
+	Scissors,
 	Sliders,
 	Trash2,
 } from "lucide-react";
 
 import {
 	type ChangeEvent,
+	type CompositionEvent,
 	type CSSProperties,
 	type FormEvent,
 	memo,
@@ -39,6 +42,7 @@ import GradientEditor, { type GradientEditorState } from "@/components/ui/gradie
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
+import { transcriptTextForWords } from "@/lib/ai-edition/document/transcript";
 import type {
 	AxcutAsset,
 	AxcutClip,
@@ -672,6 +676,14 @@ export interface TrimTarget {
 	clipId: string;
 }
 
+export type TranscriptPaneMode = "cut" | "text";
+
+export type TranscriptTextSave = (
+	assetId: string,
+	wordIds: readonly string[],
+	text: string,
+) => Promise<boolean> | boolean;
+
 // ─── Transcript ────────────────────────────────────────────────────
 // Aggregated transcript view: one contentEditable region per clip on the
 // timeline, in timeline order. Each word is rendered as a `<span
@@ -704,6 +716,7 @@ export function TranscriptPane({
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
+	onEditTranscriptText,
 	onTranscribe,
 	canTranscribe,
 	isTranscribing,
@@ -722,6 +735,7 @@ export function TranscriptPane({
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
+	onEditTranscriptText?: TranscriptTextSave;
 	onTranscribe: () => void;
 	canTranscribe: boolean;
 	isTranscribing: boolean;
@@ -731,6 +745,7 @@ export function TranscriptPane({
 	blocked?: { reason: TranscriptGateReason; message?: string };
 }) {
 	const ts = useScopedT("settings");
+	const [mode, setMode] = useState<TranscriptPaneMode>("cut");
 	// Subscribed here, not passed down: the playhead is rewritten every animation
 	// frame during playback, and reading it in NewEditorShell re-rendered the whole
 	// editor (timeline included) once per frame — see NativePlaybackSync there. Only
@@ -822,16 +837,91 @@ export function TranscriptPane({
 				<h2>{ts("transcript.title")}</h2>
 			</header>
 			<div className={styles.paneBody}>
+				<div
+					role="group"
+					aria-label={ts("transcript.modeLabel")}
+					style={{
+						display: "flex",
+						gap: 4,
+						padding: 3,
+						marginBottom: 6,
+						border: "1px solid var(--border-soft)",
+						borderRadius: "var(--r-sm)",
+						background: "var(--surface-2)",
+					}}
+				>
+					{(
+						[
+							{
+								value: "text" as const,
+								label: ts("transcript.textEditMode"),
+								help: ts("transcript.textEditHelp"),
+								icon: <Pencil size={13} aria-hidden="true" />,
+							},
+							{
+								value: "cut" as const,
+								label: ts("transcript.cutVideoMode"),
+								help: ts("transcript.cutVideoHelp"),
+								icon: <Scissors size={13} aria-hidden="true" />,
+							},
+						] satisfies Array<{
+							value: TranscriptPaneMode;
+							label: string;
+							help: string;
+							icon: ReactNode;
+						}>
+					).map((option) => {
+						const active = mode === option.value;
+						return (
+							<button
+								key={option.value}
+								type="button"
+								aria-pressed={active}
+								title={option.help}
+								onClick={() => setMode(option.value)}
+								style={{
+									display: "inline-flex",
+									alignItems: "center",
+									justifyContent: "center",
+									gap: 6,
+									flex: 1,
+									minWidth: 0,
+									padding: "7px 8px",
+									border: active ? "1px solid var(--accent)" : "1px solid transparent",
+									borderRadius: "calc(var(--r-sm) - 2px)",
+									background: active ? "var(--accent-soft)" : "transparent",
+									color: active ? "var(--accent)" : "var(--fg-2)",
+									font: "600 11px/1.2 var(--font-body)",
+									cursor: "pointer",
+								}}
+							>
+								{option.icon}
+								{option.label}
+							</button>
+						);
+					})}
+				</div>
+				<p
+					style={{
+						margin: "0 4px 12px",
+						color: "var(--muted)",
+						font: "400 11px/1.45 var(--font-body)",
+					}}
+				>
+					{ts(mode === "text" ? "transcript.textEditHelp" : "transcript.cutVideoHelp")}
+				</p>
 				{sections.map((section, idx) => (
 					<TranscriptClipBlock
 						key={section.clip.id}
 						index={idx}
 						section={section}
+						mode={mode}
 						busy={busyAssetIds.includes(section.clip.assetId)}
 						cueWordId={cueWordId}
 						onSeek={onSeek}
 						onAddTrimRange={onAddTrimRange}
 						onRemoveTrimRange={onRemoveTrimRange}
+						onEditTranscriptText={onEditTranscriptText}
 					/>
 				))}
 			</div>
@@ -854,19 +944,23 @@ export function TranscriptPane({
 const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	index,
 	section,
+	mode,
 	busy,
 	cueWordId,
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
+	onEditTranscriptText,
 }: {
 	index: number;
 	section: ClipSection;
+	mode: TranscriptPaneMode;
 	busy: boolean;
 	cueWordId: string | null;
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
+	onEditTranscriptText?: TranscriptTextSave;
 }) {
 	const ts = useScopedT("settings");
 	const { clip, asset, words } = section;
@@ -884,6 +978,216 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 
 	const editorRef = useRef<HTMLDivElement | null>(null);
 	const pendingCaretWordIdRef = useRef<string | null>(null);
+	const textSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const pendingTextRef = useRef<string | null>(null);
+	const textEditRevisionRef = useRef(0);
+	const textSaveRetryCountRef = useRef(0);
+	// A successful save updates the transcript projection before its promise
+	// necessarily settles. Keep those expected projections separate from real
+	// external replacements (regen/undo), so an older save landing cannot make
+	// us discard newer text that is still pending.
+	const expectedSavedTextsRef = useRef(new Set<string>());
+	// An IME composition mutates the DOM through events this component must not
+	// react to (see handleInput/handleBeforeInput); it is tracked here, not in
+	// state, so composition never triggers a re-render mid-candidate.
+	const isComposingRef = useRef(false);
+	const busyRef = useRef(busy);
+	const modeRef = useRef(mode);
+	const assetIdRef = useRef(clip.assetId);
+	const onEditTranscriptTextRef = useRef(onEditTranscriptText);
+	const realWords = useMemo(() => words.filter((cw) => !isSilenceWord(cw.word)), [words]);
+	const realWordIds = useMemo(() => realWords.map((cw) => cw.word.id), [realWords]);
+	const realWordIdsRef = useRef(realWordIds);
+	const editableText = useMemo(
+		() => (section.transcript ? transcriptTextForWords(section.transcript, realWordIds) : ""),
+		[section.transcript, realWordIds],
+	);
+	const committedTextRef = useRef(editableText);
+	modeRef.current = mode;
+	committedTextRef.current = editableText;
+	busyRef.current = busy;
+	assetIdRef.current = clip.assetId;
+	realWordIdsRef.current = realWordIds;
+	onEditTranscriptTextRef.current = onEditTranscriptText;
+
+	// Commit the pending typing burst to the document. A transcription regen
+	// holds the asset read-only for the whole run (busy), during which the
+	// flush polls until it clears instead of dropping the burst. All inputs
+	// come from refs, so this callback never goes stale and the debounce
+	// below can be armed from effects too.
+	const flushPendingTextSave = useCallback((delayMs: number) => {
+		if (textSaveTimerRef.current) {
+			// Normal debounce calls keep the existing timer. A zero-delay flush
+			// means the editor is about to stop owning the visible text (mode
+			// switch), so replace the debounce with an immediate save instead of
+			// merely waiting for its original deadline.
+			if (delayMs > 0) return;
+			clearTimeout(textSaveTimerRef.current);
+			textSaveTimerRef.current = null;
+		}
+		textSaveTimerRef.current = setTimeout(() => {
+			textSaveTimerRef.current = null;
+			const pendingText = pendingTextRef.current;
+			if (pendingText === null) return;
+			if (busyRef.current) {
+				flushPendingTextSave(250);
+				return;
+			}
+			const save = onEditTranscriptTextRef.current;
+			if (!save) return;
+			// The user may have retyped back to the committed projection
+			// (undo-by-hand) since arming the timer: a save would be a no-op
+			// round-trip — skip it and clear the burst.
+			if (pendingText === committedTextRef.current) {
+				pendingTextRef.current = null;
+				return;
+			}
+			const revision = textEditRevisionRef.current;
+			expectedSavedTextsRef.current.add(pendingText);
+			const finish = (saved: boolean) => {
+				if (!saved || revision === textEditRevisionRef.current) {
+					expectedSavedTextsRef.current.delete(pendingText);
+				}
+				if (revision !== textEditRevisionRef.current) return;
+				const editor = editorRef.current;
+				if (saved) {
+					pendingTextRef.current = null;
+					return;
+				}
+				if (modeRef.current !== "text") return;
+				if (editor && globalThis.document.activeElement === editor) {
+					// The user is typing in this editor: reverting the DOM would
+					// steal the caret (and truncate a live IME composition), and
+					// wiping the pending burst would silently drop the edit.
+					// Keep both and retry once after a backoff; every fresh
+					// keystroke resets the retry budget, so a failing disk
+					// cannot turn into an infinite retry loop — and a later
+					// keystroke, mode switch, or unmount flush re-attempts it.
+					if (textSaveRetryCountRef.current < 1) {
+						textSaveRetryCountRef.current += 1;
+						flushPendingTextSave(1000);
+					}
+					return;
+				}
+				pendingTextRef.current = null;
+				if (editor) {
+					editor.textContent = committedTextRef.current;
+				}
+			};
+			void Promise.resolve(save(assetIdRef.current, realWordIdsRef.current, pendingText)).then(
+				(saved) => finish(saved === true),
+				() => finish(false),
+			);
+		}, delayMs);
+	}, []);
+
+	const scheduleTextSave = useCallback(
+		(text: string) => {
+			// Busy does NOT gate this: a transcription run makes the editor
+			// read-only, but text typed just before the run started stays the
+			// pending burst, and flushPendingTextSave polls until the run
+			// clears before saving it — instead of dropping it.
+			if (modeRef.current !== "text" || !onEditTranscriptTextRef.current) return;
+			pendingTextRef.current = text;
+			textEditRevisionRef.current += 1;
+			textSaveRetryCountRef.current = 0;
+			if (textSaveTimerRef.current) {
+				clearTimeout(textSaveTimerRef.current);
+				textSaveTimerRef.current = null;
+			}
+			flushPendingTextSave(250);
+		},
+		[flushPendingTextSave],
+	);
+
+	// Flush an unsaved burst on unmount (pane closed, project switched, clip
+	// removed): the debounce timer dies with the component and would take the
+	// last 250ms of edits with it. A duplicate of an in-flight save is
+	// harmless — replaceTranscriptText no-ops when the text already matches.
+	useEffect(
+		() => () => {
+			if (textSaveTimerRef.current) clearTimeout(textSaveTimerRef.current);
+			const pendingText = pendingTextRef.current;
+			const save = onEditTranscriptTextRef.current;
+			if (pendingText !== null && save && !busyRef.current) {
+				void Promise.resolve(save(assetIdRef.current, realWordIdsRef.current, pendingText)).then(
+					() => undefined,
+					() => undefined,
+				);
+			}
+		},
+		[],
+	);
+
+	const prevModeRef = useRef(mode);
+	useLayoutEffect(() => {
+		const previous = prevModeRef.current;
+		prevModeRef.current = mode;
+		if (previous === "text" && mode !== "text" && pendingTextRef.current !== null) {
+			// Leaving text mode with unsaved text: flush now — the cut-mode
+			// render replaces the editor's content, so the DOM copy of that
+			// text is about to disappear.
+			flushPendingTextSave(0);
+		}
+		// In cut mode React owns the children (word spans); any bare text node
+		// left here was written imperatively by the text-mode writer below and
+		// is invisible to React's diff. Strip it so the word stream is the only
+		// content the cut-mode word resolution walks.
+		const editor = editorRef.current;
+		if (mode !== "text" && editor) {
+			for (const node of [...editor.childNodes]) {
+				if (node.nodeType === globalThis.Node.TEXT_NODE && node.nodeValue) {
+					node.remove();
+				}
+			}
+		}
+	}, [mode, flushPendingTextSave]);
+
+	// Keep the editor's DOM text in sync with the projection WITHOUT React
+	// children: in text mode React renders no children here, so this effect is
+	// the only writer. A React-managed text child would be rewritten by the
+	// re-render after every debounced save, resetting the caret mid-typing
+	// session. Rewrites preserve the caret when the editor has focus.
+	const prevEditableTextRef = useRef(editableText);
+	useLayoutEffect(() => {
+		const previousEditableText = prevEditableTextRef.current;
+		prevEditableTextRef.current = editableText;
+		const editor = editorRef.current;
+		if (mode !== "text" || !editor) return;
+		// A live IME composition owns the DOM text until compositionend;
+		// rewriting mid-composition destroys the candidate string. The save
+		// that follows compositionend re-derives the projection and lands the
+		// sync then.
+		if (isComposingRef.current) return;
+		const isExpectedSavedProjection = expectedSavedTextsRef.current.delete(editableText);
+		if (pendingTextRef.current !== null && previousEditableText !== editableText) {
+			if (isExpectedSavedProjection && pendingTextRef.current !== editableText) {
+				// An older save landed while the user kept typing. Its projection
+				// belongs to us, not to an external replacement: keep both the
+				// newer pending value and the editor DOM until their own save lands.
+				return;
+			}
+			// The projection changed while an edit was still pending: the
+			// transcript was replaced underneath it (transcription regen, undo,
+			// a second clip's save of the same asset). The pending text no
+			// longer maps onto the new word rows — drop it rather than
+			// replaying it over the replacement.
+			textEditRevisionRef.current += 1;
+			pendingTextRef.current = null;
+		} else if (
+			pendingTextRef.current !== null &&
+			pendingTextRef.current === editableText &&
+			editor.textContent !== editableText
+		) {
+			// Pending text matches the committed projection (typing was undone
+			// by hand) — nothing to save; just restore the view.
+			textEditRevisionRef.current += 1;
+			pendingTextRef.current = null;
+		}
+		if (editor.textContent !== editableText) {
+			writeEditorTextPreservingCaret(editor, editableText);
+		}
+	}, [editableText, mode]);
 
 	// auto-scroll the cue word into view as the playback head
 	// moves. The right pane has ONE scroll container (paneBody, which
@@ -1005,16 +1309,91 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 
 	const handleKeyDown = useCallback(
 		(event: ReactKeyboardEvent<HTMLDivElement>) => {
+			if (mode === "text") return;
 			if (event.key !== "Backspace" && event.key !== "Delete") return;
 			event.preventDefault();
 			cutNativeSelection(event.key === "Backspace" ? "backward" : "forward");
 		},
-		[cutNativeSelection],
+		[cutNativeSelection, mode],
+	);
+
+	const handleInput = useCallback(
+		(event: FormEvent<HTMLDivElement>) => {
+			if (modeRef.current !== "text") return;
+			// While an IME composition is live, intermediate input events fire
+			// for every candidate / romanisation step. Saving those would write
+			// pinyin fragments into the word rows; the compositionend handler
+			// below schedules the single save of the final text instead.
+			if (isComposingRef.current) return;
+			scheduleTextSave(event.currentTarget.textContent ?? "");
+		},
+		[scheduleTextSave],
+	);
+
+	const handleBlur = useCallback(() => {
+		if (modeRef.current === "text" && pendingTextRef.current !== null) {
+			flushPendingTextSave(0);
+		}
+	}, [flushPendingTextSave]);
+
+	const handleCompositionStart = useCallback(() => {
+		isComposingRef.current = true;
+	}, []);
+
+	const handleCompositionEnd = useCallback(
+		(event: CompositionEvent<HTMLDivElement>) => {
+			isComposingRef.current = false;
+			// compositionend is followed by a final input event on some
+			// engines; both carry the same complete text, and scheduleTextSave
+			// coalesces by value, so scheduling here is idempotent with it.
+			if (modeRef.current !== "text") return;
+			scheduleTextSave(event.currentTarget.textContent ?? "");
+		},
+		[scheduleTextSave],
+	);
+
+	const insertPlainText = useCallback(
+		(text: string) => {
+			const editor = editorRef.current;
+			const selection = globalThis.getSelection();
+			if (!editor || !selection || selection.rangeCount === 0) return;
+			const range = selection.getRangeAt(0);
+			if (
+				!editor.contains(range.commonAncestorContainer) &&
+				range.commonAncestorContainer !== editor
+			) {
+				return;
+			}
+			range.deleteContents();
+			const textNode = globalThis.document.createTextNode(text);
+			range.insertNode(textNode);
+			range.setStartAfter(textNode);
+			range.collapse(true);
+			selection.removeAllRanges();
+			selection.addRange(range);
+			editor.normalize();
+			scheduleTextSave(editor.textContent ?? "");
+		},
+		[scheduleTextSave],
 	);
 
 	const handleBeforeInput = useCallback(
 		(event: FormEvent<HTMLDivElement>) => {
 			const inputEvent = event.nativeEvent as InputEvent;
+			if (mode === "text") {
+				// A transcription run holds the editor read-only at the DOM
+				// level (contentEditable={false}), so no inserts arrive here
+				// while busy. The paragraph rewrite still runs for the editable
+				// text mode, and the pending-save flush waits out the run.
+				if (
+					inputEvent.inputType === "insertParagraph" ||
+					inputEvent.inputType === "insertLineBreak"
+				) {
+					event.preventDefault();
+					insertPlainText(" ");
+				}
+				return;
+			}
 			if (inputEvent.inputType.startsWith("delete")) {
 				event.preventDefault();
 				cutNativeSelection(
@@ -1037,16 +1416,23 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 				event.preventDefault();
 			}
 		},
-		[cutNativeSelection],
+		[cutNativeSelection, insertPlainText, mode],
 	);
 
-	const handlePaste = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
-		event.preventDefault();
-	}, []);
+	const handlePaste = useCallback(
+		(event: ReactClipboardEvent<HTMLDivElement>) => {
+			event.preventDefault();
+			if (modeRef.current !== "text") return;
+			const plainText = event.clipboardData.getData("text/plain").replace(/[\r\n]+/g, " ");
+			insertPlainText(plainText);
+		},
+		[insertPlainText],
+	);
 
 	const handlePointerUp = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
 			if (event.button !== 0) return;
+			if (mode === "text") return;
 			// a click on the trim-pill button (bin) bubbles up here
 			// before the button's onClick fires. Skip those — the bin's own
 			// handler is responsible for restoring the skip range.
@@ -1081,7 +1467,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			// single clip at the head of the timeline, where the two coordinates coincide.
 			onSeek(clip.timelineStartSec + (cw.word.startSec - clip.sourceStartSec));
 		},
-		[onSeek, words, clip.timelineStartSec, clip.sourceStartSec],
+		[onSeek, words, clip.timelineStartSec, clip.sourceStartSec, mode],
 	);
 
 	return (
@@ -1159,7 +1545,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 					</span>
 				) : null}
 			</span>
-			{words.length === 0 ? (
+			{(mode === "text" ? realWords.length : words.length) === 0 ? (
 				<p
 					style={{
 						margin: 0,
@@ -1176,14 +1562,18 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 					ref={editorRef}
 					role="textbox"
 					tabIndex={0}
-					contentEditable={!busy}
+					contentEditable={mode === "cut" || (!!onEditTranscriptText && !busy)}
 					aria-busy={busy}
-					aria-readonly={busy}
+					aria-readonly={busy || mode === "cut" || !onEditTranscriptText}
 					suppressContentEditableWarning
 					spellCheck={false}
 					aria-label={ts("transcript.editorAria", { filename })}
 					aria-multiline="true"
+					onCompositionStart={handleCompositionStart}
+					onCompositionEnd={handleCompositionEnd}
 					onBeforeInput={handleBeforeInput}
+					onInput={handleInput}
+					onBlur={handleBlur}
 					onKeyDown={handleKeyDown}
 					onPaste={handlePaste}
 					onPointerUp={handlePointerUp}
@@ -1192,10 +1582,14 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						font: "400 13px/1.65 var(--font-body)",
 						color: "var(--fg)",
 						textWrap: "pretty",
+						// Text mode renders the projection's "\n\n" paragraph breaks
+						// (derived from speech pauses) as visible blank lines; cut
+						// mode renders word spans, which never contain newlines.
+						whiteSpace: mode === "text" ? "pre-wrap" : "normal",
 						// Read-only while its transcript is being regenerated: the cursor
 						// and the wash are what stop it from reading as an editor that
 						// ignores you (see the `busy` note on TranscriptPane).
-						cursor: busy ? "progress" : "text",
+						cursor: busy ? "progress" : mode === "text" ? "text" : "default",
 						opacity: busy ? 0.6 : 1,
 						outline: "none",
 						// no overflow on the per-clip editor — the
@@ -1205,16 +1599,23 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						// scrollbar that breaks the cue auto-scroll UX.
 					}}
 				>
-					{words.map((cw) => (
-						<TranscriptWord
-							key={cw.id}
-							cw={cw}
-							isCue={cw.id === cueWordId}
-							target={trimTarget}
-							onRestore={removeTrimRun}
-							onAddTrimRange={onAddTrimRange}
-						/>
-					))}
+					{/* Text mode renders NO React children: the DOM text is owned
+						by the projection-writer effect above. A React-rendered text
+						child would be rewritten by the re-render after every
+						debounced save, resetting the caret mid-typing session (and
+						truncating a live IME composition). */}
+					{mode === "text"
+						? null
+						: words.map((cw) => (
+								<TranscriptWord
+									key={cw.id}
+									cw={cw}
+									isCue={cw.id === cueWordId}
+									target={trimTarget}
+									onRestore={removeTrimRun}
+									onAddTrimRange={onAddTrimRange}
+								/>
+							))}
 				</div>
 			)}
 		</span>
@@ -1534,6 +1935,60 @@ function restoreCaretBeforeWord(editor: HTMLElement | null, wordId: string): voi
 	const selection = globalThis.getSelection();
 	selection?.removeAllRanges();
 	selection?.addRange(range);
+}
+
+/**
+ * Rewrites the text-mode editor's DOM to a new projection while keeping the
+ * caret where the user left it. Text mode has no React children — this helper
+ * is the effect that keeps the DOM in sync with `transcriptTextForWords()`.
+ *
+ * A caret inside the editor is (text node, character offset). When the
+ * projection changes, both endpoints are located in the OLD text, mapped onto
+ * the NEW text, and re-established — so a save arriving mid-typing session
+ * does not throw the cursor to the start of the block. Mapping is by plain
+ * index: the projection changes here are single-row text rewrites (the saved
+ * edit), so index-based mapping is exact; for a full transcript replacement
+ * any mapping is a guess anyway, and clamping keeps the caret inside bounds.
+ * A live IME composition is never touched (composition text lives in the
+ * DOM only until compositionend, and rewriting mid-composition breaks it).
+ */
+function writeEditorTextPreservingCaret(editor: HTMLElement, text: string): void {
+	const selection = globalThis.getSelection();
+	const hasCaret =
+		editor.contains(globalThis.document.activeElement) &&
+		selection !== null &&
+		selection.rangeCount > 0 &&
+		editor.contains(selection.getRangeAt(0).commonAncestorContainer);
+	// Capture the caret offsets BEFORE mutating the DOM: assigning
+	// textContent detaches the selection's text node, which collapses the
+	// live Range to (editor, 0) — offsets read after the write are always 0.
+	let startOffset = 0;
+	let endOffset = 0;
+	let collapsed = true;
+	if (hasCaret) {
+		const range = selection.getRangeAt(0);
+		collapsed = range.collapsed;
+		startOffset = clampRangeOffset(range.startContainer, range.startOffset);
+		endOffset = clampRangeOffset(range.endContainer, range.endOffset);
+	}
+	const oldText = editor.textContent ?? "";
+	if (oldText === text) return;
+	editor.textContent = text;
+	if (!hasCaret) return;
+	const nextRange = globalThis.document.createRange();
+	const textNode = editor.firstChild;
+	if (!textNode) return;
+	// The projection differences that reach this helper are single-row text
+	// rewrites, so a plain index mapping of the caret keeps it where the user
+	// left it; clamping handles a shrunk text safely.
+	nextRange.setStart(textNode, Math.min(startOffset, text.length));
+	if (collapsed) {
+		nextRange.collapse(true);
+	} else {
+		nextRange.setEnd(textNode, Math.min(endOffset, text.length));
+	}
+	selection.removeAllRanges();
+	selection.addRange(nextRange);
 }
 
 // Re-export AxcutWord type so the helpers above can be typed without

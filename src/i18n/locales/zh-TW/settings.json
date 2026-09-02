@@ -264,6 +264,11 @@
 		"help": "說明"
 	},
 	"transcript": {
+		"modeLabel": "字幕互動模式",
+		"textEditMode": "字幕文字編輯",
+		"cutVideoMode": "剪掉選取範圍對應影片",
+		"textEditHelp": "只修改字幕文字，不改變影片時間軸。可直接輸入、貼上或刪除文字。",
+		"cutVideoHelp": "選取字幕文字或停頓，將對應片段從影片中剪掉。",
 		"title": "目前的逐字稿",
 		"help": "時間軸上所有片段的合併逐字稿。對某個字或選取範圍按 Backspace / Delete 會標記為略過（紅色）。將滑鼠移到紅色片段上即可還原。",
 		"noClips": "尚無片段",

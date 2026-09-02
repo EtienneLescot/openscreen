@@ -263,6 +263,11 @@
 		"help": "Yardım"
 	},
 	"transcript": {
+		"modeLabel": "Transkript etkileşim modu",
+		"textEditMode": "Altyazı metnini düzenle",
+		"cutVideoMode": "Seçili videoyu kes",
+		"textEditHelp": "Video zaman çizelgesini değiştirmeden yalnızca transkript metnini düzenleyin.",
+		"cutVideoHelp": "İlgili video bölümünü kesmek için metni veya bir duraklamayı seçin.",
 		"title": "Geçerli döküm",
 		"help": "Zaman çizelgesindeki tüm kliplerin birleşik dökümü. Bir kelimede veya seçimde Backspace / Delete tuşuna basmak onu atlanmış (kırmızı) olarak işaretler. Kırmızı bölümün üzerine gelerek geri alabilirsiniz.",
 		"noClips": "Henüz klip yok",

@@ -263,6 +263,11 @@
 		"help": "Ayuda"
 	},
 	"transcript": {
+		"modeLabel": "Modo de interacción de la transcripción",
+		"textEditMode": "Editar texto de subtítulos",
+		"cutVideoMode": "Cortar vídeo seleccionado",
+		"textEditHelp": "Edita solo el texto de la transcripción sin cambiar la línea de tiempo del vídeo.",
+		"cutVideoHelp": "Selecciona texto o una pausa para cortar el fragmento de vídeo correspondiente.",
 		"title": "Transcripción actual",
 		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la marca como omitida (en rojo). Pasa el cursor sobre un fragmento rojo para restaurarlo.",
 		"noClips": "Aún no hay clips",

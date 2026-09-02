@@ -13,6 +13,8 @@ import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
+import { withTranscript } from "@/lib/ai-edition/document/transcribe";
+import { replaceTranscriptText } from "@/lib/ai-edition/document/transcript";
 import { isModalOpen } from "@/lib/ai-edition/modalGuard";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -604,6 +606,33 @@ export function NewEditorShell() {
 		[applyTimelineOp],
 	);
 
+	// Transcript text edits are whole-document read/modify/writes, so they share the
+	// timeline queue rather than racing it on a second debounce queue. Read the document
+	// INSIDE the chain: rapid edits then see the transcript saved by the preceding edit.
+	const handleEditTranscriptText = useCallback(
+		(assetId: string, wordIds: readonly string[], text: string): Promise<boolean> =>
+			enqueueTimelineWrite(async () => {
+				const doc = useProjectStore.getState().document;
+				if (!doc) return false;
+				const transcript =
+					doc.transcripts.find((entry) => entry.assetId === assetId) ??
+					(doc.transcript?.assetId === assetId ? doc.transcript : null);
+				if (!transcript) return false;
+				try {
+					const nextTranscript = replaceTranscriptText(transcript, wordIds, text);
+					if (nextTranscript === transcript) return true;
+					return saveDocument(withTranscript(doc, nextTranscript), { history: true });
+				} catch (error) {
+					console.error("[transcript] failed to edit text:", error);
+					toast.error("Could not edit transcript text", {
+						description: error instanceof Error ? error.message : String(error),
+					});
+					return false;
+				}
+			}),
+		[enqueueTimelineWrite, saveDocument],
+	);
+
 	const handleSelectProject = useCallback(
 		async (id: string) => {
 			try {
@@ -1151,6 +1180,7 @@ export function NewEditorShell() {
 		onSeek: handleSeek,
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,
+		onEditTranscriptText: handleEditTranscriptText,
 		onTranscribe: handleTranscribe,
 		canTranscribe: hasAsset,
 		isTranscribing: transcriptGate.state === "pending",

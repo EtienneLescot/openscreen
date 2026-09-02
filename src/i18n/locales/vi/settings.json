@@ -263,6 +263,11 @@
 		"help": "Trợ giúp"
 	},
 	"transcript": {
+		"modeLabel": "Chế độ tương tác bản chép lời",
+		"textEditMode": "Chỉnh sửa chữ phụ đề",
+		"cutVideoMode": "Cắt video đã chọn",
+		"textEditHelp": "Chỉ sửa văn bản bản chép lời mà không thay đổi dòng thời gian video.",
+		"cutVideoHelp": "Chọn văn bản hoặc khoảng lặng để cắt đoạn video tương ứng.",
 		"title": "Bản chép lời hiện tại",
 		"help": "Bản chép lời gộp của mọi clip trên dòng thời gian. Nhấn Backspace / Delete trên một từ hoặc vùng chọn để đánh dấu là bỏ qua (màu đỏ). Di chuột lên đoạn màu đỏ để khôi phục.",
 		"noClips": "Chưa có clip nào",

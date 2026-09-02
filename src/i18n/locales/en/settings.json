@@ -269,6 +269,11 @@
 		"help": "Help"
 	},
 	"transcript": {
+		"modeLabel": "Transcript interaction mode",
+		"textEditMode": "Transcript text",
+		"cutVideoMode": "Cut selected video",
+		"textEditHelp": "Edit transcript text without changing the video timeline.",
+		"cutVideoHelp": "Select transcript words or pauses to cut them from the video.",
 		"title": "Current transcription",
 		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to mark it as skipped (red). Hover a red span to restore it.",
 		"noClips": "No clips yet",
