@@ -480,7 +480,7 @@ describe("V4Timeline audio lane drag", () => {
 		// eager lookup would throw before their own assertions ran.
 		return {
 			get pill() {
-				return screen.getByTitle("vo");
+				return screen.getByTitle((t) => t.startsWith("vo "));
 			},
 			container,
 			placeAudioTrack,
@@ -533,7 +533,9 @@ describe("V4Timeline audio lane drag", () => {
 			{ ...makeTrack(), id: "b", label: "b", startMs: 10_000, endMs: 70_000 },
 			{ ...makeTrack(), id: "c", label: "c", startMs: 20_000, endMs: 80_000 },
 		]);
-		const tops = ["a", "b", "c"].map((l) => (screen.getByTitle(l) as HTMLElement).style.top);
+		const tops = ["a", "b", "c"].map(
+			(l) => (screen.getByTitle((t) => t.startsWith(`${l} `)) as HTMLElement).style.top,
+		);
 		expect(new Set(tops).size).toBe(3);
 		// ...and the lane grew to hold them rather than clipping.
 		const lane = container.querySelector('[class*="tlLaneAudio"]') as HTMLElement;
@@ -545,7 +547,9 @@ describe("V4Timeline audio lane drag", () => {
 			{ ...makeTrack(), id: "a", label: "a", startMs: 0, endMs: 10_000 },
 			{ ...makeTrack(), id: "b", label: "b", startMs: 20_000, endMs: 30_000 },
 		]);
-		const tops = ["a", "b"].map((l) => (screen.getByTitle(l) as HTMLElement).style.top);
+		const tops = ["a", "b"].map(
+			(l) => (screen.getByTitle((t) => t.startsWith(`${l} `)) as HTMLElement).style.top,
+		);
 		expect(new Set(tops).size).toBe(1);
 	});
 

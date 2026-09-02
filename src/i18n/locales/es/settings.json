@@ -329,13 +329,14 @@
 	},
 	"audioTrack": {
 		"add": "Añadir pista de audio",
-		"importFailed": "No se pudo añadir el audio",
 		"defaultLabel": "Pista de audio",
-		"help": "Volumen, fundidos y bucle de esta pista de audio. Se mezcla sobre la grabación en la vista previa y la exportación. Arrastra la pista en la línea de tiempo para moverla o redimensionarla.",
 		"fadeIn": "Aparición",
 		"fadeOut": "Desvanecido",
-		"mute": "Silenciar",
+		"help": "Volumen, fundidos y bucle de esta pista de audio. Se mezcla sobre la grabación en la vista previa y la exportación. Arrastra la pista en la línea de tiempo para moverla o redimensionarla.",
+		"importFailed": "No se pudo añadir el audio",
 		"loop": "Bucle",
-		"remove": "Eliminar pista"
+		"mute": "Silenciar",
+		"remove": "Eliminar pista",
+		"slipHint": "Alt + arrastrar para desplazar el audio dentro"
 	}
 }

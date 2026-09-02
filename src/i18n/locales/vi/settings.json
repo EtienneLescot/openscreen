@@ -329,13 +329,14 @@
 	},
 	"audioTrack": {
 		"add": "Thêm bản âm thanh",
-		"importFailed": "Không thể thêm âm thanh",
 		"defaultLabel": "Bản âm thanh",
-		"help": "Âm lượng, hiệu ứng mờ và lặp cho bản âm thanh này. Nó được trộn lên trên bản ghi ở cả xem trước và xuất. Kéo bản trên dòng thời gian để di chuyển hoặc đổi kích thước.",
 		"fadeIn": "Mờ vào",
 		"fadeOut": "Mờ ra",
-		"mute": "Tắt tiếng",
+		"help": "Âm lượng, hiệu ứng mờ và lặp cho bản âm thanh này. Nó được trộn lên trên bản ghi ở cả xem trước và xuất. Kéo bản trên dòng thời gian để di chuyển hoặc đổi kích thước.",
+		"importFailed": "Không thể thêm âm thanh",
 		"loop": "Lặp",
-		"remove": "Xóa bản nhạc"
+		"mute": "Tắt tiếng",
+		"remove": "Xóa bản nhạc",
+		"slipHint": "Giữ Alt và kéo để trượt âm thanh bên trong"
 	}
 }
