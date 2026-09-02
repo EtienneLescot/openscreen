@@ -106,13 +106,41 @@ export interface SttStatusEvent {
 
 /** IPC request: renderer → main. */
 export interface SttTranscribeRequest {
-	samples: Float32Array;
+	/**
+	 * Mono-16k samples the CALLER decoded. Optional since native extraction landed:
+	 * pass `sourcePath` instead and the main process decodes with ffmpeg, off the UI
+	 * thread and without the renderer ever holding the audio. Kept for the caption
+	 * path, which already has samples in hand and has no file to point at.
+	 *
+	 * Exactly one of `samples` / `sourcePath` is required.
+	 */
+	samples?: Float32Array;
+	/**
+	 * A media file for the main process to decode itself (ffmpeg -> mono 16k f32).
+	 * Preferred: the renderer's own pipeline read the whole file, copied it twice and
+	 * resampled it on the UI thread, which is what froze the editor at open.
+	 *
+	 * The caller falls back to its own decode when this cannot be honoured — see
+	 * `FfmpegUnavailableError`.
+	 */
+	sourcePath?: string;
 	/**
 	 * ISO 639-1 language code (e.g. "en", "fr"). Omit / `"auto"` to let Whisper detect.
 	 * The spec locks language detection on by default; we only honour an explicit value.
 	 */
 	language?: string;
 }
+
+/**
+ * Marker carried in the error message when the main process cannot decode a
+ * `sourcePath` because no ffmpeg is resolvable on this install.
+ *
+ * A string rather than an error class because this crosses `ipcRenderer.invoke`,
+ * which reconstructs a plain `Error` from the message and drops the prototype and
+ * the `name`. Exported so neither side spells it out by hand — a fallback keyed on
+ * a literal typed twice is a fallback that silently stops working.
+ */
+export const STT_NATIVE_EXTRACTION_UNAVAILABLE = "stt:native-extraction-unavailable";
 
 /** IPC response: main → renderer. */
 export interface SttTranscribeResponse {
