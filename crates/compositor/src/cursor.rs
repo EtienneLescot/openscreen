@@ -315,8 +315,8 @@ mod tests {
             r#"{"samples":[
                 {"timeMs":0,"cx":0.1,"cy":0.1,"cursorType":"pointer"},
                 {"timeMs":100,"cx":0.2,"cy":0.2,"cursorType":null},
-                {"timeMs":200,"cx":0.3,"cy":0.3},
-                {"timeMs":300,"cx":0.4,"cy":0.4,"cursorType":"pointer"}
+                {"timeMs":200,"cx":0.3,"cy":0.3,"cursorType":"pointer"},
+                {"timeMs":300,"cx":0.4,"cy":0.4}
             ]}"#,
         )
         .expect("write temp sidecar");
@@ -332,9 +332,13 @@ mod tests {
         );
         assert_eq!(
             track.type_at(0.20),
-            Some("arrow"),
-            "omitted cursorType must reset to arrow"
+            Some("pointer"),
+            "pointer after null must hold until the omitted-key sample"
         );
-        assert_eq!(track.type_at(0.30), Some("pointer"));
+        assert_eq!(
+            track.type_at(0.30),
+            Some("arrow"),
+            "omitted cursorType after pointer must reset to arrow independently"
+        );
     }
 }
