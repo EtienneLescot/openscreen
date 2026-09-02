@@ -332,7 +332,7 @@
 		"defaultLabel": "Bản âm thanh",
 		"fadeIn": "Mờ vào",
 		"fadeOut": "Mờ ra",
-		"help": "Âm lượng, hiệu ứng mờ và lặp cho bản âm thanh này. Nó được trộn lên trên bản ghi ở cả xem trước và xuất. Kéo bản trên dòng thời gian để di chuyển hoặc đổi kích thước.",
+		"help": "Âm lượng, fade và lặp của rãnh âm thanh này. Nó được trộn lên trên bản ghi trong xem trước và khi xuất. Kéo rãnh trên dòng thời gian để di chuyển hoặc đổi kích thước, hoặc giữ Alt và kéo để trượt âm thanh bên trong.",
 		"importFailed": "Không thể thêm âm thanh",
 		"loop": "Lặp",
 		"mute": "Tắt tiếng",

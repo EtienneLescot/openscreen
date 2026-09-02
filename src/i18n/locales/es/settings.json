@@ -332,7 +332,7 @@
 		"defaultLabel": "Pista de audio",
 		"fadeIn": "Aparición",
 		"fadeOut": "Desvanecido",
-		"help": "Volumen, fundidos y bucle de esta pista de audio. Se mezcla sobre la grabación en la vista previa y la exportación. Arrastra la pista en la línea de tiempo para moverla o redimensionarla.",
+		"help": "Volumen, fundidos y bucle de esta pista de audio. Se mezcla sobre la grabación en la vista previa y en la exportación. Arrastra la pista en la línea de tiempo para moverla o redimensionarla, o mantén Alt y arrastra para desplazar el audio dentro.",
 		"importFailed": "No se pudo añadir el audio",
 		"loop": "Bucle",
 		"mute": "Silenciar",

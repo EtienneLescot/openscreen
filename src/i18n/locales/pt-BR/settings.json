@@ -332,7 +332,7 @@
 		"defaultLabel": "Faixa de áudio",
 		"fadeIn": "Fade in",
 		"fadeOut": "Fade out",
-		"help": "Volume, fades e repetição desta faixa de áudio. Ela é mixada sobre a gravação na prévia e na exportação. Arraste a faixa na linha do tempo para movê-la ou redimensioná-la.",
+		"help": "Volume, fades e repetição desta faixa de áudio. Ela é mixada sobre a gravação na visualização e na exportação. Arraste a faixa na linha do tempo para movê-la ou redimensioná-la, ou segure Alt e arraste para deslizar o áudio dentro dela.",
 		"importFailed": "Não foi possível adicionar o áudio",
 		"loop": "Repetir",
 		"mute": "Silenciar",
