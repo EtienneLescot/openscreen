@@ -333,7 +333,7 @@
 		"defaultLabel": "Ses parçası",
 		"fadeIn": "Açılma",
 		"fadeOut": "Kararma",
-		"help": "Bu ses parçasının seviyesi, geçişleri ve döngüsü. Önizlemede ve dışa aktarmada kaydın üzerine miksleniyor. Parçayı zaman çizelgesinde sürükleyerek taşıyın veya yeniden boyutlandırın.",
+		"help": "Bu ses kanalının seviyesi, geçişleri ve döngüsü. Önizlemede ve dışa aktarımda kaydın üzerine miksleniyor. Kanalı taşımak veya yeniden boyutlandırmak için zaman çizelgesinde sürükleyin; içindeki sesi kaydırmak için Alt tuşunu basılı tutarak sürükleyin.",
 		"importFailed": "Ses eklenemedi",
 		"loop": "Döngü",
 		"mute": "Sessiz",

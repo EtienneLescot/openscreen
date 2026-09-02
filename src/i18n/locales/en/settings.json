@@ -84,7 +84,7 @@
 		"defaultLabel": "Audio track",
 		"fadeIn": "Fade in",
 		"fadeOut": "Fade out",
-		"help": "Volume, fades and looping for this audio track. It mixes over the recording in the preview and the export. Drag the track on the timeline to move or resize it.",
+		"help": "Volume, fades and looping for this audio track. It mixes over the recording in the preview and the export. Drag the track on the timeline to move or resize it, or hold Alt and drag to slide the audio inside it.",
 		"importFailed": "Could not add audio",
 		"loop": "Loop",
 		"mute": "Mute",

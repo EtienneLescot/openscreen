@@ -333,7 +333,7 @@
 		"defaultLabel": "Piste audio",
 		"fadeIn": "Fondu d'entrée",
 		"fadeOut": "Fondu de sortie",
-		"help": "Volume, fondus et boucle de cette piste audio. Elle se mixe par-dessus l'enregistrement dans l'aperçu et à l'export. Faites glisser la piste sur la timeline pour la déplacer ou la redimensionner.",
+		"help": "Volume, fondus et boucle de cette piste audio. Elle se mixe par-dessus l’enregistrement dans l’aperçu et à l’export. Faites glisser la piste sur la timeline pour la déplacer ou la redimensionner, ou maintenez Alt en glissant pour faire défiler l’audio à l’intérieur.",
 		"importFailed": "Impossible d’ajouter l’audio",
 		"loop": "Boucle",
 		"mute": "Muet",
