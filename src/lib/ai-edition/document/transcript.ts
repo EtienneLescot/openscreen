@@ -332,6 +332,10 @@ const MIN_PAUSE_SEC = 0.05;
  * read back, for a test to hold this to.
  */
 function withInsertRangesForWords(document: AxcutDocument, assetId: string): AxcutDocument {
+	// The reason is user-visible on the region, and it is not the same fact on both lanes:
+	// the film holds a FRAME, a take holds nothing but silence — no picture is involved
+	// (issue #560). Keying, below, stays lane-agnostic: one row per word per asset.
+	const isTake = document.assets.find((a) => a.id === assetId)?.kind === "audio";
 	const transcript = document.transcripts.find((t) => t.assetId === assetId);
 	const words = transcript?.words ?? [];
 	const wanted = new Map<string, number>();
@@ -371,7 +375,9 @@ function withInsertRangesForWords(document: AxcutDocument, assetId: string): Axc
 			atSec: word.endSec,
 			durationSec,
 			wordId,
-			reason: `Held frame for the added word "${word.text}".`,
+			reason: isTake
+				? `Silence for the added word "${word.text}".`
+				: `Held frame for the added word "${word.text}".`,
 			origin: "user",
 		});
 	}
