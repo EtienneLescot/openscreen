@@ -326,6 +326,46 @@ function outputDurationOfRawSpan(
 	return out;
 }
 
+/**
+ * The raw span that plays for `outSec` OUTPUT seconds starting at `fromRawSec` — the
+ * inverse of {@link outputDurationOfRawSpan}, and the identity when nothing is sped up.
+ *
+ * A voice-over plays at 1x in the mix, so a pause for a spoken word is D seconds of the
+ * take's own clock. Under a 2x region that is 2 raw seconds, not 1, and getting it wrong
+ * puts the resumed narration half a pause out of step with the picture.
+ */
+export function rawSpanForOutDuration(
+	fromRawSec: number,
+	outSec: number,
+	speedRegions: PlaybackSpeedRegion[] = [],
+): number {
+	if (!(outSec > 0)) return 0;
+	if (speedRegions.length === 0) return outSec;
+	// Walk the regions from the head, spending output budget piecewise.
+	const edges = [
+		...new Set(
+			speedRegions
+				.flatMap((r) => [r.startMs / 1000, r.endMs / 1000])
+				.filter((edge) => edge > fromRawSec),
+		),
+	].sort((a, b) => a - b);
+	let raw = fromRawSec;
+	let left = outSec;
+	for (const edge of [...edges, Number.POSITIVE_INFINITY]) {
+		const mid = raw + Math.min(1e-6, (edge - raw) / 2);
+		const region = speedRegions.find(
+			(r) => mid >= r.startMs / 1000 && mid < r.endMs / 1000 && r.speed > 0,
+		);
+		const speed = region?.speed ?? 1;
+		const rawAvailable = edge - raw;
+		const outAvailable = rawAvailable / speed;
+		if (outAvailable >= left) return raw + left * speed - fromRawSec;
+		raw = edge;
+		left -= outAvailable;
+	}
+	return raw - fromRawSec;
+}
+
 export function projectRawTimelineSecToPlayback(
 	clips: AxcutClip[],
 	trimRanges: AxcutTrimRange[],
