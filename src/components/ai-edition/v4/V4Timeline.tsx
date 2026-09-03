@@ -51,6 +51,7 @@ import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
+	collapseRawSec,
 	expandRawSec,
 	type InsertedWordMark,
 	insertedWordMarks,
@@ -233,8 +234,11 @@ interface PlayheadOverlayProps {
 	 *  drawn on counts the pauses, so it has to be placed through them or it drifts from
 	 *  the clips by the whole added time. */
 	inserts: readonly RulerInsert[];
-	/** Live scrub position, when a drag is in flight. Takes precedence over the store. */
+	/** Live scrub position in RAW seconds, when a drag is in flight. */
 	overrideTimeSec: number | null;
+	/** The same drag's RULER position. Preferred when present: it is the only coordinate
+	 *  that can name a moment INSIDE a pause, which is zero raw seconds wide. */
+	overrideRulerSec: number | null;
 	canvasStyle: React.CSSProperties;
 	onPointerDown: (e: ReactPointerEvent) => void;
 	playheadRef?: React.MutableRefObject<HTMLDivElement | null>;
@@ -260,12 +264,17 @@ const PlayheadOverlay = memo(function PlayheadOverlay({
 	totalSec,
 	inserts,
 	overrideTimeSec,
+	overrideRulerSec,
 	canvasStyle,
 	onPointerDown,
 	playheadRef,
 }: PlayheadOverlayProps) {
 	const storeTimeSec = useProjectStore((s) => s.currentTimeSec);
-	const pct = (expandRawSec(overrideTimeSec ?? storeTimeSec, inserts) / totalSec) * 100;
+	// The scrub hands its RULER position straight through. Expanding the raw one instead
+	// would snap the playhead to a pause's left edge the moment the pointer entered it,
+	// because every ruler second inside a pause collapses to the same raw moment.
+	const pct =
+		((overrideRulerSec ?? expandRawSec(overrideTimeSec ?? storeTimeSec, inserts)) / totalSec) * 100;
 	return (
 		<div className={styles.tlPlayheadLayer} aria-hidden>
 			<div className={styles.tlCanvas} style={canvasStyle}>
@@ -830,6 +839,11 @@ export function V4Timeline({
 	// pointer for the frame the store hasn't caught up on yet. Handed down as an
 	// override to the two components that read the playhead from the store.
 	const [scrubbingTimeSec, setScrubbingTimeSec] = useState<number | null>(null);
+	// The pointer's RULER position while scrubbing, kept apart from the raw one above.
+	// Two numbers because they mean different things: the timecode reads the raw clock,
+	// like the store, and the playhead has to be able to sit INSIDE a pause — which is
+	// zero raw seconds wide, so no raw value can address a moment within it.
+	const [scrubRulerSec, setScrubRulerSec] = useState<number | null>(null);
 	const rafSeekRef = useRef<number>(0);
 	const pendingSeekTimeRef = useRef<number | null>(null);
 
@@ -846,7 +860,19 @@ export function V4Timeline({
 			if (!el) return;
 			const r = el.getBoundingClientRect();
 			const pct = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
-			const targetTime = pct * total;
+			// `total` is the EXPANDED ruler, so `pct * total` is a ruler second — and
+			// `setCurrentTime` is read as a RAW one by every consumer: the preview seek, the
+			// caption lookup, the transcript cue, the audio mix. Writing the ruler value
+			// straight in put the playhead one accumulated pause AHEAD of everything it was
+			// supposed to be pointing at, which is what showed as the wrong subtitle under a
+			// correctly-placed playhead (issue #560).
+			//
+			// Collapsing lands on the held moment when the pointer is inside a pause, which
+			// is the honest answer: a pause is zero raw seconds, so there is no raw value
+			// inside it to seek to. The ruler position is kept separately below so the
+			// playhead still follows the pointer across it.
+			const rulerTime = pct * total;
+			const { sec: targetTime } = collapseRawSec(rulerTime, inserts);
 
 			// Direct DOM playhead update (0ms latency, zero React re-render overhead)
 			if (playheadElRef.current) {
@@ -855,6 +881,7 @@ export function V4Timeline({
 
 			// Optimistic local UI state update
 			setScrubbingTimeSec(targetTime);
+			setScrubRulerSec(rulerTime);
 			pendingSeekTimeRef.current = targetTime;
 
 			if (isImmediate) {
@@ -876,7 +903,7 @@ export function V4Timeline({
 				});
 			}
 		},
-		[setCurrentTime, total],
+		[setCurrentTime, total, inserts],
 	);
 
 	// Mousedown anywhere on the empty timeline (ruler, lanes background, or
@@ -916,6 +943,7 @@ export function V4Timeline({
 					pendingSeekTimeRef.current = null;
 				}
 				setScrubbingTimeSec(null);
+				setScrubRulerSec(null);
 			};
 			window.addEventListener("pointermove", move);
 			window.addEventListener("pointerup", up);
@@ -2418,6 +2446,7 @@ export function V4Timeline({
 						totalSec={total}
 						inserts={inserts}
 						overrideTimeSec={scrubbingTimeSec}
+						overrideRulerSec={scrubRulerSec}
 						canvasStyle={canvasStyle}
 						onPointerDown={startScrub}
 						playheadRef={playheadElRef}
