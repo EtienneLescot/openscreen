@@ -146,7 +146,6 @@
 		"transcribing": "正在转录",
 		"downloadingModel": "正在下载语音模型",
 		"initializingModel": "正在启动语音模型",
-		"transcribingEllipsis": "正在转录…",
 		"pendingTranscription": "等待转录",
 		"transcriptionFailed": "转录失败",
 		"cpuBackendHint": "正在使用 CPU 运行 — 比 GPU 慢约 2 倍",

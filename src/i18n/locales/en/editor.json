@@ -141,7 +141,6 @@
 		"transcribing": "Transcribing",
 		"downloadingModel": "Downloading speech model",
 		"initializingModel": "Starting speech model",
-		"transcribingEllipsis": "Transcribing…",
 		"pendingTranscription": "Pending transcription",
 		"transcriptionFailed": "Transcription failed",
 		"cpuBackendHint": "Running on CPU — about 2× slower than on the GPU",

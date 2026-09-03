@@ -146,7 +146,6 @@
 		"transcribing": "جارٍ النسخ",
 		"downloadingModel": "جارٍ تنزيل نموذج الكلام",
 		"initializingModel": "جارٍ تهيئة نموذج الكلام",
-		"transcribingEllipsis": "جارٍ النسخ…",
 		"pendingTranscription": "بانتظار النسخ",
 		"transcriptionFailed": "فشل النسخ",
 		"cpuBackendHint": "يعمل على المعالج — أبطأ بنحو 2× من معالج الرسوميات",
