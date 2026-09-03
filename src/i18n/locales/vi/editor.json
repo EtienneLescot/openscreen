@@ -146,7 +146,6 @@
 		"transcribing": "Đang phiên âm",
 		"downloadingModel": "Đang tải mô hình giọng nói",
 		"initializingModel": "Đang khởi động mô hình giọng nói",
-		"transcribingEllipsis": "Đang phiên âm…",
 		"pendingTranscription": "Đang chờ phiên âm",
 		"transcriptionFailed": "Phiên âm thất bại",
 		"cpuBackendHint": "Đang chạy trên CPU — chậm hơn khoảng 2× so với GPU",

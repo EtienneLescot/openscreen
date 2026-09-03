@@ -146,7 +146,6 @@
 		"transcribing": "받아쓰는 중",
 		"downloadingModel": "음성 모델 다운로드 중",
 		"initializingModel": "음성 모델 시작 중",
-		"transcribingEllipsis": "받아쓰는 중…",
 		"pendingTranscription": "받아쓰기 대기 중",
 		"transcriptionFailed": "받아쓰기 실패",
 		"cpuBackendHint": "CPU에서 실행 중 — GPU보다 약 2배 느립니다",

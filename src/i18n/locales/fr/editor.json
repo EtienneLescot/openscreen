@@ -146,7 +146,6 @@
 		"transcribing": "Transcription en cours",
 		"downloadingModel": "Téléchargement du modèle vocal",
 		"initializingModel": "Démarrage du modèle vocal",
-		"transcribingEllipsis": "Transcription en cours…",
 		"pendingTranscription": "Transcription en attente",
 		"transcriptionFailed": "Échec de la transcription",
 		"cpuBackendHint": "Exécution sur le processeur — environ 2× plus lent que sur le GPU",

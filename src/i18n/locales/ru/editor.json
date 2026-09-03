@@ -146,7 +146,6 @@
 		"transcribing": "Расшифровка",
 		"downloadingModel": "Загрузка речевой модели",
 		"initializingModel": "Запуск речевой модели",
-		"transcribingEllipsis": "Расшифровка…",
 		"pendingTranscription": "Ожидает расшифровки",
 		"transcriptionFailed": "Ошибка расшифровки",
 		"cpuBackendHint": "Выполняется на процессоре — примерно в 2× медленнее, чем на GPU",

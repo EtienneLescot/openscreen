@@ -146,7 +146,6 @@
 		"transcribing": "Transcribiendo",
 		"downloadingModel": "Descargando modelo de voz",
 		"initializingModel": "Iniciando el modelo de voz",
-		"transcribingEllipsis": "Transcribiendo…",
 		"pendingTranscription": "Transcripción pendiente",
 		"transcriptionFailed": "Error de transcripción",
 		"cpuBackendHint": "Ejecutándose en la CPU — unas 2× más lento que en la GPU",
