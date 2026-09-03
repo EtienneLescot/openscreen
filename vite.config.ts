@@ -81,6 +81,13 @@ export default defineConfig({
 			},
 		},
 		rollupOptions: {
+			// Deux points d'entrée : l'éditeur, et une page minimale pour les fenêtres CLI.
+			// Sans ça une fenêtre d'export chargeait le graphe de modules de l'éditeur entier
+			// avant sa première frame — 3,9 s mesurées, dans l'intervalle chronométré.
+			input: {
+				main: path.resolve(__dirname, "index.html"),
+				cli: path.resolve(__dirname, "cli.html"),
+			},
 			output: {
 				manualChunks(id) {
 					if (id.includes("react-dom") || id.includes("/react/")) return "react-vendor";

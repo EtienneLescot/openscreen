@@ -141,7 +141,7 @@ function loadRunnerWindow(windowType: string): BrowserWindow {
 	if (VITE_DEV_SERVER_URL) {
 		win.loadURL(`${VITE_DEV_SERVER_URL}?windowType=${windowType}`);
 	} else {
-		win.loadFile(path.join(RENDERER_DIST, "index.html"), { query: { windowType } });
+		win.loadFile(path.join(RENDERER_DIST, "cli.html"), { query: { windowType } });
 	}
 	return win;
 }
