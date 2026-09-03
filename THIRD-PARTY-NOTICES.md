@@ -85,19 +85,26 @@ distributed by their own registries, not redistributed inside our binaries.
 - The MediaPipe **JavaScript** solution and its two ~5.6 MB WASM builds are no longer
   bundled: inference moved into the native compositor, and nothing loaded them.
 
-## Microsoft OpenMP runtime — `vcomp140.dll` (Windows only)
+## Microsoft Visual C++ runtime — `vcomp140.dll`, `msvcp140*.dll`, `vcruntime140*.dll` (Windows only)
 
-- **Component**: `resources/electron/native/bin/win32-x64/vcomp140.dll`.
+- **Components**: under `resources/electron/native/bin/win32-x64/` —
+  `vcomp140.dll`, `msvcp140.dll`, `msvcp140_1.dll`, `vcruntime140.dll`,
+  `vcruntime140_1.dll`.
 - **License**: redistributable under the Microsoft Visual C++ Redistributable
-  terms accompanying Visual Studio; the copy shipped is taken from the
-  `VC\Redist\MSVC\<version>\x64\Microsoft.VC<nnn>.OpenMP\` directory of the
-  Visual Studio installation that builds the release, never from `System32`.
-- **Why it ships**: the ggml backends above are compiled with OpenMP and import
-  it. It is **not** part of Windows, so without it `whisper-stt-server` dies in
-  the loader before `main()` on any machine that has no Visual C++
-  Redistributable, and transcription and captions fail with no usable error.
-  Staged by `scripts/stage-vcomp-runtime.mjs`; `scripts/before-pack.cjs` refuses
-  to package if it is missing while anything still imports it.
+  terms accompanying Visual Studio; the copies shipped are taken from the
+  `VC\Redist\MSVC\<version>\x64\Microsoft.VC<nnn>.OpenMP\` and
+  `…\Microsoft.VC<nnn>.CRT\` directories of the Visual Studio installation that
+  builds the release, never from `System32`.
+- **Why they ship**: two prebuilt binaries in the payload import them, and
+  neither is ours to recompile against the static CRT. The ggml backends above
+  are compiled with OpenMP and import `vcomp140.dll`; the vendored ONNX Runtime
+  imports the CRT proper. None of these are **part of Windows**, so without them
+  `whisper-stt-server` dies in the loader before `main()` on any machine that has
+  no Visual C++ Redistributable — transcription and captions fail with no usable
+  error — and `onnxruntime.dll` fails to load, leaving the camera background
+  silently inert. Staged by `scripts/stage-vcomp-runtime.mjs`;
+  `scripts/before-pack.cjs` refuses to package if any is missing while something
+  still imports it.
 
 ## PipeWire — headers (Linux only)
 
