@@ -2,7 +2,7 @@
 
 import "@testing-library/jest-dom";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { useState } from "react";
+import { Suspense, startTransition, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
 import { replaceTranscriptText } from "@/lib/ai-edition/document/transcript";
@@ -64,6 +64,49 @@ const TRANSCRIPT: AxcutTranscript = {
 		// The 1-4s gap creates a synthetic silence chip in cut mode.
 		{ id: "w2", segmentId: "segment_1", startSec: 4, endSec: 5, text: "brave" },
 		{ id: "w3", segmentId: "segment_1", startSec: 5, endSec: 6, text: "world" },
+	],
+};
+
+const INTERRUPTED_ASSET: AxcutAsset = {
+	...ASSET,
+	id: "asset_interrupted",
+	label: "interrupted.mp4",
+	originalPath: "/interrupted.mp4",
+};
+
+const INTERRUPTED_CLIP: AxcutClip = {
+	...CLIP,
+	assetId: INTERRUPTED_ASSET.id,
+};
+
+const INTERRUPTED_TRANSCRIPT: AxcutTranscript = {
+	assetId: INTERRUPTED_ASSET.id,
+	language: "en",
+	segments: [
+		{
+			id: "segment_interrupted",
+			kind: "speech",
+			startSec: 0,
+			endSec: 2,
+			text: "Hello committed world!",
+			wordIds: ["interrupted_1", "interrupted_2"],
+		},
+	],
+	words: [
+		{
+			id: "interrupted_1",
+			segmentId: "segment_interrupted",
+			startSec: 0,
+			endSec: 1,
+			text: "Hello committed",
+		},
+		{
+			id: "interrupted_2",
+			segmentId: "segment_interrupted",
+			startSec: 1,
+			endSec: 2,
+			text: "world!",
+		},
 	],
 };
 
@@ -357,6 +400,67 @@ describe("TranscriptPane text editing mode", () => {
 			["w1", "w2", "w3"],
 			"Hello brave world!!",
 		);
+	});
+
+	it("keeps committed save inputs when a newer render is interrupted", async () => {
+		const committedSave = vi.fn(async () => true);
+		const interruptedSave = vi.fn(async () => true);
+		let renderInterruptedState: (() => void) | undefined;
+		const neverResolves = new Promise<never>(() => {
+			// Keeps the transition suspended so its ref writes must not become observable.
+		});
+
+		function InterruptAfterPane({ active }: { active: boolean }) {
+			if (active) throw neverResolves;
+			return null;
+		}
+
+		function Harness() {
+			const [interrupted, setInterrupted] = useState(false);
+			renderInterruptedState = () => {
+				startTransition(() => setInterrupted(true));
+			};
+			return (
+				<I18nProvider>
+					<Suspense fallback={null}>
+						<TranscriptPane
+							clips={[interrupted ? INTERRUPTED_CLIP : CLIP]}
+							transcripts={[interrupted ? INTERRUPTED_TRANSCRIPT : TRANSCRIPT]}
+							assets={[interrupted ? INTERRUPTED_ASSET : ASSET]}
+							trimRanges={[]}
+							busyAssetIds={[]}
+							onSeek={vi.fn()}
+							onAddTrimRange={vi.fn()}
+							onRemoveTrimRange={vi.fn()}
+							onEditTranscriptText={interrupted ? interruptedSave : committedSave}
+							onTranscribe={vi.fn()}
+							canTranscribe
+							isTranscribing={false}
+						/>
+						<InterruptAfterPane active={interrupted} />
+					</Suspense>
+				</I18nProvider>
+			);
+		}
+
+		render(<Harness />);
+		fireEvent.click(screen.getByRole("button", { name: "Transcript text" }));
+		const editor = screen.getByRole("textbox");
+		editor.textContent = "Hello committed world!";
+		fireEvent.input(editor, { inputType: "insertText", data: "!" });
+
+		await act(async () => {
+			renderInterruptedState?.();
+			await Promise.resolve();
+		});
+		await flushTextEdit();
+
+		expect(committedSave).toHaveBeenCalledWith(
+			"asset_1",
+			["w1", "w2", "w3"],
+			"Hello committed world!",
+		);
+		expect(interruptedSave).not.toHaveBeenCalled();
 	});
 
 	it("replaces a selection spanning words with normalized plain-text paste", async () => {

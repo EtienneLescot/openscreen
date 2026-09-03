@@ -124,7 +124,12 @@ const DECLARED: WritePath[] = [
 	// "Save" on the unsaved-changes prompt.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleConfirmUnsaved", "save", "gesture"),
 	// A transcript text edit committed after the user's short typing burst.
-	w("src/components/ai-edition/NewEditorShell.tsx", "handleEditTranscriptText", "save", "gesture"),
+	w(
+		"src/lib/ai-edition/store/transcriptTextEdit.ts",
+		"enqueueTranscriptTextEdit",
+		"save",
+		"gesture",
+	),
 	// The probed duration folded into the document when the <video> loads. Twice:
 	// the first clip seed, and the backfill for clips still on a placeholder length.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleLoadedMetadata", "save", "automatic"),

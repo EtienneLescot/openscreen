@@ -1003,12 +1003,14 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 		[section.transcript, realWordIds],
 	);
 	const committedTextRef = useRef(editableText);
-	modeRef.current = mode;
-	committedTextRef.current = editableText;
-	busyRef.current = busy;
-	assetIdRef.current = clip.assetId;
-	realWordIdsRef.current = realWordIds;
-	onEditTranscriptTextRef.current = onEditTranscriptText;
+	useLayoutEffect(() => {
+		modeRef.current = mode;
+		committedTextRef.current = editableText;
+		busyRef.current = busy;
+		assetIdRef.current = clip.assetId;
+		realWordIdsRef.current = realWordIds;
+		onEditTranscriptTextRef.current = onEditTranscriptText;
+	}, [mode, editableText, busy, clip.assetId, realWordIds, onEditTranscriptText]);
 
 	// Commit the pending typing burst to the document. A transcription regen
 	// holds the asset read-only for the whole run (busy), during which the

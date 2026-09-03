@@ -13,8 +13,6 @@ import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
-import { withTranscript } from "@/lib/ai-edition/document/transcribe";
-import { replaceTranscriptText } from "@/lib/ai-edition/document/transcript";
 import { isModalOpen } from "@/lib/ai-edition/modalGuard";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -24,6 +22,7 @@ import {
 	useTimelineTranscriptGate,
 	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
+import { enqueueTranscriptTextEdit } from "@/lib/ai-edition/store/transcriptTextEdit";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
@@ -606,31 +605,30 @@ export function NewEditorShell() {
 		[applyTimelineOp],
 	);
 
-	// Transcript text edits are whole-document read/modify/writes, so they share the
-	// timeline queue rather than racing it on a second debounce queue. Read the document
-	// INSIDE the chain: rapid edits then see the transcript saved by the preceding edit.
+	// Capture the source project in the callback closure. Debounced saves and the pane's
+	// unmount flush can run after another project has loaded, so the queued task verifies
+	// this identity again before reading or persisting the current document.
 	const handleEditTranscriptText = useCallback(
-		(assetId: string, wordIds: readonly string[], text: string): Promise<boolean> =>
-			enqueueTimelineWrite(async () => {
-				const doc = useProjectStore.getState().document;
-				if (!doc) return false;
-				const transcript =
-					doc.transcripts.find((entry) => entry.assetId === assetId) ??
-					(doc.transcript?.assetId === assetId ? doc.transcript : null);
-				if (!transcript) return false;
-				try {
-					const nextTranscript = replaceTranscriptText(transcript, wordIds, text);
-					if (nextTranscript === transcript) return true;
-					return saveDocument(withTranscript(doc, nextTranscript), { history: true });
-				} catch (error) {
-					console.error("[transcript] failed to edit text:", error);
-					toast.error("Could not edit transcript text", {
-						description: error instanceof Error ? error.message : String(error),
-					});
-					return false;
-				}
-			}),
-		[enqueueTimelineWrite, saveDocument],
+		async (assetId: string, wordIds: readonly string[], text: string): Promise<boolean> => {
+			if (!projectId) return false;
+			try {
+				return await enqueueTranscriptTextEdit({
+					sourceProjectId: projectId,
+					assetId,
+					wordIds,
+					text,
+					enqueue: enqueueTimelineWrite,
+					saveDocument,
+				});
+			} catch (error) {
+				console.error("[transcript] failed to edit text:", error);
+				toast.error("Could not edit transcript text", {
+					description: error instanceof Error ? error.message : String(error),
+				});
+				return false;
+			}
+		},
+		[enqueueTimelineWrite, projectId, saveDocument],
 	);
 
 	const handleSelectProject = useCallback(
