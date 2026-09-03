@@ -222,8 +222,22 @@ impl Decoder {
                 // cœurs qui sont multiples. Ce qui compte est que la frame soit assez bon
                 // marché à décoder — ce que du 1080p 8 bits est.
                 //
-                // NON MESURÉ, d'où la condition étroite : 4K, 10 bits et HEVC gardent
-                // VideoToolbox. La preview aussi : elle n'a pas été mesurée, et la changer
+                // LA 4K AUSSI, mesurée depuis. Décodage seul, 1200 frames, meilleur de trois
+                // passes, même machine — avec le cas 1080p en témoin pour valider la méthode
+                // contre le résultat bout-en-bout ci-dessus :
+                //
+                //     1080p   logiciel 2586 fps   VideoToolbox 212 fps   x12,2
+                //     4K      logiciel  849 fps   VideoToolbox  71 fps   x11,9
+                //
+                // Le rapport ne bouge quasiment pas avec la résolution : la latence fixe par
+                // frame de VideoToolbox domine des deux côtés. Il n'y a donc pas de seuil de
+                // résolution à poser, et en poser un « par prudence » écarterait le chemin
+                // rapide du cas qui en profite le plus — 71 fps, c'est en dessous du temps
+                // réel pour une timeline 4K60.
+                //
+                // RESTE NON MESURÉ : 10 bits et HEVC. Ils gardent VideoToolbox, et la
+                // condition les écarte par construction (`format == YUV420P` et
+                // `codec_id == H264`). La preview aussi n'a pas été mesurée, et la changer
                 // sans la mesurer serait exactement l'erreur que ce commit corrige.
                 _ if intent == DecodeIntent::Export && is_h264_8bit => false,
                 _ => true,
@@ -976,6 +990,7 @@ impl VideoEncoder {
                 (*self.sw).linesize[1] as usize,
             )?;
             (*self.sw).pts = pts;
+            let _p = crate::export_probe::scope(crate::export_probe::Stage::SendFrame);
             crate::ffi::averr(
                 crate::ffi::avcodec_send_frame(self.ctx, self.sw),
                 "send_frame_composited",
