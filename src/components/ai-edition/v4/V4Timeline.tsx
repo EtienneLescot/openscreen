@@ -51,13 +51,9 @@ import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
-	collapseRawSec,
-	expandRawSec,
 	type InsertedWordMark,
 	insertedWordMarks,
-	type RulerInsert,
 	rulerInserts,
-	totalInsertedSec,
 } from "@/lib/ai-edition/timeline/inserted-time";
 import {
 	newRegionDurationSec,
@@ -230,15 +226,8 @@ interface RulerTick {
 interface PlayheadOverlayProps {
 	/** Full timeline length in seconds — the denominator for the playhead's percentage. */
 	totalSec: number;
-	/** The media added words inserted. `currentTimeSec` is a STORED second; the ruler it is
-	 *  drawn on counts the insertions, so it has to be placed through them or it drifts from
-	 *  the clips by the whole added time. */
-	inserts: readonly RulerInsert[];
 	/** Live scrub position in RAW seconds, when a drag is in flight. */
 	overrideTimeSec: number | null;
-	/** The same drag's RULER position. Preferred when present: it is the only coordinate
-	 *  that can name a moment INSIDE an insertion, which is zero raw seconds wide. */
-	overrideRulerSec: number | null;
 	canvasStyle: React.CSSProperties;
 	onPointerDown: (e: ReactPointerEvent) => void;
 	playheadRef?: React.MutableRefObject<HTMLDivElement | null>;
@@ -262,35 +251,13 @@ interface PlayheadOverlayProps {
  */
 const PlayheadOverlay = memo(function PlayheadOverlay({
 	totalSec,
-	inserts,
 	overrideTimeSec,
-	overrideRulerSec,
 	canvasStyle,
 	onPointerDown,
 	playheadRef,
 }: PlayheadOverlayProps) {
 	const storeTimeSec = useProjectStore((s) => s.currentTimeSec);
-	const storeRulerSec = useProjectStore((s) => s.currentRulerSec);
-	// The ruler position, from the most trustworthy source that has one.
-	//
-	// The raw second alone cannot draw this playhead: an insertion occupies ruler seconds
-	// and none of the recording, so every ruler second inside one collapses to the same raw
-	// moment and expanding it back puts the playhead on the insertion's near edge — where it
-	// visibly stalls through playback, and where it snaps back to after a scrub released over
-	// one (issue #560).
-	//
-	// The store's ruler second is trusted only when it still AGREES with the raw one: a
-	// caller that predates insertions writes the raw value for both, which is right until an
-	// insertion sits before it. Collapsing is the test, and expanding is the fallback.
-	const storeSec =
-		Math.abs(collapseRawSec(storeRulerSec, inserts).sec - storeTimeSec) < 1e-3
-			? storeRulerSec
-			: expandRawSec(storeTimeSec, inserts);
-	const pct =
-		((overrideRulerSec ??
-			(overrideTimeSec !== null ? expandRawSec(overrideTimeSec, inserts) : storeSec)) /
-			totalSec) *
-		100;
+	const pct = (((overrideTimeSec ?? storeTimeSec) / totalSec) * 100) as number;
 	return (
 		<div className={styles.tlPlayheadLayer} aria-hidden>
 			<div className={styles.tlCanvas} style={canvasStyle}>
@@ -629,9 +596,7 @@ export function V4Timeline({
 	onAddVoiceover,
 }: {
 	tl: TimelineApi;
-	/** `rulerSec` is the same moment on the ruler the user sees; it differs from `sec` as
-	 *  soon as an insertion sits before it, or under it. */
-	setCurrentTime: (sec: number, rulerSec?: number) => void;
+	setCurrentTime: (sec: number) => void;
 	variant?: "edit" | "media";
 	onDropAsset?: (assetId: string) => Promise<void>;
 	videoSources?: VideoSource[];
@@ -732,13 +697,11 @@ export function V4Timeline({
 		() =>
 			Math.max(
 				1,
-				clips.reduce((m, c) => Math.max(m, c.timelineEndSec), 0) + totalInsertedSec(inserts),
+				clips.reduce((m, c) => Math.max(m, c.timelineEndSec), 0),
 			),
 		[clips, inserts],
 	);
 	const pctOf = useCallback((sec: number) => (sec / total) * 100, [total]);
-	/** Stored raw seconds → a percentage of the expanded ruler. */
-	const pctAt = useCallback((sec: number) => pctOf(expandRawSec(sec, inserts)), [pctOf, inserts]);
 	const showLanes = variant === "edit";
 
 	// The visible fraction of the timeline, and what one second is worth on screen
@@ -857,14 +820,8 @@ export function V4Timeline({
 	// pointer for the frame the store hasn't caught up on yet. Handed down as an
 	// override to the two components that read the playhead from the store.
 	const [scrubbingTimeSec, setScrubbingTimeSec] = useState<number | null>(null);
-	// The pointer's RULER position while scrubbing, kept apart from the raw one above.
-	// Two numbers because they mean different things: the timecode reads the raw clock,
-	// like the store, and the playhead has to be able to sit INSIDE an insertion — which
-	// takes up none of the recording, so no raw value can address a moment within it.
-	const [scrubRulerSec, setScrubRulerSec] = useState<number | null>(null);
 	const rafSeekRef = useRef<number>(0);
 	const pendingSeekTimeRef = useRef<number | null>(null);
-	const pendingSeekRulerRef = useRef<number | null>(null);
 
 	// ── interactions ────────────────────────────────────────────────
 	const playheadElRef = useRef<HTMLDivElement | null>(null);
@@ -886,13 +843,7 @@ export function V4Timeline({
 			// supposed to be pointing at, which is what showed as the wrong subtitle under a
 			// correctly-placed playhead (issue #560).
 			//
-			// Collapsing lands on the insertion's own moment when the pointer is inside one,
-			// which is the honest answer: an insertion takes up none of the recording, so
-			// there is no raw value inside it to seek the media to. The ruler position goes
-			// to the store ALONGSIDE it, which is what lets the playhead stay where it was
-			// released instead of snapping to the insertion's near edge.
-			const rulerTime = pct * total;
-			const { sec: targetTime } = collapseRawSec(rulerTime, inserts);
+			const targetTime = pct * total;
 
 			// Direct DOM playhead update (0ms latency, zero React re-render overhead)
 			if (playheadElRef.current) {
@@ -901,16 +852,14 @@ export function V4Timeline({
 
 			// Optimistic local UI state update
 			setScrubbingTimeSec(targetTime);
-			setScrubRulerSec(rulerTime);
 			pendingSeekTimeRef.current = targetTime;
-			pendingSeekRulerRef.current = rulerTime;
 
 			if (isImmediate) {
 				if (rafSeekRef.current !== 0) {
 					cancelAnimationFrame(rafSeekRef.current);
 					rafSeekRef.current = 0;
 				}
-				setCurrentTime(targetTime, rulerTime);
+				setCurrentTime(targetTime);
 				return;
 			}
 
@@ -919,7 +868,7 @@ export function V4Timeline({
 				rafSeekRef.current = requestAnimationFrame(() => {
 					rafSeekRef.current = 0;
 					if (pendingSeekTimeRef.current !== null) {
-						setCurrentTime(pendingSeekTimeRef.current, pendingSeekRulerRef.current ?? undefined);
+						setCurrentTime(pendingSeekTimeRef.current);
 					}
 				});
 			}
@@ -960,15 +909,10 @@ export function V4Timeline({
 					rafSeekRef.current = 0;
 				}
 				if (pendingSeekTimeRef.current !== null) {
-					// The RULER second goes with it, or releasing over an insertion drops the
-					// only coordinate that could name where the pointer was: the raw second
-					// alone lands on the insertion's near edge, which is the snap-back.
-					setCurrentTime(pendingSeekTimeRef.current, pendingSeekRulerRef.current ?? undefined);
+					setCurrentTime(pendingSeekTimeRef.current);
 					pendingSeekTimeRef.current = null;
-					pendingSeekRulerRef.current = null;
 				}
 				setScrubbingTimeSec(null);
-				setScrubRulerSec(null);
 			};
 			window.addEventListener("pointermove", move);
 			window.addEventListener("pointerup", up);
@@ -1750,10 +1694,10 @@ export function V4Timeline({
 					compact ? ` ${styles.lanePillCompact}` : ""
 				}${seg.interactive && isPillSelected(p.id) ? ` ${styles.lanePillSel}` : ""}`}
 				style={{
-					left: `${pctAt(seg.segStart)}%`,
+					left: `${pctOf(seg.segStart)}%`,
 					// Measured on the expanded ruler at BOTH ends: a region straddling an insertion
 					// covers it, so its box has to grow by that insertion and not merely slide.
-					width: `${pctOf(expandRawSec(seg.segEnd, inserts) - expandRawSec(seg.segStart, inserts))}%`,
+					width: `${pctOf(seg.segEnd - seg.segStart)}%`,
 					transform: seg.shiftPx ? `translateX(${seg.shiftPx}px)` : undefined,
 					transition: !clipDrag
 						? undefined
@@ -2164,7 +2108,7 @@ export function V4Timeline({
 								<div
 									key={tick.sec}
 									className={`${styles.tlTick}${tick.major ? ` ${styles.tlTickMajor}` : ""}`}
-									style={{ left: `${pctAt(tick.sec)}%` }}
+									style={{ left: `${pctOf(tick.sec)}%` }}
 								>
 									{tick.major ? (
 										<span className={styles.tlTickLabel}>{fmtTick(tick.sec, rulerTicks.step)}</span>
@@ -2254,7 +2198,7 @@ export function V4Timeline({
 													// ruler and the audio pills were drawn on the stored one, so any
 													// insertion in the film slid the two lanes apart. The take keeps its
 													// own length — only its head follows the ruler.
-													leftPct={pctAt(start)}
+													leftPct={pctOf(start)}
 													widthPct={pctOf(widthSec)}
 													row={audioRows.rowOf.get(track.id) ?? 0}
 													rowHeight={AUDIO_ROW_HEIGHT_PX + AUDIO_ROW_GAP_PX}
@@ -2319,8 +2263,8 @@ export function V4Timeline({
 								// On the expanded ruler the box also carries whatever insertions fall
 								// inside it — the film really does stay on this clip's frame for
 								// them, so they belong to its box rather than between boxes.
-								const boxStart = expandRawSec(c.timelineStartSec, inserts);
-								const boxEnd = expandRawSec(c.timelineEndSec, inserts);
+								const boxStart = c.timelineStartSec;
+								const boxEnd = c.timelineEndSec;
 								const boxLen = boxEnd - boxStart;
 								const asset = tl.assets.find((a) => a.id === c.assetId);
 								const clipVideoUrl = videoSources.find((v) => v.id === c.assetId)?.src;
@@ -2407,7 +2351,7 @@ export function V4Timeline({
 											// SOURCE span, in the same ternary — two clocks, one of which the
 											// box is not drawn in.
 											const inserted = inserts.find((ins) => ins.wordId === wordId);
-											const left = ((expandRawSec(atRawSec, inserts) - boxStart) / boxLen) * 100;
+											const left = ((atRawSec - boxStart) / boxLen) * 100;
 											const width = inserted ? (inserted.durationSec / boxLen) * 100 : 0;
 											return (
 												<button
@@ -2469,9 +2413,7 @@ export function V4Timeline({
 				{showLanes ? (
 					<PlayheadOverlay
 						totalSec={total}
-						inserts={inserts}
 						overrideTimeSec={scrubbingTimeSec}
-						overrideRulerSec={scrubRulerSec}
 						canvasStyle={canvasStyle}
 						onPointerDown={startScrub}
 						playheadRef={playheadElRef}

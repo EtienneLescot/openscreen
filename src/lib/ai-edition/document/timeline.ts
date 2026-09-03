@@ -21,7 +21,6 @@ import type {
  */
 export type PlaybackSegment = AxcutClip & { heldSec?: number };
 
-import type { RulerInsert } from "../timeline/inserted-time";
 import { type Interval, subtractInterval } from "../timeline/intervals";
 import { keptRawSpans } from "../timeline/programme-time";
 import {
@@ -136,6 +135,54 @@ function collectWordRefs(
 // after any structural change (insert / move / remove / trim) so the timeline
 // never has gaps or overlaps between clips. Shared by useTimeline (UI) and
 // the agent tool executor (main process) so both enforce the same invariant.
+/** How much media this clip's own insertions add to it, in seconds.
+ *
+ *  Half-open at the start and closed at the end, matching where an insertion sits: at the
+ *  END of the word it follows, which is a moment the clip plays. */
+export function insertedSecForClip(
+	clip: AxcutClip,
+	insertRanges: readonly AxcutInsertRange[],
+): number {
+	const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+	return insertRanges.reduce(
+		(sum, range) =>
+			range.assetId === clip.assetId &&
+			range.atSec > clip.sourceStartSec &&
+			range.atSec <= sourceEnd + 1e-6
+				? sum + range.durationSec
+				: sum,
+		0,
+	);
+}
+
+/**
+ * Clip geometry that accounts for the media inserted inside each clip (issue #560).
+ *
+ * An added word inserts media — a fixed frame and silence, until there is a generator for
+ * it — and a clip carrying it is that much longer, exactly as it would be if the media had
+ * come from a file. This is the ONE place that says so; every reader downstream then works
+ * in a single coordinate, which is what makes the playhead, the native decoder and the
+ * export agree without any of them converting between two rulers.
+ *
+ * Absolute rather than incremental, so it is idempotent: a stored clip's length is always
+ * its source length (every writer above builds it that way), and re-running this on an
+ * already-reflowed document changes nothing. That is what lets it also serve as the
+ * migration for documents written before insertions existed.
+ */
+export function reflowClipsForInserts(
+	clips: AxcutClip[],
+	insertRanges: readonly AxcutInsertRange[],
+): AxcutClip[] {
+	return resequenceClips(
+		clips.map((clip) => {
+			const sourceLen = (clip.sourceEndSec ?? clip.sourceStartSec) - clip.sourceStartSec;
+			if (sourceLen <= 0) return clip; // duration not probed yet; leave it to the prober
+			const len = sourceLen + insertedSecForClip(clip, insertRanges);
+			return { ...clip, timelineEndSec: clip.timelineStartSec + len };
+		}),
+	);
+}
+
 export function resequenceClips(clips: AxcutClip[]): AxcutClip[] {
 	let cursor = 0;
 	return clips.map((c) => {
@@ -372,14 +419,13 @@ export function projectRawTimelineSecToPlayback(
 	trimRanges: AxcutTrimRange[],
 	rawSec: number,
 	/**
-	 * The recording lane's insertions, already placed on the raw ruler by `rulerInserts`.
+	 * The insertions, so the kept spans below can carry them.
 	 *
-	 * REQUIRED, not optional, and every call site was migrated with it. An optional
-	 * parameter would silently keep the early-audio bug alive at every site that had not
-	 * been touched yet — which is the exact failure this argument exists to fix, and the
-	 * kind that shows up as "the music starts a beat early" months later.
+	 * REQUIRED, not optional: an optional parameter would silently keep the early-audio bug
+	 * alive at every site not yet touched — the one that shows up as "the music starts a
+	 * beat early" months later.
 	 */
-	filmInserts: readonly RulerInsert[],
+	insertRanges: readonly AxcutInsertRange[],
 	/**
 	 * Speed regions on the raw ruler. Supplied by the AUDIO paths, which overlay
 	 * a 1x track onto the finished programme and so need its real, speed-adjusted
@@ -393,39 +439,17 @@ export function projectRawTimelineSecToPlayback(
 	let lastRawEnd = 0; // raw end of the last kept segment, for the trailing overhang
 	let landed: number | null = null; // output(rawSec), once it falls in/before a kept segment
 
-	// An insertion occupies ZERO raw seconds and D OUTPUT seconds — it is the one
-	// thing a flat kept-interval list cannot express, which is why it was left out and why
-	// every audio track after an insertion has been landing D seconds early in both the preview
-	// and the export. Interleaved here rather than added afterwards, because where the insertion
-	// sits inside the kept span decides which side of it `rawSec` falls on.
-	const holds = [...filmInserts].sort((a, b) => a.atRawSec - b.atRawSec);
-	let nextHold = 0;
-
 	// The kept stretches come from `keptRawSpans`, which is this walk — it was lifted out of
 	// here so the transcript lanes and the audio mix could ask the same question and get the
-	// same answer (issue #560). Trims only REMOVE, so a kept span's RAW length is what
-	// survives; how long it takes to PLAY is a separate question `outputDurationOfRawSpan`
-	// answers, because a speed region scales it.
-	for (const seg of keptRawSpans(ordered, trimRanges)) {
-		let from = seg.startSec;
-		// Every insertion this segment carries, in order. One whose moment a trim removed is
-		// in no kept span at all and is never reached — the moment it holds is not in the
-		// film any more, so neither is the insertion.
-		while (nextHold < holds.length && holds[nextHold].atRawSec < seg.startSec) nextHold++;
-		while (nextHold < holds.length && holds[nextHold].atRawSec < seg.endSec) {
-			const hold = holds[nextHold++];
-			const at = Math.max(from, hold.atRawSec);
-			if (landed === null && rawSec < at) {
-				const within = Math.min(Math.max(rawSec, from), at);
-				landed = outCursor + outputDurationOfRawSpan(from, within, speedRegions);
-			}
-			outCursor += outputDurationOfRawSpan(from, at, speedRegions);
-			from = at;
-			// Strictly after the insertion's own moment, matching `expandRawSec`: a track whose
-			// head sits exactly there starts WITH the insertion, not after it.
-			if (landed === null && rawSec <= at) landed = outCursor;
-			outCursor += hold.durationSec;
-		}
+	// same answer (issue #560). It carries the insertions too: they are timeline seconds like
+	// any other, which is exactly what one clock buys — this walk used to interleave them
+	// itself, and every reader that forgot to had audio landing early.
+	//
+	// Trims only REMOVE, so a kept span's length is what survives; how long it takes to PLAY
+	// is a separate question `outputDurationOfRawSpan` answers, because a speed region scales
+	// it.
+	for (const seg of keptRawSpans(ordered, trimRanges, insertRanges)) {
+		const from = seg.startSec;
 		if (landed === null && rawSec < seg.endSec) {
 			// `rawSec` is inside this segment, or before it in a trimmed/gap region (then
 			// the span clamps to nothing → the output edge just before the gap).

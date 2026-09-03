@@ -142,9 +142,11 @@ describe("captionLane", () => {
 		expect(texts(corrected, "voiceover")).toContain("Kubernetes words");
 	});
 
-	it("measures a pause against the FILM, on either lane", () => {
-		// A pause is a held CLIP frame. Measuring it against the take instead would land
-		// every voiceover cue early — so the inserts stay clips-derived on both lanes.
+	it("leaves a take's cues alone when the FILM gains an insertion", () => {
+		// An insertion is media inside the clip that carries it, and it lengthens that clip.
+		// A take laid over the film keeps its own position on the timeline — the picture
+		// slides underneath it — so its cues do not move either. Measured per placement,
+		// through the asset the placement actually plays.
 		const paused = doc({
 			timeline: {
 				...doc().timeline,
@@ -164,11 +166,9 @@ describe("captionLane", () => {
 		});
 		const before = deriveCaptionCues(doc(), on("voiceover"), {});
 		const after = deriveCaptionCues(paused, on("voiceover"), {});
-		// The line covers the held moment, so its END is pushed out by the second the film
-		// gained and it stays on screen through the pause. That it moves AT ALL is the
-		// point: the insert names the recording's asset, so a placement-derived ruler
-		// would have found nothing to apply and left the voiceover cue where it was.
-		expect(after[0].endMs - before[0].endMs).toBeCloseTo(1000, 0);
+		// The insertion names the RECORDING's asset. The take is a different asset laid at
+		// its own timeline position, so nothing about this cue changes.
 		expect(after[0].startMs).toBe(before[0].startMs);
+		expect(after[0].endMs).toBe(before[0].endMs);
 	});
 });

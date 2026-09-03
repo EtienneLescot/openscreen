@@ -1,7 +1,8 @@
 // Ported from axcut/apps/web/src/lib/virtual-preview.ts — pure time-mapping
 // functions shared by the VirtualPreview component and the timeline math.
 
-import type { AxcutClip } from "../schema";
+import type { AxcutClip, AxcutInsertRange } from "../schema";
+import { sourceToTimelineSec, timelineToSourceSec } from "./inserted-time";
 
 export type VirtualPosition = {
 	clip: AxcutClip;
@@ -22,6 +23,7 @@ export function clampVirtualTime(clips: AxcutClip[], value: number): number {
 export function locateVirtualPosition(
 	clips: AxcutClip[],
 	virtualTimeSec: number,
+	insertRanges: readonly AxcutInsertRange[] = [],
 ): VirtualPosition | null {
 	if (clips.length === 0) return null;
 	const clamped = clampVirtualTime(clips, virtualTimeSec);
@@ -32,7 +34,11 @@ export function locateVirtualPosition(
 	const resolvedIndex = clipIndex >= 0 ? clipIndex : clips.length - 1;
 	const clip = clips[resolvedIndex];
 	const clipDuration = (clip.sourceEndSec ?? 0) - clip.sourceStartSec;
-	const clipOffset = Math.max(0, Math.min(clipDuration, clamped - clip.timelineStartSec));
+	// Inside an insertion there is no source moment — none of those seconds came from the
+	// file — so this answers with the one the inserted media follows, which is the frame a
+	// decoder should be parked on.
+	const { sourceSec } = timelineToSourceSec(clip, clamped, insertRanges);
+	const clipOffset = Math.max(0, Math.min(clipDuration, sourceSec - clip.sourceStartSec));
 	return {
 		clip,
 		clipIndex: resolvedIndex,
@@ -72,10 +78,19 @@ export function findRawClipForSegment(
  * Maps a kept segment (`AxcutClip` from `resolvePlaybackSegments`) back to its
  * exact start position on the raw (untrimmed) document timeline.
  */
-export function getRawVirtualStartTime(segment: AxcutClip, rawClips: AxcutClip[]): number {
+export function getRawVirtualStartTime(
+	segment: AxcutClip,
+	rawClips: AxcutClip[],
+	insertRanges: readonly AxcutInsertRange[] = [],
+): number {
 	const rawClip = findRawClipForSegment(segment, rawClips);
 	if (!rawClip) return segment.timelineStartSec;
-	return rawClip.timelineStartSec + (segment.sourceStartSec - rawClip.sourceStartSec);
+	// A HELD segment is the inserted media itself, so it starts where the insertion opens.
+	// Every other segment starting at that same source moment is the film RESUMING, so it
+	// starts where the insertion closes. Same source second, two different places on the
+	// timeline — which is the whole reason an insertion is media and not a marker.
+	const edge = (segment as { heldSec?: number }).heldSec !== undefined ? "opens" : "closes";
+	return sourceToTimelineSec(rawClip, segment.sourceStartSec, insertRanges, edge);
 }
 
 /**
@@ -126,6 +141,7 @@ function toPositionAt(
 	clips: AxcutClip[],
 	clipIndex: number,
 	sourceTimeSec: number,
+	insertRanges: readonly AxcutInsertRange[] = [],
 ): VirtualPosition {
 	const clip = clips[clipIndex];
 	const sourceOffset = Math.max(
@@ -135,7 +151,9 @@ function toPositionAt(
 	return {
 		clip,
 		clipIndex,
-		virtualTimeSec: clip.timelineStartSec + sourceOffset,
+		// Not `timelineStartSec + offset`: a clip carrying insertions is longer than its
+		// source window, so a moment past one sits that much further along (issue #560).
+		virtualTimeSec: sourceToTimelineSec(clip, clip.sourceStartSec + sourceOffset, insertRanges),
 		sourceTimeSec,
 	};
 }
@@ -181,6 +199,7 @@ export function locateSourcePosition(
 	// its id here so it's preferred whenever the source time still falls
 	// inside it, before falling back to the ambiguous asset-wide scan.
 	preferredClipId?: string,
+	insertRanges: readonly AxcutInsertRange[] = [],
 ): VirtualPosition | null {
 	if (preferredClipId) {
 		const preferredIndex = clips.findIndex((clip) => clip.id === preferredClipId);
@@ -198,7 +217,7 @@ export function locateSourcePosition(
 			(!assetId || clips[preferredIndex].assetId === assetId) &&
 			isWithinClipBounds(clips[preferredIndex], sourceTimeSec, epsilon, "inclusive")
 		) {
-			return toPositionAt(clips, preferredIndex, sourceTimeSec);
+			return toPositionAt(clips, preferredIndex, sourceTimeSec, insertRanges);
 		}
 	}
 	const scan = (closingEdge: ClosingEdge) =>
@@ -219,7 +238,7 @@ export function locateSourcePosition(
 	const strict = scan("exclusive");
 	const clipIndex = strict >= 0 ? strict : scan("inclusive");
 	if (clipIndex < 0) return null;
-	return toPositionAt(clips, clipIndex, sourceTimeSec);
+	return toPositionAt(clips, clipIndex, sourceTimeSec, insertRanges);
 }
 
 /**

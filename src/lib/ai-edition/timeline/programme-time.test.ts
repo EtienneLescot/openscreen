@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { projectRawTimelineSecToPlayback, resolvePlaybackSegments } from "../document/timeline";
-import type { AxcutClip, AxcutTrimRange } from "../schema";
+import type { AxcutClip, AxcutInsertRange, AxcutTrimRange } from "../schema";
 import { keptRawSpans, removalAt, removedRawSpans, subtractRemoved } from "./programme-time";
 
 function clip(over: Partial<AxcutClip> & { id: string }): AxcutClip {
@@ -275,53 +275,71 @@ describe("subtractRemoved", () => {
 	});
 });
 
-// ─── The pause the projection used to ignore ─────────────────────────────────
-// A pause occupies ZERO raw seconds and D OUTPUT seconds, which a flat kept-interval list
-// cannot express — so it was left out, and every audio track after a pause landed D seconds
-// early in both the preview and the export. `filmInserts` is required precisely so no call
-// site can quietly keep that bug.
+// ─── The insertion the projection has to walk over ──────────────────────────
+// An insertion is media INSIDE a clip, so the clip carrying it is that much longer and the
+// insertion's seconds are timeline seconds like any other. The projection's job is unchanged
+// by that — timeline in, output out — but it has to be TOLD, because it walks each clip's
+// kept SOURCE stretches and those are shorter than the clip.
 
-describe("projectRawTimelineSecToPlayback with the film's pauses", () => {
-	const clips = twoClips();
-	const pause = { id: "i1", wordId: "w1", atRawSec: 5, durationSec: 1 };
+describe("projectRawTimelineSecToPlayback across an insertion", () => {
+	// One second inserted at source 5 of the first clip, so that clip runs 0..11 and the
+	// second one starts at 11.
+	const inserted: AxcutInsertRange[] = [
+		{
+			id: "i1",
+			assetId: "a1",
+			atSec: 5,
+			durationSec: 1,
+			wordId: "w1",
+			reason: "",
+			origin: "user",
+		},
+	];
+	const clips = [
+		clip({
+			id: "c1",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 11,
+		}),
+		clip({
+			id: "c2",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 11,
+			timelineEndSec: 21,
+		}),
+	];
 
-	it("pushes everything after a pause later by exactly what it bought", () => {
-		expect(projectRawTimelineSecToPlayback(clips, [], 8, [])).toBeCloseTo(8, 6);
-		expect(projectRawTimelineSecToPlayback(clips, [], 8, [pause])).toBeCloseTo(9, 6);
+	it("is the identity when nothing is cut — the insertion is already in the film", () => {
+		// This is what one clock buys. Under two, the walk had to re-add the insertion here
+		// and every reader that forgot to had its audio landing a second early.
+		expect(projectRawTimelineSecToPlayback(clips, [], 3, inserted)).toBeCloseTo(3, 6);
+		expect(projectRawTimelineSecToPlayback(clips, [], 8, inserted)).toBeCloseTo(8, 6);
+		expect(projectRawTimelineSecToPlayback(clips, [], 15, inserted)).toBeCloseTo(15, 6);
 	});
 
-	it("leaves everything before it where it was", () => {
-		expect(projectRawTimelineSecToPlayback(clips, [], 3, [pause])).toBeCloseTo(3, 6);
+	it("keeps the insertion's own seconds when a trim takes the film around it", () => {
+		// Cutting source 0..2 of the first clip removes two seconds of RECORDING. The second
+		// the added word bought is not recording, so it survives.
+		const trims = [trim({ id: "t1", clipId: "c1", startSec: 0, endSec: 2 })];
+		expect(projectRawTimelineSecToPlayback(clips, trims, 8, inserted)).toBeCloseTo(6, 6);
 	});
 
-	it("starts a track whose head sits exactly on the pause WITH the pause", () => {
-		// Strict, matching `expandRawSec`: arriving at the pause's moment is the beginning
-		// of the hold, not the end of it.
-		expect(projectRawTimelineSecToPlayback(clips, [], 5, [pause])).toBeCloseTo(5, 6);
-	});
-
-	it("counts two pauses, in order", () => {
-		const second = { id: "i2", wordId: "w2", atRawSec: 7, durationSec: 0.5 };
-		expect(projectRawTimelineSecToPlayback(clips, [], 9, [pause, second])).toBeCloseTo(10.5, 6);
-		// Order of the argument must not matter: the walk sorts.
-		expect(projectRawTimelineSecToPlayback(clips, [], 9, [second, pause])).toBeCloseTo(10.5, 6);
-	});
-
-	it("never reaches a pause a trim removed", () => {
-		// The moment it holds is not in the film any more, so neither is the pause — the
-		// same rule `resolvePlaybackSegments` already follows.
+	it("loses an insertion whose own moment a trim removed", () => {
+		// The moment it follows is not in the film any more, so neither is it — the same
+		// rule `resolvePlaybackSegments` follows.
 		const trims = [trim({ id: "t1", clipId: "c1", startSec: 4, endSec: 6 })];
-		expect(projectRawTimelineSecToPlayback(clips, trims, 8, [pause])).toBeCloseTo(
-			projectRawTimelineSecToPlayback(clips, trims, 8, []),
-			6,
-		);
+		const out = projectRawTimelineSecToPlayback(clips, trims, 11, inserted);
+		// 10s of recording, less the 2s cut, and the insertion gone with it.
+		expect(out).toBeCloseTo(8, 6);
 	});
 
-	it("compresses the film around a pause but never the pause itself", () => {
-		// A voice plays at 1x. A 2x region halves the film either side; the second the pause
-		// bought is still a second.
-		const speed = [{ startMs: 0, endMs: 20_000, speed: 2 }];
-		expect(projectRawTimelineSecToPlayback(clips, [], 8, [], speed)).toBeCloseTo(4, 6);
-		expect(projectRawTimelineSecToPlayback(clips, [], 8, [pause], speed)).toBeCloseTo(5, 6);
+	it("compresses the film around an insertion, and the insertion with it", () => {
+		// A 2x region halves whatever timeline it covers. The insertion is timeline, so it
+		// is halved too — the film is one thing, and speed is a property of the film.
+		const speed = [{ startMs: 0, endMs: 21_000, speed: 2 }];
+		expect(projectRawTimelineSecToPlayback(clips, [], 8, inserted, speed)).toBeCloseTo(4, 6);
 	});
 });

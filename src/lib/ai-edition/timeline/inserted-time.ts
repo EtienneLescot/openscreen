@@ -45,86 +45,119 @@ export function rulerInserts(
 	clips: readonly AxcutClip[],
 ): RulerInsert[] {
 	const placed: RulerInsert[] = [];
-	for (const insert of inserts) {
-		for (const clip of clips) {
-			if (clip.assetId !== insert.assetId) continue;
-			const sourceEnd = clip.sourceEndSec ?? Number.POSITIVE_INFINITY;
-			// Inclusive at both edges: an insertion sits at the END of the word it follows, which
-			// is routinely a clip's own boundary.
-			if (insert.atSec < clip.sourceStartSec || insert.atSec > sourceEnd) continue;
+	const claimed = new Set<string>();
+	for (const clip of clips) {
+		const sourceEnd = clip.sourceEndSec ?? Number.POSITIVE_INFINITY;
+		const mine = inserts
+			// Inclusive at both edges: an insertion sits at the END of the word it follows,
+			// which is routinely a clip's own boundary. Claimed once, by the first clip that
+			// plays the moment — two clips over the same recording are two places, not two
+			// insertions.
+			.filter(
+				(insert) =>
+					insert.assetId === clip.assetId &&
+					!claimed.has(insert.id) &&
+					insert.atSec >= clip.sourceStartSec &&
+					insert.atSec <= sourceEnd,
+			)
+			.sort((a, b) => a.atSec - b.atSec);
+		// Each insertion opens after the ones before it in the same clip: the clip's length
+		// already carries all of them, so a plain source-shift would stack them all at the
+		// first one's position.
+		let carriedSec = 0;
+		for (const insert of mine) {
+			claimed.add(insert.id);
 			placed.push({
 				id: insert.id,
 				wordId: insert.wordId,
-				atRawSec: clip.timelineStartSec + (insert.atSec - clip.sourceStartSec),
+				atRawSec: clip.timelineStartSec + (insert.atSec - clip.sourceStartSec) + carriedSec,
 				durationSec: insert.durationSec,
 			});
-			break;
+			carriedSec += insert.durationSec;
 		}
 	}
 	return placed.sort((a, b) => a.atRawSec - b.atRawSec);
 }
 
-/** How much time the insertions add in total — what the ruler grows by. */
-export function totalInsertedSec(inserts: readonly RulerInsert[]): number {
-	return inserts.reduce((sum, insert) => sum + insert.durationSec, 0);
-}
-
 /**
- * Stored raw seconds → the ruler the user sees.
+ * A clip's own source moment → where it lands on the timeline.
  *
- * Monotone and total: every stored moment has exactly one place on the expanded ruler.
- * A moment sitting exactly ON an insertion maps to where the insertion BEGINS, so the last recorded
- * frame keeps its own instant and the inserted media opens after it.
- */
-export function expandRawSec(sec: number, inserts: readonly RulerInsert[]): number {
-	let out = sec;
-	for (const insert of inserts) {
-		if (insert.atRawSec < sec) out += insert.durationSec;
-	}
-	return out;
-}
-
-/**
- * The ruler the user sees → stored raw seconds.
+ * Not a plain shift, and this is the whole consequence of an insertion being MEDIA: the
+ * clip is longer than its source window by everything inserted inside it, so a moment past
+ * an insertion sits that much further along. Every place that used to convert between a
+ * "raw" and an "expanded" ruler is really asking this, of one clip.
  *
- * The inverse of {@link expandRawSec} outside an insertion. Inside one it cannot be an inverse
- * — a whole stretch of ruler stands for a single held moment — and it returns that moment,
- * flagged, so a caller driving a decoder knows to hold rather than to seek.
+ * `edge` decides what happens AT an insertion's own moment, which is a real choice and not
+ * a rounding detail. `"opens"` puts the moment before the inserted media — right for a
+ * position, and for the START of a span, so the span does not swallow the insertion that
+ * precedes it. `"closes"` puts it after — right for the END of a span, so a stretch running
+ * up to an insertion covers it rather than stopping short and leaving it orphaned.
  */
-export function collapseRawSec(
-	sec: number,
-	inserts: readonly RulerInsert[],
-): { sec: number; heldBy: RulerInsert | null } {
-	let offset = 0;
+export function sourceToTimelineSec(
+	/** Only the three fields that locate a clip — so a voiceover placement, which carries
+	 *  the same three, maps through this too (issue #560). */
+	clip: Pick<AxcutClip, "assetId" | "sourceStartSec" | "timelineStartSec">,
+	sourceSec: number,
+	inserts: readonly AxcutInsertRange[],
+	edge: "opens" | "closes" = "opens",
+): number {
+	let added = 0;
 	for (const insert of inserts) {
-		const startsAt = insert.atRawSec + offset;
-		if (sec < startsAt) break;
-		if (sec < startsAt + insert.durationSec) {
-			return { sec: insert.atRawSec, heldBy: insert };
+		if (insert.assetId !== clip.assetId) continue;
+		if (insert.atSec <= clip.sourceStartSec) continue;
+		if (edge === "opens" ? insert.atSec < sourceSec : insert.atSec <= sourceSec + 1e-6) {
+			added += insert.durationSec;
 		}
-		offset += insert.durationSec;
 	}
-	return { sec: sec - offset, heldBy: null };
+	return clip.timelineStartSec + (sourceSec - clip.sourceStartSec) + added;
+}
+
+/**
+ * The inverse: a timeline second → the source moment the clip is showing there.
+ *
+ * Inside an insertion there is no source moment — that is what makes it an insertion — so
+ * it answers with the moment the inserted media follows, and names the insertion. A caller
+ * driving a decoder needs both: where to park, and the fact that it should stay parked.
+ */
+export function timelineToSourceSec(
+	clip: AxcutClip,
+	timelineSec: number,
+	inserts: readonly AxcutInsertRange[],
+): { sourceSec: number; insideInsert: AxcutInsertRange | null } {
+	const mine = inserts
+		.filter((insert) => insert.assetId === clip.assetId && insert.atSec > clip.sourceStartSec)
+		.sort((a, b) => a.atSec - b.atSec);
+	let added = 0;
+	for (const insert of mine) {
+		const opensAt = clip.timelineStartSec + (insert.atSec - clip.sourceStartSec) + added;
+		if (timelineSec < opensAt) break;
+		if (timelineSec < opensAt + insert.durationSec) {
+			return { sourceSec: insert.atSec, insideInsert: insert };
+		}
+		added += insert.durationSec;
+	}
+	return {
+		sourceSec: clip.sourceStartSec + (timelineSec - clip.timelineStartSec) - added,
+		insideInsert: null,
+	};
 }
 
 /**
  * The insertion a frame of playback ran into, if it ran into one.
  *
- * Half-open on the LEFT, and that is the whole point: while inserted media is playing, the
- * RAW playhead stands still at exactly `atRawSec` — the recording really is at that one
- * instant, because none of the inserted seconds come from it. `>` is therefore what refuses
- * that same moment on the way out; with `>=` the insertion is re-entered the frame it ends
- * and the film never gets past it. Closed on the right (with the frame epsilon) so an
- * insertion landing precisely on a frame boundary is played rather than skipped.
+ * Half-open on the LEFT, and that is the whole point: a player parks on the insertion's
+ * frame and pins its clock to exactly `atRawSec` for the first frame of it, so `>` is what
+ * refuses that same moment on the way in a second time. Closed on the right (with the frame
+ * epsilon) so an insertion landing precisely on a frame boundary is played, not skipped.
  */
 export function insertionEnteredBetween(
-	prevRawSec: number,
-	nextRawSec: number,
+	prevSec: number,
+	nextSec: number,
 	inserts: readonly RulerInsert[],
 	epsilonSec = 1e-6,
 ): RulerInsert | undefined {
 	return inserts.find(
-		(insert) => insert.atRawSec > prevRawSec && insert.atRawSec <= nextRawSec + epsilonSec,
+		(insert) => insert.atRawSec > prevSec && insert.atRawSec <= nextSec + epsilonSec,
 	);
 }
 

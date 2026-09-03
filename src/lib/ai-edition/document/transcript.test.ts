@@ -750,11 +750,29 @@ describe("insert ranges", () => {
 		expect(insertRangesMatchWords(take)).toBe(true);
 	});
 
-	// The clips are the thing the first attempt broke. Nothing here may touch them.
-	it("leaves the clips exactly as they were", () => {
+	// An insertion is MEDIA inside the clip, so the clip carrying it is exactly that much
+	// longer — the one fact every reader downstream depends on, and the reason none of them
+	// needs a second ruler to convert to. Its source window is untouched: no frame of the
+	// recording was added or removed.
+	it("lengthens the clip that carries the insertion, by the insertion", () => {
 		const before = docWithClip();
 		const result = insertDocumentWord(before, "asset_1", "word_2", "after", "really");
-		expect(result.timeline.clips).toEqual(before.timeline.clips);
+		const [range] = result.timeline.insertRanges;
+		const was = before.timeline.clips[0];
+		const now = result.timeline.clips[0];
+		expect(now.timelineEndSec - now.timelineStartSec).toBeCloseTo(
+			was.timelineEndSec - was.timelineStartSec + range.durationSec,
+			5,
+		);
+		expect(now.sourceStartSec).toBe(was.sourceStartSec);
+		expect(now.sourceEndSec).toBe(was.sourceEndSec);
+	});
+
+	it("gives the length back when the word goes", () => {
+		const before = docWithClip();
+		const added = insertDocumentWord(before, "asset_1", "word_2", "after", "really");
+		const removed = removeDocumentWords(added, "asset_1", ["synth_1"]);
+		expect(removed.timeline.clips).toEqual(before.timeline.clips);
 	});
 
 	it("stores nothing when the word fits in silence that is already there", () => {

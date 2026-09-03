@@ -8,16 +8,15 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutClip, AxcutInsertRange, AxcutWord } from "../schema";
 import {
-	collapseRawSec,
-	expandRawSec,
 	insertedWordMarks,
 	insertionEnteredBetween,
 	type RulerInsert,
 	rulerInserts,
-	totalInsertedSec,
+	sourceToTimelineSec,
+	timelineToSourceSec,
 } from "./inserted-time";
 
-function clip(overrides: Partial<AxcutClip> & Pick<AxcutClip, "id">): AxcutClip {
+function clipFixture(overrides: Partial<AxcutClip> & Pick<AxcutClip, "id">): AxcutClip {
 	return {
 		assetId: "a1",
 		sourceStartSec: 0,
@@ -47,7 +46,9 @@ function insert(overrides: Partial<AxcutInsertRange> = {}): AxcutInsertRange {
 describe("rulerInserts", () => {
 	it("projects a pause through the clip that plays its moment", () => {
 		// The clip plays source 4–10 starting at ruler 20, so source 6 is ruler 22.
-		const clips = [clip({ id: "c1", sourceStartSec: 4, timelineStartSec: 20, timelineEndSec: 26 })];
+		const clips = [
+			clipFixture({ id: "c1", sourceStartSec: 4, timelineStartSec: 20, timelineEndSec: 26 }),
+		];
 		expect(rulerInserts([insert({ atSec: 6 })], clips)).toEqual([
 			{ id: "ins_1", wordId: "synth_1", atRawSec: 22, durationSec: 0.5 },
 		]);
@@ -56,18 +57,22 @@ describe("rulerInserts", () => {
 	// The word is not on the timeline, so its pause has no place on the ruler and adds
 	// nothing — the same rule a caption line follows when no clip covers it.
 	it("drops a pause no clip plays", () => {
-		const clips = [clip({ id: "c1", sourceStartSec: 0, sourceEndSec: 3, timelineEndSec: 3 })];
+		const clips = [
+			clipFixture({ id: "c1", sourceStartSec: 0, sourceEndSec: 3, timelineEndSec: 3 }),
+		];
 		expect(rulerInserts([insert({ atSec: 6 })], clips)).toEqual([]);
 	});
 
 	it("counts a pause sitting exactly on a clip's edge", () => {
 		// A pause sits at the END of the word it follows, which is routinely the boundary.
-		const clips = [clip({ id: "c1", sourceStartSec: 0, sourceEndSec: 4, timelineEndSec: 4 })];
+		const clips = [
+			clipFixture({ id: "c1", sourceStartSec: 0, sourceEndSec: 4, timelineEndSec: 4 }),
+		];
 		expect(rulerInserts([insert({ atSec: 4 })], clips)).toHaveLength(1);
 	});
 
 	it("returns them in ruler order, whatever order they were stored in", () => {
-		const clips = [clip({ id: "c1" })];
+		const clips = [clipFixture({ id: "c1" })];
 		const placed = rulerInserts(
 			[insert({ id: "b", atSec: 8 }), insert({ id: "a", atSec: 2 })],
 			clips,
@@ -77,84 +82,10 @@ describe("rulerInserts", () => {
 
 	it("places a pause only once when two clips could play its moment", () => {
 		const clips = [
-			clip({ id: "c1" }),
-			clip({ id: "c2", timelineStartSec: 10, timelineEndSec: 20 }),
+			clipFixture({ id: "c1" }),
+			clipFixture({ id: "c2", timelineStartSec: 10, timelineEndSec: 20 }),
 		];
 		expect(rulerInserts([insert()], clips)).toHaveLength(1);
-	});
-});
-
-describe("the expanded ruler", () => {
-	const INSERTS: RulerInsert[] = [
-		{ id: "a", wordId: "w_a", atRawSec: 2, durationSec: 0.5 },
-		{ id: "b", wordId: "w_b", atRawSec: 6, durationSec: 1 },
-	];
-
-	it("leaves everything before the first pause where it was", () => {
-		expect(expandRawSec(0, INSERTS)).toBe(0);
-		expect(expandRawSec(1.9, INSERTS)).toBe(1.9);
-	});
-
-	// The frame about to be held keeps its own instant; the pause opens after it.
-	it("keeps the held moment itself in place", () => {
-		expect(expandRawSec(2, INSERTS)).toBe(2);
-	});
-
-	it("shifts everything after a pause by what it added", () => {
-		expect(expandRawSec(3, INSERTS)).toBe(3.5);
-		expect(expandRawSec(6, INSERTS)).toBe(6.5);
-		expect(expandRawSec(7, INSERTS)).toBe(8.5);
-	});
-
-	it("grows the ruler by the pauses' total", () => {
-		expect(totalInsertedSec(INSERTS)).toBe(1.5);
-		expect(expandRawSec(10, INSERTS)).toBe(10 + totalInsertedSec(INSERTS));
-	});
-
-	it("round-trips every moment that is not inside a pause", () => {
-		for (const sec of [0, 1.9, 3, 5.99, 7, 10]) {
-			const back = collapseRawSec(expandRawSec(sec, INSERTS), INSERTS);
-			expect(back.sec).toBeCloseTo(sec, 9);
-			expect(back.heldBy).toBeNull();
-		}
-	});
-
-	// The held moment is the one place the pair is not a clean inverse, and it is not
-	// meant to be: source 2 occupies the WHOLE of ruler [2, 2.5) — it is what the pause
-	// shows. Expanding picks the start of that stretch; collapsing it back answers with
-	// the same source moment and says it is being held, which is the honest reading of a
-	// moment that is on screen for half a second.
-	it("says the held moment is held, and still names the right source moment", () => {
-		const back = collapseRawSec(expandRawSec(2, INSERTS), INSERTS);
-		expect(back.sec).toBe(2);
-		expect(back.heldBy?.id).toBe("a");
-	});
-
-	// Not a gap in the model — this IS the pause. A stretch of ruler stands for one held
-	// source moment, and the caller is told which pause is holding it so it parks the
-	// decoder instead of seeking through content that belongs after.
-	it("collapses a moment inside a pause onto the frame being held", () => {
-		for (const sec of [2.01, 2.25, 2.49]) {
-			const back = collapseRawSec(sec, INSERTS);
-			expect(back.sec).toBe(2);
-			expect(back.heldBy?.id).toBe("a");
-		}
-	});
-
-	it("resumes on the far side of a pause", () => {
-		const back = collapseRawSec(2.5, INSERTS);
-		expect(back.sec).toBe(2);
-		expect(back.heldBy).toBeNull();
-	});
-
-	it("counts every earlier pause when collapsing a later moment", () => {
-		// Ruler 8.5 is source 7: 0.5s from the first pause and 1s from the second.
-		expect(collapseRawSec(8.5, INSERTS)).toEqual({ sec: 7, heldBy: null });
-	});
-
-	it("is the identity when there are no pauses", () => {
-		expect(expandRawSec(4, [])).toBe(4);
-		expect(collapseRawSec(4, [])).toEqual({ sec: 4, heldBy: null });
 	});
 });
 
@@ -232,37 +163,84 @@ describe("insertedWordMarks", () => {
 	});
 });
 
-// ─── The scrub round-trip ───────────────────────────────────────────────────
-// The timeline measures the pointer against the EXPANDED ruler and writes the result into
-// a store every consumer reads as a RAW second — the preview seek, the caption lookup, the
-// transcript cue, the audio mix. Straight through, the playhead sat one accumulated pause
-// AHEAD of everything it pointed at: the right playhead, the wrong subtitle (issue #560).
+// ─── Source ↔ timeline, inside one clip ─────────────────────────────────────
+// The whole consequence of an insertion being MEDIA: the clip is longer than its source
+// window, so a moment past an insertion sits that much further along the timeline. Every
+// place that used to convert between a "raw" and an "expanded" ruler is asking this, of
+// one clip — and getting it wrong put a caption, a playhead or a decoder in the wrong
+// place (issue #560).
 
-describe("a scrub survives the round trip", () => {
-	const marks: RulerInsert[] = [
-		{ id: "i1", wordId: "w1", atRawSec: 4, durationSec: 2 },
-		{ id: "i2", wordId: "w2", atRawSec: 9, durationSec: 1 },
+describe("source ↔ timeline through a clip that carries insertions", () => {
+	// Ten seconds of recording laid at timeline 0, with 0.5s inserted at source 2 and 1s
+	// at source 6 — so the clip is 11.5s long and its source window is untouched.
+	const clip = clipFixture({
+		id: "c1",
+		sourceStartSec: 0,
+		sourceEndSec: 10,
+		timelineStartSec: 0,
+		timelineEndSec: 11.5,
+	});
+	const ranges: AxcutInsertRange[] = [
+		{
+			id: "a",
+			assetId: "a1",
+			atSec: 2,
+			durationSec: 0.5,
+			wordId: "w_a",
+			reason: "",
+			origin: "user",
+		},
+		{
+			id: "b",
+			assetId: "a1",
+			atSec: 6,
+			durationSec: 1,
+			wordId: "w_b",
+			reason: "",
+			origin: "user",
+		},
 	];
 
-	it("comes back to the raw second it started from, before and after each pause", () => {
-		for (const raw of [0, 1.5, 3.9, 6, 8.5, 12, 30]) {
-			expect(collapseRawSec(expandRawSec(raw, marks), marks).sec).toBeCloseTo(raw, 6);
+	it("leaves everything before the first insertion where it was", () => {
+		expect(sourceToTimelineSec(clip, 0, ranges)).toBeCloseTo(0, 6);
+		expect(sourceToTimelineSec(clip, 1.9, ranges)).toBeCloseTo(1.9, 6);
+	});
+
+	it("counts every insertion before the moment, and only those", () => {
+		expect(sourceToTimelineSec(clip, 4, ranges)).toBeCloseTo(4.5, 6);
+		expect(sourceToTimelineSec(clip, 10, ranges)).toBeCloseTo(11.5, 6);
+	});
+
+	it("puts the insertion's own moment where it opens, or where it closes", () => {
+		// The choice is real: a position and a span's START go before the inserted media,
+		// a span's END goes after it, so a caption running up to an added word covers it.
+		expect(sourceToTimelineSec(clip, 2, ranges, "opens")).toBeCloseTo(2, 6);
+		expect(sourceToTimelineSec(clip, 2, ranges, "closes")).toBeCloseTo(2.5, 6);
+	});
+
+	it("comes back to the source moment it started from", () => {
+		for (const source of [0, 1.9, 2, 3, 5.5, 6, 9.99]) {
+			const back = timelineToSourceSec(clip, sourceToTimelineSec(clip, source, ranges), ranges);
+			expect(back.sourceSec).toBeCloseTo(source, 6);
 		}
 	});
 
-	it("lands on the held moment for a pointer inside a pause, and says so", () => {
-		// Every ruler second inside an insertion is the same raw moment: none of those
-		// seconds come from the recording, so there is nothing else it could mean.
-		const inside = collapseRawSec(5, marks);
-		expect(inside.sec).toBeCloseTo(4, 6);
-		expect(inside.heldBy?.id).toBe("i1");
-		expect(collapseRawSec(5.9, marks).sec).toBeCloseTo(4, 6);
+	it("has no source moment inside an insertion, and says which one", () => {
+		// There is nothing else it could answer: none of those seconds come from the file.
+		const inside = timelineToSourceSec(clip, 2.25, ranges);
+		expect(inside.sourceSec).toBeCloseTo(2, 6);
+		expect(inside.insideInsert?.id).toBe("a");
+		expect(timelineToSourceSec(clip, 2.5, ranges).insideInsert).toBeNull();
 	});
 
-	it("counts every pause before the pointer, not just the first", () => {
-		// Ruler 13 is past both: 13 − 2 − 1 = raw 10.
-		expect(collapseRawSec(13, marks).sec).toBeCloseTo(10, 6);
-		expect(collapseRawSec(13, marks).heldBy).toBeNull();
+	it("is the plain shift when the clip carries nothing", () => {
+		expect(sourceToTimelineSec(clip, 4, [])).toBeCloseTo(4, 6);
+		expect(timelineToSourceSec(clip, 4, []).sourceSec).toBeCloseTo(4, 6);
+	});
+
+	it("ignores insertions belonging to another recording", () => {
+		const other = [{ ...ranges[0], assetId: "a2" }];
+		expect(sourceToTimelineSec(clip, 4, other)).toBeCloseTo(4, 6);
 	});
 });
 

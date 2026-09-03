@@ -1,5 +1,6 @@
 import type { AxcutDocument, AxcutInsertRange, AxcutTranscript, AxcutWord } from "../schema";
 import { createId } from "./ids";
+import { reflowClipsForInserts } from "./timeline";
 
 const CJK_EDGE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 const CLOSING_PUNCTUATION = /^[,.;:!?%。，、；：！？…）)\]}>》」』】〕]/u;
@@ -385,7 +386,17 @@ function withInsertRangesForWords(document: AxcutDocument, assetId: string): Axc
 	if (kept.length === existing.length && kept.every((range, i) => range === existing[i])) {
 		return document;
 	}
-	return { ...document, timeline: { ...document.timeline, insertRanges: kept } };
+	// The clips grow with them. An insertion is media inside the clip, so the clip is that
+	// much longer — the single fact every downstream reader needs, written once, here, where
+	// the ranges themselves are written.
+	return {
+		...document,
+		timeline: {
+			...document.timeline,
+			insertRanges: kept,
+			clips: reflowClipsForInserts(document.timeline.clips, kept),
+		},
+	};
 }
 
 /**
