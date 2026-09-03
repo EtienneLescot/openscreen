@@ -100,6 +100,12 @@ pub struct Decoder {
 unsafe impl Send for Decoder {}
 
 impl Decoder {
+    /// Même point d'entrée que sur macOS, pour que `timeline_walk` reste portable. Le backend
+    /// Linux décode déjà en logiciel (`SwDecoder`) : l'intention n'a rien à trancher.
+    pub fn open_for_export(path: &str, gpu: &Gpu) -> Result<Decoder> {
+        Self::open(path, gpu)
+    }
+
     pub fn open(path: &str, gpu: &Gpu) -> Result<Decoder> {
         let sw = SwDecoder::open(path)?;
         let fps = sw.fps();

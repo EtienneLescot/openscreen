@@ -64,6 +64,20 @@ impl Drop for FrameGuard {
 /// seuil dépend du GOP des captures, pas du backend de décodage.
 const SEEK_FORWARD_MAX_SEC: f64 = 0.5;
 
+/// Pourquoi ce décodeur est ouvert. La preview et l'export ne demandent pas la même chose
+/// au décodeur, et sur macOS ils ne prennent donc pas le même backend.
+///
+/// La preview lit au temps réel : il lui suffit de tenir la cadence, et elle scrube, donc la
+/// latence d'un seek pèse plus que le débit. Une marche d'export déroule aussi vite que la
+/// machine le permet — c'est du débit pur, et l'arbitrage n'est pas le même.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DecodeIntent {
+    /// Lecture temps réel (`live.rs`). Arbitrage historique, inchangé.
+    Preview,
+    /// Marche d'export (`timeline_walk`, `gif_export`).
+    Export,
+}
+
 /// Décodeur ffmpeg — câblage VideoToolbox (et repli logiciel pour les codecs hors-session).
 /// Cf. `pipeline_windows::Decoder` pour la version D3D11VA. Mêmes champs publics pour
 /// que `live.rs::Player` reste portable ; les détails internes (hw_device_ctx, format
@@ -98,7 +112,19 @@ pub struct Decoder {
 }
 
 impl Decoder {
+    /// Ouvre pour la PREVIEW. Signature conservée pour tous les appelants existants.
     pub fn open(path: &str, gpu: &Gpu) -> Result<Decoder> {
+        Self::open_with(path, gpu, DecodeIntent::Preview)
+    }
+
+    /// Ouvre pour une marche d'EXPORT, où seul le débit compte. Windows et Linux exposent le
+    /// même point d'entrée sans rien en faire de particulier ; c'est ici qu'il change quelque
+    /// chose.
+    pub fn open_for_export(path: &str, gpu: &Gpu) -> Result<Decoder> {
+        Self::open_with(path, gpu, DecodeIntent::Export)
+    }
+
+    pub fn open_with(path: &str, gpu: &Gpu, intent: DecodeIntent) -> Result<Decoder> {
         unsafe {
             let mut fmt: *mut crate::ffi::AVFormatContext = ptr::null_mut();
             let cpath = CString::new(path)?;
@@ -163,11 +189,44 @@ impl Decoder {
             const FF_PROFILE_H264_CONSTRAINED_BASELINE: i32 = 578;
             let is_baseline =
                 profile == FF_PROFILE_H264_BASELINE || profile == FF_PROFILE_H264_CONSTRAINED_BASELINE;
+            // H.264 8 bits 4:2:0 : ce que produit toute capture d'écran, et le SEUL cas sur
+            // lequel l'arbitrage ci-dessous a été mesuré. `format` vient de `codecpar`, donc
+            // rempli par `avformat_find_stream_info` ; un flux dont le format reste inconnu
+            // n'est pas éligible et garde le comportement d'avant.
+            let is_h264_8bit = (*codecpar).codec_id == crate::ffi::AVCodecID::AV_CODEC_ID_H264
+                && (*codecpar).format == crate::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
             let forced = std::env::var("OPENSCREEN_MAC_DECODE").ok();
             let want_hw = match forced.as_deref() {
                 Some("software") => false,
                 Some("videotoolbox") => true,
-                _ => !is_baseline,
+                // Baseline : arbitrage historique, inchangé (cf. la note ci-dessus).
+                _ if is_baseline => false,
+                // MESURÉ, et contraire à ce que la note ci-dessus annonçait. Sur une marche
+                // d'export, un flux H.264 8 bits se décode plus vite en logiciel que par
+                // VideoToolbox — y compris en profil High, que cette note donnait à VT.
+                //
+                // Mac mini M1 8 Go / macOS 26.5. Source 1920x1080@60, 60 s, profil High.
+                // Scénario S4 du benchmark, sortie 1080p60 H.264. Trois cycles, un floor
+                // ffmpeg intercalé par cycle, dérive de fermeture 1,0002, machine à 86 % idle :
+                //
+                //     VideoToolbox   32 079 ms   1,819x floor   (MAD 34 ms)
+                //     logiciel       22 863 ms   1,296x floor   (MAD 16 ms)   -28,7 %
+                //
+                // Par étage : décodage écran 13,13 s -> 1,02 s, webcam 4,20 s -> 0,29 s.
+                // L'image ne bouge pas — bitstream H.264 (NAL SEI retirés), pixels décodés et
+                // audio ont le même md5 sur les six sorties des deux variantes.
+                //
+                // La raison est celle que la note Baseline donne déjà, et elle ne dépend pas
+                // du profil : VideoToolbox a une latence FIXE par frame et alloue un
+                // CVPixelBuffer à chacune, là où le décodeur logiciel étale le travail sur des
+                // cœurs qui sont multiples. Ce qui compte est que la frame soit assez bon
+                // marché à décoder — ce que du 1080p 8 bits est.
+                //
+                // NON MESURÉ, d'où la condition étroite : 4K, 10 bits et HEVC gardent
+                // VideoToolbox. La preview aussi : elle n'a pas été mesurée, et la changer
+                // sans la mesurer serait exactement l'erreur que ce commit corrige.
+                _ if intent == DecodeIntent::Export && is_h264_8bit => false,
+                _ => true,
             };
             let r = if want_hw {
                 crate::ffi::av_hwdevice_ctx_create(
@@ -180,6 +239,18 @@ impl Decoder {
             } else {
                 -1 // repli logiciel délibéré, pas un échec
             };
+            // Dire lequel a été pris. Sans cette ligne, « l'export est lent » et « l'export a
+            // pris VideoToolbox » ne se distinguent pas dans un rapport de bug, et un
+            // changement d'arbitrage ne se vérifie qu'au chronomètre.
+            eprintln!(
+                "[pipeline] décodage {} : {} (codec={} profil={} format={} intention={:?})",
+                path.rsplit('/').next().unwrap_or(path),
+                if r == 0 { "videotoolbox" } else { "logiciel" },
+                (*codecpar).codec_id,
+                profile,
+                (*codecpar).format,
+                intent,
+            );
             let cpu = if r != 0 {
                 // Pas de VideoToolbox sur ce codec : fallback software. `get_format` est
                 // laissé à NULL (libavcodec choisit son format de sortie, ici NV12 via

@@ -254,7 +254,7 @@ fn export_gif_inner(
 		let mut screen_decs: HashMap<String, Decoder> = HashMap::new();
 		let mut webcam_decs: HashMap<String, Decoder> = HashMap::new();
 		screen_decs.insert(clips[0].screen.clone(), unsafe {
-			Decoder::open(&clips[0].screen, gpu)?
+			Decoder::open_for_export(&clips[0].screen, gpu)?
 		});
 
 		let frames = unsafe {

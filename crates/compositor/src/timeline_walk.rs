@@ -202,10 +202,10 @@ pub(crate) unsafe fn walk_composited_timeline(
         comp.set_has_webcam(has_camera);
         let webcam_key = if has_camera { &clip.webcam } else { &clip.screen };
         if !screen_decs.contains_key(&clip.screen) {
-            screen_decs.insert(clip.screen.clone(), Decoder::open(&clip.screen, gpu)?);
+            screen_decs.insert(clip.screen.clone(), Decoder::open_for_export(&clip.screen, gpu)?);
         }
         if !webcam_decs.contains_key(webcam_key) {
-            webcam_decs.insert(webcam_key.clone(), Decoder::open(webcam_key, gpu)?);
+            webcam_decs.insert(webcam_key.clone(), Decoder::open_for_export(webcam_key, gpu)?);
         }
         let sdec = screen_decs.get_mut(&clip.screen).unwrap();
         let wdec = webcam_decs.get_mut(webcam_key).unwrap();
