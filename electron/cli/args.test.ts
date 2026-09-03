@@ -56,6 +56,13 @@ describe("parseCliArgs", () => {
 		});
 	});
 
+	it("accepts 4k as an MP4 export quality", () => {
+		expect(parse(["export", "demo.openscreen", "--quality", "4k"])).toMatchObject({
+			kind: "export",
+			quality: "4k",
+		});
+	});
+
 	it("rejects a --format that conflicts with the --out extension", () => {
 		const cmd = parse(["export", "a.openscreen", "-o", "x.mp4", "--format", "gif"]);
 		expect(cmd).toMatchObject({ kind: "error" });

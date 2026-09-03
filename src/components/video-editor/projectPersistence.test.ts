@@ -82,6 +82,10 @@ describe("projectPersistence media compatibility", () => {
 		expect(normalizeProjectEditor({ webcamMirrored: "yes" as never }).webcamMirrored).toBe(false);
 	});
 
+	it("preserves 4K as a valid export quality", () => {
+		expect(normalizeProjectEditor({ exportQuality: "4k" }).exportQuality).toBe("4k");
+	});
+
 	it("normalizes blur region type and mosaic block size safely", () => {
 		const editor = normalizeProjectEditor({
 			annotationRegions: [

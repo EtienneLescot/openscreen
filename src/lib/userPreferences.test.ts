@@ -98,6 +98,12 @@ describe("user preferences", () => {
 		expect(loadUserPreferences().trayLayout).toBe("vertical");
 	});
 
+	it("persists the 4K export quality preference", () => {
+		saveUserPreferences({ exportQuality: "4k" });
+
+		expect(loadUserPreferences().exportQuality).toBe("4k");
+	});
+
 	it("falls back to the default tray layout for invalid stored values", () => {
 		localStorage.setItem("openscreen_user_preferences", JSON.stringify({ trayLayout: "diagonal" }));
 

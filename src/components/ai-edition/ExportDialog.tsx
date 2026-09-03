@@ -114,6 +114,7 @@ const QUALITY_OPTIONS: Array<{
 }> = [
 	{ value: "medium", labelKey: "exportQuality.low" },
 	{ value: "good", labelKey: "exportQuality.medium" },
+	{ value: "4k", labelKey: "exportQuality.ultra" },
 	{ value: "source", labelKey: "exportQuality.high" },
 ];
 
@@ -409,7 +410,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 						>
 							{t("exportDialog.quality")}
 						</div>
-						<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+						<div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
 							{QUALITY_OPTIONS.map((q) => (
 								<button
 									type="button"

@@ -132,6 +132,7 @@
 		"title": "Độ phân giải xuất",
 		"low": "720p",
 		"medium": "1080p",
+		"ultra": "4K",
 		"high": "Source"
 	},
 	"gifSettings": {

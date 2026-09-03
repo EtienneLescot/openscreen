@@ -26,6 +26,7 @@ vi.mock("@/native/sceneDescription", () => ({
 import { toast } from "sonner";
 import { I18nProvider } from "@/contexts/I18nContext";
 import { type AxcutDocument, axcutSchemaVersion } from "@/lib/ai-edition/schema";
+import { exportMultiNative } from "@/native";
 import { ExportDialog } from "./ExportDialog";
 
 type ElectronAPI = Window["electronAPI"];
@@ -150,5 +151,28 @@ describe("ExportDialog done panel — show in folder", () => {
 			expect(warn).toHaveBeenCalledWith(expect.stringContaining("folder"), "ENOENT"),
 		);
 		expect(toast.error).not.toHaveBeenCalled();
+	});
+
+	it("offers a 4K button and exports a landscape project at 3840 × 2160", async () => {
+		render(
+			<I18nProvider>
+				<ExportDialog open={true} onClose={noop} document={DOC} />
+			</I18nProvider>,
+		);
+
+		const fourK = screen.getByRole("button", { name: /4k/i });
+		expect(fourK).toHaveTextContent("3840 × 2160");
+		expect(fourK).toHaveTextContent(/upscale/i);
+		fireEvent.click(fourK);
+		fireEvent.click(screen.getByRole("button", { name: /export mp4/i }));
+
+		await waitFor(() =>
+			expect(vi.mocked(exportMultiNative)).toHaveBeenCalledWith(
+				expect.any(Array),
+				SAVED_PATH,
+				expect.any(String),
+				expect.objectContaining({ width: 3840, height: 2160 }),
+			),
+		);
 	});
 });

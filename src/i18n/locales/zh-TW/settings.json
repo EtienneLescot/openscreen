@@ -133,6 +133,7 @@
 		"title": "匯出解析度",
 		"low": "720p",
 		"medium": "1080p",
+		"ultra": "4K",
 		"high": "Source"
 	},
 	"gifSettings": {
