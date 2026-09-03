@@ -62,7 +62,9 @@ import {
 	newRegionDurationSec,
 	setTimelineScale,
 } from "@/lib/ai-edition/timeline/newRegionDuration";
+import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { ventilateSpanAcrossClips } from "@/lib/ai-edition/timeline/region-ventilation";
+import { type TakePiece, takeProgramme } from "@/lib/ai-edition/timeline/take-programme";
 import { coalesceRegionsForRuler } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	coalescedTrimGroups,
@@ -397,6 +399,7 @@ const AudioLanePill = memo(function AudioLanePill({
 	slipArmed,
 	outputGain,
 	ghost,
+	pieces,
 }: {
 	track: AxcutAudioTrack;
 	url: string | undefined;
@@ -437,8 +440,18 @@ const AudioLanePill = memo(function AudioLanePill({
 		sourceStartSec: number;
 		sourceEndSec: number;
 	} | null;
+	/** The take's own walk, when it has one. Absent for music, for a looping take, and for
+	 *  a take with no insertion — all of which draw one unbroken waveform, exactly as
+	 *  before. */
+	pieces?: readonly TakePiece[] | null;
 }) {
 	const duration = assetDurationSec ?? track.durationSec;
+	// Only a take that actually holds somewhere is drawn in pieces. Everything else keeps
+	// the single waveform it has always had, so the common pill is untouched.
+	const notched = pieces?.some((piece) => piece.kind === "hold") ? pieces : null;
+	const pillRawStart = track.startMs / 1000;
+	const pillRawSpan = Math.max(1e-6, track.endMs / 1000 - pillRawStart);
+	const atPctOfPill = (rawSec: number) => ((rawSec - pillRawStart) / pillRawSpan) * 100;
 	return (
 		<>
 			{/* The rest of the tape, dimmed and unclickable, behind the pill — so the pill
@@ -493,15 +506,50 @@ const AudioLanePill = memo(function AudioLanePill({
 					style={{ left: 0 }}
 					onPointerDown={(e) => onStartDrag(e, track, "l")}
 				/>
-				<ClipWaveform
-					videoUrl={url}
-					assetDurationSec={duration}
-					sourceStartSec={sourceStartSec}
-					sourceEndSec={sourceEndSec}
-					// Track gain AND the project output gain — `finish_audio` applies both and
-					// clamps, so scaling by the track gain alone under-read a boosted output.
-					gain={audioGainScalar(track.gainDb) * outputGain}
-				/>
+				{notched ? (
+					// A notch cut out of the fill, inside ONE outline. The take is still one
+					// take — one draggable, slippable object — and the eye should read "the
+					// voice stops here", not "two takes". The opposite polarity of the clip
+					// lane's band, which means "the picture freezes here" (issue #560).
+					notched.map((piece) => {
+						const left = atPctOfPill(piece.rawStartSec);
+						const width = atPctOfPill(piece.rawEndSec) - left;
+						return piece.kind === "hold" ? (
+							<span
+								key={piece.holdId}
+								aria-hidden
+								data-testid="audio-insert-notch"
+								className={styles.laneAudioNotch}
+								style={{ left: `${left}%`, width: `${width}%` }}
+							/>
+						) : (
+							<span
+								key={`piece-${piece.rawStartSec}`}
+								aria-hidden
+								className={styles.laneAudioPiece}
+								style={{ left: `${left}%`, width: `${width}%` }}
+							>
+								<ClipWaveform
+									videoUrl={url}
+									assetDurationSec={duration}
+									sourceStartSec={piece.sourceStartSec}
+									sourceEndSec={piece.sourceEndSec}
+									gain={audioGainScalar(track.gainDb) * outputGain}
+								/>
+							</span>
+						);
+					})
+				) : (
+					<ClipWaveform
+						videoUrl={url}
+						assetDurationSec={duration}
+						sourceStartSec={sourceStartSec}
+						sourceEndSec={sourceEndSec}
+						// Track gain AND the project output gain — `finish_audio` applies both and
+						// clamps, so scaling by the track gain alone under-read a boosted output.
+						gain={audioGainScalar(track.gainDb) * outputGain}
+					/>
+				)}
 				{/* Where the file starts over, so a looping bed reads as one deliberate
 			    repeat rather than a mystery. Only drawn when the pill actually
 			    outruns its source — otherwise there is nothing to repeat. */}
@@ -1046,6 +1094,30 @@ export function V4Timeline({
 	// it keeps a document written before that rule legible instead of stacking its pills on
 	// top of each other. A kind with no tracks takes no row, so the common single-bed
 	// project stays exactly as tall as it was.
+	// One walk per take, for the lane to draw. Same inputs the preview and the export use,
+	// so a notch cannot appear where the voice does not actually stop.
+	const takePieces = useMemo(() => {
+		const clipAssetIds = new Set(clips.map((c) => c.assetId));
+		const removed = removedRawSpans(clips, tl.trimRanges);
+		const out = new Map<string, TakePiece[]>();
+		for (const pill of audioPills) {
+			if (pill.kind !== "voiceover" || pill.loop) continue;
+			// A range naming an asset that is no clip's is a take's — the same test
+			// `resolveInsertPlacement` makes, available here without a document.
+			const inserts = (tl.insertRanges ?? [])
+				.filter((range) => range.assetId === pill.assetId && !clipAssetIds.has(range.assetId))
+				.map((range) => ({
+					id: range.id,
+					wordId: range.wordId,
+					atSourceSec: range.atSec,
+					durationSec: range.durationSec,
+				}));
+			if (inserts.length === 0) continue;
+			out.set(pill.id, takeProgramme(pill, removed, inserts));
+		}
+		return out;
+	}, [audioPills, clips, tl.trimRanges, tl.insertRanges]);
+
 	const audioRows = useMemo(() => {
 		const voice = audioPills.filter((p) => p.kind === "voiceover");
 		const music = audioPills.filter((p) => p.kind !== "voiceover");
@@ -2146,6 +2218,7 @@ export function V4Timeline({
 													slipHint={ts("audioTrack.slipHint")}
 													slipArmed={slipArmed}
 													outputGain={audioGainScalar(settings.audioGainDb)}
+													pieces={takePieces.get(track.id) ?? null}
 													ghost={((g) =>
 														g
 															? {
