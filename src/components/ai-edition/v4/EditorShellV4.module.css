@@ -1562,6 +1562,32 @@
 /* Alt is held: the next drag on this pill slides the file under it rather than
    moving the pill. The cursor is the confirmation, not the lesson — the tooltip
    carries the words. */
+/* A take that holds somewhere is drawn in pieces inside ONE outline: the notch is cut out
+   of the fill, not laid over it, so the pill still reads as one take — one draggable,
+   slippable object. Opposite polarity to the clip lane's band, which means "the picture
+   freezes here"; this one means "the voice stops here, and the film runs on underneath"
+   (issue #560). */
+.laneAudioPiece {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.laneAudioNotch {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--warn) 42%, transparent) 0 3px,
+    transparent 3px 6px
+  );
+  border-left: 1px solid color-mix(in srgb, var(--warn) 70%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--warn) 70%, transparent);
+}
 .laneAudioSlip {
 	cursor: ew-resize;
 }

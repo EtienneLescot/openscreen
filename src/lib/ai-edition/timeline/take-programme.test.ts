@@ -236,3 +236,39 @@ describe("preview and export agree over a take with a cut and a pause", () => {
 		expect(resumed).toBeCloseTo(parked ?? -1, 1);
 	});
 });
+
+// ─── What the lane has to draw ──────────────────────────────────────────────
+// The notch is positioned from the walk, as a fraction of the PILL's own raw span. These
+// pin the arithmetic the drawing does, so a notch cannot appear where the voice does not
+// actually stop.
+
+describe("the pieces a pill draws", () => {
+	const pctOfPill = (pieces: ReturnType<typeof takeProgramme>, rawSec: number) =>
+		((rawSec - TAKE.startMs / 1000) / (TAKE.endMs / 1000 - TAKE.startMs / 1000)) * 100;
+
+	it("cuts one notch, in the middle, at the width of the time it took", () => {
+		const pieces = takeProgramme(TAKE, [], [ins(4, 1)]);
+		const hold = pieces.find((p) => p.kind === "hold");
+		expect(hold).toBeDefined();
+		if (!hold) return;
+		expect(pctOfPill(pieces, hold.rawStartSec)).toBeCloseTo(40, 6);
+		expect(pctOfPill(pieces, hold.rawEndSec) - pctOfPill(pieces, hold.rawStartSec)).toBeCloseTo(
+			10,
+			6,
+		);
+	});
+
+	it("leaves a take with no insertion in one piece, so the pill draws as it always did", () => {
+		expect(takeProgramme(TAKE, [], []).some((p) => p.kind === "hold")).toBe(false);
+	});
+
+	it("covers the pill end to end, with no overlap and no hole", () => {
+		const pieces = takeProgramme(TAKE, removedRawSpans(CLIPS, [trim(7, 8)]), [ins(4, 1)]);
+		let cursor = TAKE.startMs / 1000;
+		for (const piece of pieces) {
+			expect(piece.rawStartSec).toBeCloseTo(cursor, 6);
+			cursor = piece.rawEndSec;
+		}
+		expect(cursor).toBeCloseTo(TAKE.endMs / 1000, 6);
+	});
+});
