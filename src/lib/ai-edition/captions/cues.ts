@@ -24,7 +24,9 @@ import {
 import type { CaptionSegment } from "@/lib/captioning/transcribe";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { lanePlacements, type TranscriptPlacement } from "../timeline/aggregated-transcript";
+import { takeInserts } from "../timeline/insert-mapping";
 import { expandRawSec, type RulerInsert, rulerInserts } from "../timeline/inserted-time";
+import { removedRawSpans } from "../timeline/programme-time";
 import {
 	type CaptionAnchorV,
 	type CaptionSettings,
@@ -208,6 +210,8 @@ export function deriveCaptionCues(
 		// `?? []` for the same reason `insertRanges` has one: the key is additive, so a
 		// document written before it — or hand-built, never through the schema — has none.
 		document.audioTracks ?? [],
+		removedRawSpans(document.timeline.clips, document.timeline.trimRanges),
+		(groupId) => takeInserts(document, groupId),
 	);
 	if (placements.length === 0) return [];
 
