@@ -714,6 +714,42 @@ describe("insert ranges", () => {
 		expect(insertRangesMatchWords(result)).toBe(true);
 	});
 
+	// The reason is user-visible on the region, and the two lanes do not hold the same
+	// thing: the film holds a FRAME, a take holds silence and no picture is involved
+	// (issue #560). The keying above is lane-agnostic and stays that way — one row per
+	// word per asset, whichever lane the asset is on.
+	it("names what is actually held, per lane", () => {
+		const film = insertDocumentWord(docWithClip(), "asset_1", "word_2", "after", "really");
+		expect(film.timeline.insertRanges[0].reason).toContain("Held frame");
+
+		// `createEmptyDocument` carries no assets, so the lane has to be given one to read.
+		const base = docWithClip();
+		const take = insertDocumentWord(
+			{
+				...base,
+				assets: [
+					{
+						id: "asset_1",
+						kind: "audio" as const,
+						label: "take.mp3",
+						originalPath: "/take.mp3",
+						durationSec: 30,
+						cameraTrack: null,
+					},
+				],
+			},
+			"asset_1",
+			"word_2",
+			"after",
+			"really",
+		);
+		expect(take.timeline.insertRanges[0].reason).toContain("Silence");
+		expect(take.timeline.insertRanges[0].reason).not.toContain("frame");
+		// Same row otherwise, and the invariant still holds on an audio asset.
+		expect(take.timeline.insertRanges[0]).toMatchObject({ atSec: 3, durationSec: 0.4 });
+		expect(insertRangesMatchWords(take)).toBe(true);
+	});
+
 	// The clips are the thing the first attempt broke. Nothing here may touch them.
 	it("leaves the clips exactly as they were", () => {
 		const before = docWithClip();
