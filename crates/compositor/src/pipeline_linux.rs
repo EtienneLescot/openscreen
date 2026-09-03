@@ -38,10 +38,6 @@ use crate::linux_decode::SwDecoder;
 use crate::timeline_walk::NextFrameTime;
 use crate::linux_frames::CpuFrames;
 
-/// `SWS_POINT` (plus proche voisin). Bindgen ne genere pas les `SWS_*` (macros),
-/// valeur figee par l'ABI de libswscale -- comme `linux_frames::SWS_POINT`.
-const SWS_POINT: i32 = 0x10;
-
 /// Bilan d'un run d'export. Memes champs que `pipeline_macos::Stats`.
 pub struct Stats {
     pub frames: u64,
@@ -201,10 +197,6 @@ impl Decoder {
 /// `pipeline_macos::VideoEncoder`.
 pub struct VideoEncoder {
     ctx: *mut crate::ffi::AVCodecContext,
-    /// AVFrame YUV420P envoyee a l'encodeur.
-    sw: *mut AVFrame,
-    /// RGBA (sortie compositeur) -> YUV420P. Cree paresseusement (dims du readback).
-    sws: *mut crate::ffi::SwsContext,
     w: i32,
     h: i32,
 }
@@ -286,13 +278,11 @@ impl VideoEncoder {
             avcodec_free_context(&mut ctx);
             return Err(e);
         }
-        match alloc_sw_frame(AVPixelFormat::AV_PIX_FMT_YUV420P, w, h) {
-            Ok(sw) => Ok(VideoEncoder { ctx, sw, sws: ptr::null_mut(), w, h }),
-            Err(e) => {
-                avcodec_free_context(&mut ctx);
-                Err(e)
-            }
-        }
+        // Plus d'AVFrame ni de `SwsContext` ici : les frames viennent du pool de
+        // l'`EncodeWorker`, deja a la disposition du GPU. Cet encodeur ne
+        // possede plus que son contexte, donc il n'y a plus rien qui puisse
+        // echouer apres `avcodec_open2`.
+        Ok(VideoEncoder { ctx, w, h })
     }
 
     /// Réglages propres à `libopenh264`, à poser AVANT `avcodec_open2` (openh264 fige
@@ -370,55 +360,6 @@ impl VideoEncoder {
         (*ctx).profile = AV_PROFILE_H264_HIGH as i32;
     }
 
-    /// Envoie une frame composee DEJA RELUE (RGBA) a l'encodeur, en YUV420P.
-    ///
-    /// La relecture est sortie d'ici : avec la ring de staging, la frame rendue
-    /// par `readback_submit` n'est pas celle qui vient d'etre composee mais la
-    /// precedente, donc l'appelant doit apparier lui-meme la frame et son pts
-    /// (cf. `run_composited_multi`).
-    pub unsafe fn send_rgba(&mut self, rgba: &[u8], rw: i32, rh: i32, pts: i64) -> Result<()> {
-        use crate::ffi::*;
-        if self.sws.is_null() {
-            self.sws = sws_getContext(
-                rw,
-                rh,
-                AVPixelFormat::AV_PIX_FMT_RGBA,
-                self.w,
-                self.h,
-                AVPixelFormat::AV_PIX_FMT_YUV420P,
-                // POINT : le compositeur est dimensionne a la sortie -> pas de
-                // mise a l'echelle, donc echantillonnage exact (cf. mac_frames).
-                SWS_POINT,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null(),
-            );
-            if self.sws.is_null() {
-                bail!("sws_getContext {rw}x{rh} RGBA -> {}x{} YUV420P", self.w, self.h);
-            }
-        }
-        averr(av_frame_make_writable(self.sw), "make_writable")?;
-        // RGBA est un plan unique : data[0] + stride rw*4, les autres nuls.
-        let src_data: [*const u8; 4] = [rgba.as_ptr(), ptr::null(), ptr::null(), ptr::null()];
-        let src_stride: [i32; 4] = [rw * 4, 0, 0, 0];
-        let converted = sws_scale(
-            self.sws,
-            src_data.as_ptr(),
-            src_stride.as_ptr(),
-            0,
-            rh,
-            (*self.sw).data.as_ptr() as *const *mut u8,
-            (*self.sw).linesize.as_ptr(),
-        );
-        if converted <= 0 {
-            bail!("sws_scale RGBA->YUV420P : {converted} lignes");
-        }
-        (*self.sw).pts = pts;
-        averr(avcodec_send_frame(self.ctx, self.sw), "send_frame")
-    }
-
-    /// Envoie une frame deja en YUV420P, convertie par le GPU.
-    ///
     /// Recopie le buffer relu dans une AVFrame du pool. Les deux ont la MEME
     /// disposition (`alloc_padded_yuv_frame`), donc c'est un seul bloc contigu :
     /// pas de reformatage, juste un transfert hors de la memoire mappee avant que
@@ -481,32 +422,10 @@ impl Drop for VideoEncoder {
     fn drop(&mut self) {
         unsafe {
             crate::ffi::avcodec_free_context(&mut self.ctx);
-            if !self.sw.is_null() {
-                crate::ffi::av_frame_free(&mut self.sw);
-            }
-            if !self.sws.is_null() {
-                crate::ffi::sws_freeContext(self.sws);
-            }
         }
     }
 }
 
-/// Alloue une AVFrame systeme au format demande. Symetrique de
-/// `pipeline_macos::alloc_sw_frame`.
-unsafe fn alloc_sw_frame(pix_fmt: crate::ffi::AVPixelFormat::Type, w: i32, h: i32) -> Result<*mut AVFrame> {
-    let mut frame = crate::ffi::av_frame_alloc();
-    if frame.is_null() {
-        bail!("av_frame_alloc (encodeur)");
-    }
-    (*frame).format = pix_fmt as i32;
-    (*frame).width = w;
-    (*frame).height = h;
-    if crate::ffi::av_frame_get_buffer(frame, 32) < 0 {
-        crate::ffi::av_frame_free(&mut frame);
-        bail!("av_frame_get_buffer {w}x{h} pix_fmt={pix_fmt}");
-    }
-    Ok(frame)
-}
 
 /// Geometrie du buffer relu : strides alignes a 256 (ce que
 /// `copy_texture_to_buffer` impose) et offsets des trois plans dans l'allocation
@@ -1648,7 +1567,15 @@ mod tests {
             }
 
             let pkt = av_packet_alloc();
-            let mut rgba = vec![0u8; (W * H * 4) as usize];
+            // Alimente par le CHEMIN DE PRODUCTION : un buffer a la disposition
+            // du GPU (`YuvLayout`) recopie par `copy_into`, exactement ce que
+            // fait l'export. Le test passait par `send_rgba`, qui n'a plus aucun
+            // appelant en production depuis que la conversion YUV est sur le GPU
+            // — il verifiait donc la configuration de l'encodeur en empruntant un
+            // chemin que plus personne ne prend.
+            let lay = YuvLayout::for_size(W, H);
+            let mut planes = vec![0u8; lay.total];
+            let frame = alloc_padded_yuv_frame(W, H).expect("alloc_padded_yuv_frame");
             // Copie du pointeur AVANT la closure : la capturer via `enc.ctx`
             // emprunterait `enc` en lecture pour toute la durée du drain, et
             // `send_rgba` en veut un emprunt mutable juste après.
@@ -1662,21 +1589,33 @@ mod tests {
                 av_packet_unref(pkt);
             };
             for i in 0..n {
-                // Un dégradé qui glisse : de quoi donner du résidu à coder, sans quoi
-                // l'encodeur travaille sur une image morte.
-                for (p, px) in rgba.chunks_exact_mut(4).enumerate() {
-                    px[0] = ((p + i * 7) % 251) as u8;
-                    px[1] = ((p / W as usize + i * 3) % 253) as u8;
-                    px[2] = (i * 5 % 257) as u8;
-                    px[3] = 255;
+                // Un motif qui glisse : de quoi donner du residu a coder, sans
+                // quoi l'encodeur travaille sur une image morte et le test ne
+                // dirait rien des images cles.
+                // Un degrade GROSSIER et de faible amplitude, qui glisse d'un pas
+                // par frame. Assez de residu pour que l'encodeur travaille, pas
+                // assez de rupture pour reveiller sa detection de changement de
+                // scene — un motif contraste donnait des images cles a 0/17/34 au
+                // lieu de 0/20/40, et le test mesurait alors la detection de
+                // scene plutot que `gop_size`.
+                for y in 0..H as usize {
+                    let row = &mut planes[y * lay.bpr_y..y * lay.bpr_y + W as usize];
+                    for (x, px) in row.iter_mut().enumerate() {
+                        *px = 100u8.wrapping_add(((x / 16 + y / 16 + i) % 40) as u8);
+                    }
                 }
-                enc.send_rgba(&rgba, W, H, i as i64).expect("send_rgba");
+                planes[lay.off_u..].fill(128);
+                VideoEncoder::copy_into(frame, &planes, W, H, W, H).expect("copy_into");
+                (*frame).pts = i as i64;
+                averr(avcodec_send_frame(enc.ctx, frame), "send_frame").expect("send_frame");
                 drain(pkt, &mut out);
             }
             enc.flush().expect("flush");
             drain(pkt, &mut out);
             let mut pkt = pkt;
             av_packet_free(&mut pkt);
+            let mut frame = frame;
+            av_frame_free(&mut frame);
         }
         Some(out)
     }
