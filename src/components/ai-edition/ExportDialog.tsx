@@ -103,6 +103,7 @@ function buildNativeClipList(document: AxcutDocument): CompositorClipInput[] {
 				sourceEndSec,
 				webcamOffsetSec: camera.offsetSec,
 				hasAudio: true,
+				holdSec: clip.heldSec ?? 0,
 			},
 		];
 	});
