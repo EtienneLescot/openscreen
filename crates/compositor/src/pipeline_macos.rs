@@ -853,14 +853,18 @@ impl VideoEncoder {
             if self.sw.is_null() {
                 // Chemin zero-copy : une frame du pool VideoToolbox, dont `data[3]` porte le
                 // `CVPixelBuffer` dans lequel le compositeur va rendre directement.
-                let frame = crate::ffi::av_frame_alloc();
-                if frame.is_null() {
-                    bail!("av_frame_alloc (frame VT)");
-                }
-                let mut frame = frame;
-                if crate::ffi::av_hwframe_get_buffer((*self.ctx).hw_frames_ctx, frame, 0) < 0 {
-                    crate::ffi::av_frame_free(&mut frame);
-                    bail!("av_hwframe_get_buffer (pool VT épuisé)");
+                let mut frame;
+                {
+                    let _p = crate::export_probe::scope(crate::export_probe::Stage::VtGetBuffer);
+                    let f = crate::ffi::av_frame_alloc();
+                    if f.is_null() {
+                        bail!("av_frame_alloc (frame VT)");
+                    }
+                    frame = f;
+                    if crate::ffi::av_hwframe_get_buffer((*self.ctx).hw_frames_ctx, frame, 0) < 0 {
+                        crate::ffi::av_frame_free(&mut frame);
+                        bail!("av_hwframe_get_buffer (pool VT épuisé)");
+                    }
                 }
                 let pb = (*frame).data[3] as *mut std::ffi::c_void;
                 if pb.is_null() {
@@ -873,10 +877,13 @@ impl VideoEncoder {
                     return Err(e);
                 }
                 (*frame).pts = pts;
-                let sent = crate::ffi::averr(
-                    crate::ffi::avcodec_send_frame(self.ctx, frame),
-                    "send_frame_composited_vt",
-                );
+                let sent = {
+                    let _p = crate::export_probe::scope(crate::export_probe::Stage::SendFrame);
+                    crate::ffi::averr(
+                        crate::ffi::avcodec_send_frame(self.ctx, frame),
+                        "send_frame_composited_vt",
+                    )
+                };
                 crate::ffi::av_frame_free(&mut frame);
                 return sent;
             }
@@ -999,6 +1006,7 @@ pub fn run_composited_multi(
         bail!("run_composited_multi: aucun clip à exporter");
     }
     let (out_w, out_h) = (params.width, params.height);
+    crate::export_probe::reset();
     let t0 = std::time::Instant::now();
     let mut frames: u64 = 0;
 
@@ -1090,8 +1098,14 @@ pub fn run_composited_multi(
             &mut webcam_decs,
             &mut |n| {
                 enc.send_composited(comp, out_w, out_h, n as i64)?;
-                drain_encoder(ectx, octx, ostream, opkt)?;
-                progress(n + 1);
+                {
+                    let _p = crate::export_probe::scope(crate::export_probe::Stage::DrainMux);
+                    drain_encoder(ectx, octx, ostream, opkt)?;
+                }
+                {
+                    let _p = crate::export_probe::scope(crate::export_probe::Stage::Progress);
+                    progress(n + 1);
+                }
                 Ok(())
             },
             &mut |clip_index, source_end_sec, frames_in_clip, speed_segments| {
@@ -1123,6 +1137,7 @@ pub fn run_composited_multi(
     };
 
     // Flush : un null frame à l'encodeur finalise son bitstream.
+    let _finalize = crate::export_probe::scope(crate::export_probe::Stage::Finalize);
     unsafe {
         crate::ffi::averr(
             crate::ffi::avcodec_send_frame(ectx, ptr::null_mut()),
@@ -1160,6 +1175,8 @@ pub fn run_composited_multi(
     }
 
     let wall_s = t0.elapsed().as_secs_f64();
+    drop(_finalize);
+    crate::export_probe::report(wall_s, frames);
     Ok(Stats {
         frames,
         wall_s,

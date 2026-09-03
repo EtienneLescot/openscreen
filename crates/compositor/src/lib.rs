@@ -31,6 +31,7 @@ pub mod audio;
 pub mod audio_jobs;
 pub mod config;
 pub mod cursor;
+pub mod export_probe;
 pub mod ffi;
 pub mod frame_geometry;
 pub mod gif_export;

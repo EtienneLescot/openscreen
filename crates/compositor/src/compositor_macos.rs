@@ -2358,22 +2358,30 @@ impl Compositor {
         let y = cache.make_texture_from_pixel_buffer(out_tex, 0, metal::MTLPixelFormat::R8Unorm)?;
         let uv = cache.make_texture_from_pixel_buffer(out_tex, 1, metal::MTLPixelFormat::RG8Unorm)?;
 
-        let cmd_buf = self.gpu.context.new_command_buffer();
-        for (target, pipeline) in [(&y, &self.pipeline_fs_y), (&uv, &self.pipeline_fs_uv)] {
-            let enc = self.begin_pass(
-                cmd_buf,
-                target,
-                Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0)),
-                pipeline,
-            )?;
-            enc.set_fragment_texture(0, Some(&self.rt));
-            enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
-            enc.end_encoding();
+        {
+            let _p = crate::export_probe::scope(crate::export_probe::Stage::Nv12Passes);
+            let cmd_buf = self.gpu.context.new_command_buffer();
+            for (target, pipeline) in [(&y, &self.pipeline_fs_y), (&uv, &self.pipeline_fs_uv)] {
+                let enc = self.begin_pass(
+                    cmd_buf,
+                    target,
+                    Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0)),
+                    pipeline,
+                )?;
+                enc.set_fragment_texture(0, Some(&self.rt));
+                enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+                enc.end_encoding();
+            }
+            self.submit(cmd_buf);
         }
         // Pas de miroir `Shared`, pas de `getBytes` : c'est tout l'intérêt. On attend
         // quand même, parce que `avcodec_send_frame` va lire ce buffer juste après.
-        self.submit(cmd_buf);
-        self.sync();
+        // L'attente porte sur TOUT le travail GPU de la frame, composition comprise :
+        // `compose_frame` n'a fait que soumettre.
+        {
+            let _p = crate::export_probe::scope(crate::export_probe::Stage::GpuWait);
+            self.sync();
+        }
         Ok(())
     }
 

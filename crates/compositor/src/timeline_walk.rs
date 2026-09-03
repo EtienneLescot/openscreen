@@ -305,11 +305,17 @@ pub(crate) unsafe fn walk_composited_timeline(
             for segment_frame in 0..segment.frame_count {
                 let target_source_time =
                     segment.start_sec + segment_frame as f64 * segment.speed / out_fps as f64;
-                if !advance_decoder_to(sdec, target_source_time, 0.0)? {
-                    break 'clip_frames;
+                {
+                    let _p = crate::export_probe::scope(crate::export_probe::Stage::DecodeScreen);
+                    if !advance_decoder_to(sdec, target_source_time, 0.0)? {
+                        break 'clip_frames;
+                    }
                 }
-                if !advance_decoder_to(wdec, target_source_time, clip.webcam_offset_sec)? {
-                    break 'clip_frames;
+                {
+                    let _p = crate::export_probe::scope(crate::export_probe::Stage::DecodeWebcam);
+                    if !advance_decoder_to(wdec, target_source_time, clip.webcam_offset_sec)? {
+                        break 'clip_frames;
+                    }
                 }
                 let sf = sdec.cur_frame();
                 let wf = wdec.cur_frame();
@@ -321,7 +327,10 @@ pub(crate) unsafe fn walk_composited_timeline(
                 if cursor_enabled && cursor_active_path.is_some() {
                     comp.set_cursor_time(Some(target_source_time as f32));
                 }
-                comp.compose_frame(sf, wf, frames as f32, cfg)?;
+                {
+                    let _p = crate::export_probe::scope(crate::export_probe::Stage::Compose);
+                    comp.compose_frame(sf, wf, frames as f32, cfg)?;
+                }
 
                 on_frame(frames)?;
                 frames += 1;
