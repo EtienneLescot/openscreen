@@ -502,6 +502,13 @@ pub(crate) struct Decoder {
 unsafe impl Send for Decoder {}
 
 impl Decoder {
+    /// Même point d'entrée que sur macOS, pour que `timeline_walk` reste portable. Ici le
+    /// choix D3D11VA/logiciel dépend du feature level du device, pas de l'usage : l'intention
+    /// n'a rien à trancher.
+    pub(crate) unsafe fn open_for_export(path: &str, gpu: &Gpu) -> Result<Decoder> {
+        Self::open(path, gpu)
+    }
+
     pub(crate) unsafe fn open(path: &str, gpu: &Gpu) -> Result<Decoder> {
         let mut fmt: *mut AVFormatContext = ptr::null_mut();
         let cpath = CString::new(path)?;
