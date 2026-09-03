@@ -107,6 +107,26 @@ export function collapseRawSec(
 	return { sec: sec - offset, heldBy: null };
 }
 
+/**
+ * The pause a frame of playback stepped over, if it stepped over one.
+ *
+ * Half-open on the LEFT, and that is the whole point: a player that holds pins its raw
+ * playhead to exactly `atRawSec` for the length of the pause, so `>` is what refuses that
+ * same moment on the way OUT. With `>=` the pause is re-entered the instant it ends and the
+ * film never gets past it. Closed on the right (with the frame epsilon) so a pause landing
+ * precisely on a frame boundary is held rather than skipped.
+ */
+export function holdEnteredBetween(
+	prevRawSec: number,
+	nextRawSec: number,
+	inserts: readonly RulerInsert[],
+	epsilonSec = 1e-6,
+): RulerInsert | undefined {
+	return inserts.find(
+		(insert) => insert.atRawSec > prevRawSec && insert.atRawSec <= nextRawSec + epsilonSec,
+	);
+}
+
 /** An added word, placed on the raw ruler through the clip that carries it. */
 export interface InsertedWordMark {
 	clipId: string;

@@ -10,6 +10,7 @@ import type { AxcutClip, AxcutInsertRange, AxcutWord } from "../schema";
 import {
 	collapseRawSec,
 	expandRawSec,
+	holdEnteredBetween,
 	insertedWordMarks,
 	type RulerInsert,
 	rulerInserts,
@@ -262,5 +263,37 @@ describe("a scrub survives the round trip", () => {
 		// Ruler 13 is past both: 13 − 2 − 1 = raw 10.
 		expect(collapseRawSec(13, marks).sec).toBeCloseTo(10, 6);
 		expect(collapseRawSec(13, marks).heldBy).toBeNull();
+	});
+});
+
+// ─── Entering a pause ───────────────────────────────────────────────────────
+// The preview holds the picture for a pause the way the export does (`hold_sec`). The
+// half-open rule below is what keeps that from becoming an infinite hold.
+
+describe("the pause a frame steps over", () => {
+	const marks: RulerInsert[] = [
+		{ id: "i1", wordId: "w1", atRawSec: 4, durationSec: 2 },
+		{ id: "i2", wordId: "w2", atRawSec: 9, durationSec: 1 },
+	];
+
+	it("is found when the frame crosses it", () => {
+		expect(holdEnteredBetween(3.98, 4.02, marks)?.id).toBe("i1");
+		expect(holdEnteredBetween(8.9, 9.1, marks)?.id).toBe("i2");
+	});
+
+	it("is not found again from the moment it holds", () => {
+		// The hold pins the playhead to exactly 4. Coming out, the next frames must not
+		// re-enter — otherwise the film never gets past the pause.
+		expect(holdEnteredBetween(4, 4.02, marks)).toBeUndefined();
+		expect(holdEnteredBetween(4, 4.5, marks)).toBeUndefined();
+	});
+
+	it("takes the earliest of several in one frame, and none outside", () => {
+		expect(holdEnteredBetween(0, 20, marks)?.id).toBe("i1");
+		expect(holdEnteredBetween(5, 8, marks)).toBeUndefined();
+	});
+
+	it("holds a pause landing exactly on the frame boundary", () => {
+		expect(holdEnteredBetween(3.9, 4, marks)?.id).toBe("i1");
 	});
 });
