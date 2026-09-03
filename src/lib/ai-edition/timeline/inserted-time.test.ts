@@ -230,3 +230,37 @@ describe("insertedWordMarks", () => {
 		expect(insertedWordMarks([{ assetId: "other", words: [synth("w1", 2)] }], split)).toEqual([]);
 	});
 });
+
+// ─── The scrub round-trip ───────────────────────────────────────────────────
+// The timeline measures the pointer against the EXPANDED ruler and writes the result into
+// a store every consumer reads as a RAW second — the preview seek, the caption lookup, the
+// transcript cue, the audio mix. Straight through, the playhead sat one accumulated pause
+// AHEAD of everything it pointed at: the right playhead, the wrong subtitle (issue #560).
+
+describe("a scrub survives the round trip", () => {
+	const marks: RulerInsert[] = [
+		{ id: "i1", wordId: "w1", atRawSec: 4, durationSec: 2 },
+		{ id: "i2", wordId: "w2", atRawSec: 9, durationSec: 1 },
+	];
+
+	it("comes back to the raw second it started from, before and after each pause", () => {
+		for (const raw of [0, 1.5, 3.9, 6, 8.5, 12, 30]) {
+			expect(collapseRawSec(expandRawSec(raw, marks), marks).sec).toBeCloseTo(raw, 6);
+		}
+	});
+
+	it("lands on the held moment for a pointer inside a pause, and says so", () => {
+		// Every ruler second inside a pause is the same raw moment: the film is frozen
+		// there, so there is nothing else it could mean.
+		const inside = collapseRawSec(5, marks);
+		expect(inside.sec).toBeCloseTo(4, 6);
+		expect(inside.heldBy?.id).toBe("i1");
+		expect(collapseRawSec(5.9, marks).sec).toBeCloseTo(4, 6);
+	});
+
+	it("counts every pause before the pointer, not just the first", () => {
+		// Ruler 13 is past both: 13 − 2 − 1 = raw 10.
+		expect(collapseRawSec(13, marks).sec).toBeCloseTo(10, 6);
+		expect(collapseRawSec(13, marks).heldBy).toBeNull();
+	});
+});
