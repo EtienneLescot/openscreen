@@ -1754,20 +1754,28 @@
 	top: 0;
 	bottom: 0;
 	z-index: 2;
-	width: 9px;
+	/* A pause of zero still needs somewhere to be clicked; a real one is sized inline. */
+	min-width: 9px;
 	margin-left: -4px;
 	padding: 0;
 	border: 0;
 	background: transparent;
 	cursor: pointer;
 }
+/* The mark fills its button rather than sitting at a fixed 3px inside it. The button has
+   carried the pause's real width in its inline style for a while; `width: 3px` here meant a
+   word that bought two seconds and one that bought nothing drew the same tick, and the wide
+   case was a multi-second invisible column that swallowed clip drags (issue #560).
+   `min-width` is the floor that keeps a word which borrowed existing silence — a pause of
+   zero, so a zero-width button — visible and clickable. */
 .tlClipInsert::before {
 	content: "";
 	position: absolute;
-	left: 3px;
+	left: 0;
+	right: 0;
 	top: 4px;
 	bottom: 4px;
-	width: 3px;
+	min-width: 3px;
 	border-radius: 2px;
 	background: var(--warn);
 	box-shadow: 0 0 0 1px color-mix(in srgb, #080a0d 45%, transparent);

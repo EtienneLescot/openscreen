@@ -41,7 +41,7 @@ import {
 } from "@/lib/ai-edition/document/audioTracks";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
-import type { AxcutAudioTrack, AxcutClip, AxcutWord } from "@/lib/ai-edition/schema";
+import type { AxcutAudioTrack, AxcutClip } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionStore";
@@ -52,6 +52,8 @@ import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
 	expandRawSec,
+	type InsertedWordMark,
+	insertedWordMarks,
 	type RulerInsert,
 	rulerInserts,
 	totalInsertedSec,
@@ -729,22 +731,11 @@ export function V4Timeline({
 	// clip because each mark is positioned inside its clip's own box — it then travels with
 	// the clip through a reorder for free, with no ruler arithmetic of its own.
 	const insertedWordsByClip = useMemo(() => {
-		const byAsset = new Map<string, AxcutWord[]>();
-		for (const transcript of tl.transcripts) {
-			const added = transcript.words.filter((word) => word.source === "synth");
-			if (added.length > 0) byAsset.set(transcript.assetId, added);
-		}
-		if (byAsset.size === 0) return new Map<string, Array<{ word: AxcutWord; atPct: number }>>();
-		const out = new Map<string, Array<{ word: AxcutWord; atPct: number }>>();
-		for (const clip of clips) {
-			const words = byAsset.get(clip.assetId);
-			const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
-			const span = sourceEnd - clip.sourceStartSec;
-			if (!words || span <= 0) continue;
-			const marks = words
-				.filter((word) => word.startSec >= clip.sourceStartSec && word.startSec <= sourceEnd)
-				.map((word) => ({ word, atPct: ((word.startSec - clip.sourceStartSec) / span) * 100 }));
-			if (marks.length > 0) out.set(clip.id, marks);
+		const out = new Map<string, InsertedWordMark[]>();
+		for (const mark of insertedWordMarks(tl.transcripts, clips)) {
+			const list = out.get(mark.clipId);
+			if (list) list.push(mark);
+			else out.set(mark.clipId, [mark]);
 		}
 		return out;
 	}, [tl.transcripts, clips]);
@@ -2134,7 +2125,11 @@ export function V4Timeline({
 													track={track}
 													url={asset ? toFileUrl(asset.originalPath) : undefined}
 													assetDurationSec={duration}
-													leftPct={pctOf(start)}
+													// `pctAt`, not `pctOf`: the clip boxes are drawn on the EXPANDED
+													// ruler and the audio pills were drawn on the stored one, so any
+													// pause in the film slid the two lanes apart. The take keeps its
+													// own length — only its head follows the ruler.
+													leftPct={pctAt(start)}
 													widthPct={pctOf(widthSec)}
 													row={audioRows.rowOf.get(track.id) ?? 0}
 													rowHeight={AUDIO_ROW_HEIGHT_PX + AUDIO_ROW_GAP_PX}
@@ -2276,22 +2271,24 @@ export function V4Timeline({
 												{tl.assets.find((a) => a.id === c.assetId)?.label ?? c.assetId}
 											</span>
 										</div>
-										{(insertedWordsByClip.get(c.id) ?? []).map(({ word, atPct }) => {
-											// A word whose pause the film actually holds gets a BAND as wide
-											// as the time it adds — that width is the added time, drawn. One
-											// that fitted in silence already there adds nothing and stays the
-											// hairline it was: there is nothing to show.
-											const pause = inserts.find((ins) => ins.wordId === word.id);
-											const left = pause
-												? ((expandRawSec(pause.atRawSec, inserts) - boxStart) / boxLen) * 100
-												: atPct;
+										{(insertedWordsByClip.get(c.id) ?? []).map(({ wordId, text, atRawSec }) => {
+											// A word whose pause the film holds gets a BAND as wide as the time
+											// it adds — that width IS the added time, drawn. One that fitted in
+											// silence already there adds nothing and stays a hairline.
+											//
+											// Both ends on ONE clock. The mark used to place a paused word on
+											// the expanded ruler and an unpaused one at a fraction of the clip's
+											// SOURCE span, in the same ternary — two clocks, one of which the
+											// box is not drawn in.
+											const pause = inserts.find((ins) => ins.wordId === wordId);
+											const left = ((expandRawSec(atRawSec, inserts) - boxStart) / boxLen) * 100;
 											const width = pause ? (pause.durationSec / boxLen) * 100 : 0;
 											return (
 												<button
-													key={word.id}
+													key={wordId}
 													type="button"
 													data-no-clip-drag
-													data-inserted-word={word.id}
+													data-inserted-word={wordId}
 													data-inserted-sec={pause?.durationSec ?? 0}
 													className={styles.tlClipInsert}
 													style={
@@ -2299,14 +2296,14 @@ export function V4Timeline({
 															? { left: `${left}%`, width: `${width}%`, marginLeft: 0 }
 															: { left: `${left}%` }
 													}
-													title={t("toolbar.addedWord", { word: word.text })}
-													aria-label={t("toolbar.addedWord", { word: word.text })}
+													title={t("toolbar.addedWord", { word: text })}
+													aria-label={t("toolbar.addedWord", { word: text })}
 													onPointerDown={(e) => e.stopPropagation()}
 													onClick={(e) => {
 														// Jump to the moment the added text sits on. The clip box
 														// underneath would otherwise take this as a selection.
 														e.stopPropagation();
-														setCurrentTime(c.timelineStartSec + (word.startSec - c.sourceStartSec));
+														setCurrentTime(atRawSec);
 													}}
 												/>
 											);
