@@ -273,7 +273,6 @@
 		"help": "Zaman çizelgesindeki tüm kliplerin birleşik dökümü. Bir kelimede veya seçimde Backspace / Delete tuşu onu videodan keser (kırmızı). Bir kelimeye çift tıklayarak metnini düzeltebilirsiniz. İşaretli bir kelimenin üzerine gelerek geri alabilirsiniz.",
 		"helpInsert": "İki kelimenin arasına yazarak kehribar renginde yeni bir kelime ekleyebilirsiniz: altyazılara girer, videoya dokunmaz.",
 		"insertAria": "Yeni kelime",
-		"insertRecordingOnly": "Kelimeler yalnızca kayda eklenebilir — bir duraklama filmden bir kareyi dondurur.",
 		"insertedWord": "Sizin eklediğiniz — arkasında ses yok",
 		"laneFeedsCaptions": "Altyazılar bu kanaldan gömülür.",
 		"laneLabel": "Deşifreyi şuradan oku",

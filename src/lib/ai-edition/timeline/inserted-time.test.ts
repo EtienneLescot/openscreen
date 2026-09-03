@@ -6,10 +6,11 @@
 // everywhere except inside a pause — which is not a gap in the model, it is the pause.
 
 import { describe, expect, it } from "vitest";
-import type { AxcutClip, AxcutInsertRange } from "../schema";
+import type { AxcutClip, AxcutInsertRange, AxcutWord } from "../schema";
 import {
 	collapseRawSec,
 	expandRawSec,
+	insertedWordMarks,
 	type RulerInsert,
 	rulerInserts,
 	totalInsertedSec,
@@ -153,5 +154,79 @@ describe("the expanded ruler", () => {
 	it("is the identity when there are no pauses", () => {
 		expect(expandRawSec(4, [])).toBe(4);
 		expect(collapseRawSec(4, [])).toEqual({ sec: 4, heldBy: null });
+	});
+});
+
+// ─── Where an added word's mark goes ─────────────────────────────────────────
+// Issue #560. Two defects lived in one ternary in V4Timeline: a word WITH a pause was
+// placed on the expanded ruler and one WITHOUT at a fraction of the clip's SOURCE span —
+// two clocks, and the clip box is drawn in neither of them consistently. And both edges
+// were inclusive, so a word whose pause sits on a split boundary painted twice.
+
+function markClip(over: Partial<AxcutClip> & { id: string }): AxcutClip {
+	return {
+		assetId: "a1",
+		sourceStartSec: 0,
+		sourceEndSec: 5,
+		timelineStartSec: 0,
+		timelineEndSec: 5,
+		wordRefs: [],
+		origin: "user",
+		reason: "",
+		...over,
+	} as AxcutClip;
+}
+
+const synth = (id: string, startSec: number): AxcutWord =>
+	({ id, segmentId: "s", text: id, startSec, endSec: startSec, source: "synth" }) as AxcutWord;
+
+describe("insertedWordMarks", () => {
+	const split = [
+		markClip({
+			id: "c1",
+			sourceStartSec: 0,
+			sourceEndSec: 5,
+			timelineStartSec: 0,
+			timelineEndSec: 5,
+		}),
+		markClip({
+			id: "c2",
+			sourceStartSec: 5,
+			sourceEndSec: 10,
+			timelineStartSec: 5,
+			timelineEndSec: 10,
+		}),
+	];
+
+	it("paints a word on a split boundary exactly once", () => {
+		const marks = insertedWordMarks([{ assetId: "a1", words: [synth("w_edge", 5)] }], split);
+		expect(marks).toHaveLength(1);
+		expect(marks[0]).toMatchObject({ clipId: "c2", atRawSec: 5 });
+	});
+
+	it("places every mark in RAW seconds through its own clip", () => {
+		const marks = insertedWordMarks(
+			[{ assetId: "a1", words: [synth("early", 2), synth("late", 7)] }],
+			split,
+		);
+		expect(marks.map((m) => [m.clipId, m.atRawSec])).toEqual([
+			["c1", 2],
+			["c2", 7],
+		]);
+	});
+
+	it("keeps a word at the very end of the last clip", () => {
+		// Half-open everywhere but the tail, or the final word of a project vanishes.
+		const marks = insertedWordMarks([{ assetId: "a1", words: [synth("w_end", 10)] }], split);
+		expect(marks.map((m) => m.wordId)).toEqual(["w_end"]);
+	});
+
+	it("ignores words nobody added", () => {
+		const spoken = { id: "w1", segmentId: "s", text: "w1", startSec: 2, endSec: 3 } as AxcutWord;
+		expect(insertedWordMarks([{ assetId: "a1", words: [spoken] }], split)).toEqual([]);
+	});
+
+	it("ignores a transcript no clip draws on", () => {
+		expect(insertedWordMarks([{ assetId: "other", words: [synth("w1", 2)] }], split)).toEqual([]);
 	});
 });

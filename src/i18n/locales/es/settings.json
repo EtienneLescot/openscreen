@@ -273,7 +273,6 @@
 		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la corta del vídeo (en rojo). Haz doble clic en una palabra para corregir su texto. Pasa el cursor sobre una palabra marcada para deshacer.",
 		"helpInsert": "Escribe entre dos palabras para añadir una, en ámbar: llega a los subtítulos y no toca el vídeo.",
 		"insertAria": "Palabra nueva",
-		"insertRecordingOnly": "Solo se pueden añadir palabras en la grabación: una pausa congela un fotograma.",
 		"insertedWord": "Añadida por ti: no hay audio detrás",
 		"laneFeedsCaptions": "Los subtítulos se graban desde esta pista.",
 		"laneLabel": "Leer la transcripción desde",

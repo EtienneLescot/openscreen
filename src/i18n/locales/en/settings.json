@@ -291,7 +291,6 @@
 		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to cut it out of the film (red). Double-click a word to correct its text. Hover a marked word to undo it.",
 		"helpInsert": "Type between two words to add one, in amber: it reaches the captions and leaves the film alone.",
 		"insertAria": "New word",
-		"insertRecordingOnly": "Words can only be added on the recording — a pause holds a frame of film.",
 		"insertedWord": "Added by you — no audio behind it",
 		"laneFeedsCaptions": "Captions are burnt from this lane.",
 		"laneLabel": "Read the transcript from",

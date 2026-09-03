@@ -273,7 +273,6 @@
 		"help": "Trascrizione aggregata di tutti i clip sulla timeline. Backspace / Canc su una parola o selezione la taglia dal video (in rosso). Fai doppio clic su una parola per correggerne il testo. Passa sopra una parola contrassegnata per annullare.",
 		"helpInsert": "Scrivi tra due parole per aggiungerne una, in ambra: finisce nei sottotitoli e non tocca il video.",
 		"insertAria": "Nuova parola",
-		"insertRecordingOnly": "Le parole si possono aggiungere solo sulla registrazione: una pausa congela un fotogramma.",
 		"insertedWord": "Aggiunta da te — nessun audio dietro",
 		"laneFeedsCaptions": "I sottotitoli vengono impressi da questa traccia.",
 		"laneLabel": "Leggi la trascrizione da",

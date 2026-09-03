@@ -274,7 +274,6 @@
 		"help": "時間軸上所有片段的合併逐字稿。對某個字或選取範圍按 Backspace / Delete 會將其從影片中剪掉（紅色）。連按兩下某個字即可修改文字。將滑鼠移到有標記的字上即可復原。",
 		"helpInsert": "在兩個字之間輸入即可加入一個琥珀色的新字：它只進入字幕，不會動到影片。",
 		"insertAria": "新字詞",
-		"insertRecordingOnly": "只能在錄影上新增字詞——停頓會定格一格畫面。",
 		"insertedWord": "你加入的字詞 — 背後沒有聲音",
 		"laneFeedsCaptions": "字幕從這條軌道燒錄。",
 		"laneLabel": "轉錄文字讀取自",

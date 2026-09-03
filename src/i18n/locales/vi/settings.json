@@ -273,7 +273,6 @@
 		"help": "Bản chép lời gộp của mọi clip trên dòng thời gian. Nhấn Backspace / Delete trên một từ hoặc vùng chọn để cắt nó khỏi video (màu đỏ). Nhấp đúp vào một từ để sửa văn bản. Di chuột lên từ được đánh dấu để hoàn tác.",
 		"helpInsert": "Gõ giữa hai từ để thêm một từ mới, màu hổ phách: nó vào phụ đề và không đụng tới video.",
 		"insertAria": "Từ mới",
-		"insertRecordingOnly": "Chỉ có thể thêm từ trên bản ghi — một khoảng dừng giữ lại một khung hình.",
 		"insertedWord": "Bạn thêm vào — không có âm thanh phía sau",
 		"laneFeedsCaptions": "Phụ đề được ghi từ rãnh này.",
 		"laneLabel": "Đọc bản chép lời từ",

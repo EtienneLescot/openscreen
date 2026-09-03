@@ -20,7 +20,7 @@
 // of ruler maps to the single source moment being held. `collapseRawSec` returns that
 // moment, which is exactly what a decoder parked on a held frame should be told.
 
-import type { AxcutClip, AxcutInsertRange } from "../schema";
+import type { AxcutClip, AxcutInsertRange, AxcutWord } from "../schema";
 
 /** A pause placed on the raw ruler, ready to be counted. */
 export interface RulerInsert {
@@ -105,4 +105,57 @@ export function collapseRawSec(
 		offset += insert.durationSec;
 	}
 	return { sec: sec - offset, heldBy: null };
+}
+
+/** An added word, placed on the raw ruler through the clip that carries it. */
+export interface InsertedWordMark {
+	clipId: string;
+	wordId: string;
+	text: string;
+	atRawSec: number;
+}
+
+/**
+ * Where each added word's mark belongs, one per word.
+ *
+ * Claimed once, and half-open at a clip's far edge except for the last: a pause sits at the
+ * END of the word it follows, which is routinely a split boundary, and testing both edges
+ * inclusively painted the same word in BOTH halves (issue #560).
+ *
+ * Returns RAW seconds. The caller expands them; it used to mix a raw-then-expanded position
+ * for a word with a pause and a fraction of the clip's SOURCE span for one without, in the
+ * same ternary — two clocks, and the clip box is not drawn in the second.
+ */
+export function insertedWordMarks(
+	transcripts: ReadonlyArray<{ assetId: string; words: ReadonlyArray<AxcutWord> }>,
+	clips: readonly AxcutClip[],
+): InsertedWordMark[] {
+	const byAsset = new Map<string, ReadonlyArray<AxcutWord>>();
+	for (const transcript of transcripts) {
+		const added = transcript.words.filter((word) => word.source === "synth");
+		if (added.length > 0) byAsset.set(transcript.assetId, added);
+	}
+	if (byAsset.size === 0) return [];
+
+	const marks: InsertedWordMark[] = [];
+	const claimed = new Set<string>();
+	clips.forEach((clip, index) => {
+		const words = byAsset.get(clip.assetId);
+		const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+		if (!words || sourceEnd <= clip.sourceStartSec) return;
+		const isLast = index === clips.length - 1;
+		for (const word of words) {
+			if (claimed.has(word.id)) continue;
+			if (word.startSec < clip.sourceStartSec) continue;
+			if (word.startSec > sourceEnd || (!isLast && word.startSec === sourceEnd)) continue;
+			claimed.add(word.id);
+			marks.push({
+				clipId: clip.id,
+				wordId: word.id,
+				text: word.text,
+				atRawSec: clip.timelineStartSec + (word.startSec - clip.sourceStartSec),
+			});
+		}
+	});
+	return marks;
 }
