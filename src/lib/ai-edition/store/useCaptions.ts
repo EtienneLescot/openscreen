@@ -17,8 +17,10 @@ import {
 	putCaptionTranslation,
 	removeCaptionTranslation,
 } from "../captions";
+import { resolveCaptionLane } from "../captions/settings";
 import { resolveAspectRatioValue } from "../document/outputFormat";
 import type { AxcutDocument } from "../schema";
+import { lanePlacements } from "../timeline/aggregated-transcript";
 import { useProjectStore } from "./projectStore";
 import { useEditorSettings } from "./useEditorSettings";
 
@@ -73,11 +75,18 @@ export function useCaptions(): UseCaptionsResult {
 		[document, settings, translations],
 	);
 
+	// Asked of the lane the captions actually come from: a voiceover-only project has a
+	// transcript to caption even though no CLIP does, and a recording project with a
+	// freshly imported take does not yet (issue #560).
 	const hasTranscript = useMemo(() => {
 		if (!document) return false;
 		const withTranscript = new Set(document.transcripts.map((t) => t.assetId));
-		return document.timeline.clips.some((clip) => withTranscript.has(clip.assetId));
-	}, [document]);
+		return lanePlacements(
+			resolveCaptionLane(document, settings),
+			document.timeline.clips,
+			document.audioTracks ?? [],
+		).some((placement) => withTranscript.has(placement.assetId));
+	}, [document, settings]);
 
 	const set = useCallback(
 		async (patch: CaptionSettingsPatch) => {

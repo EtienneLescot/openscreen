@@ -135,6 +135,9 @@ const DECLARED: WritePath[] = [
 	// own edits to the transcript; neither touches the timeline.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleInsertWord", "save", "gesture"),
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleRemoveWords", "save", "gesture"),
+	// The transcript lane, chosen in the pane and stored on the document because it decides
+	// the captions burnt into the export (#560). Written through `useCaptions.set`, which
+	// is already in the table under its own name.
 	// A cut made in the transcript pane, and its restore. Both moved off `applyTimelineOp`
 	// onto the write chain in #560: they read the document inside it, so a word edit landing
 	// between the read and the save can no longer overwrite the cut.

@@ -22,13 +22,15 @@ import {
 	splitMergedCaptionsByWordBounds,
 } from "@/lib/captioning/annotationsFromCaptions";
 import type { CaptionSegment } from "@/lib/captioning/transcribe";
-import type { AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
+import type { AxcutDocument, AxcutTranscript } from "../schema";
+import { lanePlacements, type TranscriptPlacement } from "../timeline/aggregated-transcript";
 import { expandRawSec, type RulerInsert, rulerInserts } from "../timeline/inserted-time";
 import {
 	type CaptionAnchorV,
 	type CaptionSettings,
 	captionBackgroundCss,
 	captionBoxRect,
+	resolveCaptionLane,
 } from "./settings";
 import { type CaptionTranslations, captionTranslationUnits } from "./translations";
 
@@ -157,7 +159,10 @@ export function sourceSpanToTimelineSpans(
 	assetId: string,
 	startSec: number,
 	endSec: number,
-	clips: AxcutClip[],
+	/** Clips, or a voiceover lane's placements — this reads only `assetId`, the source
+	 *  window and the ruler head, which both providers carry (issue #560). `AxcutClip`
+	 *  stays structurally assignable, so every existing caller is unaffected. */
+	clips: TranscriptPlacement[],
 	inserts: readonly RulerInsert[] = [],
 ): Array<{ startSec: number; endSec: number }> {
 	const out: Array<{ startSec: number; endSec: number }> = [];
@@ -195,20 +200,32 @@ export function deriveCaptionCues(
 	translations: CaptionTranslations,
 ): CaptionCue[] {
 	if (!document || !settings.enabled) return [];
-	const clips = document.timeline.clips;
-	if (clips.length === 0) return [];
+	// The lane the captions are read FROM — resolved, so a stored "voiceover" whose last
+	// pill has been deleted falls back here rather than exporting nothing (issue #560).
+	const placements = lanePlacements(
+		resolveCaptionLane(document, settings),
+		document.timeline.clips,
+		// `?? []` for the same reason `insertRanges` has one: the key is additive, so a
+		// document written before it — or hand-built, never through the schema — has none.
+		document.audioTracks ?? [],
+	);
+	if (placements.length === 0) return [];
 
 	const transcripts = new Map(document.transcripts.map((t) => [t.assetId, t]));
 	// `?? []` because the key is additive: a document written before it — or a hand-built
 	// one that never went through the schema — simply has no pauses.
-	const inserts = rulerInserts(document.timeline.insertRanges ?? [], clips);
+	// CLIPS-derived on both lanes, deliberately. A pause is a held CLIP frame: it
+	// lengthens the ruler under everything, including a voiceover laid over it. Feeding it
+	// placements would measure the pause against the take instead of the film, and land
+	// every voiceover cue early.
+	const inserts = rulerInserts(document.timeline.insertRanges ?? [], document.timeline.clips);
 	// A transcript is only projected once per asset even when several clips draw
 	// from it (line grouping is the expensive part, clipping is cheap).
 	const linesByAsset = new Map<string, CaptionSegment[]>();
 	const cues: CaptionCue[] = [];
 	let n = 0;
 
-	for (const assetId of new Set(clips.map((c) => c.assetId))) {
+	for (const assetId of new Set(placements.map((c) => c.assetId))) {
 		const transcript = transcripts.get(assetId);
 		if (!transcript) continue;
 		linesByAsset.set(assetId, captionLinesForAsset(transcript, settings, translations));
@@ -222,7 +239,7 @@ export function deriveCaptionCues(
 				assetId,
 				line.startSec,
 				line.endSec,
-				clips,
+				placements,
 				inserts,
 			)) {
 				const startMs = Math.round(span.startSec * 1000);
@@ -232,6 +249,10 @@ export function deriveCaptionCues(
 		}
 	}
 
+	// No removed-word filter. A cue inside a cut maps to source time inside frames
+	// `resolvePlaybackSegments` never emits, so it is already invisible in the preview and
+	// the export; dropping the words instead would re-flow every line boundary on any
+	// project with a trim — a visible change to output, bought for nothing.
 	cues.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
 	// Lines from one asset can't overlap, but two clips playing overlapping
 	// source ranges can put two cues on the same instant. Keep the ruler honest

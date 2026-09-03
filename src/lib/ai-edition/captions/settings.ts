@@ -11,6 +11,7 @@
 
 import { clamp } from "@/utils/math";
 import type { AxcutDocument } from "../schema";
+import { type TranscriptLane, voiceoverPlacements } from "../timeline/aggregated-transcript";
 
 /**
  * Which frame edge the caption block is pinned to. The block grows AWAY from it:
@@ -52,6 +53,20 @@ export interface CaptionSettings {
 	 * layer (see `translations.ts`) — the transcript is never rewritten.
 	 */
 	language: string | null;
+	/**
+	 * Which lane's transcript the captions are read from (issue #560).
+	 *
+	 * A DOCUMENT fact, not a view preference, for the same reason `language` is one: it
+	 * decides the text that gets burnt into the exported file. `buildSceneDescription`
+	 * takes the document as its only input and one of its callers is the headless CLI
+	 * exporter — a lane living in React state would caption the preview from one lane and
+	 * the exported file from the other, with nothing to notice the difference.
+	 *
+	 * Read it through {@link resolveCaptionLane}, never directly: a stored "voiceover" on
+	 * a project whose last voiceover pill has been deleted has to fall back, and the
+	 * fallback has to happen where both the pane and the exporter can see it.
+	 */
+	captionLane: TranscriptLane;
 	/** Pixels at a 1080-high frame, the same convention as `AnnotationTextStyle.fontSize`
 	 *  — both the preview overlay and the compositor scale it by the height of the box
 	 *  they draw into (see `annotationScale.ts`), so it is resolution-free. */
@@ -89,6 +104,7 @@ export interface CaptionSettings {
 export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
 	enabled: false,
 	language: null,
+	captionLane: "recording",
 	fontSize: 48,
 	fontFamily: "Inter",
 	fontWeight: "bold",
@@ -443,6 +459,9 @@ export function getCaptionSettings(
 		// `null` is a meaningful value here ("show the original"), so an explicit
 		// null must survive; only a missing/garbage entry falls back to the default.
 		language: raw.language === null || typeof raw.language === "string" ? raw.language : d.language,
+		// Through the enum guard, so a hand-edited passthrough blob cannot inject a lane
+		// that `lanePlacements` would not recognise.
+		captionLane: readEnum(raw.captionLane, CAPTION_LANES, d.captionLane),
 		fontSize,
 		fontFamily: readString(raw.fontFamily, d.fontFamily),
 		fontWeight: readEnum(raw.fontWeight, ["normal", "bold"] as const, d.fontWeight),
@@ -454,6 +473,25 @@ export function getCaptionSettings(
 		minWordsPerLine: Math.min(minWords, maxWords),
 		maxWordsPerLine: Math.max(minWords, maxWords),
 	};
+}
+
+const CAPTION_LANES = ["recording", "voiceover"] as const;
+
+/**
+ * The lane the captions are ACTUALLY read from — the stored choice, or "recording" when
+ * that choice no longer names anything.
+ *
+ * In the pure layer on purpose. The transcript pane had this fallback in React state,
+ * and `buildSceneDescription` never runs React: a document that stored "voiceover" after
+ * its last voiceover pill was deleted would have exported zero captions while the pane
+ * quietly showed the recording's.
+ */
+export function resolveCaptionLane(
+	doc: AxcutDocument | null | undefined,
+	settings: CaptionSettings,
+): TranscriptLane {
+	if (settings.captionLane !== "voiceover") return "recording";
+	return voiceoverPlacements(doc?.audioTracks ?? []).length > 0 ? "voiceover" : "recording";
 }
 
 export type CaptionSettingsPatch = Partial<CaptionSettings>;

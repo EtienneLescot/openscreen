@@ -2141,6 +2141,47 @@
 }
 .paneHeadBtn:hover { background: var(--surface-3); color: var(--fg); }
 
+/* Two mutually exclusive readings of the same tab, so: one track, one lit half.
+   Not tabs — tabs would say the two transcripts sit side by side, and only one of
+   them exists as far as everything downstream is concerned (issue #560). */
+.laneSwitch {
+  display: flex;
+  gap: 2px;
+  margin: 0 var(--sp-4) 6px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.laneSwitchBtn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: calc(var(--r-sm) - 2px);
+  background: transparent;
+  color: var(--muted);
+  font: 500 12px/1 var(--font-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.laneSwitchBtn:hover { color: var(--fg-2); }
+.laneSwitchBtn.isActive {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--elev-1, 0 1px 2px rgb(0 0 0 / 0.12));
+}
+/* The choice reaches past this tab — it decides the text burnt into the export. */
+.laneSwitchNote {
+  margin: 0 var(--sp-4) 12px;
+  font: 400 11.5px/1.45 var(--font-body);
+  color: var(--meta);
+}
+
 .backBtn {
   display: inline-flex;
   align-items: center;

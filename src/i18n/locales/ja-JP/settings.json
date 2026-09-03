@@ -275,6 +275,7 @@
 		"insertAria": "新しい単語",
 		"insertRecordingOnly": "単語を追加できるのは録画だけです。ポーズは映像の 1 コマを保持します。",
 		"insertedWord": "あなたが追加した単語 — 音声はありません",
+		"laneFeedsCaptions": "字幕はこのトラックから焼き込まれます。",
 		"laneLabel": "文字起こしの読み込み元",
 		"laneRecording": "録画",
 		"laneVoiceover": "ナレーション",
