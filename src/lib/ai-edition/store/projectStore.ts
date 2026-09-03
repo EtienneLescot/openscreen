@@ -60,6 +60,20 @@ export interface ProjectState {
 	error: string | null;
 	sourceDurationSec: number;
 	currentTimeSec: number;
+	/** The playhead's position on the RULER — the timeline the user sees and scrubs.
+	 *
+	 *  `currentTimeSec` is the stored, RAW second: where the recording is. The two are the
+	 *  same number until an insertion exists, and then they permanently are not. An insertion
+	 *  is media added INSIDE a clip (issue #560), so it takes up ruler seconds while taking up
+	 *  none of the recording — every ruler second inside one names the same raw moment.
+	 *
+	 *  Which means the raw second cannot say WHERE inside an insertion the playhead is, and a
+	 *  playhead that only had that number fell to the insertion's near edge the instant it
+	 *  entered: playback stalled visually there, and releasing a scrub over one snapped back
+	 *  to its start. Consumers that resolve MEDIA (seek, captions, transcript cue, mix) keep
+	 *  reading `currentTimeSec` — through an insertion the recording really is at that one
+	 *  instant. Only what draws or measures the ruler reads this. */
+	currentRulerSec: number;
 	/** The selected imported audio track (issue #350), or null. In the store — not
 	 *  `useTimeline`'s local selection — because the media panel (which imports the
 	 *  file) and the inspector (which edits it) sit in different component subtrees
@@ -146,7 +160,9 @@ export interface ProjectState {
 		opts: DocumentWriteOptions,
 	) => Promise<void>;
 	setSourceDuration: (sec: number) => void;
-	setCurrentTime: (sec: number) => void;
+	/** `rulerSec` defaults to `sec`, which is right everywhere no insertion is involved
+	 *  and is what every existing caller means. */
+	setCurrentTime: (sec: number, rulerSec?: number) => void;
 	setPlaying: (playing: boolean) => void;
 	markClean: () => void;
 	/**
@@ -197,6 +213,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	error: null,
 	sourceDurationSec: 0,
 	currentTimeSec: 0,
+	currentRulerSec: 0,
 	selectedAudioTrackId: null,
 	playing: false,
 	dirty: false,
@@ -549,8 +566,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		set({ sourceDurationSec: sec });
 	},
 
-	setCurrentTime(sec) {
-		set({ currentTimeSec: sec });
+	setCurrentTime(sec, rulerSec) {
+		set({ currentTimeSec: sec, currentRulerSec: rulerSec ?? sec });
 	},
 
 	setPlaying(playing) {
@@ -581,6 +598,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			error: null,
 			sourceDurationSec: 0,
 			currentTimeSec: 0,
+			currentRulerSec: 0,
 			selectedAudioTrackId: null,
 			playing: false,
 			dirty: false,

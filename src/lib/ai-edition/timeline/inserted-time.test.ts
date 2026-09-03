@@ -10,8 +10,8 @@ import type { AxcutClip, AxcutInsertRange, AxcutWord } from "../schema";
 import {
 	collapseRawSec,
 	expandRawSec,
-	holdEnteredBetween,
 	insertedWordMarks,
+	insertionEnteredBetween,
 	type RulerInsert,
 	rulerInserts,
 	totalInsertedSec,
@@ -251,8 +251,8 @@ describe("a scrub survives the round trip", () => {
 	});
 
 	it("lands on the held moment for a pointer inside a pause, and says so", () => {
-		// Every ruler second inside a pause is the same raw moment: the film is frozen
-		// there, so there is nothing else it could mean.
+		// Every ruler second inside an insertion is the same raw moment: none of those
+		// seconds come from the recording, so there is nothing else it could mean.
 		const inside = collapseRawSec(5, marks);
 		expect(inside.sec).toBeCloseTo(4, 6);
 		expect(inside.heldBy?.id).toBe("i1");
@@ -266,34 +266,35 @@ describe("a scrub survives the round trip", () => {
 	});
 });
 
-// ─── Entering a pause ───────────────────────────────────────────────────────
-// The preview holds the picture for a pause the way the export does (`hold_sec`). The
-// half-open rule below is what keeps that from becoming an infinite hold.
+// ─── Running into an insertion ──────────────────────────────────────────────
+// An added word inserts MEDIA inside the clip — a fixed frame and silence, until there is
+// a generator for it. Playback runs THROUGH that media, and the half-open rule below is
+// what keeps it from running through the same insertion forever.
 
-describe("the pause a frame steps over", () => {
+describe("the insertion a frame runs into", () => {
 	const marks: RulerInsert[] = [
 		{ id: "i1", wordId: "w1", atRawSec: 4, durationSec: 2 },
 		{ id: "i2", wordId: "w2", atRawSec: 9, durationSec: 1 },
 	];
 
 	it("is found when the frame crosses it", () => {
-		expect(holdEnteredBetween(3.98, 4.02, marks)?.id).toBe("i1");
-		expect(holdEnteredBetween(8.9, 9.1, marks)?.id).toBe("i2");
+		expect(insertionEnteredBetween(3.98, 4.02, marks)?.id).toBe("i1");
+		expect(insertionEnteredBetween(8.9, 9.1, marks)?.id).toBe("i2");
 	});
 
-	it("is not found again from the moment it holds", () => {
-		// The hold pins the playhead to exactly 4. Coming out, the next frames must not
-		// re-enter — otherwise the film never gets past the pause.
-		expect(holdEnteredBetween(4, 4.02, marks)).toBeUndefined();
-		expect(holdEnteredBetween(4, 4.5, marks)).toBeUndefined();
+	it("is not found again from the moment it occupies", () => {
+		// While the insertion plays, the raw playhead stands still at exactly 4. Coming out,
+		// the next frames must not re-enter — otherwise the film never gets past it.
+		expect(insertionEnteredBetween(4, 4.02, marks)).toBeUndefined();
+		expect(insertionEnteredBetween(4, 4.5, marks)).toBeUndefined();
 	});
 
 	it("takes the earliest of several in one frame, and none outside", () => {
-		expect(holdEnteredBetween(0, 20, marks)?.id).toBe("i1");
-		expect(holdEnteredBetween(5, 8, marks)).toBeUndefined();
+		expect(insertionEnteredBetween(0, 20, marks)?.id).toBe("i1");
+		expect(insertionEnteredBetween(5, 8, marks)).toBeUndefined();
 	});
 
-	it("holds a pause landing exactly on the frame boundary", () => {
-		expect(holdEnteredBetween(3.9, 4, marks)?.id).toBe("i1");
+	it("plays an insertion landing exactly on the frame boundary", () => {
+		expect(insertionEnteredBetween(3.9, 4, marks)?.id).toBe("i1");
 	});
 });
