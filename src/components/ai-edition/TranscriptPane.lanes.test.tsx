@@ -15,6 +15,7 @@ import type {
 	AxcutClip,
 	AxcutTranscript,
 } from "@/lib/ai-edition/schema";
+import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { TranscriptPane } from "./RightPanes";
 
 vi.mock("@/native", () => ({ nativeBridgeClient: { aiEdition: {} } }));
@@ -90,6 +91,40 @@ const VOICEOVER: AxcutAudioTrack = {
 } as unknown as AxcutAudioTrack;
 
 function mount(audioTracks: AxcutAudioTrack[]) {
+	// The lane lives in the DOCUMENT now (issue #560), so the switch needs one to write
+	// to — it is no longer a piece of component state that answers on its own.
+	useProjectStore.setState({
+		projectId: "proj_1",
+		document: {
+			schemaVersion: 7,
+			project: {
+				id: "proj_1",
+				title: "T",
+				createdAt: "2026-06-25T10:00:00.000Z",
+				updatedAt: "2026-06-25T10:00:00.000Z",
+				primaryAssetId: "asset_rec",
+			},
+			assets: ASSETS,
+			transcript: null,
+			transcripts: TRANSCRIPTS,
+			timeline: {
+				clips: CLIPS,
+				gaps: [],
+				trimRanges: [],
+				muteRanges: [],
+				speedRanges: [],
+				captionRanges: [],
+			},
+			annotations: [],
+			zoomRanges: [],
+			audioTracks,
+			legacyEditor: null,
+			// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
+		} as any,
+		status: "ready",
+		error: null,
+		dirty: false,
+	});
 	render(
 		<I18nProvider>
 			<TranscriptPane
@@ -112,6 +147,7 @@ function mount(audioTracks: AxcutAudioTrack[]) {
 
 afterEach(() => {
 	cleanup();
+	useProjectStore.getState().clear();
 });
 
 describe("transcript lane switch", () => {

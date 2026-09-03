@@ -43,6 +43,7 @@ import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import GradientEditor, { type GradientEditorState } from "@/components/ui/gradient-editor";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
+import { resolveCaptionLane } from "@/lib/ai-edition/captions/settings";
 import { collapseTracksToPills, trackGroupId } from "@/lib/ai-edition/document/audioTracks";
 import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import type { InsertSide } from "@/lib/ai-edition/document/transcript";
@@ -59,6 +60,7 @@ import {
 	type EditorSettingsPatch,
 } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { useCaptions } from "@/lib/ai-edition/store/useCaptions";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import {
@@ -740,26 +742,32 @@ function TranscriptLaneSwitch({
 }) {
 	const ts = useScopedT("settings");
 	return (
-		<div className={styles.laneSwitch} role="group" aria-label={ts("transcript.laneLabel")}>
-			<button
-				type="button"
-				className={`${styles.laneSwitchBtn} ${lane === "recording" ? styles.isActive : ""}`}
-				aria-pressed={lane === "recording"}
-				onClick={() => onChange("recording")}
-			>
-				<Video size={13} />
-				{ts("transcript.laneRecording")}
-			</button>
-			<button
-				type="button"
-				className={`${styles.laneSwitchBtn} ${lane === "voiceover" ? styles.isActive : ""}`}
-				aria-pressed={lane === "voiceover"}
-				onClick={() => onChange("voiceover")}
-			>
-				<Mic size={13} />
-				{ts("transcript.laneVoiceover")}
-			</button>
-		</div>
+		<>
+			<div className={styles.laneSwitch} role="group" aria-label={ts("transcript.laneLabel")}>
+				<button
+					type="button"
+					className={`${styles.laneSwitchBtn} ${lane === "recording" ? styles.isActive : ""}`}
+					aria-pressed={lane === "recording"}
+					onClick={() => onChange("recording")}
+				>
+					<Video size={13} />
+					{ts("transcript.laneRecording")}
+				</button>
+				<button
+					type="button"
+					className={`${styles.laneSwitchBtn} ${lane === "voiceover" ? styles.isActive : ""}`}
+					aria-pressed={lane === "voiceover"}
+					onClick={() => onChange("voiceover")}
+				>
+					<Mic size={13} />
+					{ts("transcript.laneVoiceover")}
+				</button>
+			</div>
+			{/* Said out loud, because the choice reaches further than this tab: it decides the
+		    text burnt into the exported file. A user must never be surprised by which
+		    lane their captions came from. */}
+			<p className={styles.laneSwitchNote}>{ts("transcript.laneFeedsCaptions")}</p>
+		</>
 	);
 }
 
@@ -862,16 +870,24 @@ export function TranscriptPane({
 	// but this component's own (cheap) lookup.
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 
-	// Local, not stored: which lane you are reading is a view of the document, not a
-	// fact about it. It moves here the day captions have to follow the same choice —
-	// that is a second reader, and two readers of one choice need somewhere shared.
-	const [lane, setLane] = useState<TranscriptLane>("recording");
+	// Stored in the document, through the caption settings (issue #560). It was local
+	// state until the captions had to follow it — and the captions are burnt into the
+	// exported file by a path that never runs React, so a lane living here would caption
+	// the preview from one lane and the export from the other.
+	//
+	// `resolveCaptionLane` carries the fallback, in the pure layer for the same reason:
+	// deleting the last voiceover pill while reading it must not leave the pane, the
+	// preview and the exporter disagreeing about which lane that project has.
+	const { settings: captionSettings, set: setCaptionSettings } = useCaptions();
 	const voiceover = useMemo(() => voiceoverPlacements(audioTracks), [audioTracks]);
-	// Derived rather than reset in an effect: deleting the last voiceover pill while
-	// reading it must not leave the pane addressing a lane that is gone, and an effect
-	// would render that empty state once before correcting it.
-	const activeLane: TranscriptLane =
-		lane === "voiceover" && voiceover.length === 0 ? "recording" : lane;
+	const document = useProjectStore((s) => s.document);
+	const activeLane = resolveCaptionLane(document, captionSettings);
+	const setLane = useCallback(
+		(captionLane: TranscriptLane) => {
+			void setCaptionSettings({ captionLane });
+		},
+		[setCaptionSettings],
+	);
 	const placements = activeLane === "voiceover" ? voiceover : clips;
 
 	// From the RECORDING clips and the whole trim set, never from `placements`: the

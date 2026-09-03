@@ -7,6 +7,7 @@
 // effects, this module owns the vocabulary.
 
 import type { AxcutDocument, AxcutTranscript } from "../schema";
+import { voiceoverPlacements } from "../timeline/aggregated-transcript";
 
 /** Why a transcription run could not produce anything. */
 export type TranscriptionFailureKind = "no-audio" | "unsupported-audio" | "error";
@@ -348,9 +349,16 @@ export function assetCanCarrySpeech(document: AxcutDocument, assetId: string): b
 
 export function transcriptRelevantAssetIds(document: AxcutDocument | null): string[] {
 	if (!document) return [];
+	// The UNION of both lanes. "Can this project be transcribed" is not a per-lane
+	// question — a voiceover-only project has speech to transcribe with no clip carrying
+	// it, and narrowing this to the selected lane would report "no transcript" on a
+	// project whose other lane is full of words (issue #560).
 	const onTimeline: string[] = [];
 	for (const clip of document.timeline.clips) {
 		if (!onTimeline.includes(clip.assetId)) onTimeline.push(clip.assetId);
+	}
+	for (const placement of voiceoverPlacements(document.audioTracks ?? [])) {
+		if (!onTimeline.includes(placement.assetId)) onTimeline.push(placement.assetId);
 	}
 	const known = new Set(document.assets.map((a) => a.id));
 	const filtered = onTimeline.filter((id) => known.has(id));
