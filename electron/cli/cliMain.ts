@@ -139,7 +139,10 @@ function loadRunnerWindow(windowType: string): BrowserWindow {
 	});
 
 	if (VITE_DEV_SERVER_URL) {
-		win.loadURL(`${VITE_DEV_SERVER_URL}?windowType=${windowType}`);
+		// `cli.html`, pas la racine : la racine sert `index.html`, donc l'éditeur. Sans ce
+		// chemin, `npm run dev` et une build packagée n'exécutent pas le même point d'entrée
+		// — et un défaut de `cli-main.tsx` ne se verrait jamais en développement.
+		win.loadURL(new URL(`cli.html?windowType=${windowType}`, VITE_DEV_SERVER_URL).toString());
 	} else {
 		win.loadFile(path.join(RENDERER_DIST, "cli.html"), { query: { windowType } });
 	}
