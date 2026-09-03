@@ -125,7 +125,7 @@ describe("keptRawSpans agrees with playback", () => {
 			let before = 0;
 			for (const [i, span] of kept.entries()) {
 				expect(
-					projectRawTimelineSecToPlayback(clips, trims, span.startSec),
+					projectRawTimelineSecToPlayback(clips, trims, span.startSec, []),
 					`seed ${seed} span ${i}`,
 				).toBeCloseTo(before, 6);
 				before += span.endSec - span.startSec;
@@ -161,13 +161,13 @@ describe("keptRawSpans agrees with playback", () => {
 		const trims = [trim({ id: "t1", clipId: "c1", startSec: 2, endSec: 4 })];
 		// Raw 2..4 is gone, so everything after it plays 2s earlier; inside the cut the
 		// playhead lands on the output edge just before it.
-		expect(projectRawTimelineSecToPlayback(clips, trims, 1)).toBeCloseTo(1, 6);
-		expect(projectRawTimelineSecToPlayback(clips, trims, 3)).toBeCloseTo(2, 6);
-		expect(projectRawTimelineSecToPlayback(clips, trims, 6)).toBeCloseTo(4, 6);
-		expect(projectRawTimelineSecToPlayback(clips, trims, 20)).toBeCloseTo(18, 6);
+		expect(projectRawTimelineSecToPlayback(clips, trims, 1, [])).toBeCloseTo(1, 6);
+		expect(projectRawTimelineSecToPlayback(clips, trims, 3, [])).toBeCloseTo(2, 6);
+		expect(projectRawTimelineSecToPlayback(clips, trims, 6, [])).toBeCloseTo(4, 6);
+		expect(projectRawTimelineSecToPlayback(clips, trims, 20, [])).toBeCloseTo(18, 6);
 		// Past the programme the projection is the identity, which is what lets a voiceover
 		// hang off the end and keep playing.
-		expect(projectRawTimelineSecToPlayback(clips, trims, 25)).toBeCloseTo(23, 6);
+		expect(projectRawTimelineSecToPlayback(clips, trims, 25, [])).toBeCloseTo(23, 6);
 	});
 });
 
@@ -272,5 +272,56 @@ describe("subtractRemoved", () => {
 		expect(subtractRemoved(10, 14, removed)).toEqual([{ startSec: 10, endSec: 14 }]);
 		// Past the programme is not removed, so an overhanging take keeps its tail.
 		expect(subtractRemoved(18, 25, removed)).toEqual([{ startSec: 18, endSec: 25 }]);
+	});
+});
+
+// ─── The pause the projection used to ignore ─────────────────────────────────
+// A pause occupies ZERO raw seconds and D OUTPUT seconds, which a flat kept-interval list
+// cannot express — so it was left out, and every audio track after a pause landed D seconds
+// early in both the preview and the export. `filmInserts` is required precisely so no call
+// site can quietly keep that bug.
+
+describe("projectRawTimelineSecToPlayback with the film's pauses", () => {
+	const clips = twoClips();
+	const pause = { id: "i1", wordId: "w1", atRawSec: 5, durationSec: 1 };
+
+	it("pushes everything after a pause later by exactly what it bought", () => {
+		expect(projectRawTimelineSecToPlayback(clips, [], 8, [])).toBeCloseTo(8, 6);
+		expect(projectRawTimelineSecToPlayback(clips, [], 8, [pause])).toBeCloseTo(9, 6);
+	});
+
+	it("leaves everything before it where it was", () => {
+		expect(projectRawTimelineSecToPlayback(clips, [], 3, [pause])).toBeCloseTo(3, 6);
+	});
+
+	it("starts a track whose head sits exactly on the pause WITH the pause", () => {
+		// Strict, matching `expandRawSec`: arriving at the pause's moment is the beginning
+		// of the hold, not the end of it.
+		expect(projectRawTimelineSecToPlayback(clips, [], 5, [pause])).toBeCloseTo(5, 6);
+	});
+
+	it("counts two pauses, in order", () => {
+		const second = { id: "i2", wordId: "w2", atRawSec: 7, durationSec: 0.5 };
+		expect(projectRawTimelineSecToPlayback(clips, [], 9, [pause, second])).toBeCloseTo(10.5, 6);
+		// Order of the argument must not matter: the walk sorts.
+		expect(projectRawTimelineSecToPlayback(clips, [], 9, [second, pause])).toBeCloseTo(10.5, 6);
+	});
+
+	it("never reaches a pause a trim removed", () => {
+		// The moment it holds is not in the film any more, so neither is the pause — the
+		// same rule `resolvePlaybackSegments` already follows.
+		const trims = [trim({ id: "t1", clipId: "c1", startSec: 4, endSec: 6 })];
+		expect(projectRawTimelineSecToPlayback(clips, trims, 8, [pause])).toBeCloseTo(
+			projectRawTimelineSecToPlayback(clips, trims, 8, []),
+			6,
+		);
+	});
+
+	it("compresses the film around a pause but never the pause itself", () => {
+		// A voice plays at 1x. A 2x region halves the film either side; the second the pause
+		// bought is still a second.
+		const speed = [{ startMs: 0, endMs: 20_000, speed: 2 }];
+		expect(projectRawTimelineSecToPlayback(clips, [], 8, [], speed)).toBeCloseTo(4, 6);
+		expect(projectRawTimelineSecToPlayback(clips, [], 8, [pause], speed)).toBeCloseTo(5, 6);
 	});
 });

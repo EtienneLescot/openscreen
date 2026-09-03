@@ -39,6 +39,7 @@ import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
+import { rulerInserts } from "@/lib/ai-edition/timeline/inserted-time";
 import { removedRawSpans, subtractRemoved } from "@/lib/ai-edition/timeline/programme-time";
 import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
 import {
@@ -563,6 +564,9 @@ export function buildSceneDescription(
 	).filter((r) => Number.isFinite(r.speed) && r.speed > 0);
 	// The one removed set, hoisted out of the map: every voiceover asks it the same
 	// question, and it does not depend on the track.
+	// Placed once: the projection below counts them, so a track after a pause lands where
+	// the ruler says rather than D seconds early.
+	const filmInserts = rulerInserts(document.timeline.insertRanges ?? [], projectedClips);
 	const removed = removedRawSpans(projectedClips, document.timeline.trimRanges);
 	const audioTracks = document.audioTracks.flatMap((track) => {
 		if (track.muted) return [];
@@ -574,6 +578,7 @@ export function buildSceneDescription(
 			projectedClips,
 			document.timeline.trimRanges,
 			track.startMs / 1000,
+			filmInserts,
 			rawSpeedRegions,
 		);
 		// Length is measured WITHOUT speed, position WITH it — the two do different
@@ -590,11 +595,13 @@ export function buildSceneDescription(
 				projectedClips,
 				document.timeline.trimRanges,
 				track.endMs / 1000,
+				filmInserts,
 			) -
 			projectRawTimelineSecToPlayback(
 				projectedClips,
 				document.timeline.trimRanges,
 				track.startMs / 1000,
+				filmInserts,
 			);
 		const spanSec = trimmedSpanSec;
 		if (spanSec <= 0) return [];
@@ -634,6 +641,7 @@ export function buildSceneDescription(
 						projectedClips,
 						document.timeline.trimRanges,
 						piece.startSec,
+						filmInserts,
 						rawSpeedRegions,
 					),
 					trimStartSec: offsetSec + (piece.startSec - trackRawStart),

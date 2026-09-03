@@ -188,7 +188,7 @@ describe("resolveTimelineAudioPlayback", () => {
 			durationSec: 10,
 			offsetMs: 0,
 		};
-		const project = (rawSec: number) => projectRawTimelineSecToPlayback([clip], [trim], rawSec);
+		const project = (rawSec: number) => projectRawTimelineSecToPlayback([clip], [trim], rawSec, []);
 		const outputStart = project(bgm.startMs / 1000); // 0
 
 		// Raw playhead 5 sits 1s past the 2s cut → output 3. The track is a contiguous
@@ -225,7 +225,7 @@ describe("resolveTimelineAudioPlayback under a trim", () => {
 		origin: "user",
 		reason: "",
 	};
-	const project = (rawSec: number) => projectRawTimelineSecToPlayback([clip], [trim], rawSec);
+	const project = (rawSec: number) => projectRawTimelineSecToPlayback([clip], [trim], rawSec, []);
 
 	const buried: AxcutAudioTrack = {
 		id: "buried",
