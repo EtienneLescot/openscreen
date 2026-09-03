@@ -422,8 +422,8 @@ export function NewEditorShell() {
 	);
 
 	const handleTimeChange = useCallback(
-		(timeSec: number) => {
-			setCurrentTime(timeSec);
+		(timeSec: number, rulerSec?: number) => {
+			setCurrentTime(timeSec, rulerSec);
 		},
 		[setCurrentTime],
 	);

@@ -10,23 +10,23 @@
 // This module is the arithmetic, and nothing else: pure, no document, no React. It answers
 // two questions.
 //
-//   • Where does a pause land on the RULER? A range is anchored in SOURCE time, so it has
+//   • Where does an insertion land on the RULER? A range is anchored in SOURCE time, so it has
 //     to be projected through whichever clip plays that moment — `rulerInserts`.
-//   • What does the ruler look like once the pauses are counted? Stored raw seconds and
+//   • What does the ruler look like once the insertions are counted? Stored raw seconds and
 //     the seconds the user actually scrubs are no longer the same number, and
 //     `expandRawSec` / `collapseRawSec` are the one place that difference is resolved.
 //
-// The two are inverses everywhere except INSIDE a pause, where they cannot be: a stretch
+// The two are inverses everywhere except INSIDE an insertion, where they cannot be: a stretch
 // of ruler maps to the single source moment being held. `collapseRawSec` returns that
 // moment, which is exactly what a decoder parked on a held frame should be told.
 
 import type { AxcutClip, AxcutInsertRange, AxcutWord } from "../schema";
 
-/** A pause placed on the raw ruler, ready to be counted. */
+/** An insertion placed on the raw ruler, ready to be counted. */
 export interface RulerInsert {
 	id: string;
 	wordId: string;
-	/** Where the pause begins, in STORED raw seconds — before any pause is counted. */
+	/** Where the insertion begins, in STORED raw seconds — before any insertion is counted. */
 	atRawSec: number;
 	durationSec: number;
 }
@@ -34,7 +34,7 @@ export interface RulerInsert {
 /**
  * Project each insert onto the raw ruler through the clip that plays its source moment.
  *
- * A range whose moment no clip plays yields nothing: the pause exists for a word that is
+ * A range whose moment no clip plays yields nothing: the insertion exists for a word that is
  * not on the timeline, so there is no ruler position for it and nothing to add. Same rule
  * the captions follow for a line no clip covers.
  *
@@ -49,7 +49,7 @@ export function rulerInserts(
 		for (const clip of clips) {
 			if (clip.assetId !== insert.assetId) continue;
 			const sourceEnd = clip.sourceEndSec ?? Number.POSITIVE_INFINITY;
-			// Inclusive at both edges: a pause sits at the END of the word it follows, which
+			// Inclusive at both edges: an insertion sits at the END of the word it follows, which
 			// is routinely a clip's own boundary.
 			if (insert.atSec < clip.sourceStartSec || insert.atSec > sourceEnd) continue;
 			placed.push({
@@ -64,7 +64,7 @@ export function rulerInserts(
 	return placed.sort((a, b) => a.atRawSec - b.atRawSec);
 }
 
-/** How much time the pauses add in total — what the ruler grows by. */
+/** How much time the insertions add in total — what the ruler grows by. */
 export function totalInsertedSec(inserts: readonly RulerInsert[]): number {
 	return inserts.reduce((sum, insert) => sum + insert.durationSec, 0);
 }
@@ -73,8 +73,8 @@ export function totalInsertedSec(inserts: readonly RulerInsert[]): number {
  * Stored raw seconds → the ruler the user sees.
  *
  * Monotone and total: every stored moment has exactly one place on the expanded ruler.
- * A moment sitting exactly ON a pause maps to where the pause BEGINS, so the frame that
- * is about to be held keeps its own instant and the pause opens after it.
+ * A moment sitting exactly ON an insertion maps to where the insertion BEGINS, so the last recorded
+ * frame keeps its own instant and the inserted media opens after it.
  */
 export function expandRawSec(sec: number, inserts: readonly RulerInsert[]): number {
 	let out = sec;
@@ -87,7 +87,7 @@ export function expandRawSec(sec: number, inserts: readonly RulerInsert[]): numb
 /**
  * The ruler the user sees → stored raw seconds.
  *
- * The inverse of {@link expandRawSec} outside a pause. Inside one it cannot be an inverse
+ * The inverse of {@link expandRawSec} outside an insertion. Inside one it cannot be an inverse
  * — a whole stretch of ruler stands for a single held moment — and it returns that moment,
  * flagged, so a caller driving a decoder knows to hold rather than to seek.
  */
@@ -108,15 +108,16 @@ export function collapseRawSec(
 }
 
 /**
- * The pause a frame of playback stepped over, if it stepped over one.
+ * The insertion a frame of playback ran into, if it ran into one.
  *
- * Half-open on the LEFT, and that is the whole point: a player that holds pins its raw
- * playhead to exactly `atRawSec` for the length of the pause, so `>` is what refuses that
- * same moment on the way OUT. With `>=` the pause is re-entered the instant it ends and the
- * film never gets past it. Closed on the right (with the frame epsilon) so a pause landing
- * precisely on a frame boundary is held rather than skipped.
+ * Half-open on the LEFT, and that is the whole point: while inserted media is playing, the
+ * RAW playhead stands still at exactly `atRawSec` — the recording really is at that one
+ * instant, because none of the inserted seconds come from it. `>` is therefore what refuses
+ * that same moment on the way out; with `>=` the insertion is re-entered the frame it ends
+ * and the film never gets past it. Closed on the right (with the frame epsilon) so an
+ * insertion landing precisely on a frame boundary is played rather than skipped.
  */
-export function holdEnteredBetween(
+export function insertionEnteredBetween(
 	prevRawSec: number,
 	nextRawSec: number,
 	inserts: readonly RulerInsert[],
@@ -138,12 +139,12 @@ export interface InsertedWordMark {
 /**
  * Where each added word's mark belongs, one per word.
  *
- * Claimed once, and half-open at a clip's far edge except for the last: a pause sits at the
+ * Claimed once, and half-open at a clip's far edge except for the last: an insertion sits at the
  * END of the word it follows, which is routinely a split boundary, and testing both edges
  * inclusively painted the same word in BOTH halves (issue #560).
  *
  * Returns RAW seconds. The caller expands them; it used to mix a raw-then-expanded position
- * for a word with a pause and a fraction of the clip's SOURCE span for one without, in the
+ * for a word with an insertion and a fraction of the clip's SOURCE span for one without, in the
  * same ternary — two clocks, and the clip box is not drawn in the second.
  */
 export function insertedWordMarks(

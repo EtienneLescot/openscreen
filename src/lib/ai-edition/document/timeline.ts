@@ -13,7 +13,7 @@ import type {
 
 /**
  * What `resolvePlaybackSegments` returns: a clip-shaped slice of playable film, plus the
- * one thing a stored clip can never carry — `heldSec`, the pause an added word created.
+ * one thing a stored clip can never carry — `heldSec`, the media an added word inserted.
  *
  * A held segment's source window is the single frame it shows; its LENGTH is `heldSec`.
  * The field lives only on this derived shape, never on `clipSchema`, so nothing can write
@@ -172,8 +172,8 @@ export function resolvePlaybackSegments(
 	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
 	const result: PlaybackSegment[] = [];
 	let timelineCursor = 0;
-	// The pauses added words need, in the order they will be met. Consumed as the walk
-	// passes each one's moment, so a pause inside a span a trim removed is never reached —
+	// The media added words insert, in the order they will be met. Consumed as the walk
+	// passes each one's moment, so an insertion inside a span a trim removed is never reached —
 	// which is right: the moment it holds is not in the film any more.
 	const pending = [...insertRanges].sort((a, b) => a.atSec - b.atSec);
 	const holdAt = (clip: AxcutClip, atSec: number): PlaybackSegment | null => {
@@ -211,10 +211,10 @@ export function resolvePlaybackSegments(
 			if (!trimAppliesToClip(trim, clip)) continue;
 			kept = subtractInterval(kept, { startSec: trim.startSec, endSec: trim.endSec });
 		}
-		// A pause sits at the END of the word it follows, which is almost never a boundary a
+		// An insertion sits at the END of the word it follows, which is almost never a boundary a
 		// trim happened to leave. So each kept span is cut at the moments it holds, and the
 		// held frame goes between the halves: the stream plays up to that frame, stays on it
-		// for the pause, then carries on — which is what makes the film longer.
+		// for the insertion, then carries on — which is what makes the film longer.
 		const pieces: Array<{ startSec: number; endSec: number; holdAtEnd: boolean }> = [];
 		for (const iv of kept) {
 			const moments = pending
@@ -331,9 +331,9 @@ function outputDurationOfRawSpan(
  * The raw span that plays for `outSec` OUTPUT seconds starting at `fromRawSec` — the
  * inverse of {@link outputDurationOfRawSpan}, and the identity when nothing is sped up.
  *
- * A voice-over plays at 1x in the mix, so a pause for a spoken word is D seconds of the
+ * A voice-over plays at 1x in the mix, so an insertion for a spoken word is D seconds of the
  * take's own clock. Under a 2x region that is 2 raw seconds, not 1, and getting it wrong
- * puts the resumed narration half a pause out of step with the picture.
+ * puts the resumed narration half an insertion out of step with the picture.
  */
 export function rawSpanForOutDuration(
 	fromRawSec: number,
@@ -372,7 +372,7 @@ export function projectRawTimelineSecToPlayback(
 	trimRanges: AxcutTrimRange[],
 	rawSec: number,
 	/**
-	 * The recording lane's pauses, already placed on the raw ruler by `rulerInserts`.
+	 * The recording lane's insertions, already placed on the raw ruler by `rulerInserts`.
 	 *
 	 * REQUIRED, not optional, and every call site was migrated with it. An optional
 	 * parameter would silently keep the early-audio bug alive at every site that had not
@@ -393,10 +393,10 @@ export function projectRawTimelineSecToPlayback(
 	let lastRawEnd = 0; // raw end of the last kept segment, for the trailing overhang
 	let landed: number | null = null; // output(rawSec), once it falls in/before a kept segment
 
-	// A pause the film holds occupies ZERO raw seconds and D OUTPUT seconds — it is the one
+	// An insertion occupies ZERO raw seconds and D OUTPUT seconds — it is the one
 	// thing a flat kept-interval list cannot express, which is why it was left out and why
-	// every audio track after a pause has been landing D seconds early in both the preview
-	// and the export. Interleaved here rather than added afterwards, because where the pause
+	// every audio track after an insertion has been landing D seconds early in both the preview
+	// and the export. Interleaved here rather than added afterwards, because where the insertion
 	// sits inside the kept span decides which side of it `rawSec` falls on.
 	const holds = [...filmInserts].sort((a, b) => a.atRawSec - b.atRawSec);
 	let nextHold = 0;
@@ -408,9 +408,9 @@ export function projectRawTimelineSecToPlayback(
 	// answers, because a speed region scales it.
 	for (const seg of keptRawSpans(ordered, trimRanges)) {
 		let from = seg.startSec;
-		// Every pause this segment carries, in order. A pause whose moment a trim removed is
+		// Every insertion this segment carries, in order. One whose moment a trim removed is
 		// in no kept span at all and is never reached — the moment it holds is not in the
-		// film any more, so neither is the pause.
+		// film any more, so neither is the insertion.
 		while (nextHold < holds.length && holds[nextHold].atRawSec < seg.startSec) nextHold++;
 		while (nextHold < holds.length && holds[nextHold].atRawSec < seg.endSec) {
 			const hold = holds[nextHold++];
@@ -421,8 +421,8 @@ export function projectRawTimelineSecToPlayback(
 			}
 			outCursor += outputDurationOfRawSpan(from, at, speedRegions);
 			from = at;
-			// Strictly after the pause's own moment, matching `expandRawSec`: a track whose
-			// head sits exactly there starts WITH the pause, not after it.
+			// Strictly after the insertion's own moment, matching `expandRawSec`: a track whose
+			// head sits exactly there starts WITH the insertion, not after it.
 			if (landed === null && rawSec <= at) landed = outCursor;
 			outCursor += hold.durationSec;
 		}

@@ -230,14 +230,14 @@ interface RulerTick {
 interface PlayheadOverlayProps {
 	/** Full timeline length in seconds — the denominator for the playhead's percentage. */
 	totalSec: number;
-	/** The pauses added words created. `currentTimeSec` is a STORED second; the ruler it is
-	 *  drawn on counts the pauses, so it has to be placed through them or it drifts from
+	/** The media added words inserted. `currentTimeSec` is a STORED second; the ruler it is
+	 *  drawn on counts the insertions, so it has to be placed through them or it drifts from
 	 *  the clips by the whole added time. */
 	inserts: readonly RulerInsert[];
 	/** Live scrub position in RAW seconds, when a drag is in flight. */
 	overrideTimeSec: number | null;
 	/** The same drag's RULER position. Preferred when present: it is the only coordinate
-	 *  that can name a moment INSIDE a pause, which is zero raw seconds wide. */
+	 *  that can name a moment INSIDE an insertion, which is zero raw seconds wide. */
 	overrideRulerSec: number | null;
 	canvasStyle: React.CSSProperties;
 	onPointerDown: (e: ReactPointerEvent) => void;
@@ -270,11 +270,27 @@ const PlayheadOverlay = memo(function PlayheadOverlay({
 	playheadRef,
 }: PlayheadOverlayProps) {
 	const storeTimeSec = useProjectStore((s) => s.currentTimeSec);
-	// The scrub hands its RULER position straight through. Expanding the raw one instead
-	// would snap the playhead to a pause's left edge the moment the pointer entered it,
-	// because every ruler second inside a pause collapses to the same raw moment.
+	const storeRulerSec = useProjectStore((s) => s.currentRulerSec);
+	// The ruler position, from the most trustworthy source that has one.
+	//
+	// The raw second alone cannot draw this playhead: an insertion occupies ruler seconds
+	// and none of the recording, so every ruler second inside one collapses to the same raw
+	// moment and expanding it back puts the playhead on the insertion's near edge — where it
+	// visibly stalls through playback, and where it snaps back to after a scrub released over
+	// one (issue #560).
+	//
+	// The store's ruler second is trusted only when it still AGREES with the raw one: a
+	// caller that predates insertions writes the raw value for both, which is right until an
+	// insertion sits before it. Collapsing is the test, and expanding is the fallback.
+	const storeSec =
+		Math.abs(collapseRawSec(storeRulerSec, inserts).sec - storeTimeSec) < 1e-3
+			? storeRulerSec
+			: expandRawSec(storeTimeSec, inserts);
 	const pct =
-		((overrideRulerSec ?? expandRawSec(overrideTimeSec ?? storeTimeSec, inserts)) / totalSec) * 100;
+		((overrideRulerSec ??
+			(overrideTimeSec !== null ? expandRawSec(overrideTimeSec, inserts) : storeSec)) /
+			totalSec) *
+		100;
 	return (
 		<div className={styles.tlPlayheadLayer} aria-hidden>
 			<div className={styles.tlCanvas} style={canvasStyle}>
@@ -613,7 +629,9 @@ export function V4Timeline({
 	onAddVoiceover,
 }: {
 	tl: TimelineApi;
-	setCurrentTime: (sec: number) => void;
+	/** `rulerSec` is the same moment on the ruler the user sees; it differs from `sec` as
+	 *  soon as an insertion sits before it, or under it. */
+	setCurrentTime: (sec: number, rulerSec?: number) => void;
 	variant?: "edit" | "media";
 	onDropAsset?: (assetId: string) => Promise<void>;
 	videoSources?: VideoSource[];
@@ -701,11 +719,11 @@ export function V4Timeline({
 	// clicked instead of looking like it worked. Same question, same helper as the Layout
 	// pane: is a camera attached anywhere on this timeline?
 	const hasAnyCamera = useMemo(() => hasAnyClipWithCamera(tl.assets, clips), [tl.assets, clips]);
-	// The pauses added words created, placed on the ruler. Everything below measures the
-	// EXPANDED ruler — stored clip geometry plus the time those pauses add — because that
+	// The media added words inserted, placed on the ruler. Everything below measures the
+	// EXPANDED ruler — stored clip geometry plus the time those insertions add — because that
 	// is the film's real length and the one the playhead runs along. Stored geometry is
 	// never rewritten for this: only what is drawn moves.
-	// `?? []` because the key is additive: a document written before it has no pauses.
+	// `?? []` because the key is additive: a document written before it has no insertions.
 	const inserts = useMemo(
 		() => rulerInserts(tl.insertRanges ?? [], clips),
 		[tl.insertRanges, clips],
@@ -841,11 +859,12 @@ export function V4Timeline({
 	const [scrubbingTimeSec, setScrubbingTimeSec] = useState<number | null>(null);
 	// The pointer's RULER position while scrubbing, kept apart from the raw one above.
 	// Two numbers because they mean different things: the timecode reads the raw clock,
-	// like the store, and the playhead has to be able to sit INSIDE a pause — which is
-	// zero raw seconds wide, so no raw value can address a moment within it.
+	// like the store, and the playhead has to be able to sit INSIDE an insertion — which
+	// takes up none of the recording, so no raw value can address a moment within it.
 	const [scrubRulerSec, setScrubRulerSec] = useState<number | null>(null);
 	const rafSeekRef = useRef<number>(0);
 	const pendingSeekTimeRef = useRef<number | null>(null);
+	const pendingSeekRulerRef = useRef<number | null>(null);
 
 	// ── interactions ────────────────────────────────────────────────
 	const playheadElRef = useRef<HTMLDivElement | null>(null);
@@ -863,14 +882,15 @@ export function V4Timeline({
 			// `total` is the EXPANDED ruler, so `pct * total` is a ruler second — and
 			// `setCurrentTime` is read as a RAW one by every consumer: the preview seek, the
 			// caption lookup, the transcript cue, the audio mix. Writing the ruler value
-			// straight in put the playhead one accumulated pause AHEAD of everything it was
+			// straight in put the playhead one accumulated insertion AHEAD of everything it was
 			// supposed to be pointing at, which is what showed as the wrong subtitle under a
 			// correctly-placed playhead (issue #560).
 			//
-			// Collapsing lands on the held moment when the pointer is inside a pause, which
-			// is the honest answer: a pause is zero raw seconds, so there is no raw value
-			// inside it to seek to. The ruler position is kept separately below so the
-			// playhead still follows the pointer across it.
+			// Collapsing lands on the insertion's own moment when the pointer is inside one,
+			// which is the honest answer: an insertion takes up none of the recording, so
+			// there is no raw value inside it to seek the media to. The ruler position goes
+			// to the store ALONGSIDE it, which is what lets the playhead stay where it was
+			// released instead of snapping to the insertion's near edge.
 			const rulerTime = pct * total;
 			const { sec: targetTime } = collapseRawSec(rulerTime, inserts);
 
@@ -883,13 +903,14 @@ export function V4Timeline({
 			setScrubbingTimeSec(targetTime);
 			setScrubRulerSec(rulerTime);
 			pendingSeekTimeRef.current = targetTime;
+			pendingSeekRulerRef.current = rulerTime;
 
 			if (isImmediate) {
 				if (rafSeekRef.current !== 0) {
 					cancelAnimationFrame(rafSeekRef.current);
 					rafSeekRef.current = 0;
 				}
-				setCurrentTime(targetTime);
+				setCurrentTime(targetTime, rulerTime);
 				return;
 			}
 
@@ -898,7 +919,7 @@ export function V4Timeline({
 				rafSeekRef.current = requestAnimationFrame(() => {
 					rafSeekRef.current = 0;
 					if (pendingSeekTimeRef.current !== null) {
-						setCurrentTime(pendingSeekTimeRef.current);
+						setCurrentTime(pendingSeekTimeRef.current, pendingSeekRulerRef.current ?? undefined);
 					}
 				});
 			}
@@ -1726,8 +1747,8 @@ export function V4Timeline({
 				}${seg.interactive && isPillSelected(p.id) ? ` ${styles.lanePillSel}` : ""}`}
 				style={{
 					left: `${pctAt(seg.segStart)}%`,
-					// Measured on the expanded ruler at BOTH ends: a region straddling a pause
-					// covers it, so its box has to grow by that pause and not merely slide.
+					// Measured on the expanded ruler at BOTH ends: a region straddling an insertion
+					// covers it, so its box has to grow by that insertion and not merely slide.
 					width: `${pctOf(expandRawSec(seg.segEnd, inserts) - expandRawSec(seg.segStart, inserts))}%`,
 					transform: seg.shiftPx ? `translateX(${seg.shiftPx}px)` : undefined,
 					transition: !clipDrag
@@ -2227,7 +2248,7 @@ export function V4Timeline({
 													assetDurationSec={duration}
 													// `pctAt`, not `pctOf`: the clip boxes are drawn on the EXPANDED
 													// ruler and the audio pills were drawn on the stored one, so any
-													// pause in the film slid the two lanes apart. The take keeps its
+													// insertion in the film slid the two lanes apart. The take keeps its
 													// own length — only its head follows the ruler.
 													leftPct={pctAt(start)}
 													widthPct={pctOf(widthSec)}
@@ -2291,7 +2312,7 @@ export function V4Timeline({
 						>
 							{clips.map((c, i) => {
 								const dur = c.timelineEndSec - c.timelineStartSec;
-								// On the expanded ruler the box also carries whatever pauses fall
+								// On the expanded ruler the box also carries whatever insertions fall
 								// inside it — the film really does stay on this clip's frame for
 								// them, so they belong to its box rather than between boxes.
 								const boxStart = expandRawSec(c.timelineStartSec, inserts);
@@ -2373,7 +2394,7 @@ export function V4Timeline({
 											</span>
 										</div>
 										{(insertedWordsByClip.get(c.id) ?? []).map(({ wordId, text, atRawSec }) => {
-											// A word whose pause the film holds gets a BAND as wide as the time
+											// A word whose insertion the film plays gets a BAND as wide as the time
 											// it adds — that width IS the added time, drawn. One that fitted in
 											// silence already there adds nothing and stays a hairline.
 											//
@@ -2381,16 +2402,16 @@ export function V4Timeline({
 											// the expanded ruler and an unpaused one at a fraction of the clip's
 											// SOURCE span, in the same ternary — two clocks, one of which the
 											// box is not drawn in.
-											const pause = inserts.find((ins) => ins.wordId === wordId);
+											const inserted = inserts.find((ins) => ins.wordId === wordId);
 											const left = ((expandRawSec(atRawSec, inserts) - boxStart) / boxLen) * 100;
-											const width = pause ? (pause.durationSec / boxLen) * 100 : 0;
+											const width = inserted ? (inserted.durationSec / boxLen) * 100 : 0;
 											return (
 												<button
 													key={wordId}
 													type="button"
 													data-no-clip-drag
 													data-inserted-word={wordId}
-													data-inserted-sec={pause?.durationSec ?? 0}
+													data-inserted-sec={inserted?.durationSec ?? 0}
 													className={styles.tlClipInsert}
 													style={
 														width > 0
