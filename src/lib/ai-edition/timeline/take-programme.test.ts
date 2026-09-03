@@ -182,3 +182,57 @@ describe("takePlaybackAt", () => {
 		expect(takePlaybackAt(pieces, 12)).toBeNull();
 	});
 });
+
+// ─── The preview and the export, held to each other ─────────────────────────
+// They read the same walk now, but "the same walk" is a claim about wiring. This walks the
+// take frame by frame the way the rAF does and asserts the runs of source time it would
+// play are the entries the export emits, piece for piece.
+
+describe("preview and export agree over a take with a cut and a pause", () => {
+	const removed = removedRawSpans(CLIPS, [trim(7, 8)]);
+	const pieces = takeProgramme(TAKE, removed, [ins(4, 1)]);
+
+	it("plays exactly the play pieces, and nothing between them", () => {
+		const runs: Array<{ from: number; to: number }> = [];
+		// A run breaks on SILENCE, not on a jump in source time. Across a pause the source
+		// is deliberately continuous — the voice resumes on the word it stopped on — so a
+		// detector watching only the source would merge the two halves and see one run.
+		let wasPlaying = false;
+		for (let raw = 0; raw < 10; raw += 0.05) {
+			const at = takePlaybackAt(pieces, raw);
+			if (!at?.shouldPlay) {
+				wasPlaying = false;
+				continue;
+			}
+			const last = runs.at(-1);
+			if (wasPlaying && last && Math.abs(at.targetTimeSec - last.to) < 0.06) {
+				last.to = at.targetTimeSec;
+			} else {
+				runs.push({ from: at.targetTimeSec, to: at.targetTimeSec });
+			}
+			wasPlaying = true;
+		}
+		const entries = pieces
+			.filter((p) => p.kind === "play")
+			.map((p) => [p.sourceStartSec, p.sourceEndSec]);
+		expect(runs).toHaveLength(entries.length);
+		runs.forEach((run, i) => {
+			expect(run.from).toBeCloseTo(entries[i][0], 1);
+			expect(run.to).toBeCloseTo(entries[i][1], 1);
+		});
+	});
+
+	it("never re-seeks while the voice is parked", () => {
+		// One value for the whole pause: a target that drifted would re-seek a paused
+		// element every frame, and resuming would restart on the wrong word.
+		const inside = [4.1, 4.3, 4.5, 4.7, 4.9].map((raw) => takePlaybackAt(pieces, raw));
+		expect(inside.every((at) => at?.shouldPlay === false)).toBe(true);
+		expect(new Set(inside.map((at) => at?.targetTimeSec)).size).toBe(1);
+	});
+
+	it("resumes on the second it stopped on", () => {
+		const parked = takePlaybackAt(pieces, 4.5)?.targetTimeSec;
+		const resumed = takePlaybackAt(pieces, 5.01)?.targetTimeSec;
+		expect(resumed).toBeCloseTo(parked ?? -1, 1);
+	});
+});

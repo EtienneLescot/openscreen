@@ -4,7 +4,11 @@ import {
 	DEFAULT_CROP_REGION,
 	MAX_NATIVE_PLAYBACK_RATE,
 } from "@/components/video-editor/types";
-import { resolveFadeSecs } from "@/lib/ai-edition/document/audioTracks";
+import {
+	collapseTracksToPills,
+	resolveFadeSecs,
+	trackGroupId,
+} from "@/lib/ai-edition/document/audioTracks";
 import {
 	projectRawTimelineSecToPlayback,
 	resolvePlaybackSegments,
@@ -20,12 +24,15 @@ import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { rulerInserts } from "@/lib/ai-edition/timeline/inserted-time";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
-import {
-	type RemovedRawSpan,
-	removalAt,
-	removedRawSpans,
-} from "@/lib/ai-edition/timeline/programme-time";
+import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
+import {
+	consumedSourceSec,
+	type TakeInsert,
+	type TakePiece,
+	takePlaybackAt,
+	takeProgramme,
+} from "@/lib/ai-edition/timeline/take-programme";
 import {
 	clampVirtualTime,
 	findNextKeptSegment,
@@ -130,42 +137,6 @@ export function resolveTimelineAudioPlayback(
 		// A file shorter than its span goes silent at the end rather than
 		// restarting: seeking a finished element back would stutter it every frame.
 		shouldPlay: active && local < windowLen,
-	};
-}
-
-/**
- * Where a VOICEOVER should be, asked in RAW ruler seconds (issue #560).
- *
- * A cut under a voiceover removes the words that were said there, not the tail of the
- * take: the transcript pane has already struck those words through, so a mix that went on
- * playing them — shifted earlier, as a contiguous block does — would make the red a lie.
- *
- * Raw is the simpler question and the exact one. `resolveTimelineAudioPlayback` works in
- * output seconds because a bed is one contiguous block laid on the finished programme, and
- * getting there means projecting the playhead through the trims. A sliced take needs no
- * projection at all: its source position is its own offset plus however far raw time has
- * carried it, and it falls silent wherever the film did. That is the same question
- * `removedRawSpans` answers for the words themselves, so the two cannot drift.
- *
- * Music does NOT come through here. A bed plays through a cut and ends early, on purpose.
- */
-export function resolveVoiceoverPlayback(
-	track: AxcutAudioTrack,
-	rawSec: number,
-	removed: RemovedRawSpan[],
-) {
-	const startSec = track.startMs / 1000;
-	const offset = Math.max(0, track.offsetMs / 1000);
-	const sourceEnd = track.durationSec > 0 ? track.durationSec : Number.POSITIVE_INFINITY;
-	const local = rawSec - startSec;
-	const targetTimeSec = Math.min(Math.max(offset, offset + local), sourceEnd);
-	return {
-		targetTimeSec,
-		shouldPlay:
-			rawSec >= startSec &&
-			rawSec < track.endMs / 1000 &&
-			offset + local < sourceEnd &&
-			removalAt(removed, rawSec) === null,
 	};
 }
 
@@ -595,8 +566,46 @@ export function VirtualPreview({
 	// track after a pause lands D seconds early — the bug this argument exists to close.
 	const filmInsertsRef = useRef(rulerInserts(insertRanges, clips));
 	filmInsertsRef.current = useMemo(() => rulerInserts(insertRanges, clips), [insertRanges, clips]);
+	// One walk per take, recomputed only when the cuts or the insertions move. The rAF asks
+	// it every frame per track, and walking on each would be wasteful.
+	// The take's own insertions, resolved from the ranges this component already receives.
+	// `resolveInsertPlacement` needs assets to tell the lanes apart, and the preview has
+	// none — but a range naming an AUDIO asset is exactly one whose asset is not a clip's,
+	// which is the same test, available here.
+	const clipAssetIds = useMemo(() => new Set(clips.map((c) => c.assetId)), [clips]);
+	const takeInsertsByGroup = useCallback(
+		(groupId: string): TakeInsert[] => {
+			const pill = collapseTracksToPills(audioTracks).find((t) => trackGroupId(t) === groupId);
+			if (!pill) return [];
+			return insertRanges
+				.filter((range) => range.assetId === pill.assetId && !clipAssetIds.has(range.assetId))
+				.map((range) => ({
+					id: range.id,
+					wordId: range.wordId,
+					atSourceSec: range.atSec,
+					durationSec: range.durationSec,
+				}));
+		},
+		[audioTracks, insertRanges, clipAssetIds],
+	);
+	const takePiecesRef = useRef<Map<string, TakePiece[]>>(new Map());
+	const takeHeadsRef = useRef<Map<string, string>>(new Map());
 	const removedRef = useRef(removedRawSpans(clips, trimRanges));
 	removedRef.current = useMemo(() => removedRawSpans(clips, trimRanges), [clips, trimRanges]);
+	const takeWalks = useMemo(() => {
+		const pieces = new Map<string, TakePiece[]>();
+		const heads = new Map<string, string>();
+		const removed = removedRawSpans(clips, trimRanges);
+		for (const pill of collapseTracksToPills(audioTracks)) {
+			if (pill.kind !== "voiceover" || pill.loop) continue;
+			const groupId = trackGroupId(pill);
+			heads.set(groupId, pill.id);
+			pieces.set(groupId, takeProgramme(pill, removed, takeInsertsByGroup(groupId)));
+		}
+		return { pieces, heads };
+	}, [audioTracks, clips, trimRanges, takeInsertsByGroup]);
+	takePiecesRef.current = takeWalks.pieces;
+	takeHeadsRef.current = takeWalks.heads;
 	// Trim-narrowed (`resolvePlaybackSegments`) — used ONLY to detect "has the <video>'s own
 	// currentTime drifted into a trim" and where to jump it back out to. Everything ELSE in
 	// this component (`clips`/`clipsRef` above, virtualTimeSec, zoom/speed region lookups,
@@ -732,14 +741,37 @@ export function VirtualPreview({
 							filmInsertsRef.current,
 						),
 				);
-				// A voiceover follows the cuts; a bed plays through them. Step 6 of #560
-				// refuses `loop` on a voiceover outright, so until then a looping one keeps
-				// the bed's treatment rather than getting semantics invented for it.
-				const trackTarget =
+				// A voiceover follows the cuts AND its own insertions, through one walk over
+				// its PILL. Every fragment but the head is silenced: the document keeps one
+				// per clip the take covers, and letting each play its own slice would put the
+				// take on top of itself, exactly as it would in the export.
+				//
+				// A bed plays through a cut and ends early, on purpose. A looping voiceover
+				// keeps the bed's treatment — step 6 of #560 refuses that combination, and
+				// inventing semantics for it would be the worse answer.
+				const takeGroupId = trackGroupId(track);
+				const takePieces =
 					track.kind === "voiceover" && !track.loop
-						? resolveVoiceoverPlayback(track, virtualTimeSecRef.current, removedRef.current)
-						: resolveTimelineAudioPlayback(outputTimeSec, outputStartSec, track, spanSec);
-				const fade = timelineAudioFadeAt(track, outputTimeSec - outputStartSec, spanSec);
+						? takePiecesRef.current.get(takeGroupId)
+						: undefined;
+				if (takePieces && takeHeadsRef.current.get(takeGroupId) !== track.id) {
+					if (!el.paused) el.pause();
+					continue;
+				}
+				const trackTarget = takePieces
+					? (takePlaybackAt(takePieces, virtualTimeSecRef.current) ?? {
+							targetTimeSec: track.offsetMs / 1000,
+							shouldPlay: false,
+						})
+					: resolveTimelineAudioPlayback(outputTimeSec, outputStartSec, track, spanSec);
+				// Fades measure against the SOURCE the walk consumes, never the take's ruler
+				// extent: an insertion grows the extent without adding a second of file, and
+				// a fade-out measured on it would start early here and nowhere else.
+				const fadeSpanSec = takePieces ? consumedSourceSec(takePieces) : spanSec;
+				const fadeLocalSec = takePieces
+					? Math.max(0, trackTarget.targetTimeSec - track.offsetMs / 1000)
+					: outputTimeSec - outputStartSec;
+				const fade = timelineAudioFadeAt(track, fadeLocalSec, fadeSpanSec);
 				// Imported audio plays at its natural 1× rate, NOT the video's. The export
 				// sums it into the programme at 1× — speed regions stretch clip PCM only,
 				// never the imported track — so following `v.playbackRate` would pitch a
