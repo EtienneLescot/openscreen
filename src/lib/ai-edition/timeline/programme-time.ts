@@ -18,7 +18,8 @@
 // Storage does not change: a trim stays source-time anchored to a clip. This is the
 // derived READING of those rows, computed on demand and never written back.
 
-import type { AxcutClip, AxcutTrimRange } from "../schema";
+import type { AxcutClip, AxcutInsertRange, AxcutTrimRange } from "../schema";
+import { sourceToTimelineSec } from "./inserted-time";
 import { type Interval, subtractInterval } from "./intervals";
 import { trimAppliesToClip } from "./trim-mapping";
 
@@ -58,11 +59,20 @@ function clipRawExtent(clip: AxcutClip): RawSpan {
 	};
 }
 
-/** Source interval → raw, through the clip that carries it. */
-function sourceToRaw(clip: AxcutClip, interval: Interval): RawSpan {
+/** Source interval → timeline, through the clip that carries it.
+ *
+ *  `"closes"` on the end is what makes an insertion INSIDE a kept stretch part of it: the
+ *  film plays those seconds, so they belong to the span. An insertion at the stretch's own
+ *  start belongs to whatever came before — and if a trim took that, it is gone with it,
+ *  which is right: the moment it follows is not in the film any more. */
+function sourceToRaw(
+	clip: AxcutClip,
+	interval: Interval,
+	insertRanges: readonly AxcutInsertRange[],
+): RawSpan {
 	return {
-		startSec: clip.timelineStartSec + (interval.startSec - clip.sourceStartSec),
-		endSec: clip.timelineStartSec + (interval.endSec - clip.sourceStartSec),
+		startSec: sourceToTimelineSec(clip, interval.startSec, insertRanges, "opens"),
+		endSec: sourceToTimelineSec(clip, interval.endSec, insertRanges, "closes"),
 	};
 }
 
@@ -89,7 +99,11 @@ function keptSourceIntervals(clip: AxcutClip, trimRanges: AxcutTrimRange[]): Int
  *
  * Zero-length spans are dropped, so a caller can trust `endSec > startSec`.
  */
-export function keptRawSpans(clips: AxcutClip[], trimRanges: AxcutTrimRange[]): RawSpan[] {
+export function keptRawSpans(
+	clips: AxcutClip[],
+	trimRanges: AxcutTrimRange[],
+	insertRanges: readonly AxcutInsertRange[] = [],
+): RawSpan[] {
 	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
 	const spans: RawSpan[] = [];
 	for (const clip of ordered) {
@@ -101,7 +115,7 @@ export function keptRawSpans(clips: AxcutClip[], trimRanges: AxcutTrimRange[]): 
 			continue;
 		}
 		for (const iv of keptSourceIntervals(clip, trimRanges)) {
-			const span = sourceToRaw(clip, iv);
+			const span = sourceToRaw(clip, iv, insertRanges);
 			if (span.endSec > span.startSec) spans.push(span);
 		}
 	}
@@ -126,6 +140,7 @@ export function keptRawSpans(clips: AxcutClip[], trimRanges: AxcutTrimRange[]): 
 export function removedRawSpans(
 	clips: AxcutClip[],
 	trimRanges: AxcutTrimRange[],
+	insertRanges: readonly AxcutInsertRange[] = [],
 ): RemovedRawSpan[] {
 	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
 	if (ordered.length === 0) return [];
@@ -154,12 +169,12 @@ export function removedRawSpans(
 			.filter((trim) => trimAppliesToClip(trim, clip))
 			.map((trim) => ({
 				id: trim.id,
-				...sourceToRaw(clip, { startSec: trim.startSec, endSec: trim.endSec }),
+				...sourceToRaw(clip, { startSec: trim.startSec, endSec: trim.endSec }, insertRanges),
 			}));
 
 		let holeStart = extent.startSec;
 		for (const iv of kept) {
-			const span = sourceToRaw(clip, iv);
+			const span = sourceToRaw(clip, iv, insertRanges);
 			if (span.startSec > holeStart) {
 				removed.push(taggedHole(holeStart, span.startSec, applicable));
 			}

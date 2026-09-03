@@ -18,7 +18,7 @@
  * re-aligns them.
  */
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import type { AxcutClip } from "@/lib/ai-edition/schema";
+import type { AxcutClip, AxcutInsertRange } from "@/lib/ai-edition/schema";
 import { resolveNativePosition } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	getCurrentNativeViewId,
@@ -34,10 +34,13 @@ export function useNativePlaybackSync(
 	visibleSegments: readonly AxcutClip[],
 	/** RAW clip layout (`document.timeline.clips`) `currentTimeSec` is expressed against. */
 	rawClips: readonly AxcutClip[],
+	/** The insertions those clips carry — a clip is longer than its source window by them,
+	 *  so a segment's place on the timeline cannot be found without them (issue #560). */
+	insertRanges: readonly AxcutInsertRange[] = [],
 ): void {
 	const activePosition = useMemo(
-		() => resolveNativePosition(currentTimeSec, [...visibleSegments], [...rawClips]),
-		[visibleSegments, rawClips, currentTimeSec],
+		() => resolveNativePosition(currentTimeSec, [...visibleSegments], [...rawClips], insertRanges),
+		[visibleSegments, rawClips, currentTimeSec, insertRanges],
 	);
 	const activeClipId = activePosition?.clip.id ?? null;
 	const sourceTimeSec = activePosition?.sourceTimeSec ?? null;

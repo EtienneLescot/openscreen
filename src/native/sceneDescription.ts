@@ -42,7 +42,6 @@ import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { takeInserts } from "@/lib/ai-edition/timeline/insert-mapping";
-import { rulerInserts } from "@/lib/ai-edition/timeline/inserted-time";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { takeProgramme } from "@/lib/ai-edition/timeline/take-programme";
 import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
@@ -575,7 +574,7 @@ export function buildSceneDescription(
 	// question, and it does not depend on the track.
 	// Placed once: the projection below counts them, so a track after a pause lands where
 	// the ruler says rather than D seconds early.
-	const filmInserts = rulerInserts(document.timeline.insertRanges ?? [], projectedClips);
+	const filmInserts = document.timeline.insertRanges ?? [];
 	const removed = removedRawSpans(projectedClips, document.timeline.trimRanges);
 	// The take's pills, keyed by group. A voiceover is walked ONCE per pill and never per
 	// stored fragment: the document keeps one fragment per clip a take covers, so walking

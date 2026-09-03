@@ -18,7 +18,7 @@
 // forward by the trimmed duration.
 
 import type { PlaybackSegment } from "../document/timeline";
-import type { AxcutClip } from "../schema";
+import type { AxcutClip, AxcutInsertRange } from "../schema";
 import { ventilateSpanAcrossClips } from "./region-ventilation";
 import { findRawClipForSegment, getRawVirtualStartTime } from "./virtual-preview";
 
@@ -402,8 +402,9 @@ export function anchorRegionsWithDerivedMs<
 export function segmentRawSpanSec(
 	segment: PlaybackSegment,
 	rawClips: AxcutClip[],
+	insertRanges: readonly AxcutInsertRange[] = [],
 ): { startSec: number; endSec: number } {
-	const startSec = getRawVirtualStartTime(segment, rawClips);
+	const startSec = getRawVirtualStartTime(segment, rawClips, insertRanges);
 	// A held segment's source window is the single frame it shows, so its source length
 	// is zero — its RAW span is the pause it carries. Without this the playhead could
 	// never be inside it and would step straight over the pause.
@@ -682,9 +683,10 @@ export function resolveNativePosition(
 	rawSec: number,
 	visibleSegments: PlaybackSegment[],
 	rawClips: AxcutClip[],
+	insertRanges: readonly AxcutInsertRange[] = [],
 ): NativePosition | null {
 	if (!Number.isFinite(rawSec) || visibleSegments.length === 0) return null;
-	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
+	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips, insertRanges));
 
 	// Segment whose RAW extent contains the playhead (last segment's end inclusive).
 	const index = spans.findIndex((s, i) => {

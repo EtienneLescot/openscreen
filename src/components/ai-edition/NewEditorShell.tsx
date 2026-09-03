@@ -21,7 +21,12 @@ import {
 	setDocumentWordText,
 } from "@/lib/ai-edition/document/transcript";
 import { isModalOpen } from "@/lib/ai-edition/modalGuard";
-import { type AxcutAudioTrack, type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
+import {
+	type AxcutAudioTrack,
+	type AxcutClip,
+	type AxcutInsertRange,
+	documentSchema,
+} from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
@@ -92,15 +97,17 @@ const NO_AUDIO_TRACKS: AxcutAudioTrack[] = [];
 function NativePlaybackSync({
 	visibleClips,
 	clips,
+	insertRanges,
 }: {
 	visibleClips: AxcutClip[];
 	clips: AxcutClip[];
+	insertRanges: readonly AxcutInsertRange[];
 }) {
 	const playing = useProjectStore((s) => s.playing);
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 	// visibleClips = trim-compressed native stream; `clips` = RAW layout currentTimeSec
 	// is measured against. resolveNativePosition needs both (see timelineMap).
-	useNativePlaybackSync(playing, currentTimeSec, visibleClips, clips);
+	useNativePlaybackSync(playing, currentTimeSec, visibleClips, clips, insertRanges);
 	return null;
 }
 
@@ -429,8 +436,8 @@ export function NewEditorShell() {
 	);
 
 	const handleTimeChange = useCallback(
-		(timeSec: number, rulerSec?: number) => {
-			setCurrentTime(timeSec, rulerSec);
+		(timeSec: number) => {
+			setCurrentTime(timeSec);
 		},
 		[setCurrentTime],
 	);
@@ -1428,7 +1435,11 @@ export function NewEditorShell() {
 			className={v4.app}
 			style={{ gridTemplateRows: `58px 1fr ${showTimeline ? timelineRow : "0px"}` }}
 		>
-			<NativePlaybackSync visibleClips={visibleClips} clips={clips} />
+			<NativePlaybackSync
+				visibleClips={visibleClips}
+				clips={clips}
+				insertRanges={document?.timeline.insertRanges ?? []}
+			/>
 			<EditorTopBar
 				mode={mode}
 				onModeChange={setMode}

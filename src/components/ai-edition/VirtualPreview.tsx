@@ -22,11 +22,7 @@ import type {
 } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
-import {
-	expandRawSec,
-	insertionEnteredBetween,
-	rulerInserts,
-} from "@/lib/ai-edition/timeline/inserted-time";
+import { insertionEnteredBetween, rulerInserts } from "@/lib/ai-edition/timeline/inserted-time";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
@@ -222,9 +218,7 @@ interface VirtualPreviewProps {
 	/** The media added words inserted — it lengthens playback, it does not cut it. */
 	insertRanges?: AxcutInsertRange[];
 	seekTarget?: { timeSec: number; isSource?: boolean; requestId: number } | null;
-	/** `rulerSec` is the same moment measured on the ruler the user sees, which differs
-	 *  from `timeSec` as soon as an insertion sits before it, or under it. */
-	onTimeChange?: (timeSec: number, rulerSec: number) => void;
+	onTimeChange?: (timeSec: number) => void;
 	onLoadedMetadata?: (
 		durationSec: number,
 		assetId: string,
@@ -591,6 +585,10 @@ export function VirtualPreview({
 	 *  `updateVirtualTime` so the RULER position it publishes crosses the insertion while the
 	 *  RAW second it publishes alongside stands still at the insertion's own moment. */
 	const insertionElapsedRef = useRef(0);
+	// The ranges themselves for anything that maps through a clip; their timeline positions
+	// for the one thing that asks "did this frame run into one".
+	const insertRangesRef = useRef(insertRanges);
+	insertRangesRef.current = insertRanges;
 	const filmInsertsRef = useRef(rulerInserts(insertRanges, clips));
 	filmInsertsRef.current = useMemo(() => rulerInserts(insertRanges, clips), [insertRanges, clips]);
 	// One walk per take, recomputed only when the cuts or the insertions move. The rAF asks
@@ -760,7 +758,7 @@ export function VirtualPreview({
 					clipsRef.current,
 					trimRangesRef.current,
 					virtualTimeSecRef.current,
-					filmInsertsRef.current,
+					insertRangesRef.current,
 					speedRegionsRef.current,
 				) + insertionElapsedRef.current;
 			for (const track of audioTracksRef.current) {
@@ -770,7 +768,7 @@ export function VirtualPreview({
 					clipsRef.current,
 					trimRangesRef.current,
 					track.startMs / 1000,
-					filmInsertsRef.current,
+					insertRangesRef.current,
 					speedRegionsRef.current,
 				);
 				// Length is measured WITHOUT speed, position WITH it. A trim REMOVES
@@ -785,13 +783,13 @@ export function VirtualPreview({
 						clipsRef.current,
 						trimRangesRef.current,
 						track.endMs / 1000,
-						filmInsertsRef.current,
+						insertRangesRef.current,
 					) -
 						projectRawTimelineSecToPlayback(
 							clipsRef.current,
 							trimRangesRef.current,
 							track.startMs / 1000,
-							filmInsertsRef.current,
+							insertRangesRef.current,
 						),
 				);
 				// A voiceover follows the cuts AND its own insertions, through one walk over
@@ -985,6 +983,7 @@ export function VirtualPreview({
 					activeSourceId,
 					0.05,
 					activeClipIdRef.current ?? undefined,
+					insertRangesRef.current,
 				);
 				if (pos) {
 					activeClipIdRef.current = pos.clip.id;
@@ -1055,7 +1054,10 @@ export function VirtualPreview({
 				updateVirtualTime(entering.atRawSec);
 				return;
 			}
-			updateVirtualTime(nextRawTime);
+			// While an insertion plays the element is parked, so the position it reports stands
+			// still at where the insertion opens. Its own wall clock is what carries the
+			// playhead across it — nothing else is moving. Zero the rest of the time.
+			updateVirtualTime(nextRawTime + insertionElapsedRef.current);
 		};
 		raf = window.requestAnimationFrame(tick);
 		return () => window.cancelAnimationFrame(raf);
@@ -1076,14 +1078,7 @@ export function VirtualPreview({
 	const updateVirtualTime = useCallback(
 		(nextTimeSec: number) => {
 			setVirtualTimeSec(nextTimeSec);
-			// Two coordinates, one publish. The raw second says where the RECORDING is; the
-			// ruler second says where on the timeline the playhead is, which is the only one
-			// that can move while an insertion plays — the recording is standing still at the
-			// insertion's moment for its whole duration.
-			onTimeChange?.(
-				nextTimeSec,
-				expandRawSec(nextTimeSec, filmInsertsRef.current) + insertionElapsedRef.current,
-			);
+			onTimeChange?.(nextTimeSec);
 			// ponytail: mirrors main's per-frame `video.playbackRate = ...`
 			// (videoEventHandlers.ts) — the browser does the actual time
 			// warping, so this is the only thing speed regions need. No
@@ -1166,7 +1161,7 @@ export function VirtualPreview({
 			// advance, trim skip) are gated on `!v.paused` and so never land here mid-insertion.
 			insertionRef.current = null;
 			insertionElapsedRef.current = 0;
-			const position = locateVirtualPosition(clips, nextVirtualTimeSec);
+			const position = locateVirtualPosition(clips, nextVirtualTimeSec, insertRanges);
 			if (!position) {
 				videoRef.current?.pause();
 				updateVirtualTime(0);
@@ -1273,7 +1268,11 @@ export function VirtualPreview({
 			// the one that has to come back. An asset switch queued in the
 			// meantime is newer intent still, so it wins outright.
 			if (!pendingSeekRef.current) {
-				const position = locateVirtualPosition(clipsRef.current, virtualTimeSecRef.current);
+				const position = locateVirtualPosition(
+					clipsRef.current,
+					virtualTimeSecRef.current,
+					insertRangesRef.current,
+				);
 				// `locateVirtualPosition` answers for whatever clip the playhead
 				// is on, which after a boundary advance can belong to a DIFFERENT
 				// asset — its source time would be a meaningless offset into the

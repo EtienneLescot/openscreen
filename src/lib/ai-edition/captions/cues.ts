@@ -22,10 +22,10 @@ import {
 	splitMergedCaptionsByWordBounds,
 } from "@/lib/captioning/annotationsFromCaptions";
 import type { CaptionSegment } from "@/lib/captioning/transcribe";
-import type { AxcutDocument, AxcutTranscript } from "../schema";
+import type { AxcutDocument, AxcutInsertRange, AxcutTranscript } from "../schema";
 import { lanePlacements, type TranscriptPlacement } from "../timeline/aggregated-transcript";
 import { takeInserts } from "../timeline/insert-mapping";
-import { expandRawSec, type RulerInsert, rulerInserts } from "../timeline/inserted-time";
+import { sourceToTimelineSec } from "../timeline/inserted-time";
 import { removedRawSpans } from "../timeline/programme-time";
 import {
 	type CaptionAnchorV,
@@ -165,7 +165,7 @@ export function sourceSpanToTimelineSpans(
 	 *  window and the ruler head, which both providers carry (issue #560). `AxcutClip`
 	 *  stays structurally assignable, so every existing caller is unaffected. */
 	clips: TranscriptPlacement[],
-	inserts: readonly RulerInsert[] = [],
+	inserts: readonly AxcutInsertRange[] = [],
 ): Array<{ startSec: number; endSec: number }> {
 	const out: Array<{ startSec: number; endSec: number }> = [];
 	for (const clip of clips) {
@@ -174,20 +174,15 @@ export function sourceSpanToTimelineSpans(
 		const s = Math.max(startSec, clip.sourceStartSec);
 		const e = Math.min(endSec, clipSourceEnd);
 		if (e <= s) continue;
+		// `"closes"` on the end: a line running up to an added word covers the media that
+		// word inserted, so it stays on screen through it instead of going dark over the
+		// one moment the word exists for.
 		out.push({
-			startSec: clip.timelineStartSec + (s - clip.sourceStartSec),
-			endSec: clip.timelineStartSec + (e - clip.sourceStartSec),
+			startSec: sourceToTimelineSec(clip, s, inserts, "opens"),
+			endSec: sourceToTimelineSec(clip, e, inserts, "closes"),
 		});
 	}
-	// Onto the ruler the viewer actually sees. Expanding BOTH ends does the whole job:
-	// a line after a pause slides along by it, and a line that covers the held moment
-	// has only its end pushed out — so it stays on screen through the pause instead of
-	// going dark over the one moment an added word exists for.
-	if (inserts.length === 0) return out;
-	return out.map((span) => ({
-		startSec: expandRawSec(span.startSec, inserts),
-		endSec: expandRawSec(span.endSec, inserts),
-	}));
+	return out;
 }
 
 /**
@@ -222,7 +217,6 @@ export function deriveCaptionCues(
 	// lengthens the ruler under everything, including a voiceover laid over it. Feeding it
 	// placements would measure the pause against the take instead of the film, and land
 	// every voiceover cue early.
-	const inserts = rulerInserts(document.timeline.insertRanges ?? [], document.timeline.clips);
 	// A transcript is only projected once per asset even when several clips draw
 	// from it (line grouping is the expensive part, clipping is cheap).
 	const linesByAsset = new Map<string, CaptionSegment[]>();
@@ -244,7 +238,7 @@ export function deriveCaptionCues(
 				line.startSec,
 				line.endSec,
 				placements,
-				inserts,
+				document.timeline.insertRanges ?? [],
 			)) {
 				const startMs = Math.round(span.startSec * 1000);
 				const endMs = Math.max(Math.round(span.endSec * 1000), startMs + 1);
