@@ -906,9 +906,59 @@ export function upgradeV6DocumentToV7(raw: unknown): unknown {
  * (`PROJECT_VERSION`) through the `@/` alias, which `vite-plugin-electron` does
  * not configure for the main bundle. Keep this module alias-free.
  */
+/**
+ * Drop the ghost trims commit `b9e0f1ff` wrote (issue #560).
+ *
+ * That build let the transcript pane author a cut from the voiceover lane while still
+ * anchoring it on whatever the words belonged to — an AUDIO asset and an audio fragment.
+ * `resolvePlaybackSegments` matches no clip for such a row, so it removed nothing from the
+ * film, the preview or the export; all it did was strike the word through. Now that both
+ * lanes read the same removed set, leaving those rows behind would keep striking words
+ * through for a cut that never existed.
+ *
+ * The test is exact and needs no clip lookup: an audio asset is never a clip's `assetId`
+ * (audio is filtered out of the lists that make clips), so a trim naming one can only have
+ * come from that build. An un-anchored pre-v7 trim names a VIDEO asset and is untouched;
+ * so is a trim whose clip was deleted, which in-session undo can still bring back.
+ *
+ * No `schemaVersion` bump: nothing about the format changed, and no output moves — these
+ * rows were already inert. What changes is that words the user "deleted" on that build
+ * come back as kept, which is the correction, and belongs in the release note.
+ *
+ * Runs on RAW, untrusted input like the rest of the chain, so every read is guarded.
+ */
+function dropAudioAnchoredTrims(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+	const doc = raw as Record<string, unknown>;
+	const assets = Array.isArray(doc.assets) ? doc.assets : null;
+	if (!assets) return raw;
+	const audioAssetIds = new Set<string>();
+	for (const asset of assets) {
+		if (!asset || typeof asset !== "object" || Array.isArray(asset)) continue;
+		const entry = asset as Record<string, unknown>;
+		if (entry.kind === "audio" && typeof entry.id === "string") audioAssetIds.add(entry.id);
+	}
+	if (audioAssetIds.size === 0) return raw;
+
+	const timeline =
+		doc.timeline && typeof doc.timeline === "object" && !Array.isArray(doc.timeline)
+			? (doc.timeline as Record<string, unknown>)
+			: null;
+	const trims = timeline && Array.isArray(timeline.trimRanges) ? timeline.trimRanges : null;
+	if (!trims) return raw;
+
+	const kept = trims.filter((entry) => {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return true;
+		const trim = entry as Record<string, unknown>;
+		return !(typeof trim.assetId === "string" && audioAssetIds.has(trim.assetId));
+	});
+	if (kept.length === trims.length) return raw;
+	return { ...doc, timeline: { ...timeline, trimRanges: kept } };
+}
+
 export function migrateRawDocumentToCurrent(raw: unknown): unknown {
-	return upgradeV6DocumentToV7(
-		upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw))),
+	return dropAudioAnchoredTrims(
+		upgradeV6DocumentToV7(upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw)))),
 	);
 }
 
