@@ -475,3 +475,117 @@ describe("migrateRawDocumentToCurrent", () => {
 		expect(() => documentSchema.parse(upgraded)).not.toThrow();
 	});
 });
+
+// ─── The ghost trims of b9e0f1ff ─────────────────────────────────────────────
+// That build let a cut authored from the voiceover lane be anchored on the AUDIO asset
+// the words belonged to. It removed nothing from the film, the preview or the export —
+// it only struck the word through. Now that both lanes read one removed set, leaving
+// those rows behind would keep striking words through for a cut that never happened.
+
+describe("dropping trims anchored to audio", () => {
+	const createdAt = "2024-01-01T00:00:00.000Z";
+
+	function docWith(trimRanges: unknown[], assets?: unknown[]) {
+		return {
+			schemaVersion: 7,
+			project: { id: "p", title: "t", createdAt, updatedAt: createdAt },
+			assets: assets ?? [
+				{ id: "vid", kind: "video", label: "v", originalPath: "/v.mp4", cameraTrack: null },
+				{ id: "aud", kind: "audio", label: "a", originalPath: "/a.mp3", cameraTrack: null },
+			],
+			transcript: null,
+			transcripts: [],
+			timeline: {
+				clips: [
+					{
+						id: "c1",
+						assetId: "vid",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 0,
+						timelineEndSec: 10,
+						wordRefs: [],
+						origin: "user",
+						reason: "",
+					},
+				],
+				gaps: [],
+				trimRanges,
+				muteRanges: [],
+				speedRanges: [],
+				captionRanges: [],
+			},
+			annotations: [],
+			zoomRanges: [],
+			audioTracks: [],
+			legacyEditor: null,
+		};
+	}
+
+	const trims = (raw: unknown) =>
+		(
+			(raw as Record<string, Record<string, unknown[]>>).timeline.trimRanges as Array<{
+				id: string;
+			}>
+		).map((t) => t.id);
+
+	const ghost = {
+		id: "ghost",
+		assetId: "aud",
+		clipId: "vo_frag",
+		startSec: 1,
+		endSec: 2,
+		origin: "user",
+		reason: "",
+	};
+	const legacy = {
+		id: "legacy",
+		assetId: "vid",
+		startSec: 1,
+		endSec: 2,
+		origin: "user",
+		reason: "",
+	};
+	const orphan = {
+		id: "orphan",
+		assetId: "vid",
+		clipId: "deleted",
+		startSec: 3,
+		endSec: 4,
+		origin: "user",
+		reason: "",
+	};
+
+	it("drops a trim anchored to an audio asset", () => {
+		expect(trims(migrateRawDocumentToCurrent(docWith([ghost, legacy])))).toEqual(["legacy"]);
+	});
+
+	it("keeps a pre-v7 trim that names no clip, and one whose clip is gone", () => {
+		// The first is asset-wide back-compat; the second can still come back through undo.
+		expect(trims(migrateRawDocumentToCurrent(docWith([legacy, orphan])))).toEqual([
+			"legacy",
+			"orphan",
+		]);
+	});
+
+	it("is idempotent, and returns the document untouched when there is nothing to sweep", () => {
+		const clean = docWith([legacy]);
+		expect(migrateRawDocumentToCurrent(clean)).toBe(clean);
+		const swept = migrateRawDocumentToCurrent(docWith([ghost, legacy]));
+		expect(migrateRawDocumentToCurrent(swept)).toBe(swept);
+	});
+
+	it("leaves a project with no audio asset entirely alone", () => {
+		const noAudio = docWith(
+			[legacy],
+			[{ id: "vid", kind: "video", label: "v", originalPath: "/v.mp4", cameraTrack: null }],
+		);
+		expect(migrateRawDocumentToCurrent(noAudio)).toBe(noAudio);
+	});
+
+	it("still parses after the sweep", () => {
+		expect(() =>
+			documentSchema.parse(migrateRawDocumentToCurrent(docWith([ghost, legacy]))),
+		).not.toThrow();
+	});
+});

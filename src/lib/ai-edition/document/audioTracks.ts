@@ -18,11 +18,7 @@
 // outer edges only.
 
 import type { AxcutAudioTrack, AxcutClip, AxcutDocument } from "../schema";
-import {
-	anchorRegionsWithDerivedMs,
-	clampSpanAgainstNeighbours,
-	coalesceRegionsForRuler,
-} from "../timeline/timelineMap";
+import { anchorRegionsWithDerivedMs, clampSpanAgainstNeighbours } from "../timeline/timelineMap";
 
 /** Every fragment of one user-visible track shares this key. */
 export function trackGroupId(track: AxcutAudioTrack): string {
@@ -115,11 +111,6 @@ export function collapseTracksToPills(tracks: AxcutAudioTrack[]): AxcutAudioTrac
 			fadeOutMs: tail.fadeOutMs,
 		};
 	});
-}
-
-/** Lane pills for the ruler, one per user-visible track. */
-export function audioTrackPills(tracks: AxcutAudioTrack[]) {
-	return coalesceRegionsForRuler(collapseTracksToPills(tracks));
 }
 
 /** Drop every fragment of a track, and its asset when nothing else needs it.
