@@ -861,22 +861,22 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 	const trim = makeTrim({ startSec: 2, endSec: 4 });
 
 	it("is the identity when there are no trims", () => {
-		expect(projectRawTimelineSecToPlayback([clip], [], 6)).toBeCloseTo(6, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [], 6, [])).toBeCloseTo(6, 6);
 	});
 
 	it("pulls a raw position after a cut earlier by the removed duration", () => {
 		// Raw 6 sits 2s past the 2s cut → output 4. This is the exact bug: the track was
 		// landing at 6 (delayed by the trim) instead of 4.
-		expect(projectRawTimelineSecToPlayback([clip], [trim], 6)).toBeCloseTo(4, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [trim], 6, [])).toBeCloseTo(4, 6);
 	});
 
 	it("is unaffected for a position before the cut", () => {
-		expect(projectRawTimelineSecToPlayback([clip], [trim], 1)).toBeCloseTo(1, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [trim], 1, [])).toBeCloseTo(1, 6);
 	});
 
 	it("collapses a position inside the trimmed gap to the end of the kept content before it", () => {
 		// Raw 3 is inside the removed 2..4 span → the next audible sample is at output 2.
-		expect(projectRawTimelineSecToPlayback([clip], [trim], 3)).toBeCloseTo(2, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [trim], 3, [])).toBeCloseTo(2, 6);
 	});
 
 	it("counts overlapping trims once (union, not sum)", () => {
@@ -886,7 +886,7 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 			makeTrim({ id: "t1", startSec: 2, endSec: 5 }),
 			makeTrim({ id: "t2", startSec: 3, endSec: 4 }),
 		];
-		expect(projectRawTimelineSecToPlayback([clip], trims, 6)).toBeCloseTo(3, 6);
+		expect(projectRawTimelineSecToPlayback([clip], trims, 6, [])).toBeCloseTo(3, 6);
 	});
 
 	it("removes a raw gap between clips (concatenated, like the programme)", () => {
@@ -906,7 +906,7 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 			timelineStartSec: 15,
 			timelineEndSec: 25,
 		});
-		expect(projectRawTimelineSecToPlayback([clipA, clipB], [], 20)).toBeCloseTo(15, 6);
+		expect(projectRawTimelineSecToPlayback([clipA, clipB], [], 20, [])).toBeCloseTo(15, 6);
 	});
 
 	it("sums cuts across multiple clips", () => {
@@ -930,7 +930,7 @@ describe("projectRawTimelineSecToPlayback (issue #350 audio-track/trim sync)", (
 			makeTrim({ id: "t2", startSec: 12, endSec: 14 }),
 		];
 		// Raw 18 is past both cuts (3s removed) → output 15.
-		expect(projectRawTimelineSecToPlayback([clipA, clipB], trims, 18)).toBeCloseTo(15, 6);
+		expect(projectRawTimelineSecToPlayback([clipA, clipB], trims, 18, [])).toBeCloseTo(15, 6);
 	});
 });
 
@@ -1714,16 +1714,16 @@ describe("projectRawTimelineSecToPlayback with speed regions", () => {
 	it("halves the time a 2x stretch takes to play", () => {
 		// Raw 4..8 at 2x plays in 2s, so raw 8 lands at output 6.
 		const speed = [{ startMs: 4000, endMs: 8000, speed: 2 }];
-		expect(projectRawTimelineSecToPlayback([clip], [], 4, speed)).toBeCloseTo(4, 6);
-		expect(projectRawTimelineSecToPlayback([clip], [], 6, speed)).toBeCloseTo(5, 6);
-		expect(projectRawTimelineSecToPlayback([clip], [], 8, speed)).toBeCloseTo(6, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [], 4, [], speed)).toBeCloseTo(4, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [], 6, [], speed)).toBeCloseTo(5, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [], 8, [], speed)).toBeCloseTo(6, 6);
 		// Everything after carries the compression with it.
-		expect(projectRawTimelineSecToPlayback([clip], [], 12, speed)).toBeCloseTo(10, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [], 12, [], speed)).toBeCloseTo(10, 6);
 	});
 
 	it("stretches a slow-motion region instead", () => {
 		const speed = [{ startMs: 0, endMs: 4000, speed: 0.5 }];
-		expect(projectRawTimelineSecToPlayback([clip], [], 4, speed)).toBeCloseTo(8, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [], 4, [], speed)).toBeCloseTo(8, 6);
 	});
 
 	it("composes with trims", () => {
@@ -1738,12 +1738,12 @@ describe("projectRawTimelineSecToPlayback with speed regions", () => {
 			reason: "",
 		};
 		const speed = [{ startMs: 6000, endMs: 10_000, speed: 2 }];
-		expect(projectRawTimelineSecToPlayback([clip], [trim], 12, speed)).toBeCloseTo(8, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [trim], 12, [], speed)).toBeCloseTo(8, 6);
 	});
 
 	it("ignores a nonsense rate rather than dividing by it", () => {
 		const speed = [{ startMs: 0, endMs: 4000, speed: 0 }];
-		expect(projectRawTimelineSecToPlayback([clip], [], 4, speed)).toBeCloseTo(4, 6);
+		expect(projectRawTimelineSecToPlayback([clip], [], 4, [], speed)).toBeCloseTo(4, 6);
 	});
 });
 

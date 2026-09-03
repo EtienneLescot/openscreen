@@ -18,6 +18,7 @@ import type {
 } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import { rulerInserts } from "@/lib/ai-edition/timeline/inserted-time";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import {
 	type RemovedRawSpan,
@@ -590,6 +591,10 @@ export function VirtualPreview({
 	trimRangesRef.current = trimRanges;
 	// What the film no longer contains, recomputed only when the cuts move — the rAF asks
 	// it once per voiceover per frame, and walking every trim there would be wasteful.
+	// The film's pauses, placed on the raw ruler once. The projection needs them or every
+	// track after a pause lands D seconds early — the bug this argument exists to close.
+	const filmInsertsRef = useRef(rulerInserts(insertRanges, clips));
+	filmInsertsRef.current = useMemo(() => rulerInserts(insertRanges, clips), [insertRanges, clips]);
 	const removedRef = useRef(removedRawSpans(clips, trimRanges));
 	removedRef.current = useMemo(() => removedRawSpans(clips, trimRanges), [clips, trimRanges]);
 	// Trim-narrowed (`resolvePlaybackSegments`) — used ONLY to detect "has the <video>'s own
@@ -693,6 +698,7 @@ export function VirtualPreview({
 				clipsRef.current,
 				trimRangesRef.current,
 				virtualTimeSecRef.current,
+				filmInsertsRef.current,
 				speedRegionsRef.current,
 			);
 			for (const track of audioTracksRef.current) {
@@ -702,6 +708,7 @@ export function VirtualPreview({
 					clipsRef.current,
 					trimRangesRef.current,
 					track.startMs / 1000,
+					filmInsertsRef.current,
 					speedRegionsRef.current,
 				);
 				// Length is measured WITHOUT speed, position WITH it. A trim REMOVES
@@ -716,11 +723,13 @@ export function VirtualPreview({
 						clipsRef.current,
 						trimRangesRef.current,
 						track.endMs / 1000,
+						filmInsertsRef.current,
 					) -
 						projectRawTimelineSecToPlayback(
 							clipsRef.current,
 							trimRangesRef.current,
 							track.startMs / 1000,
+							filmInsertsRef.current,
 						),
 				);
 				// A voiceover follows the cuts; a bed plays through them. Step 6 of #560

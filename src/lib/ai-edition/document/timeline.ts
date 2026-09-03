@@ -21,6 +21,7 @@ import type {
  */
 export type PlaybackSegment = AxcutClip & { heldSec?: number };
 
+import type { RulerInsert } from "../timeline/inserted-time";
 import { type Interval, subtractInterval } from "../timeline/intervals";
 import { keptRawSpans } from "../timeline/programme-time";
 import {
@@ -371,6 +372,15 @@ export function projectRawTimelineSecToPlayback(
 	trimRanges: AxcutTrimRange[],
 	rawSec: number,
 	/**
+	 * The recording lane's pauses, already placed on the raw ruler by `rulerInserts`.
+	 *
+	 * REQUIRED, not optional, and every call site was migrated with it. An optional
+	 * parameter would silently keep the early-audio bug alive at every site that had not
+	 * been touched yet — which is the exact failure this argument exists to fix, and the
+	 * kind that shows up as "the music starts a beat early" months later.
+	 */
+	filmInserts: readonly RulerInsert[],
+	/**
 	 * Speed regions on the raw ruler. Supplied by the AUDIO paths, which overlay
 	 * a 1x track onto the finished programme and so need its real, speed-adjusted
 	 * clock; omitted by callers that only care about trims. Left out, the
@@ -383,19 +393,46 @@ export function projectRawTimelineSecToPlayback(
 	let lastRawEnd = 0; // raw end of the last kept segment, for the trailing overhang
 	let landed: number | null = null; // output(rawSec), once it falls in/before a kept segment
 
+	// A pause the film holds occupies ZERO raw seconds and D OUTPUT seconds — it is the one
+	// thing a flat kept-interval list cannot express, which is why it was left out and why
+	// every audio track after a pause has been landing D seconds early in both the preview
+	// and the export. Interleaved here rather than added afterwards, because where the pause
+	// sits inside the kept span decides which side of it `rawSec` falls on.
+	const holds = [...filmInserts].sort((a, b) => a.atRawSec - b.atRawSec);
+	let nextHold = 0;
+
 	// The kept stretches come from `keptRawSpans`, which is this walk — it was lifted out of
 	// here so the transcript lanes and the audio mix could ask the same question and get the
 	// same answer (issue #560). Trims only REMOVE, so a kept span's RAW length is what
 	// survives; how long it takes to PLAY is a separate question `outputDurationOfRawSpan`
 	// answers, because a speed region scales it.
 	for (const seg of keptRawSpans(ordered, trimRanges)) {
+		let from = seg.startSec;
+		// Every pause this segment carries, in order. A pause whose moment a trim removed is
+		// in no kept span at all and is never reached — the moment it holds is not in the
+		// film any more, so neither is the pause.
+		while (nextHold < holds.length && holds[nextHold].atRawSec < seg.startSec) nextHold++;
+		while (nextHold < holds.length && holds[nextHold].atRawSec < seg.endSec) {
+			const hold = holds[nextHold++];
+			const at = Math.max(from, hold.atRawSec);
+			if (landed === null && rawSec < at) {
+				const within = Math.min(Math.max(rawSec, from), at);
+				landed = outCursor + outputDurationOfRawSpan(from, within, speedRegions);
+			}
+			outCursor += outputDurationOfRawSpan(from, at, speedRegions);
+			from = at;
+			// Strictly after the pause's own moment, matching `expandRawSec`: a track whose
+			// head sits exactly there starts WITH the pause, not after it.
+			if (landed === null && rawSec <= at) landed = outCursor;
+			outCursor += hold.durationSec;
+		}
 		if (landed === null && rawSec < seg.endSec) {
 			// `rawSec` is inside this segment, or before it in a trimmed/gap region (then
 			// the span clamps to nothing → the output edge just before the gap).
-			const within = Math.min(Math.max(rawSec, seg.startSec), seg.endSec);
-			landed = outCursor + outputDurationOfRawSpan(seg.startSec, within, speedRegions);
+			const within = Math.min(Math.max(rawSec, from), seg.endSec);
+			landed = outCursor + outputDurationOfRawSpan(from, within, speedRegions);
 		}
-		outCursor += outputDurationOfRawSpan(seg.startSec, seg.endSec, speedRegions);
+		outCursor += outputDurationOfRawSpan(from, seg.endSec, speedRegions);
 		lastRawEnd = seg.endSec;
 	}
 	// Past every kept frame: programme end plus whatever raw time hangs off the end (identity when
