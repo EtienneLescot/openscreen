@@ -576,24 +576,20 @@ export function VirtualPreview({
 	 *  yet, so the stand-in is a fixed frame and silence — but it is a piece of media on the
 	 *  timeline like any other, and playback runs THROUGH it rather than around it.
 	 *
-	 *  The `<video>` cannot supply those seconds: they are not in the file. So for the
-	 *  insertion's duration the element is PINNED (`currentTime` held at its source moment,
-	 *  which is the fixed frame) and MUTED (the inserted audio is silence today). It is
-	 *  deliberately NOT `pause()`d — the film is playing, and pausing the element told the
-	 *  whole app otherwise: the store's `playing` flag mirrors the element's `pause` event,
-	 *  so the transport flipped to stopped the moment an insertion began. */
-	const insertionRef = useRef<{
-		insertId: string;
-		rawSec: number;
-		sourceSec: number;
-		durationSec: number;
-		startedAtMs: number;
-	} | null>(null);
-	/** The element's own muted flag, to restore when the insertion ends. */
-	const mutedBeforeInsertionRef = useRef(false);
-	/** How far into the insertion currently playing we are, in ruler seconds. Read by
-	 *  `updateVirtualTime` so the position it publishes advances ACROSS the insertion while
-	 *  the raw second it also publishes stands still at the insertion's moment. */
+	 *  The `<video>` cannot supply those seconds: they are not in the file. So it is PARKED
+	 *  for the insertion's duration — paused, which holds the frame the insertion stands for
+	 *  and silences the recording under it — and a wall clock runs the insertion out.
+	 *
+	 *  Parked, not re-seeked: writing `currentTime` every frame to a still-playing element
+	 *  is a seek storm the decoder never settles out of, and that is what "playback stops at
+	 *  the insertion" actually was. The cost is that `<video>.paused` stops answering "is the
+	 *  film stopped?" — see `filmPlaying` in the tick. */
+	const insertionRef = useRef<{ rawSec: number; durationSec: number; startedAtMs: number } | null>(
+		null,
+	);
+	/** How far into the insertion the wall clock has run, in seconds. Read by
+	 *  `updateVirtualTime` so the RULER position it publishes crosses the insertion while the
+	 *  RAW second it publishes alongside stands still at the insertion's own moment. */
 	const insertionElapsedRef = useRef(0);
 	const filmInsertsRef = useRef(rulerInserts(insertRanges, clips));
 	filmInsertsRef.current = useMemo(() => rulerInserts(insertRanges, clips), [insertRanges, clips]);
@@ -698,34 +694,25 @@ export function VirtualPreview({
 			if (!v || !Number.isFinite(v.currentTime)) {
 				return;
 			}
-			// Play the insertion FIRST: everything below is positioned against a clock that is
-			// running through it — the imported tracks especially, which sit on the programme
-			// clock exactly as they do in the render's output stream.
-			let insertionElapsedSec = 0;
+			// Run the insertion out FIRST: everything below is positioned against a clock that
+			// crosses it — the imported tracks especially, which sit on the programme clock
+			// exactly as they do in the render's output stream.
 			const insertion = insertionRef.current;
 			if (insertion) {
-				insertionElapsedSec = Math.min(
-					insertion.durationSec,
-					(performance.now() - insertion.startedAtMs) / 1000,
-				);
-				if (insertionElapsedSec >= insertion.durationSec) {
+				const elapsedSec = (performance.now() - insertion.startedAtMs) / 1000;
+				// `!v.paused` means something un-parked the element under us — the transport.
+				if (elapsedSec >= insertion.durationSec || !v.paused) {
 					insertionRef.current = null;
-					insertionElapsedSec = 0;
-					v.muted = mutedBeforeInsertionRef.current;
+					insertionElapsedRef.current = 0;
+					if (v.paused) void v.play().catch(() => undefined);
 				} else {
-					// Re-pinned every frame: the element is still playing, so left alone it
-					// would decode straight past the fixed frame the insertion stands for.
-					if (Math.abs(v.currentTime - insertion.sourceSec) > 0.01) {
-						try {
-							v.currentTime = insertion.sourceSec;
-						} catch {
-							// not seekable this instant; the next frame retries
-						}
-					}
-					v.muted = true;
+					insertionElapsedRef.current = elapsedSec;
 				}
 			}
-			insertionElapsedRef.current = insertionElapsedSec;
+			// A PARKED element is not a stopped film, and this is the question every gate
+			// below actually means: the picture is held on the insertion's frame on purpose
+			// while the programme keeps running over it.
+			const filmPlaying = !v.paused || insertionRef.current !== null;
 			for (const audio of [primaryAudioRef.current, supplementalAudioRef.current]) {
 				if (!audio) continue;
 				const target = resolveAudioTrackPlayback(v.currentTime, audio.duration);
@@ -775,7 +762,7 @@ export function VirtualPreview({
 					virtualTimeSecRef.current,
 					filmInsertsRef.current,
 					speedRegionsRef.current,
-				) + insertionElapsedSec;
+				) + insertionElapsedRef.current;
 			for (const track of audioTracksRef.current) {
 				const el = audioTrackElsRef.current.get(track.id);
 				if (!el) continue;
@@ -867,7 +854,7 @@ export function VirtualPreview({
 						// media metadata not ready yet
 					}
 				}
-				if (!v.paused && trackTarget.shouldPlay && el.paused) {
+				if (filmPlaying && trackTarget.shouldPlay && el.paused) {
 					// Resume a context suspended by autoplay policy, exactly as the primary
 					// loop does above — otherwise a track that starts while the primary
 					// element is silent (its span is over, or a recording with no separate
@@ -877,7 +864,7 @@ export function VirtualPreview({
 					}
 					const playback = el.play();
 					if (playback) void playback.catch(() => undefined);
-				} else if ((v.paused || !trackTarget.shouldPlay) && !el.paused) {
+				} else if ((!filmPlaying || !trackTarget.shouldPlay) && !el.paused) {
 					el.pause();
 				}
 			}
@@ -886,7 +873,7 @@ export function VirtualPreview({
 			// bypasses React state entirely.
 			if (clockRef) {
 				clockRef.current.sourceTimeSec = v.currentTime;
-				clockRef.current.isPlaying = !v.paused;
+				clockRef.current.isPlaying = filmPlaying;
 				clockRef.current.playbackRate = v.playbackRate;
 				clockRef.current.virtualTimeSec = virtualTimeSecRef.current;
 			}
@@ -977,7 +964,7 @@ export function VirtualPreview({
 			// `clockRef` et `setSourceTimeSec` ci-dessus continuent d'être publiés : la webcam
 			// et le calque curseur ont besoin du temps source même à l'arrêt. Seule la
 			// position de la TIMELINE cesse d'être dictée par le média.
-			if (v.paused) {
+			if (!filmPlaying) {
 				return;
 			}
 			if (clipsRef.current.length === 0) {
@@ -1053,14 +1040,15 @@ export function VirtualPreview({
 				? undefined
 				: insertionEnteredBetween(virtualTimeSecRef.current, nextRawTime, filmInsertsRef.current);
 			if (entering) {
-				mutedBeforeInsertionRef.current = v.muted;
 				insertionRef.current = {
-					insertId: entering.id,
 					rawSec: entering.atRawSec,
-					sourceSec: position.sourceTimeSec,
 					durationSec: entering.durationSec,
 					startedAtMs: performance.now(),
 				};
+				insertionElapsedRef.current = 0;
+				// Parks the picture on the frame the insertion stands for, and silences the
+				// recording under it. Both are what the insertion IS.
+				v.pause();
 				// The insertion's own moment, not the frame we happened to land on: the
 				// transcript cue, the caption lookup and the audio mix all read this, and
 				// through the insertion the RECORDING really is at that one instant.
@@ -1173,17 +1161,11 @@ export function VirtualPreview({
 
 	const seekToVirtualTime = useCallback(
 		(nextVirtualTimeSec: number, preservePlayback = false, forceResume = false) => {
-			// A seek AWAY ends the insertion that was playing: the playhead is somewhere else
-			// now, so the fixed frame it was pinning is not the frame any more. A seek TO the
-			// insertion's own moment is not "away" — it is the echo of the position this very
-			// tick published, and clearing on it would cut every insertion short the frame it
-			// began.
-			const playingInsertion = insertionRef.current;
-			if (playingInsertion && Math.abs(playingInsertion.rawSec - nextVirtualTimeSec) > 1e-3) {
-				insertionRef.current = null;
-				const el = videoRef.current;
-				if (el) el.muted = mutedBeforeInsertionRef.current;
-			}
+			// A seek ends the insertion that was playing: the playhead is somewhere else now,
+			// so the frame it parked on is not the frame any more. The rAF's own seeks (clip
+			// advance, trim skip) are gated on `!v.paused` and so never land here mid-insertion.
+			insertionRef.current = null;
+			insertionElapsedRef.current = 0;
 			const position = locateVirtualPosition(clips, nextVirtualTimeSec);
 			if (!position) {
 				videoRef.current?.pause();
