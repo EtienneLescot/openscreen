@@ -777,6 +777,7 @@ export function buildSceneDescription(
 		visibleClips,
 		document.timeline.clips,
 		() => createId("zoom"),
+		document.timeline.insertRanges ?? [],
 	);
 	// Same raw→source projection as the zoom regions above, for the same reason: annotations are
 	// authored in RAW document time and the compositor matches each frame's SOURCE time.
@@ -813,6 +814,7 @@ export function buildSceneDescription(
 		visibleClips,
 		document.timeline.clips,
 		() => createId("ann"),
+		document.timeline.insertRanges ?? [],
 	);
 	const projectedCameraFullscreenRegions = projectRegionsToSource(
 		((document.legacyEditor as Record<string, unknown> | null)?.cameraFullscreenRegions as
@@ -821,6 +823,7 @@ export function buildSceneDescription(
 		visibleClips,
 		document.timeline.clips,
 		() => createId("camfull"),
+		document.timeline.insertRanges ?? [],
 	);
 	// Speed regions carry an extra `speed` field the standard `rangeSchema` does not, so we
 	// can't read from `document.timeline.speedRanges` today (see SceneDescription.speedRegions
@@ -835,6 +838,7 @@ export function buildSceneDescription(
 		visibleClips,
 		document.timeline.clips,
 		() => createId("speed"),
+		document.timeline.insertRanges ?? [],
 	);
 
 	// Webcam rect, single source of truth between preview & native :
