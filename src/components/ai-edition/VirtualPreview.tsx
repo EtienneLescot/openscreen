@@ -22,7 +22,7 @@ import type {
 } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
-import { rulerInserts } from "@/lib/ai-edition/timeline/inserted-time";
+import { holdEnteredBetween, rulerInserts } from "@/lib/ai-edition/timeline/inserted-time";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
@@ -564,6 +564,28 @@ export function VirtualPreview({
 	// it once per voiceover per frame, and walking every trim there would be wasteful.
 	// The film's pauses, placed on the raw ruler once. The projection needs them or every
 	// track after a pause lands D seconds early — the bug this argument exists to close.
+	/** The pause the picture is currently sitting on, if any.
+	 *
+	 *  A word added to a lane buys OUTPUT seconds, and the film has to spend them somewhere.
+	 *  The export spends them holding a frame (`hold_sec`, `walk_composited_timeline`); the
+	 *  ruler spends them by growing (`expandRawSec`); the programme clock spends them by
+	 *  stepping over them (`projectRawTimelineSecToPlayback`). The DOM preview did not spend
+	 *  them at all — the `<video>` ran straight through, because a pause has no frames of its
+	 *  own to decode. So past the first pause the picture was D seconds BEHIND every track
+	 *  positioned on the programme clock, and the preview stopped being the same film as the
+	 *  export (issue #560).
+	 *
+	 *  The element is paused and a WALL clock runs the hold out, which is the honest model:
+	 *  the frame is frozen, so media time is exactly what must stop advancing while real time
+	 *  does not. */
+	const holdRef = useRef<{
+		insertId: string;
+		rawSec: number;
+		durationSec: number;
+		startedAtMs: number;
+	} | null>(null);
+	/** Set when the hold interrupted actual playback, so the film resumes on its own. */
+	const resumeAfterHoldRef = useRef(false);
 	const filmInsertsRef = useRef(rulerInserts(insertRanges, clips));
 	filmInsertsRef.current = useMemo(() => rulerInserts(insertRanges, clips), [insertRanges, clips]);
 	// One walk per take, recomputed only when the cuts or the insertions move. The rAF asks
@@ -667,6 +689,27 @@ export function VirtualPreview({
 			if (!v || !Number.isFinite(v.currentTime)) {
 				return;
 			}
+			// Run the pause out FIRST: everything below that is positioned on the programme
+			// clock — the imported tracks especially — is still advancing during a hold even
+			// though the picture is not, exactly as the render's output stream is.
+			let heldElapsedSec = 0;
+			const hold = holdRef.current;
+			if (hold) {
+				heldElapsedSec = Math.min(hold.durationSec, (performance.now() - hold.startedAtMs) / 1000);
+				if (heldElapsedSec >= hold.durationSec) {
+					holdRef.current = null;
+					heldElapsedSec = hold.durationSec;
+					if (resumeAfterHoldRef.current) {
+						resumeAfterHoldRef.current = false;
+						const resumed = v.play();
+						if (resumed) void resumed.catch(() => undefined);
+					}
+				} else if (!v.paused) {
+					// A `play()` from elsewhere (autoplay, a resume racing the hold) would
+					// otherwise let the picture walk out from under the pause.
+					v.pause();
+				}
+			}
 			for (const audio of [primaryAudioRef.current, supplementalAudioRef.current]) {
 				if (!audio) continue;
 				const target = resolveAudioTrackPlayback(v.currentTime, audio.duration);
@@ -703,13 +746,19 @@ export function VirtualPreview({
 			// was never given a faster `playbackRate`, but seeking it twice as fast
 			// amounts to the same thing. Dividing raw time by the rate turns that
 			// back into 1x wall-clock, which is what the render does too.
-			const outputTimeSec = projectRawTimelineSecToPlayback(
-				clipsRef.current,
-				trimRangesRef.current,
-				virtualTimeSecRef.current,
-				filmInsertsRef.current,
-				speedRegionsRef.current,
-			);
+			// `+ heldElapsedSec`, and only here: the raw playhead is pinned to the held moment
+			// for the whole pause, and the projection of that moment is the pause's OPENING
+			// (`expandRawSec` and this walk both give the frame about to be held its own
+			// instant). Adding the wall-clock elapsed walks the programme through the pause,
+			// which is what the mixer downstream is doing over the same seconds.
+			const outputTimeSec =
+				projectRawTimelineSecToPlayback(
+					clipsRef.current,
+					trimRangesRef.current,
+					virtualTimeSecRef.current,
+					filmInsertsRef.current,
+					speedRegionsRef.current,
+				) + heldElapsedSec;
 			for (const track of audioTracksRef.current) {
 				const el = audioTrackElsRef.current.get(track.id);
 				if (!el) continue;
@@ -980,7 +1029,28 @@ export function VirtualPreview({
 				seekToVirtualTimeRef.current?.(nextClip.timelineStartSec, true);
 				return;
 			}
-			updateVirtualTime(clampVirtualTime(clipsRef.current, position.virtualTimeSec));
+			const nextRawTime = clampVirtualTime(clipsRef.current, position.virtualTimeSec);
+			// The first pause this frame stepped over — the rule, and why it is half-open,
+			// live with the other ruler arithmetic.
+			const entering = holdRef.current
+				? undefined
+				: holdEnteredBetween(virtualTimeSecRef.current, nextRawTime, filmInsertsRef.current);
+			if (entering) {
+				holdRef.current = {
+					insertId: entering.id,
+					rawSec: entering.atRawSec,
+					durationSec: entering.durationSec,
+					startedAtMs: performance.now(),
+				};
+				resumeAfterHoldRef.current = true;
+				v.pause();
+				// The held moment, not the frame we happened to land on: the transcript cue,
+				// the caption lookup and the audio mix all read this, and for the length of
+				// the pause the film really is at that one instant.
+				updateVirtualTime(entering.atRawSec);
+				return;
+			}
+			updateVirtualTime(nextRawTime);
 		};
 		raf = window.requestAnimationFrame(tick);
 		return () => window.cancelAnimationFrame(raf);
@@ -1079,6 +1149,14 @@ export function VirtualPreview({
 
 	const seekToVirtualTime = useCallback(
 		(nextVirtualTimeSec: number, preservePlayback = false, forceResume = false) => {
+			// A seek ends any pause the picture was holding: the playhead is somewhere else
+			// now, so the frame we were frozen on is not the frame any more. Without this the
+			// hold's wall clock would run out under the new position and hand the film back to
+			// `play()` — the film starting itself again because the user scrubbed during a
+			// pause. The rAF's own seeks (clip advance, trim skip) are gated on `!paused` and
+			// so never reach here while a hold is in flight.
+			holdRef.current = null;
+			resumeAfterHoldRef.current = false;
 			const position = locateVirtualPosition(clips, nextVirtualTimeSec);
 			if (!position) {
 				videoRef.current?.pause();
