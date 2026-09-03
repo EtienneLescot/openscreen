@@ -10,8 +10,15 @@
 // Mesuré sur cette machine (Mac mini M1) : entre l'exécution du preload et celle du module
 // d'entrée, l'`index.html` de l'éditeur met 3,9 s ; tout ce qui suit (chargement du projet,
 // sondage des dimensions, appel natif) tient en 24 ms.
+//
+// `I18nProvider` EST nécessaire, contrairement à ce qu'une première version de ce fichier
+// supposait. Aucun runner n'appelle `useI18n` directement, mais `CliRecordRunner` passe par
+// `useScreenRecorder`, qui en dépend : sans le fournisseur, la fenêtre lève
+// « useI18n must be used within <I18nProvider> » et `openscreen record` reste bloqué pour
+// toujours — le processus principal attend une requête que le renderer ne demandera jamais.
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { I18nProvider } from "./contexts/I18nContext";
 
 /// Monte le runner correspondant à `windowType` dans `root`.
 ///
@@ -28,7 +35,9 @@ export async function mountCliWindow(
 			const { default: R } = await import("./cli/CliExportRunner");
 			root.render(
 				<React.StrictMode>
-					<R />
+					<I18nProvider>
+						<R />
+					</I18nProvider>
 				</React.StrictMode>,
 			);
 			return;
@@ -37,7 +46,9 @@ export async function mountCliWindow(
 			const { default: R } = await import("./cli/CliRecordRunner");
 			root.render(
 				<React.StrictMode>
-					<R />
+					<I18nProvider>
+						<R />
+					</I18nProvider>
 				</React.StrictMode>,
 			);
 			return;
@@ -46,7 +57,9 @@ export async function mountCliWindow(
 			const { default: R } = await import("./cli/CliSourcesRunner");
 			root.render(
 				<React.StrictMode>
-					<R />
+					<I18nProvider>
+						<R />
+					</I18nProvider>
 				</React.StrictMode>,
 			);
 			return;
@@ -55,7 +68,9 @@ export async function mountCliWindow(
 			const { default: R } = await import("./cli/CliCaptionsRunner");
 			root.render(
 				<React.StrictMode>
-					<R />
+					<I18nProvider>
+						<R />
+					</I18nProvider>
 				</React.StrictMode>,
 			);
 			return;
