@@ -31,6 +31,7 @@ import {
 import { createId } from "@/lib/ai-edition/document/ids";
 import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
 import {
+	type PlaybackSegment,
 	type PlaybackSpeedRegion,
 	projectRawTimelineSecToPlayback,
 	resolvePlaybackSegments,
@@ -514,7 +515,12 @@ function clipAssetIsResolvable(
 	return Boolean(assetById.get(clip.assetId)?.originalPath);
 }
 
-export function resolveVisibleClips(document: AxcutDocument): AxcutClip[] {
+/**
+ * Returns `PlaybackSegment[]`, not `AxcutClip[]`: a held segment carries `heldSec`, and
+ * widening it away here is what kept the pause from ever reaching the compositor. Every
+ * caller maps it to `holdSec` on the clip input (issue #560).
+ */
+export function resolveVisibleClips(document: AxcutDocument): PlaybackSegment[] {
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
 	return resolvePlaybackSegments(
 		document.timeline.clips,
@@ -705,6 +711,9 @@ export function buildSceneDescription(
 				sourceEndSec: resolveClipSourceEndSec(clip, asset),
 				webcamOffsetSec: camera.offsetSec,
 				hasAudio: true,
+				// A held segment has an empty source window and exists only for the frames it
+				// holds; every other clip holds nothing.
+				holdSec: clip.heldSec ?? 0,
 			},
 		];
 	});

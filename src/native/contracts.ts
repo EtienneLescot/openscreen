@@ -170,6 +170,16 @@ export interface CompositorClipInput {
 	 *  convention). Populated by `buildSceneDescription` and `buildNativeClipList`;
 	 *  see the comment on the producer side for the exact rule. */
 	hasAudio: boolean;
+	/** Extra OUTPUT seconds this clip holds its last frame for, silently.
+	 *
+	 *  A word added to the recording transcript needs somewhere to be spoken, so the film
+	 *  holds a frame and everything after it moves along the ruler (issue #560). The ruler
+	 *  and the preview have honoured that for a while; the EXPORT did not, because a held
+	 *  segment has an empty source window and `walk_composited_timeline` skips those. It is
+	 *  a separate clip carrying this field rather than an adjustment to its predecessor:
+	 *  scene regions are keyed by clip INDEX, so removing an entry from the list would point
+	 *  every region after it at the wrong clip. */
+	holdSec: number;
 }
 
 /** Bilan d'un export natif (mesure enveloppante §10 : frames, durée, fps). */

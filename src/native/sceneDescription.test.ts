@@ -1994,6 +1994,72 @@ describe("buildSceneDescription.captions", () => {
 });
 
 // --- imported audio tracks (issue #350) ------------------------------------
+// ─── The pause that exported as nothing ─────────────────────────────────────
+// A held segment has an empty source window, and `walk_composited_timeline` skipped every
+// clip shaped like that — so a word added to the recording lengthened the ruler and the
+// preview and produced no frames at all in the exported file (issue #560). The segment now
+// reaches the compositor as its OWN clip carrying `holdSec`, keeping its index so the scene
+// regions after it still point at the right clip.
+
+describe("buildSceneDescription.holdSec", () => {
+	it("sends a pause to the compositor as a clip that holds", () => {
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "scr", kind: "video", originalPath: "/s.mp4", durationSec: 10 })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "scr",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			timeline: {
+				// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
+				insertRanges: [
+					{
+						id: "i1",
+						assetId: "scr",
+						atSec: 4,
+						durationSec: 1,
+						wordId: "w1",
+						reason: "",
+						origin: "user",
+					},
+				] as any,
+			},
+		});
+		const clips = buildSceneDescription(doc).clips;
+		const held = clips.filter((c) => c.holdSec > 0);
+		expect(held).toHaveLength(1);
+		expect(held[0].holdSec).toBeCloseTo(1, 6);
+		// Its own entry, in place — not folded onto its predecessor, which would shift every
+		// clip index after it and point the scene's per-clip regions at the wrong clip.
+		expect(clips).toHaveLength(3);
+		expect(clips[1]).toBe(held[0]);
+		// An empty source window: it decodes nothing and exists only for its held frames.
+		expect(held[0].sourceEndSec).toBeCloseTo(held[0].sourceStartSec, 6);
+	});
+
+	it("holds nothing on an ordinary clip", () => {
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "scr", kind: "video", originalPath: "/s.mp4", durationSec: 10 })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "scr",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+		});
+		expect(buildSceneDescription(doc).clips.every((c) => c.holdSec === 0)).toBe(true);
+	});
+});
+
 describe("buildSceneDescription.audioTracks", () => {
 	const audioAsset = makeAsset({
 		id: "aud",

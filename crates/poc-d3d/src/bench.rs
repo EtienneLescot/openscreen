@@ -150,6 +150,7 @@ fn run_bench(args: &[String]) -> Result<()> {
                 source_end_sec: 6.0, // la fixture entière (§ fixture.json : 6 s, 360 frames)
                 webcam_offset_sec: 0.0,
                 has_audio: false,
+                hold_sec: 0.0,
             };
             let path = format!("{out}/{}_{:?}.mp4", cfg.name, backend).to_lowercase();
             let s = pipeline::run_composited_multi(
@@ -292,6 +293,7 @@ fn run_gif_bench(
         source_end_sec: f64::MAX,
         webcam_offset_sec: 0.0,
         has_audio: false,
+        hold_sec: 0.0,
     }];
     for r in 0..repeat {
         // Each run writes to the same path — the last frame wins. The

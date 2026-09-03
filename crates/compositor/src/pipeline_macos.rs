@@ -614,6 +614,8 @@ pub struct ClipSource {
     pub source_end_sec: f64,
     pub webcam_offset_sec: f64,
     pub has_audio: bool,
+    /// Secondes de sortie tenues sur la dernière image, en silence (issue #560).
+    pub hold_sec: f64,
 }
 
 /// Codec cible pour l'export. Identique à `pipeline_windows::ExportCodec`.

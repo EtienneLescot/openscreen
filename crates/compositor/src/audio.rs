@@ -1630,6 +1630,40 @@ impl Drop for AacEncoder {
 }
 
 #[cfg(test)]
+mod hold_tests {
+    use super::*;
+
+    /// Les images tenues allongent le CRÉNEAU audio du clip sans allonger son PCM, et
+    /// `assemble_concatenated_pcm` laisse des zéros dans ce qui dépasse. Le silence d'une
+    /// pause est donc gratuit : aucun fichier muet à décoder, aucune entrée de mix en plus.
+    #[test]
+    fn a_longer_slot_than_pcm_leaves_silence_at_its_tail() {
+        // 2s de créneau à 1 fps, mais seulement 1s de PCM décodé.
+        let plan = build_audio_concat_plan(&[2], &[true], 1.0);
+        let one_sec = AUDIO_OUTPUT_SAMPLE_RATE as usize;
+        let pcm = vec![Some(vec![vec![0.5f32; one_sec]; AUDIO_OUTPUT_CHANNELS])];
+        let out = assemble_concatenated_pcm(&pcm, &plan);
+        assert_eq!(out[0].len(), 2 * one_sec);
+        assert!((out[0][0] - 0.5).abs() < 1e-6, "le vrai son est bien là");
+        assert_eq!(out[0][2 * one_sec - 1], 0.0, "la queue du créneau est du silence");
+    }
+
+    /// Et le son réel n'est PAS étiré pour remplir le créneau : la voix garde son rythme.
+    #[test]
+    fn the_clips_own_audio_is_not_stretched_to_fill_the_hold() {
+        let plan = build_audio_concat_plan(&[4], &[true], 1.0);
+        let one_sec = AUDIO_OUTPUT_SAMPLE_RATE as usize;
+        let mut source = vec![0.0f32; one_sec];
+        source[0] = 1.0;
+        let pcm = vec![Some(vec![source.clone(), source])];
+        let out = assemble_concatenated_pcm(&pcm, &plan);
+        // L'impulsion reste au premier échantillon, pas répartie sur quatre secondes.
+        assert!((out[0][0] - 1.0).abs() < 1e-6);
+        assert_eq!(out[0][1], 0.0);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

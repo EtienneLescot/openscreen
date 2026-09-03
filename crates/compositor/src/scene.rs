@@ -19,6 +19,11 @@ pub struct SceneClip {
     /// Une source sans piste audio décodable garde sa durée via du silence natif.
     #[serde(default)]
     pub has_audio: bool,
+    /// Secondes de sortie pendant lesquelles ce clip TIENT sa dernière image, en silence.
+    /// `#[serde(default)]` comme `has_audio` juste au-dessus, et pour la même raison : un
+    /// document écrit avant ce champ se charge sans lui, à 0.0.
+    #[serde(default)]
+    pub hold_sec: f64,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -612,6 +617,26 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Un document écrit avant `holdSec` doit se charger, à 0.0 — comme `hasAudio` avant
+    /// lui. Sans ce défaut, ouvrir un projet fait par une version antérieure échouerait au
+    /// parse au lieu de simplement ne rien tenir (issue #560).
+    #[test]
+    fn a_clip_without_hold_sec_deserializes_to_zero() {
+        let json = r##"{"screenPath":"/s.mp4","webcamPath":"/w.mp4","sourceStartSec":0,"sourceEndSec":4,"webcamOffsetSec":0,"hasAudio":true}"##;
+        let clip: SceneClip = serde_json::from_str(json).expect("clip sans holdSec");
+        assert_eq!(clip.hold_sec, 0.0);
+    }
+
+    #[test]
+    fn a_clip_carries_its_hold_when_the_document_states_one() {
+        let json = r##"{"screenPath":"/s.mp4","webcamPath":"/w.mp4","sourceStartSec":2,"sourceEndSec":2,"webcamOffsetSec":0,"hasAudio":true,"holdSec":1.5}"##;
+        let clip: SceneClip = serde_json::from_str(json).expect("clip tenu");
+        assert_eq!(clip.hold_sec, 1.5);
+        // Fenêtre source vide ET pause positive : c'est exactement la forme que la marche
+        // laisse désormais passer.
+        assert!(clip.source_end_sec <= clip.source_start_sec);
+    }
 
     #[test]
     fn parses_a_minimal_scene_json() {
