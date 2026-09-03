@@ -568,11 +568,16 @@ export function projectRegionsToSource<
 	visibleSegments: PlaybackSegment[],
 	rawClips: AxcutClip[],
 	makeId: () => string,
+	/** The insertions the clips carry. A segment after one starts that much further along
+	 *  the timeline, and an UNANCHORED region — a caption cue, which is built fresh each
+	 *  time and has no clip anchor — is placed by intersecting with exactly that extent.
+	 *  Without them the caption landed on the wrong stretch of source (issue #560). */
+	insertRanges: readonly AxcutInsertRange[] = [],
 ): (T & { clipIndex?: number; underTrim?: boolean })[] {
 	// RAW extents + owning raw clip per visible segment. Both are only consulted by the
 	// path that needs them (raw fallback / anchor match), but resolving them once keeps
 	// the per-region loop free of repeated lookups.
-	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
+	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips, insertRanges));
 	const segmentRawClipIds = visibleSegments.map((seg) => findRawClipForSegment(seg, rawClips)?.id);
 	const out: (T & { clipIndex?: number; underTrim?: boolean })[] = [];
 	for (const region of regions) {

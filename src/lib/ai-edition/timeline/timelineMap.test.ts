@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { resolvePlaybackSegments } from "../document/timeline";
-import type { AxcutClip, AxcutTrimRange } from "../schema";
+import type { AxcutClip, AxcutInsertRange, AxcutTrimRange } from "../schema";
 import {
 	anchorRawRegionsToClips,
 	anchorRegionsWithDerivedMs,
@@ -803,5 +803,67 @@ describe("legacy groupId must never affect identity (regression: test 1)", () =>
 			() => "gen",
 		);
 		expect(out[0]).not.toHaveProperty("groupId");
+	});
+});
+
+// ─── Placing an unanchored region past an insertion ─────────────────────────
+// A caption cue is built fresh on every derive and carries no clip anchor, so it is placed
+// by intersecting its TIMELINE span with each segment's extent. A clip carrying insertions
+// is longer than its source window, so the segment that resumes after one starts that much
+// further along — and a projection blind to that put every caption after an insertion on
+// the wrong stretch of source. That is what "the subtitles are out of sync" was (#560).
+
+describe("projectRegionsToSource past an insertion", () => {
+	const raw = clip({
+		id: "c1",
+		assetId: "a1",
+		sourceStartSec: 0,
+		sourceEndSec: 10,
+		timelineStartSec: 0,
+		timelineEndSec: 11, // 10s of recording + 1s inserted at source 5
+	});
+	const inserts: AxcutInsertRange[] = [
+		{
+			id: "i1",
+			assetId: "a1",
+			atSec: 5,
+			durationSec: 1,
+			wordId: "w1",
+			reason: "",
+			origin: "user",
+		},
+	];
+	// What `resolvePlaybackSegments` produces: the clip split at the insertion, with the
+	// inserted media between the halves.
+	const segments = [
+		clip({ id: "c1_seg1", assetId: "a1", sourceStartSec: 0, sourceEndSec: 5 }),
+		clip({ id: "c1_seg2", assetId: "a1", sourceStartSec: 5, sourceEndSec: 10 }),
+	];
+
+	it("lands a region on the source it actually names", () => {
+		// Timeline 7..9 is one second past the insertion, so it is source 6..8.
+		const [out] = projectRegionsToSource(
+			[region("cue", 7, 9)],
+			segments,
+			[raw],
+			() => "x",
+			inserts,
+		);
+		expect(out.startMs).toBe(6000);
+		expect(out.endMs).toBe(8000);
+		expect(out.clipIndex).toBe(1);
+	});
+
+	it("leaves a region before the insertion where it was", () => {
+		const [out] = projectRegionsToSource(
+			[region("cue", 1, 3)],
+			segments,
+			[raw],
+			() => "x",
+			inserts,
+		);
+		expect(out.startMs).toBe(1000);
+		expect(out.endMs).toBe(3000);
+		expect(out.clipIndex).toBe(0);
 	});
 });
