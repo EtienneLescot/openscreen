@@ -998,7 +998,7 @@ export function NewEditorShell() {
 		// fragment's source offset — the generic one would copy the offset into
 		// every fragment and restart the file at each cut.
 		if (snapshot.kind === "audio") {
-			const { anchorAudioTrackFragments } = await import("@/lib/ai-edition/document/audioTracks");
+			const { placeAudioTrackInDocument } = await import("@/lib/ai-edition/document/audioTracks");
 			const track = {
 				...(snapshot.region as unknown as AxcutAudioTrack),
 				id: createId("audio"),
@@ -1006,14 +1006,11 @@ export function NewEditorShell() {
 				startMs: timeMs,
 				endMs: timeMs + (Number(src.endMs) - Number(src.startMs)),
 			};
-			const fragments = anchorAudioTrackFragments(track, doc.timeline.clips, () =>
-				createId("audio"),
-			);
-			if (fragments.length === 0) return;
-			await saveDocument(
-				{ ...doc, audioTracks: [...doc.audioTracks, ...fragments] },
-				{ history: true },
-			);
+			// Pasting onto an occupied lane queues behind what is there rather than doubling
+			// the row — the same rule every other placement obeys (issue #560).
+			const next = placeAudioTrackInDocument(doc, track, () => createId("audio"), "create");
+			if (next === doc) return;
+			await saveDocument(next, { history: true });
 			toast.success("Region pasted");
 			return;
 		}

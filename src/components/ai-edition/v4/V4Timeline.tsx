@@ -1050,7 +1050,25 @@ export function V4Timeline({
 	// not the live drag geometry: a pill that changed rows halfway through a drag
 	// would jump out from under the pointer.
 	const audioPills = useMemo(() => collapseTracksToPills(tl.audioTracks), [tl.audioTracks]);
-	const audioRows = useMemo(() => packAudioTrackRows(audioPills), [audioPills]);
+	// One row per KIND, and the packer unchanged INSIDE each kind (issue #560). Placement
+	// now clamps same-kind pills apart, so intra-kind packing is the legacy escape hatch —
+	// it keeps a document written before that rule legible instead of stacking its pills on
+	// top of each other. A kind with no tracks takes no row, so the common single-bed
+	// project stays exactly as tall as it was.
+	const audioRows = useMemo(() => {
+		const voice = audioPills.filter((p) => p.kind === "voiceover");
+		const music = audioPills.filter((p) => p.kind !== "voiceover");
+		const voiceRows = packAudioTrackRows(voice);
+		const musicRows = packAudioTrackRows(music);
+		const rowOf = new Map<string, number>();
+		const base = voice.length > 0 ? voiceRows.rowCount : 0;
+		for (const pill of voice) rowOf.set(pill.id, voiceRows.rowOf.get(pill.id) ?? 0);
+		for (const pill of music) rowOf.set(pill.id, base + (musicRows.rowOf.get(pill.id) ?? 0));
+		return {
+			rowOf,
+			rowCount: Math.max(1, base + (music.length > 0 ? musicRows.rowCount : 0)),
+		};
+	}, [audioPills]);
 
 	// Whether Alt is held, so an audio pill can show that the next drag slips. Window
 	// listeners rather than per-pill handlers: the key is pressed BEFORE the pointer

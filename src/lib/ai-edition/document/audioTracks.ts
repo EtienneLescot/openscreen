@@ -18,7 +18,11 @@
 // outer edges only.
 
 import type { AxcutAudioTrack, AxcutClip, AxcutDocument } from "../schema";
-import { anchorRegionsWithDerivedMs, coalesceRegionsForRuler } from "../timeline/timelineMap";
+import {
+	anchorRegionsWithDerivedMs,
+	clampSpanAgainstNeighbours,
+	coalesceRegionsForRuler,
+} from "../timeline/timelineMap";
 
 /** Every fragment of one user-visible track shares this key. */
 export function trackGroupId(track: AxcutAudioTrack): string {
@@ -281,6 +285,132 @@ export function slipAudioOffsetMs(
 	const slackMs = durationSec * 1000 - spanMs;
 	if (!(slackMs > 0)) return null;
 	return Math.round(Math.min(slackMs, Math.max(0, offsetMs + deltaMs)));
+}
+
+/** The document's user-visible pills of one kind, in ruler order. */
+export function audioLanePills(
+	tracks: AxcutAudioTrack[],
+	kind: AxcutAudioTrack["kind"],
+): AxcutAudioTrack[] {
+	return collapseTracksToPills(tracks)
+		.filter((pill) => pill.kind === kind)
+		.sort((a, b) => a.startMs - b.startMs);
+}
+
+/**
+ * The first head at or after `headMs` where a `spanMs` pill fits between its neighbours.
+ *
+ * For CREATING one. Two takes recorded from the same playhead used to land on top of each
+ * other, which is what forced a second voiceover row into existence; the later one now
+ * queues behind the first instead.
+ */
+export function firstFreeHeadMs(
+	pills: Array<{ startMs: number; endMs: number }>,
+	headMs: number,
+	spanMs: number,
+): number {
+	let head = Math.max(0, headMs);
+	for (const pill of [...pills].sort((a, b) => a.startMs - b.startMs)) {
+		if (pill.endMs <= head) continue;
+		if (pill.startMs >= head + spanMs) break; // it fits in front of this one
+		head = pill.endMs;
+	}
+	return head;
+}
+
+/**
+ * Lay a pill down in the document, clamped so its own kind keeps ONE row (issue #560).
+ *
+ * The single door every writer goes through. There were seven hand-rolled
+ * `[...others, ...fragments]` splices before this, and each one was a way to end up with
+ * two voiceover rows — which is what made the transcript tab's lane switch incoherent:
+ * "the voiceover" has to name one thing.
+ *
+ * The mode is the gesture, and each resolves an overlap differently:
+ *   - "resize" stops the dragged EDGE at the neighbour, keeping the head still.
+ *   - "move" keeps the DURATION and parks the pill against the wall. A take must never be
+ *     silently cropped because it was dragged somewhere crowded.
+ *   - "create" queues behind whatever is already there.
+ *
+ * Deliberately NOT `regionIdentityKey`: `assetId` is in `NON_IDENTITY_FIELDS`, so two
+ * different voiceover files with matching payload hash the same and would MERGE into one
+ * pill — silently splicing two takes together.
+ *
+ * Only same-kind pills clamp. A voiceover over a music bed is the normal case.
+ */
+export function placeAudioTrackInDocument(
+	doc: AxcutDocument,
+	pill: AxcutAudioTrack,
+	makeId: () => string,
+	mode: "move" | "resize" | "create",
+): AxcutDocument {
+	const groupId = trackGroupId(pill);
+	const others = audioLanePills(doc.audioTracks, pill.kind).filter(
+		(other) => trackGroupId(other) !== groupId,
+	);
+	const spanMs = Math.max(0, pill.endMs - pill.startMs);
+
+	let startMs = pill.startMs;
+	let endMs = pill.endMs;
+	if (mode === "create") {
+		startMs = firstFreeHeadMs(others, pill.startMs, spanMs);
+		endMs = startMs + spanMs;
+	} else if (mode === "move") {
+		startMs = firstFreeHeadMs(others, pill.startMs, spanMs);
+		endMs = startMs + spanMs;
+	} else {
+		const clamped = clampSpanAgainstNeighbours(
+			{ start: pill.startMs, end: pill.endMs },
+			`lane:${pill.kind}:${groupId}`,
+			others.map((other) => ({
+				id: other.id,
+				identity: `lane:${other.kind}:${trackGroupId(other)}`,
+				start: other.startMs,
+				end: other.endMs,
+			})),
+		);
+		startMs = clamped.start;
+		endMs = clamped.end;
+	}
+
+	const placed = { ...pill, startMs, endMs };
+	const fragments = anchorAudioTrackFragments(placed, doc.timeline.clips, makeId);
+	if (fragments.length === 0) return doc;
+	const kept = doc.audioTracks.filter((track) => trackGroupId(track) !== groupId);
+	return { ...doc, audioTracks: [...kept, ...fragments] };
+}
+
+/**
+ * Push any same-kind pill whose head fell inside its predecessor forward to that
+ * predecessor's end, so each kind is back to one row.
+ *
+ * REPAIR, not refusal. The generic region pipeline re-derives audio spans with no audio
+ * code running — a clip reorder or a removed clip can slide two disjoint takes into
+ * overlap — and a schema refine there would surface as a thrown save and a "failed to
+ * save" toast on an ordinary clip drag, and would make existing documents unloadable.
+ *
+ * Deterministic, order-preserving and idempotent. It cannot lose audio: a pill pushed
+ * past the end of the programme still plays, because removal is defined by trims and
+ * gaps only and the projection is the identity out there.
+ */
+export function separateAudioLanes(tracks: AxcutAudioTrack[]): AxcutAudioTrack[] {
+	const shift = new Map<string, number>();
+	for (const kind of ["voiceover", "music"] as const) {
+		let cursor = Number.NEGATIVE_INFINITY;
+		for (const pill of audioLanePills(tracks, kind)) {
+			const spanMs = Math.max(0, pill.endMs - pill.startMs);
+			const startMs = Math.max(pill.startMs, cursor);
+			if (startMs !== pill.startMs) shift.set(trackGroupId(pill), startMs - pill.startMs);
+			cursor = startMs + spanMs;
+		}
+	}
+	if (shift.size === 0) return tracks;
+	return tracks.map((track) => {
+		const by = shift.get(trackGroupId(track));
+		return by === undefined
+			? track
+			: { ...track, startMs: track.startMs + by, endMs: track.endMs + by };
+	});
 }
 
 export function packAudioTrackRows(tracks: Array<{ id: string; startMs: number; endMs: number }>): {
