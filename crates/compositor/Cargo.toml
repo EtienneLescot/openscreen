@@ -24,21 +24,27 @@ segmentation = ["dep:ort", "dep:ndarray"]
 
 [dependencies]
 anyhow.workspace = true
-[target.'cfg(target_os = "linux")'.dependencies]
-# Acces Vulkan brut, UNIQUEMENT pour ouvrir le device avec les extensions de
-# memoire externe (cf. `d3d_linux::open_device_with_dmabuf_export`). Les versions
-# sont celles que wgpu 24 tire deja : en prendre d'autres ferait cohabiter deux
-# bindings pour un meme `VkDevice`.
 wgpu.workspace = true
 pollster.workspace = true
 cosmic-text.workspace = true
-ash = "0.38"
-wgpu-hal = { version = "24", features = ["vulkan"] }
 ort = { workspace = true, optional = true }
 ndarray = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
+
+# Acces Vulkan brut, UNIQUEMENT pour ouvrir le device avec les extensions de
+# memoire externe (cf. `d3d_linux::open_device_with_dmabuf_export`). Les versions
+# sont celles que wgpu 24 tire deja : en prendre d'autres ferait cohabiter deux
+# bindings pour un meme `VkDevice`.
+#
+# LINUX SEULEMENT, et rien d'autre ne doit venir ici : ces deux lignes ont ete
+# ajoutees sous cet en-tete par une edition qui l'a place trop haut, emportant
+# `wgpu`, `serde`, `ort` et le reste avec elles. Windows et macOS ont alors cesse
+# de compiler.
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = "0.38"
+wgpu-hal = { version = "24", features = ["vulkan"] }
 
 # Windows : D3D11 + D3D11VA + Direct2D/DirectWrite + HLSL à l'exécution.
 [target.'cfg(windows)'.dependencies]
