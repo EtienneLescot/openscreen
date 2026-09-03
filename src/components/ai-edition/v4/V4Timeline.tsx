@@ -960,8 +960,12 @@ export function V4Timeline({
 					rafSeekRef.current = 0;
 				}
 				if (pendingSeekTimeRef.current !== null) {
-					setCurrentTime(pendingSeekTimeRef.current);
+					// The RULER second goes with it, or releasing over an insertion drops the
+					// only coordinate that could name where the pointer was: the raw second
+					// alone lands on the insertion's near edge, which is the snap-back.
+					setCurrentTime(pendingSeekTimeRef.current, pendingSeekRulerRef.current ?? undefined);
 					pendingSeekTimeRef.current = null;
+					pendingSeekRulerRef.current = null;
 				}
 				setScrubbingTimeSec(null);
 				setScrubRulerSec(null);
