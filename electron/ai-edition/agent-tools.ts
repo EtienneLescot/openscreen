@@ -17,9 +17,9 @@
 
 import { z } from "zod";
 import {
-	anchorAudioTrackFragments,
 	collapseTracksToPills,
 	patchAudioTrack,
+	placeAudioTrackInDocument,
 	trackGroupId,
 } from "../../src/lib/ai-edition/document/audioTracks";
 import { createId } from "../../src/lib/ai-edition/document/ids";
@@ -2049,7 +2049,8 @@ export function executeAgentTool(
 			const startMs = toMs(Math.min(startSec, endSec));
 			const endMs = toMs(Math.max(startSec, endSec));
 			const trackId = createId("audio");
-			const placed = anchorAudioTrackFragments(
+			const withTrack = placeAudioTrackInDocument(
+				document,
 				{
 					id: trackId,
 					trackId,
@@ -2067,16 +2068,14 @@ export function executeAgentTool(
 					label: asset.label,
 					origin: "agent",
 				} as AxcutDocument["audioTracks"][number],
-				document.timeline.clips,
 				() => createId("audio"),
+				"create",
 			);
-			if (placed.length === 0) {
+			if (withTrack === document) {
 				return coversNoClip("audio", startMs / 1000, endMs / 1000, document);
 			}
-			const next: AxcutDocument = {
-				...document,
-				audioTracks: [...document.audioTracks, ...placed],
-			};
+			const placed = withTrack.audioTracks.filter((t) => trackGroupId(t) === trackId);
+			const next: AxcutDocument = withTrack;
 			const landing = landingOf(placed, document);
 			return {
 				ok: true,
@@ -2131,7 +2130,11 @@ export function executeAgentTool(
 				const current =
 					collapseTracksToPills(next.audioTracks).find((t) => trackGroupId(t) === audioId) ?? pill;
 				const { startMs, endMs } = resolveSpanMs(current, parsed.data.startSec, parsed.data.endSec);
-				const replaced = anchorAudioTrackFragments(
+				// A `kind` flip re-clamps against the DESTINATION lane's neighbours, not the
+				// one it is leaving — moving a take onto the music row must respect what is
+				// already on the music row (issue #560).
+				const moved = placeAudioTrackInDocument(
+					next,
 					{
 						...current,
 						id: audioId,
@@ -2140,19 +2143,13 @@ export function executeAgentTool(
 						endMs,
 						...(parsed.data.kind !== undefined ? { kind: parsed.data.kind } : {}),
 					},
-					document.timeline.clips,
 					() => createId("audio"),
+					"move",
 				);
-				if (replaced.length === 0) {
+				if (moved === next) {
 					return coversNoClip("audio", startMs / 1000, endMs / 1000, document);
 				}
-				next = {
-					...next,
-					audioTracks: [
-						...next.audioTracks.filter((t) => trackGroupId(t) !== audioId),
-						...replaced,
-					],
-				};
+				next = moved;
 			}
 
 			const after = collapseTracksToPills(next.audioTracks).find(

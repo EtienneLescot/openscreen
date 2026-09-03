@@ -9,9 +9,9 @@ import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import {
-	anchorAudioTrackFragments,
 	collapseTracksToPills,
 	patchAudioTrack,
+	placeAudioTrackInDocument,
 	removeAudioTrack as removeAudioTrackInDocument,
 	trackGroupId,
 } from "../document/audioTracks";
@@ -1352,7 +1352,7 @@ export function useTimeline() {
 		async (trackId: string, span: { startMs: number; endMs: number; offsetMs?: number }) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
-			const others = doc.audioTracks.filter((t) => trackGroupId(t) !== trackId);
+			// The door replaces the whole group, so the survivors no longer need naming here.
 			const [pill] = collapseTracksToPills(
 				doc.audioTracks.filter((t) => trackGroupId(t) === trackId),
 			);
@@ -1368,11 +1368,17 @@ export function useTimeline() {
 				offsetMs:
 					span.offsetMs === undefined ? pill.offsetMs : Math.max(0, Math.round(span.offsetMs)),
 			};
-			const fragments = anchorAudioTrackFragments(moved, doc.timeline.clips, () =>
-				createId("audio"),
+			// A resize stops the dragged edge at the neighbour; a move keeps the take's
+			// duration and parks it against the wall. Cropping a take because it was
+			// dragged somewhere crowded would lose audio the user never asked to lose.
+			const next = placeAudioTrackInDocument(
+				doc,
+				moved,
+				() => createId("audio"),
+				span.offsetMs === undefined ? "move" : "resize",
 			);
-			if (fragments.length === 0) return;
-			await saveDocument({ ...doc, audioTracks: [...others, ...fragments] }, { history: true });
+			if (next === doc) return;
+			await saveDocument(next, { history: true });
 		},
 		[saveDocument],
 	);
@@ -1408,6 +1414,11 @@ export function useTimeline() {
 			const fragments = doc.audioTracks.filter((t) => trackGroupId(t) === trackId);
 			const [pill] = collapseTracksToPills(fragments);
 			if (!pill) return;
+			// Refused on a voiceover. `anchorAudioTrackFragments` does not advance `offsetMs`
+			// across a looping track's fragments, so its words map to raw moments they do not
+			// occupy — the transcript lane drops it, and a cut authored from it would land in
+			// the wrong place. Music loops; narration does not (issue #560).
+			if (loop && pill.kind === "voiceover") return;
 			const programmeEndMs = Math.round(
 				doc.timeline.clips.reduce((max, c) => Math.max(max, c.timelineEndSec), 0) * 1000,
 			);
@@ -1417,17 +1428,15 @@ export function useTimeline() {
 				await saveDocument(patched, { history: true });
 				return;
 			}
-			const others = patched.audioTracks.filter((t) => trackGroupId(t) !== trackId);
-			const filled = anchorAudioTrackFragments(
+			// The fill stops at the next pill of its own kind, not at the programme end: a
+			// bed filling the timeline must not swallow a second bed that comes after it.
+			const filled = placeAudioTrackInDocument(
+				patched,
 				{ ...pill, loop, endMs: programmeEndMs },
-				doc.timeline.clips,
 				() => createId("audio"),
+				"resize",
 			);
-			if (filled.length === 0) {
-				await saveDocument(patched, { history: true });
-				return;
-			}
-			await saveDocument({ ...doc, audioTracks: [...others, ...filled] }, { history: true });
+			await saveDocument(filled === patched ? patched : filled, { history: true });
 		},
 		[saveDocument],
 	);

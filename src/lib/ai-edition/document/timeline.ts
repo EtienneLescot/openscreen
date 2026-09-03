@@ -30,7 +30,7 @@ import {
 	hasCompleteClipAnchor,
 } from "../timeline/timelineMap";
 import { dropTrimPillsByIds, trimAppliesToClip } from "../timeline/trim-mapping";
-import { removeAudioTrack } from "./audioTracks";
+import { reanchorAudioTracks, removeAudioTrack, separateAudioLanes } from "./audioTracks";
 import { createId } from "./ids";
 
 /** The region families a delete can target by id. Shared with the store so "which kinds
@@ -420,10 +420,28 @@ function mapAllRegionCollections(
 			document.annotations as unknown as StoredRegion[],
 			"ann",
 		) as unknown as AxcutDocument["annotations"],
-		audioTracks: fn(
-			document.audioTracks as unknown as StoredRegion[],
-			"audio",
-		) as unknown as AxcutDocument["audioTracks"],
+		// Repaired here rather than at each of the four call sites, so no structural edit
+		// can skip it (issue #560).
+		//
+		// `reanchorAudioTracks` first: the generic pipeline copies `offsetMs` verbatim into
+		// every fragment, which corrupts a split take's offsets — a live bug, unrelated to
+		// lanes, that this walk was already causing. Then `separateAudioLanes`, because the
+		// same pipeline can slide two disjoint takes into overlap with no audio code
+		// running, and each kind has to keep ONE row.
+		//
+		// Repair, never refusal: a schema refine here would turn an ordinary clip drag into
+		// a thrown save, and would make every existing document with overlapping same-kind
+		// pills unloadable.
+		audioTracks: separateAudioLanes(
+			reanchorAudioTracks(
+				fn(
+					document.audioTracks as unknown as StoredRegion[],
+					"audio",
+				) as unknown as AxcutDocument["audioTracks"],
+				document.timeline.clips,
+				() => createId("audio"),
+			),
+		),
 		legacyEditor:
 			legacy && (speedRegions || cameraFullscreenRegions)
 				? {

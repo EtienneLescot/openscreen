@@ -264,7 +264,8 @@ const DECLARED: WritePath[] = [
 	// Three exits, one gesture: the toggle writes the flag alone when there is
 	// nothing to fill, and the flag plus the filled span when there is. Either
 	// way it is one undo step (see setAudioTrackLoop).
-	w("src/lib/ai-edition/store/useTimeline.ts", "setAudioTrackLoop", "save", "gesture"),
+	// Two, not three: the fill and its no-op fallback collapsed into one call when the
+	// placement door took over the clamping (#560).
 	w("src/lib/ai-edition/store/useTimeline.ts", "setAudioTrackLoop", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "setAudioTrackLoop", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAudioTrack", "save", "gesture"),
