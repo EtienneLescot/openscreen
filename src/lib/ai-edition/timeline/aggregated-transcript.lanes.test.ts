@@ -64,16 +64,42 @@ describe("voiceoverPlacements", () => {
 		expect(placements.map((p) => p.id)).toEqual(["early", "late"]);
 	});
 
-	it("keeps every fragment of a ventilated track", () => {
-		// A bed spanning a cut is one pill and two fragments; collapsing them here
-		// would re-read the file from its head on the far side of the cut.
+	it("folds a ventilated take back into one placement", () => {
+		// The fragments exist because the take spans a cut in the FILM, not because the
+		// narration is in two pieces. The walk recomputes the source advance, so collapsing
+		// them is safe now — and necessary, because a fragment's own source window knows
+		// nothing about an insertion before it.
 		const placements = voiceoverPlacements([
 			track({ id: "f1", trackId: "T", startMs: 0, endMs: 3000, offsetMs: 0 }),
 			track({ id: "f2", trackId: "T", startMs: 3000, endMs: 5000, offsetMs: 3000 }),
 		]);
-		expect(placements.map((p) => [p.sourceStartSec, p.sourceEndSec])).toEqual([
-			[0, 3],
-			[3, 5],
+		expect(placements.map((p) => [p.sourceStartSec, p.sourceEndSec])).toEqual([[0, 5]]);
+	});
+
+	it("splits at the CUTS, not at the fragment boundaries", () => {
+		const placements = voiceoverPlacements(
+			[track({ id: "f1", trackId: "T", startMs: 0, endMs: 6000, offsetMs: 0 })],
+			[{ startSec: 2, endSec: 4, trimIds: ["t1"] }],
+		);
+		// The take is heard 0..2 and 4..6 of the ruler, reading source 0..2 and 4..6 — its
+		// own clock ran through the cut, so the words after it stay on their picture.
+		expect(placements.map((p) => [p.timelineStartSec, p.sourceStartSec, p.sourceEndSec])).toEqual([
+			[0, 0, 2],
+			[4, 4, 6],
+		]);
+	});
+
+	it("maps the words after an insertion to the moment they actually occupy", () => {
+		// The reason this stopped being per-fragment. Source 4 is heard at ruler 5, because
+		// the pause before it took a second of the take's span.
+		const placements = voiceoverPlacements(
+			[track({ id: "f1", trackId: "T", startMs: 0, endMs: 6000, offsetMs: 0 })],
+			[],
+			() => [{ id: "i1", wordId: "w1", atSourceSec: 4, durationSec: 1 }],
+		);
+		expect(placements.map((p) => [p.timelineStartSec, p.sourceStartSec, p.sourceEndSec])).toEqual([
+			[0, 0, 4],
+			[5, 4, 5],
 		]);
 	});
 });
@@ -279,5 +305,58 @@ describe("one programme, two lanes", () => {
 		// take's later fragments map their words to raw moments the words do not occupy.
 		expect(voiceoverPlacements([{ ...VO, loop: true }])).toEqual([]);
 		expect(voiceoverPlacements([VO])).toHaveLength(1);
+	});
+});
+
+// ─── The cue, after an insertion ─────────────────────────────────────────────
+// `findCueWordId` carries its own inverse of the affine map — the fourth copy in the tree.
+// It needs no insertion term of its own PROVIDED each placement is affine, which is exactly
+// what walking the take by play pieces buys. Asserted rather than assumed.
+
+describe("the karaoke highlight after a pause", () => {
+	const TAKE = track({ id: "vo", startMs: 0, endMs: 6000, offsetMs: 0, durationSec: 6 });
+	const WORDS = {
+		assetId: "asset_vo",
+		language: "en",
+		segments: [],
+		words: [0, 1, 2, 3, 4, 5].map((i) => ({
+			id: `w${i}`,
+			segmentId: "s",
+			text: `w${i}`,
+			startSec: i + 0.1,
+			endSec: i + 0.9,
+		})),
+	};
+
+	const sectionsWith = (
+		inserts: Array<{ id: string; wordId: string; atSourceSec: number; durationSec: number }>,
+	) =>
+		buildAggregatedSections(
+			// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
+			voiceoverPlacements([TAKE as any], [], () => inserts),
+			// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
+			[WORDS as any],
+			[],
+			[],
+		);
+
+	it("tracks the voice with no insertion", () => {
+		expect(findCueWordId(sectionsWith([]), 4.5)).toBe("vo:w4");
+	});
+
+	it("follows the word D later once a pause has pushed it there", () => {
+		// A one-second pause at source 3: source 4 is now heard at ruler 5.
+		const inserts = [{ id: "i1", wordId: "w3", atSourceSec: 3, durationSec: 1 }];
+		const sections = sectionsWith(inserts);
+		expect(findCueWordId(sections, 5.5)).toBe("vo#1:w4");
+		// And it is NOT still answering with the pre-pause mapping.
+		expect(findCueWordId(sections, 4.5)).not.toBe("vo:w4");
+	});
+
+	it("highlights nothing while the voice is parked", () => {
+		// No word is being said during the pause, so the karaoke goes quiet rather than
+		// leaving a word lit that has already been spoken.
+		const inserts = [{ id: "i1", wordId: "w3", atSourceSec: 3, durationSec: 1 }];
+		expect(findCueWordId(sectionsWith(inserts), 3.5)).toBeNull();
 	});
 });

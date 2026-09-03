@@ -28,6 +28,7 @@ import {
 	getCaptionSettings,
 	getCaptionTranslations,
 } from "@/lib/ai-edition/captions";
+import { collapseTracksToPills, trackGroupId } from "@/lib/ai-edition/document/audioTracks";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
 import {
@@ -40,8 +41,10 @@ import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
+import { takeInserts } from "@/lib/ai-edition/timeline/insert-mapping";
 import { rulerInserts } from "@/lib/ai-edition/timeline/inserted-time";
-import { removedRawSpans, subtractRemoved } from "@/lib/ai-edition/timeline/programme-time";
+import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
+import { takeProgramme } from "@/lib/ai-edition/timeline/take-programme";
 import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	computeCompositeLayout,
@@ -574,6 +577,15 @@ export function buildSceneDescription(
 	// the ruler says rather than D seconds early.
 	const filmInserts = rulerInserts(document.timeline.insertRanges ?? [], projectedClips);
 	const removed = removedRawSpans(projectedClips, document.timeline.trimRanges);
+	// The take's pills, keyed by group. A voiceover is walked ONCE per pill and never per
+	// stored fragment: the document keeps one fragment per clip a take covers, so walking
+	// them separately would emit overlapping entries and `overlay_track_pcm` sums with `+=`
+	// at an absolute offset — the export would contain the take playing on top of itself.
+	const voiceoverPills = new Map(
+		collapseTracksToPills(document.audioTracks)
+			.filter((pill) => pill.kind === "voiceover" && !pill.loop)
+			.map((pill) => [trackGroupId(pill), pill]),
+	);
 	const audioTracks = document.audioTracks.flatMap((track) => {
 		if (track.muted) return [];
 		const asset = assetById.get(track.assetId);
@@ -633,25 +645,32 @@ export function buildSceneDescription(
 		// #560 refuses that combination outright, and inventing semantics for something
 		// about to be banned would be the worse answer.
 		if (track.kind === "voiceover" && !track.loop) {
-			const trackRawStart = track.startMs / 1000;
-			const rawSpanSec = Math.max(0, track.endMs / 1000 - trackRawStart);
+			const groupId = trackGroupId(track);
+			const pill = voiceoverPills.get(groupId);
+			// Emitted from the group's HEAD fragment only — every other fragment of the same
+			// take is already covered by the pill's own walk.
+			if (!pill || pill.id !== track.id) return [];
+			const rawSpanSec = Math.max(0, pill.endMs / 1000 - pill.startMs / 1000);
 			// Unprobed assets have no real duration to cap with; the RAW span is how much
 			// file the take covers, which is the honest fallback once the cuts are taken out.
 			const voWindowSec =
 				sourceDurationSec > 0 ? Math.max(0, sourceDurationSec - offsetSec) : rawSpanSec;
-			const pieces = subtractRemoved(trackRawStart, track.endMs / 1000, removed);
-			const kept = pieces
+			// One walk: the cuts take time away, the take's own insertions add it, and the
+			// walk resolves them together so a second insertion lands after the first one's
+			// hold rather than inside it.
+			const kept = takeProgramme(pill, removed, takeInserts(document, groupId), rawSpeedRegions)
+				.filter((piece) => piece.kind === "play")
 				.map((piece) => ({
 					...base,
 					startSec: projectRawTimelineSecToPlayback(
 						projectedClips,
 						document.timeline.trimRanges,
-						piece.startSec,
+						piece.rawStartSec,
 						filmInserts,
 						rawSpeedRegions,
 					),
-					trimStartSec: offsetSec + (piece.startSec - trackRawStart),
-					trimEndSec: Math.min(offsetSec + voWindowSec, offsetSec + (piece.endSec - trackRawStart)),
+					trimStartSec: piece.sourceStartSec,
+					trimEndSec: Math.min(offsetSec + voWindowSec, piece.sourceEndSec),
 				}))
 				.filter((entry) => entry.trimEndSec > entry.trimStartSec);
 			// The fades belong to the TAKE's edges, not to every piece a cut left behind.

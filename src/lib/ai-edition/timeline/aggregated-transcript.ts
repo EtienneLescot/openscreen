@@ -14,8 +14,10 @@
 // names a word a filler. The transcript view shows plain text for every
 // kept word; the user or the LLM decides what to mark as skipped.
 
+import { collapseTracksToPills, trackGroupId } from "../document/audioTracks";
 import type { AxcutAsset, AxcutAudioTrack, AxcutClip, AxcutTranscript, AxcutWord } from "../schema";
 import { type RawSpan, type RemovedRawSpan, removalAt } from "./programme-time";
+import { type TakeInsert, takeProgramme } from "./take-programme";
 
 /**
  * The unit the aggregation actually runs over: one stretch of ONE asset's source
@@ -309,32 +311,39 @@ export function buildAggregatedSections(
  * all (STT on a bed is noise we pay for), so a music placement could only ever
  * produce an empty section that reads as a failed transcription.
  *
- * One placement PER FRAGMENT, not per user-visible track. A track that spans a cut
- * is ventilated into a fragment per clip, each with its own `offsetMs` advanced by
- * what its predecessors consumed (`anchorAudioTrackFragments`) — so the fragments
- * already carry exactly the source windows this needs, and collapsing them back
- * into one pill here would re-read the file from its head at every cut.
+ * One placement per PLAY PIECE of the take's own walk, which is what makes the words after
+ * an insertion map to the raw moment they actually occupy. It used to be one per stored
+ * FRAGMENT — equivalent while a take could only lose time, wrong the moment it can gain
+ * some, because a fragment's source window knows nothing about the pause before it.
  *
  * A LOOPING take contributes nothing at all. `anchorAudioTrackFragments` deliberately
  * does not advance `offsetMs` across the fragments of a looping track, so their words map
  * to raw moments the words do not occupy — a placement built from them would read
  * kept-or-removed on false evidence, and would author a cut in the wrong place.
  */
-export function voiceoverPlacements(audioTracks: AxcutAudioTrack[]): TranscriptPlacement[] {
-	return audioTracks
-		.filter((track) => track.kind === "voiceover" && !track.loop)
-		.slice()
+export function voiceoverPlacements(
+	audioTracks: AxcutAudioTrack[],
+	/** What the film no longer contains. Empty is the honest default: with no cuts and no
+	 *  insertions the walk yields one piece per take, which is what this always produced. */
+	removed: readonly RemovedRawSpan[] = [],
+	/** This take's own insertions, by group id. */
+	insertsFor: (groupId: string) => readonly TakeInsert[] = () => [],
+): TranscriptPlacement[] {
+	return collapseTracksToPills(audioTracks)
+		.filter((pill) => pill.kind === "voiceover" && !pill.loop)
 		.sort((a, b) => a.startMs - b.startMs || a.id.localeCompare(b.id))
-		.map((track) => {
-			const offsetSec = track.offsetMs / 1000;
-			return {
-				id: track.id,
-				assetId: track.assetId,
-				sourceStartSec: offsetSec,
-				sourceEndSec: offsetSec + Math.max(0, track.endMs - track.startMs) / 1000,
-				timelineStartSec: track.startMs / 1000,
-			};
-		});
+		.flatMap((pill) =>
+			takeProgramme(pill, removed, insertsFor(trackGroupId(pill)))
+				.filter((piece) => piece.kind === "play")
+				.map((piece, i) => ({
+					// Namespaced by piece so two stretches of one take never collide on a word id.
+					id: i === 0 ? pill.id : `${pill.id}#${i}`,
+					assetId: pill.assetId,
+					sourceStartSec: piece.sourceStartSec,
+					sourceEndSec: piece.sourceEndSec,
+					timelineStartSec: piece.rawStartSec,
+				})),
+		);
 }
 
 /** The placements a lane contributes, in timeline order. */
@@ -342,8 +351,10 @@ export function lanePlacements(
 	lane: TranscriptLane,
 	clips: AxcutClip[],
 	audioTracks: AxcutAudioTrack[],
+	removed: readonly RemovedRawSpan[] = [],
+	insertsFor: (groupId: string) => readonly TakeInsert[] = () => [],
 ): TranscriptPlacement[] {
-	return lane === "voiceover" ? voiceoverPlacements(audioTracks) : clips;
+	return lane === "voiceover" ? voiceoverPlacements(audioTracks, removed, insertsFor) : clips;
 }
 
 /**

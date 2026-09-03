@@ -78,6 +78,7 @@ import {
 } from "@/lib/ai-edition/timeline/aggregated-transcript";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
+import { takeInserts } from "@/lib/ai-edition/timeline/insert-mapping";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import type { TranscriptGateReason } from "@/lib/ai-edition/transcription/status";
 import { getAssetPath } from "@/lib/assetPath";
@@ -862,8 +863,21 @@ export function TranscriptPane({
 	// deleting the last voiceover pill while reading it must not leave the pane, the
 	// preview and the exporter disagreeing about which lane that project has.
 	const { settings: captionSettings, set: setCaptionSettings } = useCaptions();
-	const voiceover = useMemo(() => voiceoverPlacements(audioTracks), [audioTracks]);
 	const document = useProjectStore((s) => s.document);
+	// From the RECORDING clips and the whole trim set, never from `placements`: the
+	// programme is one thing, and the voiceover lane is asking whether the film still
+	// contains a moment — not whether some trim happens to name an audio fragment.
+	const removed = useMemo(() => removedRawSpans(clips, trimRanges), [clips, trimRanges]);
+	// The take's placements are fed the cuts AND its own insertions, so a word after a pause
+	// is struck through — and highlighted — at the moment it is actually heard (issue #560).
+	const insertsFor = useCallback(
+		(groupId: string) => (document ? takeInserts(document, groupId) : []),
+		[document],
+	);
+	const voiceover = useMemo(
+		() => voiceoverPlacements(audioTracks, removed, insertsFor),
+		[audioTracks, removed, insertsFor],
+	);
 	const activeLane = resolveCaptionLane(document, captionSettings);
 	const setLane = useCallback(
 		(captionLane: TranscriptLane) => {
@@ -873,10 +887,6 @@ export function TranscriptPane({
 	);
 	const placements = activeLane === "voiceover" ? voiceover : clips;
 
-	// From the RECORDING clips and the whole trim set, never from `placements`: the
-	// programme is one thing, and the voiceover lane is asking whether the film still
-	// contains a moment — not whether some trim happens to name an audio fragment.
-	const removed = useMemo(() => removedRawSpans(clips, trimRanges), [clips, trimRanges]);
 	const sections = useMemo(
 		() => buildAggregatedSections(placements, transcripts, assets, removed),
 		[placements, transcripts, assets, removed],
