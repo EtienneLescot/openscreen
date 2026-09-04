@@ -189,9 +189,22 @@ describe("deleting the amber clip from the TIMELINE, not from the transcript", (
 		expect(back.transcripts.map((t) => t.assetId)).toEqual(["a1"]);
 	});
 
-	it("leaves the recording's own media alone when an ordinary clip goes", () => {
-		const back = removeClip(withInsertion(), "ext:synth_1");
-		expect(back.timeline.clips.map((c) => c.assetId)).toEqual(["a1"]);
+	it("leaves the recording in the document when its LAST clip goes", () => {
+		// Why the sweep is scoped to generated ids rather than "anything nothing plays":
+		// `restoreFullTimeline` reads the primary asset's duration, so emptying the
+		// timeline must not take the recording with it or the button has nothing to
+		// restore. This is the branch that empties it.
+		const back = removeClip(doc(), "c1");
+		expect(back.timeline.clips).toEqual([]);
+		expect(back.assets.map((a) => a.id)).toEqual(["a1"]);
+	});
+
+	it("leaves generated media alone when an ORDINARY clip goes and the insertion stays", () => {
+		// The other way an over-eager sweep goes wrong: a delete somewhere else must not
+		// collect media that is still on the timeline.
+		const back = removeClip(withInsertion(), "c1");
+		expect(back.timeline.clips.some((c) => c.assetId === "ext:synth_1")).toBe(true);
+		expect(back.assets.map((a) => a.id)).toEqual(["a1", "ext:synth_1"]);
 	});
 });
 
