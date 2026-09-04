@@ -40,6 +40,11 @@ on:
 
 permissions:
   contents: read
+  # Provenance attestation. `id-token` mints the OIDC token GitHub signs with, and
+  # `attestations` lets the run record the result. Both are needed by
+  # `actions/attest-build-provenance`; neither grants write access to the repository.
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -184,6 +189,20 @@ jobs:
           tar -czf "${DIR}.tgz" -C stage "${DIR}"
           shasum -a 256 "${DIR}.tgz"
 
+      - name: Attest build provenance
+        # A SHA-256 in `fetch-onnxruntime.mjs` says "these are the bytes somebody
+        # pinned". It cannot say WHERE they came from — and once the publisher is us
+        # rather than Microsoft, that is the question that matters. This binds the
+        # archive's digest to the commit, workflow and run that produced it, signed by
+        # GitHub, so provenance becomes verifiable rather than asserted:
+        #
+        #     gh attestation verify onnxruntime-osx-arm64-<v>.tgz --repo getopenscreen/openscreen
+        #
+        # It does not replace the digest pin, it answers a different question. Keep both.
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: onnxruntime-osx-arm64-*.tgz
+
       - name: Upload
         uses: actions/upload-artifact@v7
         with:
@@ -209,6 +228,12 @@ jobs:
             {
               echo "- Archive: \`${ARCHIVE}\` ($(du -h "$ARCHIVE" | cut -f1))"
               echo "- SHA-256: \`${SHA}\`"
+              echo ""
+              echo "Provenance is attested; before adopting, verify it with:"
+              echo ""
+              echo '```bash'
+              echo "gh attestation verify ${ARCHIVE} --repo ${{ github.repository }}"
+              echo '```'
               echo ""
               echo "To adopt it: attach the archive to a release, then point the"
               echo "\`darwin-arm64\` entry of \`PINNED\` in \`scripts/fetch-onnxruntime.mjs\`"
