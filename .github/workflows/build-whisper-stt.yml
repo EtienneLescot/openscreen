@@ -16,6 +16,13 @@ name: Build whisper-stt binaries
 on:
   workflow_dispatch:
   push:
+    # ALL branches, NO tags. `paths:` alone also matches a tag push, and it has:
+    # publishing `v0.0.0-onnxruntime-1.27.1` started a four-platform whisper build
+    # for a tag that touched none of these files. Listing `branches` is what
+    # excludes tags; `'**'` keeps every branch working, which is the point of this
+    # workflow — contributors push a branch to get binaries built.
+    branches:
+      - "**"
     paths:
       - "scripts/build-whisper-stt.sh"
       - "electron/native/whisper-stt/**"
@@ -139,6 +146,23 @@ jobs:
           "${VCPKG_ROOT_DIR}/vcpkg" install spirv-headers:x64-windows
           echo "CMAKE_PREFIX_PATH=${VCPKG_ROOT_DIR}/installed/x64-windows" >> "$GITHUB_ENV"
 
+      # `${{ env.ImageOS }}` DOES NOT WORK, and it fails silently — the `env`
+      # expression context holds only what a workflow/job/step `env:` block put
+      # there, and the runner sets ImageOS/ImageVersion into its own process
+      # environment instead. Written that way, both halves expanded to the empty
+      # string and the cache below was keyed on the tag and the CMakeLists hash
+      # alone, for every platform, for as long as the line existed: the repo's
+      # own cache list read `whisper-stt-build-darwin-arm64---<hash>`. Reading
+      # them here in a shell is what actually gets their values.
+      #
+      # `shell: bash` is required, not decorative: this matrix includes
+      # windows-latest, where the default shell is PowerShell and `${VAR:-default}`
+      # is not syntax. GitHub ships bash on the Windows image.
+      - name: Read the runner image
+        id: image
+        shell: bash
+        run: echo "tag=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
       - name: Cache whisper.cpp build tree
         uses: actions/cache@v6
         with:
@@ -151,15 +175,15 @@ jobs:
           # bump there invalidates the cache instead of silently reusing a stale
           # FetchContent checkout; falls back to the newest cache for the same
           # platform + runner image on a miss so incremental compilation still
-          # helps. The runner image version ($ImageOS/$ImageVersion) is part of
+          # helps. The runner image version (read by the step above) is part of
           # the key AND the restore-keys prefix because CMake bakes absolute
           # toolchain paths (e.g. the Xcode SDK's libz.tbd) into the cached build
           # tree — when GitHub rolls the image's Xcode/SDK, those paths vanish and
           # a restored tree fails with "No rule to make target …libz.tbd". Scoping
           # the cache to the image version auto-busts it on every toolchain roll.
-          key: whisper-stt-build-${{ matrix.tag }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('electron/native/whisper-stt/CMakeLists.txt') }}
+          key: whisper-stt-build-${{ matrix.tag }}-${{ steps.image.outputs.tag }}-${{ hashFiles('electron/native/whisper-stt/CMakeLists.txt') }}
           restore-keys: |
-            whisper-stt-build-${{ matrix.tag }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-
+            whisper-stt-build-${{ matrix.tag }}-${{ steps.image.outputs.tag }}-
 
       - name: Run whisper-stt build script
         run: bash scripts/build-whisper-stt.sh
