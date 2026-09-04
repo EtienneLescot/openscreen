@@ -18,7 +18,7 @@ import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "
  */
 export type PlaybackSegment = AxcutClip & { extensionWordId?: string };
 
-import { clipParts } from "../timeline/clip-parts";
+import { clipParts, partsLengthSec } from "../timeline/clip-parts";
 import { type Interval, subtractInterval } from "../timeline/intervals";
 import { keptRawSpans } from "../timeline/programme-time";
 import {
@@ -133,6 +133,35 @@ function collectWordRefs(
 // after any structural change (insert / move / remove / trim) so the timeline
 // never has gaps or overlaps between clips. Shared by useTimeline (UI) and
 // the agent tool executor (main process) so both enforce the same invariant.
+/**
+ * Clip lengths, recomputed from the parts they now have.
+ *
+ * `timelineEndSec` is STORED, so something has to keep it true once a word can add media
+ * inside a clip — and the ruler reads it, so a clip left short draws a film that ends before
+ * the programme does. This is that something, and it is a recompute, not a reconciliation:
+ * the parts are derived from the words, so there is no second stored fact to drift from.
+ *
+ * Idempotent, and a no-op for a document with no added words.
+ */
+export function withClipsSizedToParts(document: AxcutDocument): AxcutDocument {
+	const wordsByAsset = new Map(document.transcripts.map((t) => [t.assetId, t.words]));
+	const clips = document.timeline.clips.map((clip) => {
+		const parts = clipParts(clip, wordsByAsset.get(clip.assetId) ?? []);
+		// No parts means the duration has not been probed yet; the prober owns the length.
+		if (parts.length === 0) return clip;
+		return { ...clip, timelineEndSec: clip.timelineStartSec + partsLengthSec(parts) };
+	});
+	const resequenced = resequenceClips(clips);
+	const unchanged = resequenced.every(
+		(clip, i) =>
+			Math.abs(clip.timelineStartSec - document.timeline.clips[i].timelineStartSec) < 1e-9 &&
+			Math.abs(clip.timelineEndSec - document.timeline.clips[i].timelineEndSec) < 1e-9,
+	);
+	return unchanged
+		? document
+		: { ...document, timeline: { ...document.timeline, clips: resequenced } };
+}
+
 export function resequenceClips(clips: AxcutClip[]): AxcutClip[] {
 	let cursor = 0;
 	return clips.map((c) => {

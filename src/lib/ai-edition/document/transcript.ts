@@ -1,4 +1,5 @@
 import type { AxcutDocument, AxcutTranscript, AxcutWord } from "../schema";
+import { withClipsSizedToParts } from "./timeline";
 
 const CJK_EDGE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 const CLOSING_PUNCTUATION = /^[,.;:!?%。，、；：！？…）)\]}>》」』】〕]/u;
@@ -121,12 +122,14 @@ export function withTranscript(
 		...document.transcripts.filter((t) => t.assetId !== transcript.assetId),
 		transcript,
 	];
-	return {
+	// Sized here, at the ONE funnel every transcript write goes through, so adding or
+	// removing a word cannot leave a clip claiming a length its parts no longer have.
+	return withClipsSizedToParts({
 		...document,
 		transcript:
 			document.project.primaryAssetId === transcript.assetId ? transcript : document.transcript,
 		transcripts,
-	};
+	});
 }
 
 /**
