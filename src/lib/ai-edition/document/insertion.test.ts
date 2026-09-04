@@ -268,6 +268,18 @@ describe("editing an insertion's text, through the path the pane actually calls"
 		);
 	});
 
+	it("shrinks it back when the text gets shorter", () => {
+		// The same path, and nothing in it is directional — but "grew" and "shrank" are two
+		// claims and only one of them was pinned.
+		const long = insertGeneratedClip(doc(), "a1", "w1", "after", "a much longer line");
+		const short = setDocumentWordText(long, "ext:synth_1", "synth_1", "hi");
+		const clip = short.timeline.clips.find((c) => c.id === "ext:synth_1");
+		expect(clip?.sourceEndSec).toBeCloseTo(GEN_SEC, 6);
+		expect((clip?.timelineEndSec ?? 0) - (clip?.timelineStartSec ?? 0)).toBeCloseTo(GEN_SEC, 6);
+		const clips = short.timeline.clips;
+		expect(clips[clips.length - 1].timelineEndSec).toBeCloseTo(10 + GEN_SEC, 6);
+	});
+
 	it("renames the file, so the save generates the media the new text needs", () => {
 		const after = setDocumentWordText(withInsertion(), "ext:synth_1", "synth_1", "longer");
 		expect(after.assets.find((a) => a.id === "ext:synth_1")?.originalPath).toBe(
