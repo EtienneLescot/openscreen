@@ -2211,7 +2211,7 @@ export function executeAgentTool(
 			else if (document.audioTracks.some((t) => trackGroupId(t) === id)) kind = "audio";
 			if (!kind) {
 				return failure(
-					`No zoom / speed / annotation / full-camera modifier with id ${id}. ` +
+					`No zoom / speed / annotation / full-camera / audio modifier with id ${id}. ` +
 						`For a trim use removeTrim; for a clip use removeClip.`,
 				);
 			}

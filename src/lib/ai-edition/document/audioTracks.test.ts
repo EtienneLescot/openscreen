@@ -178,9 +178,17 @@ describe("patchAudioTrack", () => {
 			makeId,
 		);
 		const doc = { ...emptyDoc(), audioTracks: frags };
-		const next = patchAudioTrack(doc, trackGroupId(frags[0]), { gainDb: -6, muted: true });
+		const next = patchAudioTrack(doc, trackGroupId(frags[0]), {
+			gainDb: -6,
+			muted: true,
+			// `loop` is the third payload key the patch spreads, and the one a half-applied
+			// patch would break loudest: a track looping on one fragment and not the other
+			// stops mid-take at the clip boundary.
+			loop: true,
+		});
 		expect(next.audioTracks.map((t) => t.gainDb)).toEqual([-6, -6]);
 		expect(next.audioTracks.every((t) => t.muted)).toBe(true);
+		expect(next.audioTracks.every((t) => t.loop)).toBe(true);
 	});
 
 	it("keeps fades on the outer edges when they are edited", () => {
@@ -337,6 +345,9 @@ describe("slipAudioOffsetMs", () => {
 	it("refuses an unknown duration", () => {
 		expect(slipAudioOffsetMs(0, 4_000, null, 5_000)).toBeNull();
 		expect(slipAudioOffsetMs(0, 4_000, 0, 5_000)).toBeNull();
+		// `undefined` is its own branch: an asset whose duration has never been probed
+		// carries no key at all, which is not the same shape as a stored null.
+		expect(slipAudioOffsetMs(0, 4_000, undefined, 5_000)).toBeNull();
 	});
 
 	it("returns whole milliseconds, which is what the schema stores", () => {

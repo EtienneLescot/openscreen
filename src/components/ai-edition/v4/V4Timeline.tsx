@@ -472,10 +472,13 @@ const AudioLanePill = memo(function AudioLanePill({
 				// Body drag moves the track; it also selects and stops the .tlTracks scrub.
 				onPointerDown={(e) => onStartDrag(e, track, "move")}
 				onKeyDown={(e) => {
-					if (e.key === "Enter" || e.key === " ") {
-						e.preventDefault();
-						onSelect(track.id);
-					}
+					if (e.key !== "Enter" && e.key !== " ") return;
+					e.preventDefault();
+					// The shell binds Space to play/pause on `window`, above React's root, so
+					// stopping only the synthetic event selects the pill and toggles playback in
+					// the same keystroke. Same fix as the region pill below.
+					e.nativeEvent.stopPropagation();
+					onSelect(track.id);
 				}}
 				title={`${label} — ${slipHint}`}
 			>
