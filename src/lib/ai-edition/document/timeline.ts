@@ -21,6 +21,7 @@ import type {
  */
 export type PlaybackSegment = AxcutClip & { heldSec?: number };
 
+import { assignInsertsToClips } from "../timeline/inserted-time";
 import { type Interval, subtractInterval } from "../timeline/intervals";
 import { keptRawSpans } from "../timeline/programme-time";
 import {
@@ -135,26 +136,6 @@ function collectWordRefs(
 // after any structural change (insert / move / remove / trim) so the timeline
 // never has gaps or overlaps between clips. Shared by useTimeline (UI) and
 // the agent tool executor (main process) so both enforce the same invariant.
-/** How much media this clip's own insertions add to it, in seconds.
- *
- *  Half-open at the start and closed at the end, matching where an insertion sits: at the
- *  END of the word it follows, which is a moment the clip plays. */
-export function insertedSecForClip(
-	clip: AxcutClip,
-	insertRanges: readonly AxcutInsertRange[],
-): number {
-	const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
-	return insertRanges.reduce(
-		(sum, range) =>
-			range.assetId === clip.assetId &&
-			range.atSec > clip.sourceStartSec &&
-			range.atSec <= sourceEnd + 1e-6
-				? sum + range.durationSec
-				: sum,
-		0,
-	);
-}
-
 /**
  * Clip geometry that accounts for the media inserted inside each clip (issue #560).
  *
@@ -173,12 +154,19 @@ export function reflowClipsForInserts(
 	clips: AxcutClip[],
 	insertRanges: readonly AxcutInsertRange[],
 ): AxcutClip[] {
+	// Through `assignInsertsToClips`, so the length a clip gains and the pills drawn inside it
+	// come from the same assignment. They used to be computed separately, and with two clips
+	// over one recording the film grew twice for an insertion drawn once.
+	const byClip = assignInsertsToClips(clips, insertRanges);
 	return resequenceClips(
 		clips.map((clip) => {
 			const sourceLen = (clip.sourceEndSec ?? clip.sourceStartSec) - clip.sourceStartSec;
 			if (sourceLen <= 0) return clip; // duration not probed yet; leave it to the prober
-			const len = sourceLen + insertedSecForClip(clip, insertRanges);
-			return { ...clip, timelineEndSec: clip.timelineStartSec + len };
+			const owed = (byClip.get(clip.id) ?? []).reduce((sum, r) => sum + r.durationSec, 0);
+			return {
+				...clip,
+				timelineEndSec: clip.timelineStartSec + sourceLen + owed,
+			};
 		}),
 	);
 }

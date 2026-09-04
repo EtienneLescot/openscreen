@@ -32,7 +32,7 @@ export interface RulerInsert {
 }
 
 /**
- * Project each insert onto the raw ruler through the clip that plays its source moment.
+ * Project each insert onto the ruler through the clip that owns it.
  *
  * A range whose moment no clip plays yields nothing: the insertion exists for a word that is
  * not on the timeline, so there is no ruler position for it and nothing to add. Same rule
@@ -40,19 +40,26 @@ export interface RulerInsert {
  *
  * Ordered by ruler position, which is what lets the accumulation below be a single pass.
  */
-export function rulerInserts(
-	inserts: readonly AxcutInsertRange[],
+/**
+ * Which clip owns each insertion.
+ *
+ * ONE definition, because the geometry and the drawing must not answer this differently.
+ * An insertion is anchored to an ASSET and a source moment, not to a clip, so two clips over
+ * the same recording could both claim it — and when they did, the film grew twice while the
+ * pill was drawn once. It is claimed by the FIRST clip that plays its moment, in timeline
+ * order: the insertion is stored once and the word exists once, so it happens once.
+ */
+export function assignInsertsToClips(
 	clips: readonly AxcutClip[],
-): RulerInsert[] {
-	const placed: RulerInsert[] = [];
+	inserts: readonly AxcutInsertRange[],
+): Map<string, AxcutInsertRange[]> {
+	const byClip = new Map<string, AxcutInsertRange[]>();
 	const claimed = new Set<string>();
-	for (const clip of clips) {
+	for (const clip of [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec)) {
 		const sourceEnd = clip.sourceEndSec ?? Number.POSITIVE_INFINITY;
 		const mine = inserts
 			// Inclusive at both edges: an insertion sits at the END of the word it follows,
-			// which is routinely a clip's own boundary. Claimed once, by the first clip that
-			// plays the moment — two clips over the same recording are two places, not two
-			// insertions.
+			// which is routinely a clip's own boundary.
 			.filter(
 				(insert) =>
 					insert.assetId === clip.assetId &&
@@ -61,12 +68,24 @@ export function rulerInserts(
 					insert.atSec <= sourceEnd,
 			)
 			.sort((a, b) => a.atSec - b.atSec);
+		for (const insert of mine) claimed.add(insert.id);
+		if (mine.length > 0) byClip.set(clip.id, mine);
+	}
+	return byClip;
+}
+
+export function rulerInserts(
+	inserts: readonly AxcutInsertRange[],
+	clips: readonly AxcutClip[],
+): RulerInsert[] {
+	const byClip = assignInsertsToClips(clips, inserts);
+	const placed: RulerInsert[] = [];
+	for (const clip of clips) {
 		// Each insertion opens after the ones before it in the same clip: the clip's length
 		// already carries all of them, so a plain source-shift would stack them all at the
 		// first one's position.
 		let carriedSec = 0;
-		for (const insert of mine) {
-			claimed.add(insert.id);
+		for (const insert of byClip.get(clip.id) ?? []) {
 			placed.push({
 				id: insert.id,
 				wordId: insert.wordId,

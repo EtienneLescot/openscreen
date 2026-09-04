@@ -13,6 +13,10 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createId } from "../../src/lib/ai-edition/document/ids";
+import {
+	parseStoredDocument,
+	reconcileClipsWithInserts,
+} from "../../src/lib/ai-edition/document/load";
 import { removeClip } from "../../src/lib/ai-edition/document/timeline";
 import {
 	type AxcutAsset,
@@ -122,7 +126,7 @@ function safeProjectId(raw: string): string {
 // `getProject` spells the same two steps out inline because it relinks moved
 // media between them; keep the order (upgrade, then validate) in step.
 function parseLoadedDocument(raw: string): AxcutDocument {
-	return documentSchema.parse(migrateRawDocumentToCurrent(JSON.parse(raw)));
+	return parseStoredDocument(JSON.parse(raw));
 }
 
 /**
@@ -273,7 +277,9 @@ export class DocumentService {
 		// back, and it is not persisted from here: the renderer saves the document
 		// it was given, as it does for any other load-time repair.
 		const migrated = migrateRawDocumentToCurrent(JSON.parse(raw));
-		return documentSchema.parse(await relinkProjectMedia(migrated, this.mediaRegistryDir));
+		return reconcileClipsWithInserts(
+			documentSchema.parse(await relinkProjectMedia(migrated, this.mediaRegistryDir)),
+		);
 	}
 
 	async createProject(title: string): Promise<AxcutDocument> {

@@ -5,6 +5,7 @@ import { toastText } from "@/i18n/toastText";
 import { nativeBridgeClient } from "@/native/client";
 import { placeAudioTrackInDocument } from "../document/audioTracks";
 import { createId } from "../document/ids";
+import { reconcileClipsWithInserts } from "../document/load";
 import { type Interval, replaceTimeline as replaceTimelineOp } from "../document/timeline";
 import { type AxcutAsset, type AxcutDocument, createAudioTrack, documentSchema } from "../schema";
 import { probeAudioDuration, probeVideoDimensions } from "../timeline/duration";
@@ -158,7 +159,10 @@ export interface ProjectState {
 }
 
 function parseDocument(value: unknown): AxcutDocument {
-	return documentSchema.parse(value);
+	// Reconciled here too, not only in the main process: this is the renderer's own gate on
+	// every document it accepts, and it is idempotent, so a document that arrived correct
+	// passes through untouched.
+	return reconcileClipsWithInserts(documentSchema.parse(value));
 }
 
 /**

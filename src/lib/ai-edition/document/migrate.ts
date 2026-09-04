@@ -28,10 +28,9 @@ import {
 	type AxcutLegacyEditor,
 	type AxcutTrimRange,
 	type AxcutZoomRegion,
-	documentSchema,
-	migrateRawDocumentToCurrent,
 } from "../schema";
 import { createId } from "./ids";
+import { parseStoredDocument } from "./load";
 
 const MS_TO_SEC = 1 / 1000;
 const SEC_TO_MS = 1000;
@@ -63,7 +62,7 @@ function clampSec(sec: number): number {
  * v2 inputs are not handled by it — `migrateProjectDataToAxcutDocument` below
  * still owns the legacy EditorProjectData → AxcutDocument translation.
  */
-export { migrateRawDocumentToCurrent };
+export { migrateRawDocumentToCurrent } from "../schema";
 
 function toLegacyMedia(input: ProjectMedia | undefined): ProjectMedia | null {
 	if (!input) return null;
@@ -250,7 +249,7 @@ export function migrateProjectDataToAxcutDocument(
 		legacyEditor,
 	};
 
-	return documentSchema.parse(migrateRawDocumentToCurrent(draft));
+	return parseStoredDocument(draft);
 }
 
 /**
