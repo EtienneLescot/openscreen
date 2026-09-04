@@ -154,7 +154,7 @@
 		"@types/react-dom": "^18.3.7",
 		"@vitejs/plugin-react": "^5.2.0",
 		"autoprefixer": "^10.5.0",
-		"electron": "^41.2.1",
+		"electron": "41.2.1",
 		"electron-builder": "^26.15.3",
 		"esbuild": "^0.28.1",
 		"fast-check": "^4.7.0",
