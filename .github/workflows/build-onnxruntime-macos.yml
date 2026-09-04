@@ -84,13 +84,31 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
+      - name: Read the runner image
+        id: image
+        # `${{ env.ImageOS }}` DOES NOT WORK, and it fails silently. The `env`
+        # expression context only carries what a workflow, job or step `env:` block
+        # defined; `ImageOS`/`ImageVersion` are set by the runner in its own
+        # environment, so the expression evaluates to the empty string and the cache
+        # key simply loses that component. The evidence is in this repo's own cache
+        # list: `build-whisper-stt.yml` builds its key the same way and the stored
+        # keys read `whisper-stt-build-darwin-arm64---<hash>` — three hyphens, both
+        # values empty. Reading them in a `run:` step, where they are ordinary shell
+        # variables, is what actually works.
+        run: |
+          set -euo pipefail
+          echo "tag=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+
       - name: Cache the CMake build tree
         uses: actions/cache@v6
         with:
           path: onnxruntime-build
-          # Keyed on the version, the floor and the runner image: CMake bakes
-          # absolute SDK paths into the tree, so a toolchain roll must bust it.
-          key: ort-${{ steps.pin.outputs.version }}-${{ steps.floor.outputs.floor }}-${{ env.ImageOS }}-${{ env.ImageVersion }}
+          # Keyed on the version, the floor and the runner image. The image matters:
+          # CMake bakes absolute SDK paths into the tree, so when GitHub rolls Xcode a
+          # restored tree fails on paths that no longer exist. Scoping the key to the
+          # image busts it automatically on every roll.
+          key: ort-${{ steps.pin.outputs.version }}-${{ steps.floor.outputs.floor }}-${{ steps.image.outputs.tag }}
 
       - name: Configure
         # Driven straight at CMake rather than through upstream's `build.sh`.
@@ -155,6 +173,14 @@ jobs:
           ln -s "libonnxruntime.${V}.dylib" "stage/${DIR}/lib/libonnxruntime.dylib"
           ln -s "libonnxruntime.${V}.dylib" "stage/${DIR}/lib/libonnxruntime.1.dylib"
           cp onnxruntime-src/include/onnxruntime/core/session/*.h "stage/${DIR}/include/" || true
+          # NOT optional. `fetch-onnxruntime.mjs` refuses an archive with no LICENSE
+          # (`LICENSE not found inside …`) and then reads it to confirm the library
+          # really is MIT — "asset names are not evidence". Without this the archive
+          # would pass its SHA-256 and fail at vendoring, which is the worst place to
+          # find out. `ThirdPartyNotices.txt` rides along because upstream ships it and
+          # THIRD-PARTY-NOTICES.md is what carries the attribution.
+          cp onnxruntime-src/LICENSE "stage/${DIR}/LICENSE"
+          cp onnxruntime-src/ThirdPartyNotices.txt "stage/${DIR}/ThirdPartyNotices.txt"
           tar -czf "${DIR}.tgz" -C stage "${DIR}"
           shasum -a 256 "${DIR}.tgz"
 
