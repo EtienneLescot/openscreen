@@ -89,7 +89,10 @@ export function extensionClipArgs(spec: ExtensionClipSpec, outPath: string): str
 }
 
 /** Deterministic, and carries what it was generated from: a word whose text changed asks for
- *  a different name, so the old file is never mistaken for the new one. */
+ *  a different name, so the old file is never mistaken for the new one.
+ *
+ *  The duration comes from `extensionDurationSec` — the ONE rule for how long an added word
+ *  takes — so the file a part asks for and the file this writes are named by the same fact. */
 export function extensionClipName(wordId: string, durationSec: number): string {
 	return `${wordId}_${Math.round(durationSec * 1000)}.mp4`;
 }
