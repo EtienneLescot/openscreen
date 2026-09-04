@@ -40,6 +40,7 @@ import {
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
+import { extensionClipPath } from "@/lib/ai-edition/timeline/clip-parts";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { takeProgramme } from "@/lib/ai-edition/timeline/take-programme";
@@ -702,6 +703,25 @@ export function buildSceneDescription(
 	const clips: CompositorClipInput[] = visibleClips.flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);
 		if (!asset?.originalPath) return [];
+		// An extension plays GENERATED media, not the recording's. Everything else about the
+		// entry is the clip's — same webcam pairing, same audio expectation — because that is
+		// the point of making it a file rather than a behaviour.
+		if (clip.extensionWordId) {
+			return [
+				{
+					screenPath: extensionClipPath(
+						asset.originalPath,
+						clip.extensionWordId,
+						clip.sourceEndSec ?? 0,
+					),
+					webcamPath: "",
+					sourceStartSec: 0,
+					sourceEndSec: clip.sourceEndSec ?? 0,
+					webcamOffsetSec: 0,
+					hasAudio: true,
+				},
+			];
+		}
 		const camera = assetCameraSource(asset);
 		// ponytail: `asset.audio` exists in the schema but the probe pipeline never
 		// populates it, so there is no per-asset "is there a track?" signal to read

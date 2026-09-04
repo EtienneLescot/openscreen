@@ -14,6 +14,12 @@
 import { spawn } from "node:child_process";
 import { access, mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { AxcutWord } from "../../src/lib/ai-edition/schema";
+import {
+	extensionClipPath,
+	extensionDurationSec,
+	isAddedWord,
+} from "../../src/lib/ai-edition/timeline/clip-parts";
 import { resolveFfmpeg } from "./audioPeaks";
 
 export interface ExtensionClipSpec {
@@ -88,26 +94,60 @@ export function extensionClipArgs(spec: ExtensionClipSpec, outPath: string): str
 	];
 }
 
-/** Deterministic, and carries what it was generated from: a word whose text changed asks for
- *  a different name, so the old file is never mistaken for the new one.
+/**
+ * Every extension the document's words call for, generated if it is not already there.
  *
- *  The duration comes from `extensionDurationSec` — the ONE rule for how long an added word
- *  takes — so the file a part asks for and the file this writes are named by the same fact. */
-export function extensionClipName(wordId: string, durationSec: number): string {
-	return `${wordId}_${Math.round(durationSec * 1000)}.mp4`;
+ * Called on SAVE, which is the only moment the main process — the one that can spawn ffmpeg
+ * — sees the document. Idempotent by name, so a save that adds nothing costs one `stat` per
+ * added word. A failure is logged and swallowed: the edit is not lost because a derived file
+ * could not be written, and the segment renders black until the next save regenerates it.
+ */
+export async function ensureDocumentExtensions(document: {
+	assets: ReadonlyArray<{
+		id: string;
+		originalPath?: string;
+		video?: { width: number; height: number; fps: number };
+	}>;
+	transcripts: ReadonlyArray<{ assetId: string; words: ReadonlyArray<AxcutWord> }>;
+}): Promise<void> {
+	for (const transcript of document.transcripts) {
+		const asset = document.assets.find((a) => a.id === transcript.assetId);
+		if (!asset?.originalPath) continue;
+		for (const word of transcript.words) {
+			if (!isAddedWord(word)) continue;
+			const durationSec = extensionDurationSec(word.text);
+			if (durationSec <= 0) continue;
+			const outPath = extensionClipPath(asset.originalPath, word.id, durationSec);
+			try {
+				await ensureExtensionClip(
+					{
+						sourcePath: asset.originalPath,
+						atSec: word.startSec,
+						durationSec,
+						fps: asset.video?.fps ?? 0,
+						width: asset.video?.width ?? 0,
+						height: asset.video?.height ?? 0,
+					},
+					outPath,
+				);
+			} catch (error) {
+				console.error(`[extension] ${word.id}: ${(error as Error).message}`);
+			}
+		}
+	}
 }
 
 /**
  * Generate the file if it is not already there, and return its path.
  *
- * Idempotent by name: the same word and duration reuse the file rather than re-encoding.
+ * Idempotent: the same word and duration name the same file, which is reused rather than
+ * re-encoded. The path is decided by `extensionClipPath`, so the renderer names the file it
+ * expects and this writes the file it named — one rule, both sides.
  */
 export async function ensureExtensionClip(
 	spec: ExtensionClipSpec,
-	wordId: string,
-	outDir: string,
+	outPath: string,
 ): Promise<string> {
-	const outPath = path.join(outDir, extensionClipName(wordId, spec.durationSec));
 	try {
 		await access(outPath);
 		return outPath;
@@ -116,7 +156,7 @@ export async function ensureExtensionClip(
 	}
 	const ffmpeg = resolveFfmpeg();
 	if (!ffmpeg) throw new Error("no bundled ffmpeg to generate the extension clip with");
-	await mkdir(outDir, { recursive: true });
+	await mkdir(path.dirname(outPath), { recursive: true });
 	await run(ffmpeg, extensionClipArgs(spec, outPath));
 	return outPath;
 }

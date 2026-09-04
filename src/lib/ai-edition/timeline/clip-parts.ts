@@ -112,6 +112,25 @@ export function clipParts(clip: AxcutClip, words: readonly AxcutWord[]): ClipPar
 	return parts;
 }
 
+/** Where the generated media for an added word lives.
+ *
+ *  Beside the recording it was cut from, in a hidden sibling folder, and derived by pure
+ *  string work from the asset path and the word — so the renderer and the main process
+ *  arrive at the same path without asking each other. That is what keeps the file DERIVED:
+ *  no one stores it, anyone can name it, and the process that can spawn ffmpeg is the only
+ *  one that has to create it.
+ *
+ *  The name carries the duration, so a re-typed word asks for a different file and a stale
+ *  one is simply never named again. */
+export function extensionClipPath(assetPath: string, wordId: string, durationSec: number): string {
+	const sep = assetPath.includes("\\") ? "\\" : "/";
+	const dir = assetPath.slice(0, Math.max(0, assetPath.lastIndexOf(sep)));
+	return `${dir}${sep}${EXTENSIONS_DIR}${sep}${wordId}_${Math.round(durationSec * 1000)}.mp4`;
+}
+
+/** Hidden, because it is derived: deleting it costs nothing but a regeneration. */
+export const EXTENSIONS_DIR = ".openscreen-extensions";
+
 /** What the clip's timeline length has to be, given its parts. The stored `timelineEndSec`
  *  is this — the writer that adds a word is what keeps them equal. */
 export function partsLengthSec(parts: readonly ClipPart[]): number {

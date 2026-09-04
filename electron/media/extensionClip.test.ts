@@ -2,7 +2,8 @@
 // would test ffmpeg, not us — the arguments are where a mistake actually lives.
 
 import { describe, expect, it } from "vitest";
-import { extensionClipArgs, extensionClipName } from "./extensionClip";
+import { extensionClipPath } from "../../src/lib/ai-edition/timeline/clip-parts";
+import { extensionClipArgs } from "./extensionClip";
 
 const SPEC = {
 	sourcePath: "C:/rec/take.mp4",
@@ -46,10 +47,26 @@ describe("extensionClipArgs", () => {
 	});
 });
 
-describe("extensionClipName", () => {
+/** One backslash, built rather than escaped: the escape is what this test keeps losing. */
+const BS = String.fromCharCode(92);
+
+describe("extensionClipPath", () => {
+	it("sits beside the recording it was cut from, in a hidden folder", () => {
+		expect(extensionClipPath("C:/rec/take.mp4", "synth_2", 3.6)).toBe(
+			"C:/rec/.openscreen-extensions/synth_2_3600.mp4",
+		);
+	});
+
 	it("carries the word and the duration, so a re-typed word asks for a different file", () => {
-		expect(extensionClipName("synth_2", 3.6)).toBe("synth_2_3600.mp4");
-		expect(extensionClipName("synth_2", 3.8)).not.toBe(extensionClipName("synth_2", 3.6));
+		expect(extensionClipPath("C:/rec/take.mp4", "synth_2", 3.8)).not.toBe(
+			extensionClipPath("C:/rec/take.mp4", "synth_2", 3.6),
+		);
+	});
+
+	it("is the same rule on a Windows path, so both processes name one file", () => {
+		expect(extensionClipPath(`C:${BS}rec${BS}take.mp4`, "w1", 1)).toBe(
+			`C:${BS}rec${BS}.openscreen-extensions${BS}w1_1000.mp4`,
+		);
 	});
 });
 

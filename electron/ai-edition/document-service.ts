@@ -21,6 +21,7 @@ import {
 	documentSchema,
 	migrateRawDocumentToCurrent,
 } from "../../src/lib/ai-edition/schema";
+import { ensureDocumentExtensions } from "../media/extensionClip";
 import { relinkProjectMedia } from "../media/projectMediaRelinker";
 
 const PROJECT_FILE_EXTENSION = ".openscreen";
@@ -294,6 +295,9 @@ export class DocumentService {
 			project: { ...parsed.project, updatedAt: new Date().toISOString() },
 		};
 		await this.writeProject(stamped);
+		// After the write, never before: a derived file is not worth delaying the user's edit
+		// reaching disk, and a failure to generate one must not fail the save.
+		await ensureDocumentExtensions(stamped);
 		return stamped;
 	}
 
