@@ -34,6 +34,11 @@ export function isAddedWord(word: AxcutWord): boolean {
  *  anything else, so a reader can tell generated media from a recording at a glance. */
 export const EXTENSION_ID_PREFIX = "ext:";
 
+/** True for the asset — and the clip, which shares its id — of a generated insertion. */
+export function isGeneratedAssetId(id: string): boolean {
+	return id.startsWith(EXTENSION_ID_PREFIX);
+}
+
 /** The id an insertion's media answers to. */
 export function extensionAssetId(wordId: string): string {
 	return `${EXTENSION_ID_PREFIX}${wordId}`;

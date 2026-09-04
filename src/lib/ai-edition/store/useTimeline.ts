@@ -21,11 +21,11 @@ import {
 	moveClip as moveClipInDocument,
 	PLACEHOLDER_DURATION_SEC,
 	type RegionKind,
-	rederiveRegionMs,
 	removeClip as removeClipInDocument,
 	removeRegion as removeRegionInDocument,
 	resequenceClips,
 	setClipSourceRange,
+	withClipsChanged,
 } from "../document/timeline";
 import type { AxcutAudioTrack, AxcutClipCropRegion, AxcutDocument } from "../schema";
 import { hasAnyClipWithCamera } from "../timeline/camera";
@@ -1165,12 +1165,7 @@ export function useTimeline() {
 			const arr = [...oldClips];
 			const at = Math.max(0, Math.min(arr.length, index));
 			arr.splice(at, 0, newClip);
-			const newClips = resequenceClips(arr);
-			const next: AxcutDocument = {
-				...currentDoc,
-				timeline: { ...currentDoc.timeline, clips: newClips },
-			};
-			const finalDoc = rederiveRegionMs(next, newClips);
+			const finalDoc = withClipsChanged(currentDoc, arr);
 			if (!(await saveDocument(finalDoc, { history: true }))) return;
 			setClipSelection(newClip.id);
 

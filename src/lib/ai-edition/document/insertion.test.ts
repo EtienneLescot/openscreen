@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutDocument } from "../schema";
 import { insertGeneratedClip, removeGeneratedClips, retextGeneratedClip } from "./insertion";
-import { resolvePlaybackSegments } from "./timeline";
+import { moveClip, removeClip, resolvePlaybackSegments } from "./timeline";
 
 const doc = (over: Partial<AxcutDocument> = {}): AxcutDocument =>
 	({
@@ -163,7 +163,63 @@ describe("removeGeneratedClips", () => {
 		expect(back.timeline.clips[1].timelineStartSec).toBeCloseTo(4, 6);
 	});
 
+	it("rejoins the recording when the generated clip is dragged away instead", () => {
+		// Nothing in `insertion.ts` knows this happens. The clip list holds the invariant, so
+		// moving the insertion out of the middle heals the cut exactly as deleting it does.
+		const next = withInsertion();
+		const moved = moveClip(next, "ext:synth_1", 2, "user", "");
+		expect(moved.timeline.clips.map((c) => c.assetId)).toEqual(["a1", "ext:synth_1"]);
+		expect(moved.timeline.clips[0]).toMatchObject({ sourceStartSec: 0, sourceEndSec: 10 });
+	});
+
 	it("is a no-op for a word that has no clip", () => {
+		const base = doc();
+		expect(removeGeneratedClips(base, ["synth_9"])).toBe(base);
+	});
+});
+
+describe("the seam only closes under generated media", () => {
+	it("leaves two halves of a recording apart when an ORDINARY clip between them goes", () => {
+		// Cutting a recording into consecutive clips is something this app does on purpose —
+		// `replaceTimeline` builds exactly that so each piece can carry its own zoom. Deleting
+		// a B-roll clip laid between two of them must not collapse the two into one.
+		const base = doc({
+			assets: [
+				...doc().assets,
+				{
+					id: "a2",
+					kind: "video",
+					label: "broll",
+					originalPath: "C:/rec/broll.mp4",
+					cameraTrack: null,
+				},
+			],
+		} as never);
+		base.timeline.clips = [
+			{ ...base.timeline.clips[0], id: "left", sourceEndSec: 4, timelineEndSec: 4 },
+			{
+				...base.timeline.clips[0],
+				id: "broll",
+				assetId: "a2",
+				sourceStartSec: 0,
+				sourceEndSec: 2,
+				timelineStartSec: 4,
+				timelineEndSec: 6,
+			},
+			{
+				...base.timeline.clips[0],
+				id: "right",
+				sourceStartSec: 4,
+				sourceEndSec: 10,
+				timelineStartSec: 6,
+				timelineEndSec: 12,
+			},
+		];
+		const after = removeClip(base, "broll");
+		expect(after.timeline.clips.map((c) => c.id)).toEqual(["left", "right"]);
+	});
+
+	it("keeps a word that has no clip a no-op", () => {
 		const base = doc();
 		expect(removeGeneratedClips(base, ["synth_9"])).toBe(base);
 	});

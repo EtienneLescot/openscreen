@@ -21,10 +21,10 @@
 
 import type { AxcutAsset, AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
 import {
-	EXTENSION_ID_PREFIX,
 	extensionAssetId,
 	extensionClipPath,
 	extensionDurationSec,
+	isGeneratedAssetId,
 } from "../timeline/clip-parts";
 import { createId } from "./ids";
 import { rederiveRegionMs, removeClip, resequenceClips } from "./timeline";
@@ -32,10 +32,7 @@ import { rederiveRegionMs, removeClip, resequenceClips } from "./timeline";
 /** Where a new word goes relative to the word the caret was resting on. */
 export type InsertSide = "before" | "after";
 
-/** True for the asset — and the clip, which shares its id — of a generated insertion. */
-export function isGeneratedAssetId(id: string): boolean {
-	return id.startsWith(EXTENSION_ID_PREFIX);
-}
+export { isGeneratedAssetId };
 
 const EPS = 1e-6;
 
