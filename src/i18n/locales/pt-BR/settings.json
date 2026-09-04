@@ -132,6 +132,7 @@
 		"title": "Qualidade de Exportação",
 		"low": "Baixa",
 		"medium": "Média",
+		"ultra": "4K",
 		"high": "Alta"
 	},
 	"gifSettings": {

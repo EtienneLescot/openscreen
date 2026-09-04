@@ -76,7 +76,7 @@ Usage:
 Export options:
   -o, --out <path>          Output file (.mp4 or .gif). Default: next to the project file
   --format <mp4|gif>        Override the format stored in the project
-  --quality <medium|good|source>
+  --quality <medium|good|4k|source>
                             MP4 quality (default: from project)
   --gif-fps <15|20|25|30>   GIF frame rate (default: from project)
   --gif-size <medium|large|original>
@@ -203,8 +203,8 @@ function parseExport(args: string[], cwd: string): CliCommand {
 			}
 			case "--quality": {
 				const [value, next] = takeValue(args, i, arg);
-				if (value !== "medium" && value !== "good" && value !== "source") {
-					throw new Error(`--quality must be medium, good or source, got "${value}"`);
+				if (value !== "medium" && value !== "good" && value !== "4k" && value !== "source") {
+					throw new Error(`--quality must be medium, good, 4k or source, got "${value}"`);
 				}
 				request.quality = value;
 				i = next;

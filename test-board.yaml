@@ -1,0 +1,66 @@
+version: 1
+project:
+  name: "openscreen"
+  test_command: "npm run test"
+  repo: "nanameru/openscreen"
+
+source_roots:
+  - src
+  - electron
+  - tests
+
+cases:
+  - id: TC-007
+    title: "4K品質は縦横比を維持して短辺2160で出力する"
+    feature: "4K MP4エクスポート"
+    scenario: "横長・縦長プロジェクトの4K寸法計算"
+    status: done
+    priority: high
+    type: regression
+    source: [src/lib/exporter/mp4ExportSettings.ts]
+    test_file: "src/lib/exporter/mp4ExportSettings.test.ts"
+    issues: [6]
+
+  - id: TC-008
+    title: "エクスポート画面から4Kを選択して3840×2160で出力する"
+    feature: "4K品質ボタン"
+    scenario: "1080p素材を4KへアップスケールしてMP4出力"
+    status: done
+    priority: high
+    type: integration
+    source: [src/components/ai-edition/ExportDialog.tsx]
+    test_file: "src/components/ai-edition/ExportDialog.showInFolder.test.tsx"
+    issues: [6]
+
+  - id: TC-009
+    title: "CLIでquality 4kを指定できる"
+    feature: "4K CLIエクスポート"
+    scenario: "openscreen export --quality 4k"
+    status: done
+    priority: medium
+    type: regression
+    source: [electron/cli/args.ts]
+    test_file: "electron/cli/args.test.ts"
+    issues: [6]
+
+  - id: TC-010
+    title: "ユーザー設定の4K品質を読込時に維持する"
+    feature: "4K品質のユーザー設定"
+    scenario: "ユーザー設定の保存と読込"
+    status: done
+    priority: medium
+    type: regression
+    source: [src/lib/userPreferences.ts]
+    test_file: "src/lib/userPreferences.test.ts"
+    issues: [6]
+
+  - id: TC-011
+    title: "プロジェクト設定の4K品質を正規化時に維持する"
+    feature: "4K品質のプロジェクト設定"
+    scenario: "保存済みプロジェクト設定の読込"
+    status: done
+    priority: medium
+    type: regression
+    source: [src/components/video-editor/projectPersistence.ts]
+    test_file: "src/components/video-editor/projectPersistence.test.ts"
+    issues: [6]

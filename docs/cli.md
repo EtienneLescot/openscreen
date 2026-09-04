@@ -143,7 +143,7 @@ speed regions, wallpaper/padding, annotations, cursor rendering, webcam layouts.
 
 ```bash
 openscreen export demo.openscreen                    # format/quality from the project
-openscreen export demo.openscreen -o out.mp4 --quality source
+openscreen export demo.openscreen -o out.mp4 --quality 4k
 openscreen export demo.openscreen -o out.gif --gif-fps 20 --gif-size large
 openscreen export demo.openscreen --json | while read line; do ...; done
 ```
@@ -152,7 +152,7 @@ openscreen export demo.openscreen --json | while read line; do ...; done
 |---|---|
 | `-o, --out <path>` | Output file; extension picks the format. Default: next to the project |
 | `--format <mp4\|gif>` | Override the project's stored format |
-| `--quality <medium\|good\|source>` | MP4 quality |
+| `--quality <medium\|good\|4k\|source>` | MP4 quality |
 | `--gif-fps <15\|20\|25\|30>`, `--gif-size <medium\|large\|original>` | GIF settings |
 | `--auto-zoom` | Add automatic zooms from cursor telemetry before rendering — the same dwell-detection engine as the editor's magic wand. Existing zoom regions are kept; suggestions never overlap them |
 | `--audio <file>` | Mix a voiceover file into the MP4 (mp3/wav/m4a — anything Chromium can decode; AIFF is not supported) |

@@ -109,6 +109,26 @@ describe("calculateMp4ExportSettings", () => {
 		});
 	});
 
+	it("exports 4K at a 2160px short side while preserving the project aspect ratio", () => {
+		expect(
+			calculateMp4ExportSettings({
+				quality: "4k",
+				sourceWidth: 1920,
+				sourceHeight: 1080,
+				aspectRatioValue: 16 / 9,
+			}),
+		).toMatchObject({ width: 3840, height: 2160, bitrate: 80_000_000 });
+
+		expect(
+			calculateMp4ExportSettings({
+				quality: "4k",
+				sourceWidth: 1080,
+				sourceHeight: 1920,
+				aspectRatioValue: 9 / 16,
+			}),
+		).toMatchObject({ width: 2160, height: 3840, bitrate: 80_000_000 });
+	});
+
 	it("does not call letterbox rows an upscale (1920x1032 window capture, 16:9 project)", () => {
 		const source = { width: 1920, height: 1032 };
 		const tier = (quality: "medium" | "good" | "source") =>
