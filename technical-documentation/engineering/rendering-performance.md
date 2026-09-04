@@ -572,7 +572,7 @@ Unit tests never look at a pixel. The `native*` arms write real files: export th
 
 ### Capping the macOS decoder's thread count
 
-**What it was.** After the export moved to the software H.264 decoder it runs with `thread_count = 0`, i.e. one thread per core, and the export's CPU-seconds went 8.4 → 29.8. Since the walk is bound by the encoder and the decoder has seconds of slack, capping its threads looked like free CPU. **What the measurement said.** It is not free and it does not return CPU. Public bundle, S4, three cycles with a floor inside each, closing drift 0.9979, output identical across variants:
+**What it was.** After the export moved to the software H.264 decoder it runs with `thread_count = 0`, which in libavcodec means *automatic* — the decoder picks, from the CPU count and its own threading model, and the number it actually chose was never read back here. The export's CPU-seconds went 8.4 → 29.8. Since the walk is bound by the encoder and the decoder has seconds of slack, capping its threads looked like free CPU. **What the measurement said.** It is not free and it does not return CPU. Public bundle, S4, three cycles with a floor inside each, closing drift 0.9979, output identical across variants:
 
 | decode threads | cost | CPU s |
 |---|---:|---:|
@@ -580,7 +580,7 @@ Unit tests never look at a pixel. The `native*` arms write real files: export th
 | 2 | 1.056× | 29.2 |
 | 1 | **1.775×** | 27.4 |
 
-**One thread costs +70 % of wall clock to return 9.6 % of CPU** — it throws away nearly the whole decode gain, landing back near the 2.002× the shipped build measures. The premise was simply wrong: decoding N frames costs the same total work however many threads do it, so threads move wall clock and core occupancy, never CPU-seconds. The profile shows the mechanism cleanly — at one thread `decode.screen` goes 1.05 s → 6.17 s while `enc.send_frame` goes 7.61 s → 2.16 s, the decoder eating the slack the encoder-bound pipeline left it, until the slack runs out. **One-line reason not to re-propose:** threads do not buy CPU-seconds back, and by the time the cap is low enough to matter it has already cost the export more than the optimisation gained.
+**One thread costs +70 % of wall clock to return 9.6 % of CPU** — it throws away nearly the whole decode gain, landing back near the 2.002× the shipped build measures. The premise was wrong about the size of the effect, not its sign: CPU-seconds do fall, by 30.3 → 27.4, but nothing like proportionally, because decoding N frames costs roughly the same total work however many threads share it. Threads mostly redistribute that work rather than reduce it, and the ~10 % that does disappear is plausibly the thread pool's own overhead — which was not isolated, so treat the mechanism behind that last 10 % as unexplained rather than established. The profile shows the mechanism cleanly — at one thread `decode.screen` goes 1.05 s → 6.17 s while `enc.send_frame` goes 7.61 s → 2.16 s, the decoder eating the slack the encoder-bound pipeline left it, until the slack runs out. **One-line reason not to re-propose:** threads do not buy CPU-seconds back, and by the time the cap is low enough to matter it has already cost the export more than the optimisation gained.
 
 ### A dedicated encode thread on macOS
 
