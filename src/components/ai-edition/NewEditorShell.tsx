@@ -1340,6 +1340,7 @@ export function NewEditorShell() {
 		isMac,
 		togglePlay,
 		handleSeek,
+		openVoiceoverFlow,
 	]);
 
 	const showTimeline = mode !== "rec";

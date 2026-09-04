@@ -84,7 +84,7 @@ describe("a cut authored from the voiceover lane", () => {
 		// wrote `clipId: "vo"` here and removed nothing at all.
 		// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 		const [placement] = voiceoverPlacements([VOICE as any]);
-		const rows = cut(placementRawSec(placement, 2), placementRawSec(placement, 3));
+		const rows = cut(placementRawSec(placement, 2, []), placementRawSec(placement, 3, []));
 		expect(rows).toHaveLength(1);
 		expect(CLIPS.map((c) => c.id)).toContain(rows[0].clipId);
 		expect(filmSec([])).toBeCloseTo(12, 6);

@@ -128,6 +128,19 @@ export function captionLinesForAsset(
 	);
 }
 
+function overlapsAdded(
+	word: CaptionSegment,
+	added: Array<{ startSec: number; endSec: number }>,
+): boolean {
+	return added.some(
+		(span) =>
+			(word.startSec < span.endSec && word.endSec > span.startSec) ||
+			// An added word's source span is DEGENERATE — the seconds it is spoken in are the
+			// insertion, not the recording — so a strict overlap never matches it.
+			(word.startSec >= span.startSec && word.endSec <= span.endSec),
+	);
+}
+
 /** Where the transcript's ADDED words sit, in source time. */
 function addedWordSpans(transcript: AxcutTranscript): Array<{ startSec: number; endSec: number }> {
 	return transcript.words
@@ -148,8 +161,7 @@ function captionRuns(
 	added: Array<{ startSec: number; endSec: number }>,
 ): CaptionSegment[][] {
 	if (added.length === 0) return [stream];
-	const isAdded = (word: CaptionSegment) =>
-		added.some((span) => word.startSec < span.endSec && word.endSec > span.startSec);
+	const isAdded = (word: CaptionSegment) => overlapsAdded(word, added);
 	const runs: CaptionSegment[][] = [];
 	let current: CaptionSegment[] = [];
 	let currentIsAdded: boolean | null = null;
@@ -220,11 +232,13 @@ export function sourceSpanToTimelineSpans(
 		const s = Math.max(startSec, clip.sourceStartSec);
 		const e = Math.min(endSec, clipSourceEnd);
 		if (e <= s) continue;
-		// `"closes"` on the end: a line running up to an added word covers the media that
-		// word inserted, so it stays on screen through it instead of going dark over the
-		// one moment the word exists for.
 		out.push({
 			startSec: sourceToTimelineSec(clip, s, inserts, "opens"),
+			// `"closes"` on the end, unconditionally. For an ADDED line that is what gives it
+			// the width of the media it bought — its source span is degenerate. For a RECORDED
+			// line the two edges agree: `finalizeCaptionSegmentsForPlayback` has already
+			// trimmed its end back to just before the next line begins, which is the added
+			// word's own moment, so there is no insertion at or past it to count.
 			endSec: sourceToTimelineSec(clip, e, inserts, "closes"),
 		});
 	}

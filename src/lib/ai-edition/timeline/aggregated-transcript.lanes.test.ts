@@ -143,6 +143,7 @@ describe("lanePlacements", () => {
 			[transcript as any],
 			[],
 			[],
+			[],
 		);
 		expect(sections).toHaveLength(1);
 		expect(sections[0].words.filter((w) => !w.word.id.startsWith("silence_"))).toHaveLength(2);
@@ -224,6 +225,7 @@ describe("one programme, two lanes", () => {
 				transcripts as any,
 				[],
 				removed,
+				[],
 			);
 		return { recording: build("recording"), voiceover: build("voiceover") };
 	}
@@ -263,6 +265,7 @@ describe("one programme, two lanes", () => {
 			[secondsTranscript("asset_vo", 14)] as any,
 			[],
 			removed,
+			[],
 		);
 		const w6 = sections.flatMap((s) => s.words).find((w) => w.word.id === "w6"); // raw 6..7
 		expect(w6?.kept).toBe(false);
@@ -281,6 +284,7 @@ describe("one programme, two lanes", () => {
 			[secondsTranscript("asset_vo", 20)] as any,
 			[],
 			removedRawSpans(CLIPS_2, [], []),
+			[],
 		);
 		const w15 = sections.flatMap((s) => s.words).find((w) => w.word.id === "w15");
 		expect(w15?.kept).toBe(true);
@@ -290,14 +294,14 @@ describe("one programme, two lanes", () => {
 		// The cue used to be resolved into a clip id, which only the recording lane has —
 		// so this returned null for every moment of every voiceover.
 		const { voiceover } = lanes([]);
-		expect(findCueWordId(voiceover, 4.5)).toBe("vo_1:w4");
-		expect(findCueWordId(voiceover, 0.5)).toBe("vo_1:w0");
+		expect(findCueWordId(voiceover, 4.5, [])).toBe("vo_1:w4");
+		expect(findCueWordId(voiceover, 0.5, [])).toBe("vo_1:w0");
 	});
 
 	it("reads a word's raw moment through its own placement", () => {
 		// A take starting 3s along the ruler, 5s into its file: its source 6 is raw 4.
 		const placement = { id: "p", assetId: "a", sourceStartSec: 5, timelineStartSec: 3 };
-		expect(placementRawSec(placement, 6)).toBe(4);
+		expect(placementRawSec(placement, 6, [])).toBe(4);
 	});
 
 	it("contributes no placement for a looping take", () => {
@@ -338,25 +342,26 @@ describe("the karaoke highlight after a pause", () => {
 			[WORDS as any],
 			[],
 			[],
+			[],
 		);
 
 	it("tracks the voice with no insertion", () => {
-		expect(findCueWordId(sectionsWith([]), 4.5)).toBe("vo:w4");
+		expect(findCueWordId(sectionsWith([]), 4.5, [])).toBe("vo:w4");
 	});
 
 	it("follows the word D later once a pause has pushed it there", () => {
 		// A one-second pause at source 3: source 4 is now heard at ruler 5.
 		const inserts = [{ id: "i1", wordId: "w3", atSourceSec: 3, durationSec: 1 }];
 		const sections = sectionsWith(inserts);
-		expect(findCueWordId(sections, 5.5)).toBe("vo#1:w4");
+		expect(findCueWordId(sections, 5.5, [])).toBe("vo#1:w4");
 		// And it is NOT still answering with the pre-pause mapping.
-		expect(findCueWordId(sections, 4.5)).not.toBe("vo:w4");
+		expect(findCueWordId(sections, 4.5, [])).not.toBe("vo:w4");
 	});
 
 	it("highlights nothing while the voice is parked", () => {
 		// No word is being said during the pause, so the karaoke goes quiet rather than
 		// leaving a word lit that has already been spoken.
 		const inserts = [{ id: "i1", wordId: "w3", atSourceSec: 3, durationSec: 1 }];
-		expect(findCueWordId(sectionsWith(inserts), 3.5)).toBeNull();
+		expect(findCueWordId(sectionsWith(inserts), 3.5, [])).toBeNull();
 	});
 });

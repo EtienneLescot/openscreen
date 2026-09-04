@@ -699,7 +699,7 @@ export function V4Timeline({
 				1,
 				clips.reduce((m, c) => Math.max(m, c.timelineEndSec), 0),
 			),
-		[clips, inserts],
+		[clips],
 	);
 	const pctOf = useCallback((sec: number) => (sec / total) * 100, [total]);
 	const showLanes = variant === "edit";
@@ -873,7 +873,7 @@ export function V4Timeline({
 				});
 			}
 		},
-		[setCurrentTime, total, inserts],
+		[setCurrentTime, total],
 	);
 
 	// Mousedown anywhere on the empty timeline (ruler, lanes background, or

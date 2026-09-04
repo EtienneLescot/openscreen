@@ -139,7 +139,9 @@ export function sourceToTimelineSec(
  * driving a decoder needs both: where to park, and the fact that it should stay parked.
  */
 export function timelineToSourceSec(
-	clip: AxcutClip,
+	/** The same three fields `sourceToTimelineSec` needs, so a voiceover placement maps
+	 *  through this too. */
+	clip: Pick<AxcutClip, "assetId" | "sourceStartSec" | "timelineStartSec">,
 	timelineSec: number,
 	inserts: readonly AxcutInsertRange[],
 ): { sourceSec: number; insideInsert: AxcutInsertRange | null } {

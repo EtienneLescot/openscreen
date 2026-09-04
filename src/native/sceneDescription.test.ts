@@ -2016,7 +2016,6 @@ describe("buildSceneDescription.holdSec", () => {
 				}),
 			],
 			timeline: {
-				// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 				insertRanges: [
 					{
 						id: "i1",
@@ -2027,6 +2026,7 @@ describe("buildSceneDescription.holdSec", () => {
 						reason: "",
 						origin: "user",
 					},
+					// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 				] as any,
 			},
 		});

@@ -332,6 +332,49 @@ const MIN_PAUSE_SEC = 0.05;
  * so no caller has to remember any of the three. `insertRangesMatchWords` is the same rule
  * read back, for a test to hold this to.
  */
+/** `synth_N` — the id every added word has been minted with, and the one thing a row
+ *  written before the `source` field carries to say what it is. */
+const SYNTH_WORD_ID = /^synth_\d+$/;
+
+/**
+ * Added words that never got marked as such, marked.
+ *
+ * `source: "synth"` is how the whole pipeline recognises a word the user typed: it decides
+ * whether the word gets an insertion, whether the film makes room for it, and whether the
+ * caption line breaks around it. A row minted before that field existed answers no to all
+ * three, so its text plays over the recording and everything after it drifts. The id is the
+ * evidence — `nextSynthWordId` has always minted exactly this shape, and the numbering scan
+ * already reads it back with the same pattern.
+ */
+export function withMarkedAddedWords(document: AxcutDocument): AxcutDocument {
+	let touched = false;
+	const transcripts = document.transcripts.map((transcript) => {
+		let changed = false;
+		const words = transcript.words.map((word) => {
+			if (word.source !== undefined || !SYNTH_WORD_ID.test(word.id)) return word;
+			changed = true;
+			return { ...word, source: "synth" as const };
+		});
+		if (!changed) return transcript;
+		touched = true;
+		return { ...transcript, words };
+	});
+	return touched ? { ...document, transcripts } : document;
+}
+
+/**
+ * Every asset's insert ranges brought back in line with its words.
+ *
+ * The per-asset reconciler applied to the whole document, so a load can enforce the
+ * invariant it maintains rather than waiting for the next word write to notice.
+ */
+export function withInsertRangesForAllWords(document: AxcutDocument): AxcutDocument {
+	return document.transcripts.reduce(
+		(doc, transcript) => withInsertRangesForWords(doc, transcript.assetId),
+		document,
+	);
+}
+
 function withInsertRangesForWords(document: AxcutDocument, assetId: string): AxcutDocument {
 	// The reason is user-visible on the region, and it is not the same fact on both lanes:
 	// the film holds a FRAME, a take holds nothing but silence — no picture is involved

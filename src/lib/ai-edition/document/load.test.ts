@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AxcutClip, AxcutDocument, AxcutInsertRange } from "../schema";
-import { reconcileClipsWithInserts } from "./load";
+import { reconcileClipsWithInserts, reconcileInsertions } from "./load";
 
 function clip(over: Partial<AxcutClip> & { id: string }): AxcutClip {
 	return {
@@ -83,5 +83,56 @@ describe("reconcileClipsWithInserts", () => {
 		const [first, second] = reconcileClipsWithInserts(before).timeline.clips;
 		expect(first.timelineEndSec).toBeCloseTo(11.5, 6);
 		expect(second.timelineEndSec - second.timelineStartSec).toBeCloseTo(10, 6);
+	});
+});
+
+// ─── An added word nobody marked ────────────────────────────────────────────
+// `source: "synth"` is how the whole pipeline recognises a word the user typed: it decides
+// whether the word gets an insertion, whether the film makes room for it, and whether the
+// caption line breaks around it. A row minted before that field existed answers no to all
+// three — its text plays over the recording and everything after it drifts. Found in the
+// live project: `synth_1`, zero-width at source 9.15, with no insertion at all (issue #560).
+
+describe("reconcileInsertions", () => {
+	function docWithUnmarkedWord(): AxcutDocument {
+		return {
+			assets: [{ id: "a1", kind: "video" }],
+			transcripts: [
+				{
+					assetId: "a1",
+					language: "en",
+					segments: [{ id: "s1", kind: "speech", startSec: 0, endSec: 6, text: "x", wordIds: [] }],
+					words: [
+						{ id: "w1", segmentId: "s1", startSec: 0, endSec: 1, text: "hello" },
+						// Minted as an added word — the id says so — but never marked.
+						{ id: "synth_1", segmentId: "s1", startSec: 1, endSec: 1, text: "a much longer thing" },
+					],
+				},
+			],
+			timeline: { clips: [clip({ id: "c1" })], insertRanges: [] },
+		} as unknown as AxcutDocument;
+	}
+
+	it("marks it, gives it an insertion, and makes room for it", () => {
+		const out = reconcileInsertions(docWithUnmarkedWord());
+		const word = out.transcripts[0].words.find((w) => w.id === "synth_1");
+		expect(word?.source).toBe("synth");
+		const range = out.timeline.insertRanges?.find((r) => r.wordId === "synth_1");
+		expect(range).toBeDefined();
+		expect(range?.durationSec ?? 0).toBeGreaterThan(0);
+		const [c] = out.timeline.clips;
+		expect(c.timelineEndSec - c.timelineStartSec).toBeCloseTo(10 + (range?.durationSec ?? 0), 6);
+	});
+
+	it("leaves a word that was never added alone", () => {
+		const out = reconcileInsertions(docWithUnmarkedWord());
+		expect(out.transcripts[0].words.find((w) => w.id === "w1")?.source).toBeUndefined();
+	});
+
+	it("is idempotent", () => {
+		const once = reconcileInsertions(docWithUnmarkedWord());
+		const twice = reconcileInsertions(once);
+		expect(twice.timeline.clips).toEqual(once.timeline.clips);
+		expect(twice.timeline.insertRanges).toEqual(once.timeline.insertRanges);
 	});
 });
