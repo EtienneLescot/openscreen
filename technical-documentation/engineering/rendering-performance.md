@@ -584,17 +584,19 @@ Unit tests never look at a pixel. The `native*` arms write real files: export th
 | same, whole bundle read into cache first | 2130 ms | 771 ms |
 | **newly written copy + 3 GB pinned** | **3988 ms** | **1115 ms** |
 
+**Read the columns, not the total.** The magnitude matches the report — 5103 ms from spawn to the first frame against an 884 ms baseline — but it lands on the other side of `started`: 3988 ms of it before the event, 1115 ms after. The original report put its 4.2 s entirely *after* `started`, with the renderer's `domInteractive` at 3887 ms. Nothing here reproduces that split, which is why [Known gaps](#known-gaps) keeps it open as possibly a second phenomenon.
+
 Five things fall out, each with its own control:
 
 - **Reading every byte of the bundle first changes nothing** — 2130 ms against 2120 ms. That is the best case a smaller archive could ever approach, so a smaller archive cannot help. A cold read of the entire 261 MB archive costs 110 ms; the machine does 2.4 GB/s and the file is not the problem.
-- **Cold pages are worth ~35 ms** of the `started`→first-frame interval (493 vs 457). The flush is not imaginary: page faults requiring I/O go 656 → 2730, and 12 708 in the most effective trial.
-- **Memory pressure is real but saturates at about +200 ms.** Doubling the pin from 1.5 GB to 3 GB moves the cost from +150 ms to +213 ms, not from +150 ms to +300 ms.
+- **Cold pages are worth ~36 ms** of the `started`→first-frame interval. That is 493 ms against the **paired warm arm of the same experiment** (457 ms), not against the table's baseline row — pairing each flushed run with the unflushed run that followed it is the comparison that holds the machine constant. Against the table row it reads 41 ms; the difference between the two is the noise this pairing exists to remove. The flush is not imaginary: page faults requiring I/O go 656 → 2730, and 12 708 in the most effective trial.
+- **Memory pressure is real, and over the range tested it grows far slower than the pin.** Each figure is the mean of two paired pressure/free blocks: 1.5 GB costs +183 and +114 ms (mean **+148**), 3 GB costs +213 and +195 ms (mean **+204**). Doubling the pin buys 38 % more cost, not 100 % — but 1.5–3 GB is the whole tested range, and nothing here says where it goes above that.
 - **It is not Gatekeeper and not signature verification.** Pre-running `spctl -a -t exec` (372 ms) and `codesign --verify --deep` (209 ms) on a fresh copy leaves the first launch exactly where it was: 2137 ms against 2127 ms without.
-- **It is bound to the file's identity.** Rewriting the same bytes to the same path with the same mtime — a new inode and nothing else — brings the whole cost back: 2380 ms against 441 ms. So it is neither a path-keyed nor a `userData`-keyed cache the app could pre-warm; it is charged by the kernel against the binary itself.
+- **It is bound to the file's identity.** Rewriting the same bytes to the same path with the same mtime — a new inode and nothing else — brings the whole cost back: 2380 ms against 441 ms. So it is neither a path-keyed nor a `userData`-keyed cache the app could pre-warm; it is charged by the platform against the binary itself — by which layer is exactly what stays open, since ruling out the two user-space checks does not rule out the kernel's own per-page validation, nor a dyld launch closure.
 
 The expensive launch is therefore **the first execution of a newly installed binary**, compounding with memory pressure to the ~4 s that was reported (7578 ms total against 3447 ms). It is paid once per install or update, which is also why it disappeared "on the same binary, hours later" — and why it never shows up in a benchmark, which launches the same binary dozens of times.
 
-**One-line reason not to re-propose:** making the entire archive resident buys nothing, so making it smaller cannot; what remains is charged against the binary's identity, not its size.
+**One-line reason not to re-propose:** pre-warming the archive is refuted outright — full residency buys 10 ms out of 2120 — so no lever that works by improving residency can pay. Whether a *smaller* bundle would shorten the identity-bound cost is a different question and an open one: it was not tested here, because removing content invalidates the signature that is part of what is being measured. Re-propose that one only with a size-controlled experiment attached.
 
 ### Capping the macOS decoder's thread count
 
