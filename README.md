@@ -19,10 +19,6 @@
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=for-the-badge" alt="Platform" />
 </p>
 
-<p align="center">
-  <a href="https://trendshift.io/developers/12646?utm_source=developer-badge&amp;utm_medium=badge&amp;utm_campaign=badge-developer-12646" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/developers/12646" alt="EtienneLescot | Trendshift" width="250" height="55" /></a>
-</p>
-
 > [!NOTE]
 > **This is OpenScreen, continued.** [Siddharth Vaddem](https://github.com/siddharthvaddem) created the project and [archived the original repository](https://github.com/siddharthvaddem/openscreen) after v1.5.0. Development moved here with his approval, under the same name and the same MIT license.
 
