@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { AxcutDocument } from "../schema";
 import { insertGeneratedClip, removeGeneratedClips, retextGeneratedClip } from "./insertion";
 import { moveClip, removeClip, resolvePlaybackSegments } from "./timeline";
+import { setDocumentWordText } from "./transcript";
 
 const doc = (over: Partial<AxcutDocument> = {}): AxcutDocument =>
 	({
@@ -245,6 +246,39 @@ describe("the join is blind to what made the clips contiguous", () => {
 		];
 		const after = removeClip(base, "broll");
 		expect(after.timeline.clips.map((c) => c.id)).toEqual(["left", "right"]);
+	});
+});
+
+describe("editing an insertion's text, through the path the pane actually calls", () => {
+	it("regrows the clip and the film with it", () => {
+		// The pane hands `setDocumentWordText` the SECTION's asset, which for an insertion is
+		// its own `ext:` one. Its length is its text, so the edit has to reach the clip and the
+		// file — a correction that left the duration alone would play the old media.
+		const before = withInsertion();
+		const after = setDocumentWordText(before, "ext:synth_1", "synth_1", "a much longer line");
+		const seconds = "a much longer line".length / 15;
+		const clip = after.timeline.clips.find((c) => c.id === "ext:synth_1");
+		expect(clip?.sourceEndSec).toBeCloseTo(seconds, 6);
+		expect(clip?.timelineEndSec ?? 0).toBeCloseTo((clip?.timelineStartSec ?? 0) + seconds, 6);
+		// The whole film is longer by the difference, so the ruler agrees with the media.
+		const end = (cs: typeof after.timeline.clips) => cs[cs.length - 1].timelineEndSec;
+		expect(end(after.timeline.clips) - end(before.timeline.clips)).toBeCloseTo(
+			seconds - GEN_SEC,
+			6,
+		);
+	});
+
+	it("renames the file, so the save generates the media the new text needs", () => {
+		const after = setDocumentWordText(withInsertion(), "ext:synth_1", "synth_1", "longer");
+		expect(after.assets.find((a) => a.id === "ext:synth_1")?.originalPath).toBe(
+			`C:/rec/.openscreen-extensions/synth_1_${Math.round((6 / 15) * 1000)}.mp4`,
+		);
+	});
+
+	it("leaves a recorded word's correction alone — it changes no media", () => {
+		const before = doc();
+		const after = setDocumentWordText(before, "a1", "w1", "HELLO");
+		expect(after.timeline.clips).toEqual(before.timeline.clips);
 	});
 });
 

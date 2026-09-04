@@ -1683,6 +1683,38 @@
 /* A generated clip: the media behind an inserted word, which nobody shot. Amber on the box
    itself rather than a badge inside it, so it stays legible at the zoom levels where a clip
    is a few pixels wide and there is no room to draw anything in it. */
+/* A clip a few pixels wide — an insertion of a few tenths of a second at a wide zoom is
+   exactly that. Nothing fits inside it, so while it is SELECTED its controls step out to the
+   right and float over whatever follows. Selection-only, so the timeline is never littered,
+   and no layout above or below has to make room for them. */
+.tlClipNarrow .tlClipLabel {
+	display: none;
+}
+.tlClipSel.tlClipNarrow {
+	overflow: visible;
+	z-index: 6;
+}
+/* Selected: the pencil comes back, beside the box rather than in it, and without the name —
+   which is what needed the room in the first place. */
+.tlClipSel.tlClipNarrow .tlClipLabel {
+	display: inline-flex;
+	left: calc(100% + 6px);
+	top: 50%;
+	transform: translateY(-50%);
+	max-width: none;
+	padding: 3px 6px;
+	cursor: pointer;
+}
+.tlClipSel.tlClipNarrow .tlClipName {
+	display: none;
+}
+/* Clear of the pencil chip beside it. */
+.tlClipDelete[data-narrow] {
+	right: auto;
+	left: calc(100% + 43px);
+	top: 50%;
+	transform: translateY(-50%);
+}
 .tlClipGenerated {
 	border-color: var(--warn);
 	background: color-mix(in srgb, var(--warn) 18%, var(--surface-1));

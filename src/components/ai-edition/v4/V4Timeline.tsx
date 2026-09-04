@@ -155,6 +155,9 @@ const AUDIO_LANE_PAD_PX = 3;
 /** Visual separation between two clip cards. Taken off each clip's own width
  *  (see .tlClip) rather than inserted between them, so it cannot displace the
  *  clips that follow — which is what a flex `gap` did, once per junction. */
+/** Below this a clip cannot show a label and a delete button inside itself. */
+const NARROW_CLIP_PX = 120;
+
 const CLIP_GUTTER_PX = 6;
 /**
  * Shortest region a resize may leave behind — the storage grid itself (regions
@@ -2179,11 +2182,16 @@ export function V4Timeline({
 									else if (target < from && i >= target && i < from)
 										clipTransform = `translateX(${shiftPx}px)`;
 								}
+								// Too narrow to hold its own controls. An insertion of a few tenths
+								// of a second on a half-minute timeline is a handful of pixels, and
+								// there is no arrangement that fits a button inside that — so while
+								// it is selected the controls step outside the box instead.
+								const narrow = boxLen * pxPerSec < NARROW_CLIP_PX;
 								return (
 									<div
 										key={c.id}
 										data-clip-id={c.id}
-										className={`${styles.tlClip}${
+										className={`${styles.tlClip}${narrow ? ` ${styles.tlClipNarrow}` : ""}${
 											// Amber, because nobody shot it. Same token the mark it replaces
 											// used, so an insertion still reads as one at a glance.
 											isGeneratedAssetId(c.assetId) ? ` ${styles.tlClipGenerated}` : ""
@@ -2244,6 +2252,7 @@ export function V4Timeline({
 												type="button"
 												data-no-clip-drag
 												className={styles.tlClipDelete}
+												data-narrow={narrow ? "true" : undefined}
 												title={t("toolbar.deleteClip")}
 												aria-label={t("toolbar.deleteClip")}
 												onClick={(e) => {

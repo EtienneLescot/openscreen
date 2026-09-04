@@ -281,7 +281,15 @@ export function retextGeneratedClip(
 		timeline: {
 			...document.timeline,
 			clips: resequenceClips(
-				document.timeline.clips.map((c) => (c.id === id ? { ...c, sourceEndSec: durationSec } : c)),
+				document.timeline.clips.map((c) =>
+					c.id === id
+						? // Zeroing the ruler extent is how `setClipSourceRange` asks `resequenceClips`
+							// to take the clip's length from its SOURCE window. Without it the window
+							// grew and the length did not: the clip kept playing the old duration and
+							// the film never got longer.
+							{ ...c, sourceEndSec: durationSec, timelineStartSec: 0, timelineEndSec: 0 }
+						: c,
+				),
 			),
 		},
 	};
