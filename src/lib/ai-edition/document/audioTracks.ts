@@ -76,8 +76,50 @@ export function reanchorAudioTracks(
 ): AxcutAudioTrack[] {
 	// Coalesce back to one raw span per track FIRST: re-anchoring the stored
 	// fragments individually would re-ventilate each one and multiply them.
-	return collapseTracksToPills(tracks).flatMap((track) =>
+	//
+	// Joined at the PILL level, before ventilation, for the same reason: ventilation
+	// deliberately produces fragments that meet and whose offsets continue, so joining
+	// after it would undo the split it just made.
+	return joinContiguousTakes(collapseTracksToPills(tracks)).flatMap((track) =>
 		anchorAudioTrackFragments(track, clips, makeId),
+	);
+}
+
+/**
+ * Two takes that are one continuous stretch of one file are one take.
+ *
+ * The audio lane's half of the clip list's invariant, and it is what puts a take back
+ * together when the insertion that split it is removed. Nothing marks the split: the two
+ * halves meet on the ruler and the file continues across the join, which is all the
+ * evidence there is and all there needs to be.
+ */
+function joinContiguousTakes(pills: AxcutAudioTrack[]): AxcutAudioTrack[] {
+	const ordered = [...pills].sort((a, b) => a.startMs - b.startMs || a.id.localeCompare(b.id));
+	const out: AxcutAudioTrack[] = [];
+	for (const pill of ordered) {
+		const previous = out[out.length - 1];
+		if (previous && takesJoin(previous, pill)) {
+			out[out.length - 1] = { ...previous, endMs: pill.endMs, fadeOutMs: pill.fadeOutMs };
+			continue;
+		}
+		out.push(pill);
+	}
+	return out;
+}
+
+/** Same file, meeting on the ruler, and the file's own timecode continuing across the join —
+ *  plus every payload the two would otherwise have to disagree about. */
+function takesJoin(left: AxcutAudioTrack, right: AxcutAudioTrack): boolean {
+	const spanMs = left.endMs - left.startMs;
+	return (
+		left.assetId === right.assetId &&
+		left.kind === right.kind &&
+		!left.loop &&
+		!right.loop &&
+		left.gainDb === right.gainDb &&
+		left.muted === right.muted &&
+		Math.abs(left.endMs - right.startMs) < 1 &&
+		Math.abs(left.offsetMs + spanMs - right.offsetMs) < 1
 	);
 }
 

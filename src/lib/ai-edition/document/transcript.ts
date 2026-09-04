@@ -6,6 +6,12 @@ import {
 	removeGeneratedClips,
 	retextGeneratedClip,
 } from "./insertion";
+import {
+	insertGeneratedTrack,
+	isTrackAsset,
+	removeGeneratedTracks,
+	retextGeneratedTrack,
+} from "./insertionTrack";
 
 const CJK_EDGE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 const CLOSING_PUNCTUATION = /^[,.;:!?%。，、；：！？…）)\]}>》」』】〕]/u;
@@ -147,9 +153,13 @@ export function setDocumentWordText(
 	wordId: string,
 	text: string,
 ): AxcutDocument {
-	// An inserted word's length IS its text, so rewriting it resizes the clip it plays on
-	// and renames the file. Nothing a plain transcript write can express.
-	if (isGeneratedAssetId(assetId)) return retextGeneratedClip(document, wordId, text);
+	// An inserted word's length IS its text, so rewriting it resizes the clip — or the take
+	// fragment — it plays on, and renames the file. Nothing a plain transcript write can say.
+	if (isGeneratedAssetId(assetId)) {
+		return isTrackAsset(document, assetId)
+			? retextGeneratedTrack(document, wordId, text)
+			: retextGeneratedClip(document, wordId, text);
+	}
 	const transcript = document.transcripts.find((t) => t.assetId === assetId);
 	if (!transcript) {
 		throw new Error(`Cannot edit a word of asset "${assetId}": it has no transcript`);
@@ -168,7 +178,11 @@ export function insertDocumentWord(
 	side: InsertSide,
 	text: string,
 ): AxcutDocument {
-	return insertGeneratedClip(document, assetId, anchorWordId, side, text);
+	// Which lane the caret was in decides which shape the insertion takes — a clip in the
+	// film, a fragment in the take. It is the only thing that differs between them.
+	return isTrackAsset(document, assetId)
+		? insertGeneratedTrack(document, assetId, anchorWordId, side, text)
+		: insertGeneratedClip(document, assetId, anchorWordId, side, text);
 }
 
 /** Delete inserted words, taking the whole set at once: a Backspace over several of them
@@ -181,7 +195,8 @@ export function removeDocumentWords(
 	_assetId: string,
 	wordIds: readonly string[],
 ): AxcutDocument {
-	return removeGeneratedClips(document, wordIds);
+	// Each is a no-op for a word the other lane owns, so the set can span both.
+	return removeGeneratedTracks(removeGeneratedClips(document, wordIds), wordIds);
 }
 
 /** What {@link carryOverWordEdits} managed to save from the previous transcript. */

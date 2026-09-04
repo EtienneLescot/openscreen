@@ -1012,7 +1012,6 @@ export function TranscriptPane({
 			{sections.map((section, idx) => (
 				<TranscriptClipBlock
 					key={section.clip.id}
-					lane={activeLane}
 					index={idx}
 					section={section}
 					busy={busyAssetIds.includes(section.clip.assetId)}
@@ -1260,13 +1259,6 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			// timeline time (the pause gesture) it is a silent freeze frame. Drop this gate
 			// when TTS lands.
 			if (!import.meta.env.DEV) return;
-			// Not on the voiceover lane. `insertRangeSchema` has no `clipId`, and the pause an
-			// a voiceover placement has no clip to hold. Refused with a reason rather than
-			// left to write a record nothing can read.
-			if (lane === "voiceover") {
-				toast.error(ts("transcript.insertRecordingOnly"));
-				return;
-			}
 			if (busy || !seed.trim()) return;
 			const editor = editorRef.current;
 			const selection = globalThis.getSelection();
@@ -1278,7 +1270,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			if (!anchor) return;
 			setInsertion({ ...anchor, draft: seed });
 		},
-		[busy, lane, ts, words],
+		[busy, words],
 	);
 
 	const commitInsertion = useCallback(() => {

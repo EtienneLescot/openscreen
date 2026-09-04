@@ -63,7 +63,7 @@ function anchorRulerSec(
 }
 
 /** `synth_N`, numbered past every generated asset the document already carries. */
-function nextGeneratedWordId(document: AxcutDocument): string {
+export function nextGeneratedWordId(document: AxcutDocument): string {
 	let highest = 0;
 	for (const asset of document.assets) {
 		const match = /^ext:synth_(\d+)$/.exec(asset.id);
@@ -74,13 +74,13 @@ function nextGeneratedWordId(document: AxcutDocument): string {
 
 /** The recording the generated files are written beside. One rule, so the renderer and the
  *  main process arrive at the same folder without asking each other. */
-function hostAsset(document: AxcutDocument): AxcutAsset | null {
+export function hostAsset(document: AxcutDocument): AxcutAsset | null {
 	const primary = document.assets.find((a) => a.id === document.project.primaryAssetId);
 	if (primary?.originalPath && !isGeneratedAssetId(primary.id)) return primary;
 	return document.assets.find((a) => a.originalPath && !isGeneratedAssetId(a.id)) ?? null;
 }
 
-function generatedAsset(
+export function generatedAsset(
 	host: AxcutAsset,
 	wordId: string,
 	durationSec: number,
@@ -98,7 +98,7 @@ function generatedAsset(
 	};
 }
 
-function generatedTranscript(
+export function generatedTranscript(
 	wordId: string,
 	durationSec: number,
 	text: string,
