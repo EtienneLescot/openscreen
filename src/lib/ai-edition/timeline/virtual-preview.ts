@@ -23,7 +23,10 @@ export function clampVirtualTime(clips: AxcutClip[], value: number): number {
 export function locateVirtualPosition(
 	clips: AxcutClip[],
 	virtualTimeSec: number,
-	insertRanges: readonly AxcutInsertRange[] = [],
+	/** REQUIRED, not defaulted. A clip carrying insertions is longer than its source window,
+	 *  so a caller that omits these gets an answer that is plausible and wrong by exactly the
+	 *  inserted time, with nothing to catch it (issue #560). */
+	insertRanges: readonly AxcutInsertRange[],
 ): VirtualPosition | null {
 	if (clips.length === 0) return null;
 	const clamped = clampVirtualTime(clips, virtualTimeSec);
@@ -81,7 +84,10 @@ export function findRawClipForSegment(
 export function getRawVirtualStartTime(
 	segment: AxcutClip,
 	rawClips: AxcutClip[],
-	insertRanges: readonly AxcutInsertRange[] = [],
+	/** REQUIRED, not defaulted. A clip carrying insertions is longer than its source window,
+	 *  so a caller that omits these gets an answer that is plausible and wrong by exactly the
+	 *  inserted time, with nothing to catch it (issue #560). */
+	insertRanges: readonly AxcutInsertRange[],
 ): number {
 	const rawClip = findRawClipForSegment(segment, rawClips);
 	if (!rawClip) return segment.timelineStartSec;
@@ -114,12 +120,13 @@ export function findNextKeptSegment(
 	playbackClips: AxcutClip[],
 	rawClips: AxcutClip[],
 	currentRawTime: number,
-	activeSourceId?: string,
-	currentSourceTime?: number,
-	activeClipId?: string,
+	activeSourceId: string | undefined,
+	currentSourceTime: number | undefined,
+	activeClipId: string | undefined,
+	insertRanges: readonly AxcutInsertRange[],
 ): AxcutClip | undefined {
 	for (const seg of playbackClips) {
-		const segRawStart = getRawVirtualStartTime(seg, rawClips);
+		const segRawStart = getRawVirtualStartTime(seg, rawClips, insertRanges);
 		if (segRawStart > currentRawTime + 0.001) {
 			return seg;
 		}
@@ -188,8 +195,8 @@ function isWithinClipBounds(
 export function locateSourcePosition(
 	clips: AxcutClip[],
 	sourceTimeSec: number,
-	assetId?: string,
-	epsilon = 0.05,
+	assetId: string | undefined,
+	epsilon: number,
 	// When two clips share the same source asset (and possibly overlapping
 	// source ranges — a duplicated clip, or simply not trimmed yet), scanning
 	// by (assetId, sourceTime) alone is ambiguous and always resolves to the
@@ -198,8 +205,11 @@ export function locateSourcePosition(
 	// which clip they're tracking (VirtualPreview, mid-playback) should pass
 	// its id here so it's preferred whenever the source time still falls
 	// inside it, before falling back to the ambiguous asset-wide scan.
-	preferredClipId?: string,
-	insertRanges: readonly AxcutInsertRange[] = [],
+	preferredClipId: string | undefined,
+	/** REQUIRED, not defaulted. A clip carrying insertions is longer than its source window,
+	 *  so a caller that omits these gets an answer that is plausible and wrong by exactly the
+	 *  inserted time, with nothing to catch it (issue #560). */
+	insertRanges: readonly AxcutInsertRange[],
 ): VirtualPosition | null {
 	if (preferredClipId) {
 		const preferredIndex = clips.findIndex((clip) => clip.id === preferredClipId);
@@ -266,8 +276,12 @@ export function locateKeptSegment(
 	const ownSegments = activeClipId
 		? playbackClips.filter((seg) => findRawClipForSegment(seg, rawClips)?.id === activeClipId)
 		: [];
-	if (ownSegments.length > 0) return locateSourcePosition(ownSegments, sourceTimeSec, assetId);
-	return locateSourcePosition(playbackClips, sourceTimeSec, assetId);
+	// The SEGMENTS are already split at every insertion, so within one of them source → its
+	// own start is a plain shift again. `[]` here is the honest answer, not a forgotten
+	// argument: there is no insertion inside a segment to account for.
+	if (ownSegments.length > 0)
+		return locateSourcePosition(ownSegments, sourceTimeSec, assetId, 0.05, undefined, []);
+	return locateSourcePosition(playbackClips, sourceTimeSec, assetId, 0.05, undefined, []);
 }
 
 export function keptWordIdSet(clips: AxcutClip[]): Set<string> {

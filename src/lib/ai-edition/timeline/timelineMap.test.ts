@@ -48,7 +48,7 @@ const region = (id: string, startSec: number, endSec: number, payload?: string):
 
 describe("projectRegionsToSource", () => {
 	it("passes a region through unchanged (no clipIndex) when there are no segments", () => {
-		const out = projectRegionsToSource([region("r", 1.5, 4.25)], [], [], () => "x");
+		const out = projectRegionsToSource([region("r", 1.5, 4.25)], [], [], () => "x", []);
 		expect(out).toEqual([{ id: "r", startMs: 1500, endMs: 4250 }]);
 	});
 
@@ -60,7 +60,7 @@ describe("projectRegionsToSource", () => {
 			sourceEndSec: 10,
 			timelineEndSec: 10,
 		});
-		const out = projectRegionsToSource([region("r", 3, 5)], [c], [c], () => "x");
+		const out = projectRegionsToSource([region("r", 3, 5)], [c], [c], () => "x", []);
 		expect(out).toEqual([{ id: "r", startMs: 3000, endMs: 5000, clipIndex: 0 }]);
 	});
 
@@ -75,7 +75,7 @@ describe("projectRegionsToSource", () => {
 			timelineEndSec: 10,
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 2, 4)]);
-		const out = projectRegionsToSource([region("r", 6, 8)], segments, [c], () => "x");
+		const out = projectRegionsToSource([region("r", 6, 8)], segments, [c], () => "x", []);
 		expect(out).toEqual([{ id: "r", startMs: 6000, endMs: 8000, clipIndex: 1 }]);
 	});
 
@@ -96,7 +96,13 @@ describe("projectRegionsToSource", () => {
 			timelineStartSec: 5,
 			timelineEndSec: 10,
 		});
-		const out = projectRegionsToSource([region("r", 3, 7, "keep")], [c1, c2], [c1, c2], () => "r2");
+		const out = projectRegionsToSource(
+			[region("r", 3, 7, "keep")],
+			[c1, c2],
+			[c1, c2],
+			() => "r2",
+			[],
+		);
 		expect(out).toEqual([
 			{ id: "r", startMs: 103000, endMs: 105000, clipIndex: 0, payload: "keep" },
 			{ id: "r2", startMs: 200000, endMs: 202000, clipIndex: 1, payload: "keep" },
@@ -114,7 +120,7 @@ describe("projectRegionsToSource", () => {
 			timelineEndSec: 10,
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 4, 6)]);
-		const out = projectRegionsToSource([region("r", 3, 8)], segments, [c], () => "r2");
+		const out = projectRegionsToSource([region("r", 3, 8)], segments, [c], () => "r2", []);
 		expect(out).toEqual([
 			{ id: "r", startMs: 3000, endMs: 4000, clipIndex: 0 },
 			{ id: "r2", startMs: 6000, endMs: 8000, clipIndex: 1 },
@@ -149,7 +155,7 @@ describe("projectRegionsToSource", () => {
 		const segments = resolvePlaybackSegments([c1, c2], [trim("a", 2, 8)]);
 		// segments: c1[0,2] (0), c1[8,10] (1), c2[0,10] (2).
 		const anchored = { ...region("r", 3, 5), clipId: "c1", sourceStartSec: 3, sourceEndSec: 5 };
-		expect(projectRegionsToSource([anchored], segments, [c1, c2], () => "x")).toEqual([
+		expect(projectRegionsToSource([anchored], segments, [c1, c2], () => "x", [])).toEqual([
 			{ ...anchored, startMs: 3000, endMs: 5000, clipIndex: 0, underTrim: true },
 		]);
 	});
@@ -175,7 +181,7 @@ describe("projectRegionsToSource", () => {
 		});
 		const segments = resolvePlaybackSegments([c1, c2], [trim("a", 0, 10)]);
 		const anchored = { ...region("r", 3, 5), clipId: "c1", sourceStartSec: 3, sourceEndSec: 5 };
-		expect(projectRegionsToSource([anchored], segments, [c1, c2], () => "x")).toEqual([]);
+		expect(projectRegionsToSource([anchored], segments, [c1, c2], () => "x", [])).toEqual([]);
 	});
 
 	it("keeps an unanchored region a trim removes entirely, mapped through its raw clip", () => {
@@ -191,7 +197,7 @@ describe("projectRegionsToSource", () => {
 			timelineEndSec: 10,
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 4, 6)]);
-		expect(projectRegionsToSource([region("r", 4.5, 5.5)], segments, [c], () => "x")).toEqual([
+		expect(projectRegionsToSource([region("r", 4.5, 5.5)], segments, [c], () => "x", [])).toEqual([
 			{ id: "r", startMs: 4500, endMs: 5500, clipIndex: 0, underTrim: true },
 		]);
 	});
@@ -208,7 +214,7 @@ describe("projectRegionsToSource", () => {
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 0, 3)]);
 		const anchored = { ...region("r", 1, 2), clipId: "c1", sourceStartSec: 1, sourceEndSec: 2 };
-		expect(projectRegionsToSource([anchored], segments, [c], () => "x")).toEqual([
+		expect(projectRegionsToSource([anchored], segments, [c], () => "x", [])).toEqual([
 			{ ...anchored, startMs: 1000, endMs: 2000, clipIndex: 0, underTrim: true },
 		]);
 	});
@@ -234,9 +240,9 @@ describe("projectRegionsToSource", () => {
 		});
 		const segments = resolvePlaybackSegments([c1, c2], [trim("a", 6, 10)]);
 		const anchored = { ...region("r", 7, 9), clipId: "c1", sourceStartSec: 7, sourceEndSec: 9 };
-		const [projected] = projectRegionsToSource([anchored], segments, [c1, c2], () => "x");
+		const [projected] = projectRegionsToSource([anchored], segments, [c1, c2], () => "x", []);
 		// raw 8 is inside c1's removed tail; the region covering source [7,9] is that same cut.
-		expect(resolveNativePosition(8, segments, [c1, c2])?.clipIndex).toBe(projected.clipIndex);
+		expect(resolveNativePosition(8, segments, [c1, c2], [])?.clipIndex).toBe(projected.clipIndex);
 	});
 
 	// --- anchored path: the anchor is the SSOT, `startMs`/`endMs` are not consulted ---
@@ -258,7 +264,7 @@ describe("projectRegionsToSource", () => {
 			sourceStartSec: 6,
 			sourceEndSec: 8,
 		};
-		const out = projectRegionsToSource([stale], [c], [c], () => "x");
+		const out = projectRegionsToSource([stale], [c], [c], () => "x", []);
 		expect(out).toEqual([{ ...stale, startMs: 6000, endMs: 8000, clipIndex: 0 }]);
 	});
 
@@ -278,7 +284,7 @@ describe("projectRegionsToSource", () => {
 			sourceStartSec: 3,
 			sourceEndSec: 8,
 		};
-		const out = projectRegionsToSource([anchored], segments, [c], () => "r2");
+		const out = projectRegionsToSource([anchored], segments, [c], () => "r2", []);
 		expect(out).toEqual([
 			{ ...anchored, id: "r", startMs: 3000, endMs: 4000, clipIndex: 0 },
 			{ ...anchored, id: "r2", startMs: 6000, endMs: 8000, clipIndex: 1 },
@@ -310,7 +316,7 @@ describe("projectRegionsToSource", () => {
 			sourceStartSec: 1,
 			sourceEndSec: 2,
 		};
-		const out = projectRegionsToSource([anchored], [c1, c2], [c1, c2], () => "x");
+		const out = projectRegionsToSource([anchored], [c1, c2], [c1, c2], () => "x", []);
 		expect(out).toEqual([{ ...anchored, startMs: 1000, endMs: 2000, clipIndex: 1 }]);
 	});
 
@@ -325,7 +331,7 @@ describe("projectRegionsToSource", () => {
 			timelineEndSec: 10,
 		});
 		const partial = { ...region("r", 3, 5), clipId: "c1" }; // no source span
-		const out = projectRegionsToSource([partial], [c], [c], () => "x");
+		const out = projectRegionsToSource([partial], [c], [c], () => "x", []);
 		expect(out).toEqual([{ ...partial, startMs: 3000, endMs: 5000, clipIndex: 0 }]);
 	});
 });
@@ -351,12 +357,12 @@ describe("resolveNativePosition", () => {
 				timelineEndSec: 12,
 			}),
 		];
-		expect(resolveNativePosition(6.5, clips, clips)).toMatchObject({
+		expect(resolveNativePosition(6.5, clips, clips, [])).toMatchObject({
 			clip: { id: "c2" },
 			clipIndex: 1,
 			sourceTimeSec: 22.5,
 		});
-		expect(resolveNativePosition(10, clips, clips)).toMatchObject({
+		expect(resolveNativePosition(10, clips, clips, [])).toMatchObject({
 			clip: { id: "c3" },
 			clipIndex: 2,
 			sourceTimeSec: 42,
@@ -383,12 +389,12 @@ describe("resolveNativePosition", () => {
 				timelineEndSec: 12,
 			}),
 		];
-		expect(resolveNativePosition(7.25, clips, clips)).toMatchObject({
+		expect(resolveNativePosition(7.25, clips, clips, [])).toMatchObject({
 			clip: { assetId: "asset-b" },
 			clipIndex: 1,
 			sourceTimeSec: 103.25,
 		});
-		expect(resolveNativePosition(11, clips, clips)).toMatchObject({
+		expect(resolveNativePosition(11, clips, clips, [])).toMatchObject({
 			clip: { assetId: "asset-c" },
 			clipIndex: 2,
 			sourceTimeSec: 14,
@@ -405,11 +411,11 @@ describe("resolveNativePosition", () => {
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 2, 4)]);
 		// raw 1 → source 1 on seg1; raw 6 → source 6 on seg2 (NOT 8).
-		expect(resolveNativePosition(1, segments, [c])).toMatchObject({
+		expect(resolveNativePosition(1, segments, [c], [])).toMatchObject({
 			clipIndex: 0,
 			sourceTimeSec: 1,
 		});
-		expect(resolveNativePosition(6, segments, [c])).toMatchObject({
+		expect(resolveNativePosition(6, segments, [c], [])).toMatchObject({
 			clipIndex: 1,
 			sourceTimeSec: 6,
 		});
@@ -430,7 +436,7 @@ describe("resolveNativePosition", () => {
 		// points at, and would incrust any modifier under the cut on someone else's image (#216).
 		// The segment it borrows is the one the cut interrupts (seg1), so a modifier under that
 		// cut — addressed the same way — survives `belongs()`.
-		expect(resolveNativePosition(3, segments, [c])).toMatchObject({
+		expect(resolveNativePosition(3, segments, [c], [])).toMatchObject({
 			clipIndex: 0,
 			sourceTimeSec: 3,
 		});
@@ -445,7 +451,7 @@ describe("resolveNativePosition", () => {
 			timelineEndSec: 10,
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 0, 3)]);
-		expect(resolveNativePosition(1, segments, [c])).toMatchObject({
+		expect(resolveNativePosition(1, segments, [c], [])).toMatchObject({
 			clipIndex: 0,
 			sourceTimeSec: 1,
 		});
@@ -461,11 +467,11 @@ describe("resolveNativePosition", () => {
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 2, 4)]);
 		// No raw clip owns raw 99 — nothing to present, so the historical clamp stands.
-		expect(resolveNativePosition(99, segments, [c])).toMatchObject({ clipIndex: 1 });
+		expect(resolveNativePosition(99, segments, [c], [])).toMatchObject({ clipIndex: 1 });
 	});
 
 	it("returns null when there are no segments", () => {
-		expect(resolveNativePosition(1, [], [])).toBeNull();
+		expect(resolveNativePosition(1, [], [], [])).toBeNull();
 	});
 });
 

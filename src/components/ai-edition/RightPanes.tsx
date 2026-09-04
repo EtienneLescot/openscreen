@@ -51,6 +51,7 @@ import type {
 	AxcutAsset,
 	AxcutAudioTrack,
 	AxcutClip,
+	AxcutInsertRange,
 	AxcutTranscript,
 	AxcutTrimRange,
 	AxcutWord,
@@ -110,6 +111,9 @@ import { CaptionsPane } from "./CaptionsPane";
 import styles from "./NewEditorShell.module.css";
 import { useTranscriptionLabel } from "./TranscriptionStatus";
 import { transcriptionBusyLabel } from "./transcriptionBusyLabel";
+
+/** Stable identity, so the memos below are not invalidated every render by a fresh `[]`. */
+const EMPTY_INSERT_RANGES: readonly AxcutInsertRange[] = [];
 
 interface PaneProps {
 	title: string;
@@ -884,7 +888,11 @@ export function TranscriptPane({
 	// From the RECORDING clips and the whole trim set, never from `placements`: the
 	// programme is one thing, and the voiceover lane is asking whether the film still
 	// contains a moment — not whether some trim happens to name an audio fragment.
-	const removed = useMemo(() => removedRawSpans(clips, trimRanges), [clips, trimRanges]);
+	const insertRanges = document?.timeline.insertRanges ?? EMPTY_INSERT_RANGES;
+	const removed = useMemo(
+		() => removedRawSpans(clips, trimRanges, insertRanges),
+		[clips, trimRanges, insertRanges],
+	);
 	// The take's placements are fed the cuts AND its own insertions, so a word after a pause
 	// is struck through — and highlighted — at the moment it is actually heard (issue #560).
 	const insertsFor = useCallback(

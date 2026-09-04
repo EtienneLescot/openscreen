@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { WebcamLayoutPreset, WebcamMaskShape } from "@/components/video-editor/types";
-import type { AxcutClip } from "@/lib/ai-edition/schema";
+import type { AxcutClip, AxcutInsertRange } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { resolveActiveCameraTrack } from "@/lib/ai-edition/timeline/camera";
@@ -31,8 +31,14 @@ import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { setWebcamNativeSize } from "@/native/webcamSizeCache";
 import styles from "./NewEditorShell.module.css";
 
+/** Stable identity, so the memos are not invalidated every render by a fresh `[]`. */
+const EMPTY_INSERT_RANGES: readonly AxcutInsertRange[] = [];
+
 interface WebcamOverlayProps {
 	clips: AxcutClip[];
+	/** The insertions those clips carry — the camera follows the clip under the playhead,
+	 *  and which clip that is cannot be answered without them (issue #560). */
+	insertRanges?: readonly AxcutInsertRange[];
 	currentTimeSec: number;
 	onTimeChange: (sec: number) => void;
 	isPlaying: boolean;
@@ -61,14 +67,15 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 	// Fallback (pre-clockRef / first paint) position from props, used only for
 	// the initial correction on loadedmetadata before the rAF loop below has
 	// had a chance to run.
+	const overlayInserts = props.insertRanges ?? EMPTY_INSERT_RANGES;
 	const position = useMemo(
-		() => locateVirtualPosition(props.clips, props.currentTimeSec),
-		[props.clips, props.currentTimeSec],
+		() => locateVirtualPosition(props.clips, props.currentTimeSec, overlayInserts),
+		[props.clips, props.currentTimeSec, overlayInserts],
 	);
 
 	const cameraTrack = useMemo(
-		() => resolveActiveCameraTrack(assets ?? [], props.clips, props.currentTimeSec),
-		[assets, props.clips, props.currentTimeSec],
+		() => resolveActiveCameraTrack(assets ?? [], props.clips, props.currentTimeSec, overlayInserts),
+		[assets, props.clips, props.currentTimeSec, overlayInserts],
 	);
 
 	const cameraTime = useMemo(() => {
@@ -81,6 +88,8 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 	// re-creating the loop on every document mutation.
 	const clipsRef = useRef(props.clips);
 	clipsRef.current = props.clips;
+	const insertsRef = useRef(overlayInserts);
+	insertsRef.current = overlayInserts;
 	const assetsRef = useRef(assets);
 	assetsRef.current = assets;
 
@@ -97,11 +106,12 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 			raf = window.requestAnimationFrame(tick);
 			const clock = clockRef.current;
 			const clipsNow = clipsRef.current;
-			const positionNow = locateVirtualPosition(clipsNow, clock.virtualTimeSec);
+			const positionNow = locateVirtualPosition(clipsNow, clock.virtualTimeSec, insertsRef.current);
 			const trackNow = resolveActiveCameraTrack(
 				assetsRef.current ?? [],
 				clipsNow,
 				clock.virtualTimeSec,
+				insertsRef.current,
 			);
 			const target = resolveCameraSyncTarget(
 				clock,

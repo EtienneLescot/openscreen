@@ -36,7 +36,7 @@ export function useNativePlaybackSync(
 	rawClips: readonly AxcutClip[],
 	/** The insertions those clips carry — a clip is longer than its source window by them,
 	 *  so a segment's place on the timeline cannot be found without them (issue #560). */
-	insertRanges: readonly AxcutInsertRange[] = [],
+	insertRanges: readonly AxcutInsertRange[],
 ): void {
 	const activePosition = useMemo(
 		() => resolveNativePosition(currentTimeSec, [...visibleSegments], [...rawClips], insertRanges),
