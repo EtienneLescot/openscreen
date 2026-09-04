@@ -40,7 +40,7 @@ import {
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
-import { extensionClipPath } from "@/lib/ai-edition/timeline/clip-parts";
+import { withExtensions } from "@/lib/ai-edition/timeline/clip-parts";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { takeProgramme } from "@/lib/ai-edition/timeline/take-programme";
@@ -521,22 +521,24 @@ function clipAssetIsResolvable(
  * Returns `PlaybackSegment[]`, not `AxcutClip[]`: a held segment carries `heldSec`, and
  * widening it away here is what kept the pause from ever reaching the compositor. Every
  */
-export function resolveVisibleClips(document: AxcutDocument): PlaybackSegment[] {
+export function resolveVisibleClips(rawDocument: AxcutDocument): PlaybackSegment[] {
+	// An extension is a clip on its own asset from here down. Idempotent, so a caller that
+	// already derived the document pays nothing.
+	const document = withExtensions(rawDocument);
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
-	return resolvePlaybackSegments(
-		document.timeline.clips,
-		document.timeline.trimRanges,
-		document.transcripts,
-	)
+	return resolvePlaybackSegments(document.timeline.clips, document.timeline.trimRanges)
 		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
 		.filter((clip) => clipAssetIsResolvable(clip, assetById));
 }
 
 /** Serialize a document into a {@link SceneDescription}. Pure — no per-frame math. */
 export function buildSceneDescription(
-	document: AxcutDocument,
+	rawDocument: AxcutDocument,
 	webcamSourceSize: { width: number; height: number } | null = null,
 ): SceneDescription {
+	// Once, at the top: every list below — the assets, the clips, the raw layout the regions
+	// are projected through — has to agree about what the film contains.
+	const document = withExtensions(rawDocument);
 	const settings = getEditorSettings(document);
 
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
@@ -703,25 +705,6 @@ export function buildSceneDescription(
 	const clips: CompositorClipInput[] = visibleClips.flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);
 		if (!asset?.originalPath) return [];
-		// An extension plays GENERATED media, not the recording's. Everything else about the
-		// entry is the clip's — same webcam pairing, same audio expectation — because that is
-		// the point of making it a file rather than a behaviour.
-		if (clip.extensionWordId) {
-			return [
-				{
-					screenPath: extensionClipPath(
-						asset.originalPath,
-						clip.extensionWordId,
-						clip.sourceEndSec ?? 0,
-					),
-					webcamPath: "",
-					sourceStartSec: 0,
-					sourceEndSec: clip.sourceEndSec ?? 0,
-					webcamOffsetSec: 0,
-					hasAudio: true,
-				},
-			];
-		}
 		const camera = assetCameraSource(asset);
 		// ponytail: `asset.audio` exists in the schema but the probe pipeline never
 		// populates it, so there is no per-asset "is there a track?" signal to read
@@ -809,7 +792,9 @@ export function buildSceneDescription(
 	const captionAspect = outputDims.height > 0 ? outputDims.width / outputDims.height : 16 / 9;
 	const captionSettings = getCaptionSettings(document, captionAspect);
 	const captionRegions = captionCuesToTextRegions(
-		deriveCaptionCues(document, captionSettings, getCaptionTranslations(document)),
+		// `rawDocument`: the caption path resolves the insertion itself, through the clip's
+		// parts, and handing it the derived clips would ask the same question twice.
+		deriveCaptionCues(rawDocument, captionSettings, getCaptionTranslations(document)),
 		captionSettings,
 		captionAspect,
 	);

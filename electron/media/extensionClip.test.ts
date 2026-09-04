@@ -5,45 +5,48 @@ import { describe, expect, it } from "vitest";
 import { extensionClipPath } from "../../src/lib/ai-edition/timeline/clip-parts";
 import { extensionClipArgs } from "./extensionClip";
 
-const SPEC = {
-	sourcePath: "C:/rec/take.mp4",
-	atSec: 5.3,
-	durationSec: 3.6,
-	fps: 30,
-	width: 1920,
-	height: 1080,
-};
+const SPEC = { durationSec: 3.6, fps: 30, width: 1920, height: 1080 };
 
 describe("extensionClipArgs", () => {
 	const args = extensionClipArgs(SPEC, "C:/out/w1_3600.mp4");
-	const at = (flag: string) => args[args.indexOf(flag) + 1];
+	const filter = (prefix: string) => args.find((a) => a.startsWith(prefix)) ?? "";
 
-	it("seeks BEFORE the input, so ffmpeg does not decode up to the moment", () => {
-		expect(args.indexOf("-ss")).toBeLessThan(args.indexOf("-i"));
-		expect(at("-ss")).toBe("5.300");
+	it("draws a test pattern, so generated media is unmistakable on screen", () => {
+		// A held frame from the recording looked exactly like a decoder stuck at the end of
+		// a clip — which is the bug it hid for three rounds.
+		expect(filter("testsrc2=")).toContain("size=1920x1080");
+		expect(filter("testsrc2=")).toContain("rate=30");
 	});
 
-	it("holds exactly the frozen frame for the whole duration", () => {
-		const filter = at("-filter_complex");
-		expect(filter).toContain("trim=end_frame=1");
-		expect(filter).toContain("loop=loop=-1:size=1:start=0");
-		expect(filter).toContain("trim=duration=3.600");
-	});
-
-	it("matches the recording's geometry, so the two concatenate downstream", () => {
-		expect(at("-filter_complex")).toContain("fps=30");
-		expect(at("-filter_complex")).toContain("scale=1920:1080");
-	});
-
-	it("carries an audio track rather than none — silence reads as a broken file", () => {
-		expect(args.some((a) => a.startsWith("anoisesrc="))).toBe(true);
+	it("carries an audible noise track rather than silence", () => {
+		expect(filter("anoisesrc=")).toContain("a=0.2");
 		expect(args).toContain("1:a");
 	});
 
-	it("bounds the output, so a looping filter cannot run away", () => {
-		// `-t` appears twice on purpose: once on the noise input, once on the output.
-		expect(args.filter((a) => a === "-t")).toHaveLength(2);
+	it("reads the recording not at all — nothing to seek, nothing to decode", () => {
+		expect(args.filter((a) => a === "-i")).toHaveLength(2);
+		expect(args).not.toContain("-ss");
+		expect(args.some((a) => a.endsWith(".mp4") && a !== "C:/out/w1_3600.mp4")).toBe(false);
+	});
+
+	it("runs for exactly the duration asked for, on both streams and the output", () => {
+		expect(filter("testsrc2=")).toContain("duration=3.600");
+		expect(filter("anoisesrc=")).toContain("d=3.600");
+		expect(args[args.indexOf("-t") + 1]).toBe("3.600");
 		expect(args[args.length - 1]).toBe("C:/out/w1_3600.mp4");
+	});
+
+	it("uses an encoder the bundled LGPL ffmpeg actually has", () => {
+		// `libx264` is GPL and absent: the first real run failed with "Unknown encoder".
+		expect(args).toContain("libopenh264");
+		expect(args).not.toContain("libx264");
+	});
+
+	it("still has a geometry when the asset does not know its own", () => {
+		// The live project's asset carries `fps: 0` — the probe never filled it in.
+		const blind = extensionClipArgs({ ...SPEC, fps: 0, width: 0, height: 0 }, "out.mp4");
+		expect(blind.find((a) => a.startsWith("testsrc2="))).toContain("size=1920x1080");
+		expect(blind.find((a) => a.startsWith("testsrc2="))).toContain("rate=30");
 	});
 });
 
@@ -67,21 +70,5 @@ describe("extensionClipPath", () => {
 		expect(extensionClipPath(`C:${BS}rec${BS}take.mp4`, "w1", 1)).toBe(
 			`C:${BS}rec${BS}.openscreen-extensions${BS}w1_1000.mp4`,
 		);
-	});
-});
-
-describe("the two things reality imposed", () => {
-	it("uses an encoder the bundled LGPL ffmpeg actually has", () => {
-		// `libx264` is GPL and absent: the first real run failed with "Unknown encoder".
-		const args = extensionClipArgs(SPEC, "out.mp4");
-		expect(args).toContain("libopenh264");
-		expect(args).not.toContain("libx264");
-	});
-
-	it("still has a frame rate when the asset does not know its own", () => {
-		// The live project's asset carries `fps: 0` — the probe never filled it in, and a
-		// loop filter with no rate produces nothing.
-		const args = extensionClipArgs({ ...SPEC, fps: 0 }, "out.mp4");
-		expect(args[args.indexOf("-filter_complex") + 1]).toContain("fps=30");
 	});
 });

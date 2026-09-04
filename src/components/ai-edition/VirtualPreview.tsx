@@ -16,13 +16,11 @@ import {
 import type {
 	AxcutAudioTrack,
 	AxcutClip,
-	AxcutTranscript,
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
-import { clipsWithExtensions } from "@/lib/ai-edition/timeline/clip-parts";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
@@ -214,8 +212,6 @@ interface VirtualPreviewProps {
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
 	trimRanges?: AxcutTrimRange[];
-	/** So a clip carrying added words plays their extensions — see `clipParts`. */
-	transcripts?: AxcutTranscript[];
 	seekTarget?: { timeSec: number; isSource?: boolean; requestId: number } | null;
 	onTimeChange?: (timeSec: number) => void;
 	onLoadedMetadata?: (
@@ -262,7 +258,6 @@ export function VirtualPreview({
 	zoomRegions = [],
 	speedRegions = [],
 	trimRanges = [],
-	transcripts = [],
 	seekTarget,
 	onTimeChange,
 	onLoadedMetadata,
@@ -552,13 +547,8 @@ export function VirtualPreview({
 	// stuck at 0% and the drag range at `max=1`. The refs let the rAF
 	// always see the latest values without re-creating on every clip
 	// mutation.
-	// The clips this player sees: each extension spliced in as a clip of its own, so the
-	// source-swap and the clock it already has apply to it without a new case. Everything
-	// below reads THIS list — `clips` from the props is the document's, and the difference
-	// is exactly the media an added word is spoken over.
-	const playerClips = useMemo(() => clipsWithExtensions(clips, transcripts), [clips, transcripts]);
-	const clipsRef = useRef(playerClips);
-	clipsRef.current = playerClips;
+	const clipsRef = useRef(clips);
+	clipsRef.current = clips;
 	// Same reason as `clipsRef`: the rAF projects the playhead and each imported
 	// audio track's head raw→output every frame (see the audio-track loop), and
 	// must see the live trims, not the set captured when the loop was created.
@@ -599,10 +589,8 @@ export function VirtualPreview({
 	// source time to a RAW virtual time that jumps discontinuously by exactly the trim's
 	// width the moment the video itself jumps — matching the marker's own pixel span.
 	const playbackClips = useMemo(
-		// `[]` transcripts, not a forgotten argument: `playerClips` has already spliced the
-		// extensions in, and splicing them twice would play each one twice.
-		() => resolvePlaybackSegments(playerClips, trimRanges, []),
-		[playerClips, trimRanges],
+		() => resolvePlaybackSegments(clips, trimRanges),
+		[clips, trimRanges],
 	);
 	const playbackClipsRef = useRef(playbackClips);
 	playbackClipsRef.current = playbackClips;

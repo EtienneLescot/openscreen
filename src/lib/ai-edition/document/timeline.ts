@@ -8,15 +8,11 @@ import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "
 /**
  * What `resolvePlaybackSegments` returns: a clip-shaped slice of playable film.
  *
- * `extensionWordId` names the ONE case where the media is not the clip's own asset — the
- * extension an added word is spoken over, whose file is derived from the word. It says which
- * MEDIA to play, not what behaviour to perform, and that is the whole difference from the
- * `heldSec` this replaces: a reader resolves it to a file like any other, rather than
- * carrying a special case for a stretch with nothing to decode.
- *
- * Derived-only, never on `clipSchema`, so nothing can write one to disk.
+ * A plain clip, deliberately. An extension is one too by the time it gets here — `withExtensions`
+ * resolved it into a clip on its own asset upstream — so nothing below this line carries a
+ * notion of inserted media, and the trim arithmetic is the same it was before insertions existed.
  */
-export type PlaybackSegment = AxcutClip & { extensionWordId?: string };
+export type PlaybackSegment = AxcutClip;
 
 import { clipParts, partsLengthSec } from "../timeline/clip-parts";
 import { type Interval, subtractInterval } from "../timeline/intervals";
@@ -193,12 +189,8 @@ export function resequenceClips(clips: AxcutClip[]): AxcutClip[] {
 export function resolvePlaybackSegments(
 	clips: AxcutClip[],
 	trimRanges: AxcutTrimRange[],
-	/** The transcripts, so a clip carrying added words splits into its parts. Omitted, a
-	 *  clip is one recording part and this behaves exactly as it did before extensions. */
-	transcripts: readonly AxcutTranscript[] = [],
 ): PlaybackSegment[] {
 	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
-	const wordsByAsset = new Map(transcripts.map((t) => [t.assetId, t.words]));
 	const result: PlaybackSegment[] = [];
 	let timelineCursor = 0;
 	for (const clip of ordered) {
@@ -214,54 +206,24 @@ export function resolvePlaybackSegments(
 			timelineCursor += dur;
 			continue;
 		}
-		// The insertion layer, and the only place this function meets it. Below here a part
-		// is media with a source window, and the trim arithmetic is the same it always was.
-		const parts = clipParts(clip, wordsByAsset.get(clip.assetId) ?? []);
-		// Named once the clip's own pieces are known: a clip keeps its id only when it yields
-		// exactly ONE piece of recording and nothing else. Naming from the PART count instead
-		// missed the split a trim makes inside a single part.
-		const clipSegments: PlaybackSegment[] = [];
-		for (const part of parts) {
-			if (part.kind === "extension") {
-				// No trim can name it: a trim is anchored in the RECORDING's seconds, and an
-				// extension has none. Its own media starts at zero and runs its full length.
-				clipSegments.push({
-					...clip,
-					id: `${clip.id}__ext_${part.wordId}`,
-					extensionWordId: part.wordId,
-					sourceStartSec: 0,
-					sourceEndSec: part.timelineEndSec - part.timelineStartSec,
-					timelineStartSec: timelineCursor,
-					timelineEndSec: timelineCursor + (part.timelineEndSec - part.timelineStartSec),
-				});
-				timelineCursor += part.timelineEndSec - part.timelineStartSec;
-				continue;
-			}
-			let kept: Interval[] = [{ startSec: part.sourceStartSec, endSec: part.sourceEndSec }];
-			for (const trim of trimRanges) {
-				if (!trimAppliesToClip(trim, clip)) continue;
-				kept = subtractInterval(kept, { startSec: trim.startSec, endSec: trim.endSec });
-			}
-			for (const piece of kept) {
-				const dur = piece.endSec - piece.startSec;
-				if (dur <= 0) continue;
-				clipSegments.push({
-					...clip,
-					sourceStartSec: piece.startSec,
-					sourceEndSec: piece.endSec,
-					timelineStartSec: timelineCursor,
-					timelineEndSec: timelineCursor + dur,
-				});
-				timelineCursor += dur;
-			}
+		let kept: Interval[] = [{ startSec: clip.sourceStartSec, endSec: sourceEnd }];
+		for (const trim of trimRanges) {
+			if (!trimAppliesToClip(trim, clip)) continue;
+			kept = subtractInterval(kept, { startSec: trim.startSec, endSec: trim.endSec });
 		}
-		const recorded = clipSegments.filter((seg) => seg.extensionWordId === undefined);
-		let n = 0;
-		for (const seg of clipSegments) {
-			if (seg.extensionWordId !== undefined) continue;
-			seg.id = recorded.length === 1 ? clip.id : `${clip.id}_seg${++n}`;
-		}
-		result.push(...clipSegments);
+		const pieces = kept.filter((piece) => piece.endSec > piece.startSec);
+		pieces.forEach((piece, i) => {
+			const dur = piece.endSec - piece.startSec;
+			result.push({
+				...clip,
+				id: pieces.length === 1 ? clip.id : `${clip.id}_seg${i + 1}`,
+				sourceStartSec: piece.startSec,
+				sourceEndSec: piece.endSec,
+				timelineStartSec: timelineCursor,
+				timelineEndSec: timelineCursor + dur,
+			});
+			timelineCursor += dur;
+		});
 	}
 	return result;
 }

@@ -4,6 +4,7 @@ import { noteUiProbeClipSwitch } from "@/lib/ai-edition/perf/uiFrameProbe";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
+import { withExtensions } from "@/lib/ai-edition/timeline/clip-parts";
 import { resolveNativePosition } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	pushAllNativeParams,
@@ -69,13 +70,18 @@ export function NativeCompositorOverlay() {
 	// Sans ça (ancien `resolveNativePlaybackPosition(nativeClips, currentTimeSec)`), un playhead
 	// RAW lu contre des clips compactés désignait le mauvais clip après un trim → mauvaise caméra
 	// + décalage écran/cam.
+	// The document the NATIVE side plays: an extension is a clip on its own asset, with its
+	// own file. Everything below — the compacted segments, the raw layout they are placed
+	// against, the asset the decoder is pointed at — has to be read from the same one, or
+	// they disagree about what the film contains.
+	const playedDocument = useMemo(() => (document ? withExtensions(document) : null), [document]);
 	const nativeClips = useMemo(() => {
-		if (!document) return [];
-		return resolveVisibleClips(document);
-	}, [document]);
+		if (!playedDocument) return [];
+		return resolveVisibleClips(playedDocument);
+	}, [playedDocument]);
 	const activePosition = useMemo(
-		() => resolveNativePosition(currentTimeSec, nativeClips, document?.timeline.clips ?? []),
-		[nativeClips, currentTimeSec, document],
+		() => resolveNativePosition(currentTimeSec, nativeClips, playedDocument?.timeline.clips ?? []),
+		[nativeClips, currentTimeSec, playedDocument],
 	);
 	const activeClip = activePosition?.clip ?? null;
 
@@ -191,7 +197,7 @@ export function NativeCompositorOverlay() {
 	useEffect(() => {
 		if (
 			viewId === null ||
-			!document ||
+			!playedDocument ||
 			!activeClipId ||
 			!activeClip ||
 			activeClipIndex === null ||
@@ -202,7 +208,7 @@ export function NativeCompositorOverlay() {
 		if (previousActiveClipIdRef.current === activeClipId) {
 			return;
 		}
-		const asset = document.assets.find((candidate) => candidate.id === activeClip.assetId);
+		const asset = playedDocument?.assets.find((candidate) => candidate.id === activeClip.assetId);
 		if (!asset?.originalPath) {
 			return;
 		}
@@ -248,7 +254,15 @@ export function NativeCompositorOverlay() {
 					previousActiveClipIdRef.current = null;
 				}
 			});
-	}, [viewId, document, activeClipId, activeClip, activeClipIndex, activeSourceTimeSec, playing]);
+	}, [
+		viewId,
+		playedDocument,
+		activeClipId,
+		activeClip,
+		activeClipIndex,
+		activeSourceTimeSec,
+		playing,
+	]);
 
 	if (!ready) {
 		return null;

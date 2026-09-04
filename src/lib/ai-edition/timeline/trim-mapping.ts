@@ -15,6 +15,7 @@
 // had no answer and each caller invented its own. See `trimAppliesToClip`.
 
 import type { AxcutClip, AxcutTrimRange } from "../schema";
+import { baseClipId } from "./clip-parts";
 import { type CoalescedSpan, ventilateSpanAcrossClips } from "./region-ventilation";
 import { coalesceByIdentity, regionIdentityKey } from "./timelineMap";
 
@@ -46,7 +47,10 @@ export function trimAppliesToClip(
 	trim: TrimAnchor,
 	clip: Pick<AxcutClip, "id" | "assetId">,
 ): boolean {
-	if (trim.clipId !== undefined) return trim.clipId === clip.id;
+	// `baseClipId`, not the id itself: an insertion splits a clip into pieces that are all
+	// still the clip the trim was authored on, and matching the piece would have left the
+	// cut applied to the first half only.
+	if (trim.clipId !== undefined) return trim.clipId === baseClipId(clip.id);
 	return trim.assetId === clip.assetId;
 }
 

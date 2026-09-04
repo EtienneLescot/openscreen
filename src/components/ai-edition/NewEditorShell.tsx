@@ -32,12 +32,7 @@ import {
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
-import {
-	extensionAssetId,
-	extensionClipPath,
-	extensionDurationSec,
-	isAddedWord,
-} from "@/lib/ai-edition/timeline/clip-parts";
+import { withExtensions } from "@/lib/ai-edition/timeline/clip-parts";
 import { newRegionDurationSec } from "@/lib/ai-edition/timeline/newRegionDuration";
 import { firstTimelineBusyView } from "@/lib/ai-edition/transcription/status";
 import {
@@ -236,6 +231,10 @@ export function NewEditorShell() {
 		document?.assets.find((a) => a.id === document.project.primaryAssetId)?.originalPath ?? null;
 	void primaryAssetPath;
 	const clips: AxcutClip[] = document?.timeline.clips ?? [];
+	// The document as the PLAYER sees it: an extension is a clip on its own asset. The ruler
+	// deliberately keeps `clips` above — a clip does not become three on screen because a
+	// word was typed into it.
+	const playedDocument = useMemo(() => (document ? withExtensions(document) : null), [document]);
 	const visibleClips = useMemo(() => (document ? resolveVisibleClips(document) : []), [document]);
 	const hasProject = Boolean(document);
 	const hasAsset = projectId !== null && (document?.assets.length ?? 0) > 0;
@@ -360,45 +359,24 @@ export function NewEditorShell() {
 	}, [promptUnsaved, saveDocument]);
 
 	const videoSources = useMemo(() => {
-		if (!document) return [];
-		// One source per added word, beside the recordings. The player keys sources by asset
-		// id and an extension answers to `ext:<wordId>`, so it swaps to the generated file at
-		// the boundary exactly as it swaps between two recordings — no new case.
-		//
-		// A file the save has not written yet simply fails to load, and the player reports it
-		// the way it reports any unreadable source: the edit stands, the picture catches up.
-		const extensions = document.transcripts.flatMap((transcript) => {
-			const asset = document.assets.find((a) => a.id === transcript.assetId);
-			if (!asset?.originalPath) return [];
-			return transcript.words.filter(isAddedWord).flatMap((word) => {
-				const durationSec = extensionDurationSec(word.text);
-				if (durationSec <= 0) return [];
-				const filePath = extensionClipPath(asset.originalPath, word.id, durationSec);
-				return [
-					{
-						id: extensionAssetId(word.id),
-						filePath,
-						src: toFileUrl(filePath),
-						label: word.text,
-					},
-				];
-			});
-		});
-		return document.assets
-			.map((asset) => ({
-				id: asset.id,
-				filePath: /^(https?|blob|data):/.test(asset.originalPath) ? undefined : asset.originalPath,
-				// Real Electron assets are filesystem paths and go through toFileUrl.
-				// In the browser preview an asset can already point at an http(s)/
-				// blob/data URL served by Vite; toFileUrl would mangle those into a
-				// broken file:// URL, so pass web URLs through untouched.
-				src: /^(https?|blob|data):/.test(asset.originalPath)
-					? asset.originalPath
-					: toFileUrl(asset.originalPath),
-				label: asset.label,
-			}))
-			.concat(extensions);
-	}, [document]);
+		if (!playedDocument) return [];
+		// Every asset, extensions included — they are assets by the time they get here, each
+		// with a real path. A file the save has not written yet simply fails to load, and the
+		// player reports it the way it reports any unreadable source: the edit stands, the
+		// picture catches up on the next save.
+		return playedDocument.assets.map((asset) => ({
+			id: asset.id,
+			filePath: /^(https?|blob|data):/.test(asset.originalPath) ? undefined : asset.originalPath,
+			// Real Electron assets are filesystem paths and go through toFileUrl.
+			// In the browser preview an asset can already point at an http(s)/
+			// blob/data URL served by Vite; toFileUrl would mangle those into a
+			// broken file:// URL, so pass web URLs through untouched.
+			src: /^(https?|blob|data):/.test(asset.originalPath)
+				? asset.originalPath
+				: toFileUrl(asset.originalPath),
+			label: asset.label,
+		}));
+	}, [playedDocument]);
 
 	const handleLoadedMetadata = useCallback(
 		(durationSec: number, assetId: string) => {
@@ -1539,12 +1517,11 @@ export function NewEditorShell() {
 									// itself keeps playing — that is what the user is narrating to.
 									audioTracks={voiceoverRecording ? NO_AUDIO_TRACKS : tl.audioTracks}
 									audioSources={videoSources}
-									clips={clips}
+									clips={playedDocument?.timeline.clips ?? clips}
 									zoomRegions={tl.zoomRegions}
 									speedRegions={tl.speedRegions}
 									cameraFullscreenRegions={tl.cameraFullscreenRegions}
 									trimRanges={tl.trimRanges}
-									transcripts={document?.transcripts ?? []}
 									selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
 									onZoomFocusChange={tl.updateZoomFocusLive}
 									onZoomFocusCommit={() => void tl.commitZoomFocus()}

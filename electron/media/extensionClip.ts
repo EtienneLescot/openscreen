@@ -2,9 +2,14 @@
  * The media an added word is spoken over.
  *
  * A word typed into the transcript has no recording behind it. Until there is TTS and frame
- * generation, the stand-in is the last frame the recording showed, held, over faint noise —
- * a real file, with real frames and a real audio track, so everything downstream decodes it
- * like any other media instead of special-casing its absence.
+ * generation the stand-in is a TEST PATTERN over noise — a real file, with real frames and a
+ * real audio track, so everything downstream decodes it like any other media instead of
+ * special-casing its absence.
+ *
+ * ponytail: a mire, on purpose, and not the recording's last frame held. A held frame is
+ * indistinguishable on screen from a decoder stuck at the end of a clip, which is exactly
+ * the bug it hid. The mire says "this is generated media, and it is playing HERE" at a
+ * glance. Swap it for synthesized frames the day there are any.
  *
  * DERIVED, never authored: the word is the truth, this file is regenerable from it. The name
  * carries what it was generated from, so a stale one is simply never asked for again, and a
@@ -23,63 +28,57 @@ import {
 import { resolveFfmpeg } from "./audioPeaks";
 
 export interface ExtensionClipSpec {
-	/** The recording the frozen frame is taken from. */
-	sourcePath: string;
-	/** Source second to freeze on — the moment the added word follows. */
-	atSec: number;
 	durationSec: number;
 	/** Matched to the recording so the two concatenate without a re-encode downstream.
-	 *  `0` when the asset was imported before the probe filled it in — see `FALLBACK_FPS`. */
+	 *  `0` when the asset was imported before the probe filled it in — see the fallbacks. */
 	fps: number;
 	width: number;
 	height: number;
 }
 
 /** Noise rather than silence: a silent track is indistinguishable from a broken one, and
- *  this stands in for a voice that will be synthesized later. Quiet enough not to startle. */
-const NOISE_AMPLITUDE = 0.02;
+ *  this stands in for a voice that will be synthesized later. Loud enough to be unmistakable
+ *  while the generated stretch is the thing being debugged. */
+const NOISE_AMPLITUDE = 0.2;
 const SAMPLE_RATE = 48_000;
 
 /** The bundled ffmpeg is LGPL, so `libx264` is not in it — `libopenh264` is the software
- *  H.264 encoder every LGPL build carries, on every platform. The hardware encoders
- *  (`h264_nvenc`, `h264_mf`, …) are faster and each needs its own hardware; for a clip of a
- *  few seconds that trade is not worth a platform branch. */
+ *  H.264 encoder every LGPL build carries, on every platform. */
 const VIDEO_ENCODER = "libopenh264";
 
-/** Assets imported before the probe filled `video.fps` carry 0, and the live project has
- *  one. A loop filter needs a rate, so it gets a common one.
- *  ponytail: fixed 30, read the real rate off the source when the probe backfills it. */
+/** Assets imported before the probe filled `video` carry zeroes, and the live project does.
+ *  ponytail: fixed, read the real geometry off the source when the probe backfills it. */
 const FALLBACK_FPS = 30;
+const FALLBACK_WIDTH = 1920;
+const FALLBACK_HEIGHT = 1080;
 
 /**
  * The ffmpeg arguments, as a pure function so the command can be asserted without running it.
  *
- * One pass, no temp file: seek to the moment, keep the single frame there, loop it for the
- * duration, and mux it against a noise source of the same length.
+ * Two synthetic inputs and nothing else: the recording is not read at all, which is what
+ * makes this fast, independent of what the source codec is, and impossible to confuse with
+ * the recording once it is on screen.
  */
 export function extensionClipArgs(spec: ExtensionClipSpec, outPath: string): string[] {
 	const dur = spec.durationSec.toFixed(3);
 	const fps = spec.fps > 0 ? spec.fps : FALLBACK_FPS;
+	const width = spec.width > 0 ? spec.width : FALLBACK_WIDTH;
+	const height = spec.height > 0 ? spec.height : FALLBACK_HEIGHT;
 	return [
 		"-y",
 		"-hide_banner",
 		"-loglevel",
 		"error",
-		// Before `-i`, so ffmpeg seeks rather than decoding up to the moment.
-		"-ss",
-		spec.atSec.toFixed(3),
-		"-i",
-		spec.sourcePath,
 		"-f",
 		"lavfi",
-		"-t",
-		dur,
 		"-i",
-		`anoisesrc=c=pink:a=${NOISE_AMPLITUDE}:r=${SAMPLE_RATE}`,
-		"-filter_complex",
-		`[0:v]trim=end_frame=1,loop=loop=-1:size=1:start=0,fps=${fps},trim=duration=${dur},setpts=PTS-STARTPTS,scale=${spec.width}:${spec.height}[v]`,
+		`testsrc2=size=${width}x${height}:rate=${fps}:duration=${dur}`,
+		"-f",
+		"lavfi",
+		"-i",
+		`anoisesrc=c=pink:a=${NOISE_AMPLITUDE}:r=${SAMPLE_RATE}:d=${dur}`,
 		"-map",
-		"[v]",
+		"0:v",
 		"-map",
 		"1:a",
 		"-c:v",
@@ -121,8 +120,6 @@ export async function ensureDocumentExtensions(document: {
 			try {
 				await ensureExtensionClip(
 					{
-						sourcePath: asset.originalPath,
-						atSec: word.startSec,
 						durationSec,
 						fps: asset.video?.fps ?? 0,
 						width: asset.video?.width ?? 0,

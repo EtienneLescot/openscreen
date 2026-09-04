@@ -49,6 +49,7 @@ import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
+import { clipParts } from "@/lib/ai-edition/timeline/clip-parts";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
 	newRegionDurationSec,
@@ -712,21 +713,29 @@ export function V4Timeline({
 	// clip because each mark is positioned inside its clip's own box — it then travels with
 	// the clip through a reorder for free, with no ruler arithmetic of its own.
 	const insertedWordsByClip = useMemo(() => {
-		const byAsset = new Map<string, AxcutWord[]>();
-		for (const transcript of tl.transcripts) {
-			const added = transcript.words.filter((word) => word.source === "synth");
-			if (added.length > 0) byAsset.set(transcript.assetId, added);
-		}
-		if (byAsset.size === 0) return new Map<string, Array<{ word: AxcutWord; atPct: number }>>();
-		const out = new Map<string, Array<{ word: AxcutWord; atPct: number }>>();
+		type Mark = { word: AxcutWord; atPct: number; widthPct: number; atSec: number };
+		const byAsset = new Map(tl.transcripts.map((t) => [t.assetId, t.words]));
+		const out = new Map<string, Mark[]>();
 		for (const clip of clips) {
 			const words = byAsset.get(clip.assetId);
-			const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
-			const span = sourceEnd - clip.sourceStartSec;
+			// The clip's TIMELINE span, which is what the box on screen measures. Using the
+			// source span put the mark at the wrong percentage AND gave it no width, because
+			// the two spans stop being equal the moment a word is added.
+			const span = clip.timelineEndSec - clip.timelineStartSec;
 			if (!words || span <= 0) continue;
-			const marks = words
-				.filter((word) => word.startSec >= clip.sourceStartSec && word.startSec <= sourceEnd)
-				.map((word) => ({ word, atPct: ((word.startSec - clip.sourceStartSec) / span) * 100 }));
+			const byId = new Map(words.map((w) => [w.id, w]));
+			const marks = clipParts(clip, words).flatMap((part): Mark[] => {
+				const word = part.kind === "extension" ? byId.get(part.wordId) : undefined;
+				if (!word) return [];
+				return [
+					{
+						word,
+						atPct: ((part.timelineStartSec - clip.timelineStartSec) / span) * 100,
+						widthPct: ((part.timelineEndSec - part.timelineStartSec) / span) * 100,
+						atSec: part.timelineStartSec,
+					},
+				];
+			});
 			if (marks.length > 0) out.set(clip.id, marks);
 		}
 		return out;
@@ -2259,33 +2268,35 @@ export function V4Timeline({
 												{tl.assets.find((a) => a.id === c.assetId)?.label ?? c.assetId}
 											</span>
 										</div>
-										{(insertedWordsByClip.get(c.id) ?? []).map(({ word, atPct }) => {
-											const left = atPct;
-											const width = 0;
-											return (
-												<button
-													key={word.id}
-													type="button"
-													data-no-clip-drag
-													data-inserted-word={word.id}
-													className={styles.tlClipInsert}
-													style={
-														width > 0
-															? { left: `${left}%`, width: `${width}%`, marginLeft: 0 }
-															: { left: `${left}%` }
-													}
-													title={t("toolbar.addedWord", { word: word.text })}
-													aria-label={t("toolbar.addedWord", { word: word.text })}
-													onPointerDown={(e) => e.stopPropagation()}
-													onClick={(e) => {
-														// Jump to the moment the added text sits on. The clip box
-														// underneath would otherwise take this as a selection.
-														e.stopPropagation();
-														setCurrentTime(c.timelineStartSec + (word.startSec - c.sourceStartSec));
-													}}
-												/>
-											);
-										})}
+										{(insertedWordsByClip.get(c.id) ?? []).map(
+											({ word, atPct, widthPct, atSec }) => {
+												const left = atPct;
+												const width = widthPct;
+												return (
+													<button
+														key={word.id}
+														type="button"
+														data-no-clip-drag
+														data-inserted-word={word.id}
+														className={styles.tlClipInsert}
+														style={
+															width > 0
+																? { left: `${left}%`, width: `${width}%`, marginLeft: 0 }
+																: { left: `${left}%` }
+														}
+														title={t("toolbar.addedWord", { word: word.text })}
+														aria-label={t("toolbar.addedWord", { word: word.text })}
+														onPointerDown={(e) => e.stopPropagation()}
+														onClick={(e) => {
+															// Jump to the moment the added text sits on. The clip box
+															// underneath would otherwise take this as a selection.
+															e.stopPropagation();
+															setCurrentTime(atSec);
+														}}
+													/>
+												);
+											},
+										)}
 										{selected ? (
 											<button
 												type="button"

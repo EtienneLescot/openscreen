@@ -21,6 +21,7 @@ import {
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
+import { withExtensions } from "@/lib/ai-edition/timeline/clip-parts";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import {
 	type ExportFormat,
@@ -80,7 +81,8 @@ function revealExportedFile(filePath: string): void {
  *  `NativeCompositorOverlay`, so export/preview/scene all see the exact same clip stream),
  *  each with its asset's screen file + camera file (falls back to the screen when a clip has
  *  no camera — the no-webcam layout is a later step) and its source trim. */
-function buildNativeClipList(document: AxcutDocument): CompositorClipInput[] {
+function buildNativeClipList(rawDocument: AxcutDocument): CompositorClipInput[] {
+	const document = withExtensions(rawDocument);
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
 	return resolveVisibleClips(document).flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);

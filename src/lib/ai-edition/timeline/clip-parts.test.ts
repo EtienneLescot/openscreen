@@ -2,16 +2,18 @@
 // start where the clip starts, and no stored source coordinate moved to achieve it.
 
 import { describe, expect, it } from "vitest";
-import type { AxcutClip, AxcutWord } from "../schema";
+import { resolvePlaybackSegments } from "../document/timeline";
+import type { AxcutClip, AxcutDocument, AxcutWord } from "../schema";
 import {
+	baseClipId,
 	clipParts,
-	clipsWithExtensions,
-	extensionAssetId,
 	extensionAt,
+	extensionClipPath,
 	extensionDurationSec,
 	partsLengthSec,
 	partsRawSec,
 	partsSourceSec,
+	withExtensions,
 } from "./clip-parts";
 
 const CLIP: AxcutClip = {
@@ -115,34 +117,85 @@ describe("extensionDurationSec", () => {
 	});
 });
 
-// ─── What a player sees ─────────────────────────────────────────────────────
-// The DOM preview already plays several clips over several files and swaps at the boundary.
-// An extension is exactly that, so it is handed a clip rather than taught a new case.
+// ─── What everything that RENDERS sees ──────────────────────────────────────
+// Every mapping downstream — the ruler, the native decoder swap, the exporter, the DOM
+// player — is built on "a clip is an uninterrupted shift from source to ruler". So the
+// interruption is resolved into the shape they already handle, and below this line an
+// extension is simply a clip that plays a generated file.
 
-describe("clipsWithExtensions", () => {
-	const transcripts = [{ assetId: "a1", words: [added("synth_1", 4, "really")] }];
+const DOC = (words: AxcutWord[], clips: AxcutClip[] = [CLIP]): AxcutDocument =>
+	({
+		assets: [
+			{
+				id: "a1",
+				kind: "video",
+				label: "take",
+				originalPath: "C:/rec/take.mp4",
+				video: { width: 1920, height: 1080, fps: 30 },
+				cameraTrack: null,
+			},
+		],
+		transcripts: [{ assetId: "a1", words }],
+		timeline: { clips, trimRanges: [] },
+	}) as unknown as AxcutDocument;
 
-	it("splices the extension in as a clip of its own, on its own media", () => {
-		const out = clipsWithExtensions([CLIP], transcripts);
-		expect(out.map((c) => c.assetId)).toEqual(["a1", "ext:synth_1", "a1"]);
-		expect(out[1]).toMatchObject({ sourceStartSec: 0 });
-		expect(out[1].sourceEndSec).toBeCloseTo(6 / 15, 6);
+describe("withExtensions", () => {
+	const doc = DOC([added("synth_1", 4, "really")]);
+
+	it("makes the extension a clip on an asset of its own", () => {
+		const out = withExtensions(doc);
+		expect(out.timeline.clips.map((c) => c.assetId)).toEqual(["a1", "ext:synth_1", "a1"]);
+		expect(out.timeline.clips[1]).toMatchObject({ sourceStartSec: 0 });
+		expect(out.timeline.clips[1].sourceEndSec).toBeCloseTo(6 / 15, 6);
 	});
 
-	it("lays them end to end, so the player's clock never sees a gap", () => {
-		const out = clipsWithExtensions([CLIP], transcripts);
+	it("gives that asset the file the generator writes, so the decoder can open it", () => {
+		const asset = withExtensions(doc).assets.find((a) => a.id === "ext:synth_1");
+		expect(asset?.originalPath).toBe(
+			extensionClipPath("C:/rec/take.mp4", "synth_1", extensionDurationSec("really")),
+		);
+		// The recording's geometry: the generated file was made to match it.
+		expect(asset?.video).toMatchObject({ width: 1920, height: 1080 });
+	});
+
+	it("lays them end to end, so no mapping downstream sees a gap", () => {
+		const out = withExtensions(doc).timeline.clips;
 		expect(out[0].timelineStartSec).toBe(0);
 		for (const [i, clip] of out.slice(0, -1).entries()) {
 			expect(clip.timelineEndSec).toBeCloseTo(out[i + 1].timelineStartSec, 9);
 		}
 	});
 
-	it("returns the clips unchanged when no word was added", () => {
-		expect(clipsWithExtensions([CLIP], [{ assetId: "a1", words: [] }])).toEqual([CLIP]);
+	it("is the same document when no word was added", () => {
+		const plain = DOC([]);
+		expect(withExtensions(plain)).toBe(plain);
 	});
 
-	it("gives the extension an id no real asset can collide with", () => {
-		expect(extensionAssetId("synth_1")).toBe("ext:synth_1");
+	it("is idempotent — deriving twice must not split the halves again", () => {
+		const once = withExtensions(doc);
+		expect(withExtensions(once)).toBe(once);
+	});
+
+	it("keeps every piece answering to the name a trim knows the clip by", () => {
+		const ids = withExtensions(doc).timeline.clips.map((c) => baseClipId(c.id));
+		expect(ids).toEqual(["c1", "c1", "c1"]);
+	});
+
+	it("still cuts the recording, and never the extension", () => {
+		// A trim is anchored in the RECORDING's seconds; an extension has none. Cutting
+		// source 5..6 shortens the half AFTER the added word and nothing else.
+		const clips = withExtensions(doc).timeline.clips;
+		const trims = [
+			{ id: "t1", clipId: "c1", assetId: "a1", startSec: 5, endSec: 6 },
+		] as unknown as Parameters<typeof resolvePlaybackSegments>[1];
+		const segs = resolvePlaybackSegments(clips, trims);
+		const recorded = segs.filter((s) => !s.assetId.startsWith("ext:"));
+		expect(recorded.map((s) => [s.sourceStartSec, s.sourceEndSec])).toEqual([
+			[0, 4],
+			[4, 5],
+			[6, 10],
+		]);
+		expect(segs.filter((s) => s.assetId.startsWith("ext:"))).toHaveLength(1);
 	});
 });
 

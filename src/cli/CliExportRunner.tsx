@@ -24,6 +24,7 @@ import { applyProbedDuration } from "@/lib/ai-edition/document/timeline";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
+import { withExtensions } from "@/lib/ai-edition/timeline/clip-parts";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { DEFAULT_ZOOM_DEPTH, ZOOM_DEPTH_SCALES } from "@/lib/ai-edition/timeline/zoom-scale";
 import { buildAutoZoomSuggestions } from "@/lib/ai-edition/timeline/zoom-suggestions";
@@ -78,7 +79,8 @@ function replaceExtension(filePath: string, newExtension: string): string {
 /** Mirrors ExportDialog.buildNativeClipList: trim-narrowed visible clips mapped
  * onto the native multiclip contract. Kept in lock-step with
  * buildSceneDescription so export and scene agree on the clip stream. */
-function buildNativeClipList(axcutDocument: AxcutDocument): CompositorClipInput[] {
+function buildNativeClipList(rawDocument: AxcutDocument): CompositorClipInput[] {
+	const axcutDocument = withExtensions(rawDocument);
 	const assetById = new Map(axcutDocument.assets.map((asset) => [asset.id, asset]));
 	return resolveVisibleClips(axcutDocument).flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);

@@ -13,7 +13,7 @@
 // with a source window and a place on the timeline, and the plain arithmetic every reader
 // used before insertions works again.
 
-import type { AxcutClip, AxcutWord } from "../schema";
+import type { AxcutAsset, AxcutClip, AxcutDocument, AxcutWord } from "../schema";
 
 /** How fast a synthesized voice will be assumed to speak, in characters per second.
  *
@@ -128,48 +128,111 @@ export function extensionClipPath(assetPath: string, wordId: string, durationSec
 	return `${dir}${sep}${EXTENSIONS_DIR}${sep}${wordId}_${Math.round(durationSec * 1000)}.mp4`;
 }
 
-/** The id an extension's media answers to, so a player that keys sources by asset finds it
- *  without knowing what an extension is. Prefixed rather than opaque: it can never collide
- *  with a real asset id, and it says what it is in a log line. */
+/** Marks every id this module derives. Never produced by the writers, so `withExtensions`
+ *  can recognise a document it has already derived — and a log line says what it is. */
+export const EXTENSION_ID_PREFIX = "ext:";
+
+/** The id an extension's media answers to. */
 export function extensionAssetId(wordId: string): string {
-	return `ext:${wordId}`;
+	return `${EXTENSION_ID_PREFIX}${wordId}`;
+}
+
+/** Separates a derived piece from the clip it was cut out of. Double, so it cannot collide
+ *  with the single underscores every generated clip id already carries. */
+const PIECE = "__";
+
+/** The stored clip a derived piece came from. A trim names a clip by id, and both halves of
+ *  a split clip are still that clip — so both must answer to its name. */
+export function baseClipId(clipId: string): string {
+	const at = clipId.indexOf(PIECE);
+	return at < 0 ? clipId : clipId.slice(0, at);
 }
 
 /**
- * The clips a PLAYER should see: each extension spliced in as a clip of its own.
+ * The document as everything that RENDERS it should see it: an extension is a clip, on an
+ * asset, with a file.
  *
- * The DOM preview already knows how to play several clips over several files and swap at the
- * boundary. An extension is exactly that — a different file, played for a stretch — so it is
- * handed one rather than taught a new case. `resolvePlaybackSegments` does the same thing
- * one layer down, with the trims applied; this is the untrimmed list the player's own clock
- * maps against.
+ * This is the whole insertion layer, and it exists because of one property every mapping in
+ * this codebase is built on — a clip is an UNINTERRUPTED shift between its source seconds
+ * and the ruler. `timelineMap`, the native `setActiveClip`, the exporter and the DOM player
+ * all assume it. A clip interrupted by generated media breaks that assumption in every one
+ * of them at once, which is why teaching them each about extensions never converged: the
+ * fix was eight special cases, and it was still one bug.
+ *
+ * So the interruption is resolved HERE, once, into the shape they already handle. Below this
+ * line there are no extensions — only clips, some of which happen to play a generated file.
+ *
+ * Derived, never stored: one direction, nothing to reconcile. The stored clip keeps its own
+ * single identity and its own source window, and the words remain the only truth about what
+ * was added.
  */
-export function clipsWithExtensions(
-	clips: readonly AxcutClip[],
-	transcripts: ReadonlyArray<{ assetId: string; words: readonly AxcutWord[] }>,
-): AxcutClip[] {
-	const wordsByAsset = new Map(transcripts.map((t) => [t.assetId, t.words]));
-	return clips.flatMap((clip) =>
-		clipParts(clip, wordsByAsset.get(clip.assetId) ?? []).map((part) =>
-			part.kind === "extension"
-				? {
+export function withExtensions(document: AxcutDocument): AxcutDocument {
+	// Already derived — deriving again would split the halves a second time, because the
+	// added word sits exactly on the first half's end.
+	if (document.assets.some((a) => a.id.startsWith(EXTENSION_ID_PREFIX))) return document;
+
+	const wordsByAsset = new Map(document.transcripts.map((t) => [t.assetId, t.words]));
+	const assetById = new Map(document.assets.map((a) => [a.id, a]));
+	const assets = [...document.assets];
+
+	const clips = document.timeline.clips.flatMap((clip): AxcutClip[] => {
+		const parts = clipParts(clip, wordsByAsset.get(clip.assetId) ?? []);
+		if (parts.length < 2) return [clip];
+		const source = assetById.get(clip.assetId);
+		let piece = 0;
+		return parts.flatMap((part): AxcutClip[] => {
+			if (part.kind === "recording") {
+				piece += 1;
+				return [
+					{
 						...clip,
-						id: `${clip.id}__ext_${part.wordId}`,
-						assetId: extensionAssetId(part.wordId),
-						sourceStartSec: 0,
-						sourceEndSec: part.timelineEndSec - part.timelineStartSec,
-						timelineStartSec: part.timelineStartSec,
-						timelineEndSec: part.timelineEndSec,
-					}
-				: {
-						...clip,
+						// The first piece keeps the clip's own name so anything holding it still
+						// finds something; `baseClipId` is what makes the rest answer to it too.
+						id: piece === 1 ? clip.id : `${clip.id}${PIECE}r${piece}`,
 						sourceStartSec: part.sourceStartSec,
 						sourceEndSec: part.sourceEndSec,
 						timelineStartSec: part.timelineStartSec,
 						timelineEndSec: part.timelineEndSec,
 					},
-		),
-	);
+				];
+			}
+			// Nothing to name the file after, so nothing to play: the clip simply stays short
+			// of what the word asked for, rather than pointing at a path that cannot exist.
+			if (!source?.originalPath) return [];
+			const durationSec = part.timelineEndSec - part.timelineStartSec;
+			const id = extensionAssetId(part.wordId);
+			if (!assetById.has(id)) {
+				const asset: AxcutAsset = {
+					id,
+					kind: "video",
+					label: part.text.trim().slice(0, 40) || part.wordId,
+					originalPath: extensionClipPath(source.originalPath, part.wordId, durationSec),
+					durationSec,
+					// The recording's geometry, because the generated file was made to match it.
+					video: source.video,
+					cameraTrack: null,
+				};
+				assetById.set(id, asset);
+				assets.push(asset);
+			}
+			return [
+				{
+					...clip,
+					id: `${clip.id}${PIECE}ext_${part.wordId}`,
+					assetId: id,
+					// Authored against the recording's framing, which this is not.
+					cropRegion: undefined,
+					sourceStartSec: 0,
+					sourceEndSec: durationSec,
+					timelineStartSec: part.timelineStartSec,
+					timelineEndSec: part.timelineEndSec,
+				},
+			];
+		});
+	});
+
+	if (assets.length === document.assets.length) return document;
+	return { ...document, assets, timeline: { ...document.timeline, clips } };
 }
 
 /** Hidden, because it is derived: deleting it costs nothing but a regeneration. */
@@ -237,6 +300,34 @@ export function extensionAt(parts: readonly ClipPart[], rawSec: number): string 
 	for (const part of parts) {
 		if (part.kind !== "extension") continue;
 		if (rawSec >= part.timelineStartSec && rawSec < part.timelineEndSec) return part.wordId;
+	}
+	return null;
+}
+
+/**
+ * The ruler span of the extension inserted at this source second, if there is one.
+ *
+ * The answer to a question source time cannot express: an added word occupies no source
+ * seconds, so anything measuring it there measures zero. Its span lives on its part.
+ */
+export function extensionSpanAtSource(
+	parts: readonly ClipPart[],
+	sourceSec: number,
+): { startSec: number; endSec: number } | null {
+	const played = recordings(parts);
+	for (const [i, part] of parts.entries()) {
+		if (part.kind !== "extension") continue;
+		// The recording part that ENDS where this extension begins is the one whose last
+		// source second the word was typed after.
+		const before =
+			parts
+				.slice(0, i)
+				.filter((p) => p.kind === "recording")
+				.at(-1) ?? played[0];
+		const at = before ? before.sourceEndSec : sourceSec;
+		if (Math.abs(at - sourceSec) < 1e-6) {
+			return { startSec: part.timelineStartSec, endSec: part.timelineEndSec };
+		}
 	}
 	return null;
 }

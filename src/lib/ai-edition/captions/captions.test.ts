@@ -684,6 +684,15 @@ describe("captions over an inserted word", () => {
 		expect(cues[cues.length - 1].endMs).toBeCloseTo(6000 + (4 / 15) * 1000, 0);
 	});
 
+	it("gives the inserted word a line of its own, over the media it inserted", () => {
+		// Grouped with the recorded words beside it, it inherited their span — which is what
+		// left the inserted subtitle glued to the line before it.
+		const wait = deriveCaptionCues(withInsertion(), ON, {}).find((c) => c.text === "wait");
+		expect(wait).toBeDefined();
+		expect(wait?.startMs).toBe(2000);
+		expect(wait?.endMs).toBeCloseTo(2000 + (4 / 15) * 1000, 0);
+	});
+
 	it("leaves the cues before it exactly where they were", () => {
 		const before = deriveCaptionCues(doc(), ON, {});
 		const after = deriveCaptionCues(withInsertion(), ON, {});
