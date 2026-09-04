@@ -78,20 +78,18 @@ unsafe fn decode_frame_n_inner(path: &str, gpu: &Gpu, n: u32) -> Result<FrameGua
     }
     let stream = sn_fmt_stream(fmt, vidx);
     let codecpar = (*stream).codecpar;
-    let dec = avcodec_find_decoder((*codecpar).codec_id);
-    let dctx = avcodec_alloc_context3(dec);
+    if !d3d11va_for_codec((*codecpar).codec_id) {
+        avformat_close_input(&mut fmt);
+        bail!(
+            "decode_frame_n only supports H.264 D3D11VA (codec_id {})",
+            (*codecpar).codec_id as i32
+        );
+    }
+    let (dec, dctx) = require_decoder(codecpar)?;
     averr(avcodec_parameters_to_context(dctx, codecpar), "params_to_ctx")?;
     allow_d3d11va_h264_baseline(dctx);
 
-    let hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
-    let hwdc = (*hwdev).data as *mut AVHWDeviceContext;
-    let d3dctx = (*hwdc).hwctx as *mut AVD3D11VADeviceContext;
-    let dev_clone = gpu.device.clone();
-    (*d3dctx).device = dev_clone.as_raw() as *mut ID3D11Device;
-    std::mem::forget(dev_clone);
-    averr(av_hwdevice_ctx_init(hwdev), "hwdevice_ctx_init")?;
-    (*dctx).hw_device_ctx = av_buffer_ref(hwdev);
-    (*dctx).get_format = Some(get_hw_format);
+    let hwdev = attach_d3d11va(dctx, gpu)?;
     averr(avcodec_open2(dctx, dec, ptr::null_mut()), "avcodec_open2")?;
 
     let pkt = av_packet_alloc();
@@ -161,6 +159,56 @@ unsafe fn allow_d3d11va_h264_baseline(dctx: *mut AVCodecContext) {
     if (*dctx).profile == AV_PROFILE_H264_BASELINE as i32 {
         (*dctx).hwaccel_flags |= AV_HWACCEL_FLAG_ALLOW_PROFILE_MISMATCH as i32;
     }
+}
+
+/// D3D11VA in this crate is the H.264 screen-recording path. AV1/VP9 (legacy
+/// WebMs, imports) must not attach a D3D11 device — that has aborted the
+/// Electron process at clip boundaries (#554). macOS already software-falls
+/// back when VideoToolbox refuses those codecs.
+fn d3d11va_for_codec(codec_id: AVCodecID::Type) -> bool {
+    codec_id == AVCodecID::AV_CODEC_ID_H264
+}
+
+unsafe fn require_decoder_id(
+    codec_id: AVCodecID::Type,
+) -> Result<(*const AVCodec, *mut AVCodecContext)> {
+    let dec = avcodec_find_decoder(codec_id);
+    if dec.is_null() {
+        bail!("no decoder for codec_id {}", codec_id as i32);
+    }
+    let dctx = avcodec_alloc_context3(dec);
+    if dctx.is_null() {
+        bail!("avcodec_alloc_context3");
+    }
+    Ok((dec, dctx))
+}
+
+unsafe fn require_decoder(
+    codecpar: *mut AVCodecParameters,
+) -> Result<(*const AVCodec, *mut AVCodecContext)> {
+    if codecpar.is_null() {
+        bail!("codecpar null");
+    }
+    require_decoder_id((*codecpar).codec_id)
+}
+
+unsafe fn attach_d3d11va(dctx: *mut AVCodecContext, gpu: &Gpu) -> Result<*mut AVBufferRef> {
+    let mut hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
+    if hwdev.is_null() {
+        bail!("av_hwdevice_ctx_alloc");
+    }
+    let hwdc = (*hwdev).data as *mut AVHWDeviceContext;
+    let d3dctx = (*hwdc).hwctx as *mut AVD3D11VADeviceContext;
+    let dev_clone = gpu.device.clone();
+    (*d3dctx).device = dev_clone.as_raw() as *mut ID3D11Device;
+    std::mem::forget(dev_clone);
+    if let Err(error) = averr(av_hwdevice_ctx_init(hwdev), "hwdevice_ctx_init") {
+        av_buffer_unref(&mut hwdev);
+        return Err(error);
+    }
+    (*dctx).hw_device_ctx = av_buffer_ref(hwdev);
+    (*dctx).get_format = Some(get_hw_format);
+    Ok(hwdev)
 }
 
 // D3D11_TEXTURE2D_DESC.BindFlags (valeurs SDK)
@@ -246,29 +294,18 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
     let stream = sn_fmt_stream(fmt, vidx);
     let codecpar = (*stream).codecpar;
 
-    // ---- décodeur D3D11VA sur NOTRE device ----
-    let dec = avcodec_find_decoder((*codecpar).codec_id);
-    if dec.is_null() {
-        bail!("décodeur introuvable");
+    // ---- décodeur D3D11VA sur NOTRE device (H.264 only; see d3d11va_for_codec) ----
+    if !d3d11va_for_codec((*codecpar).codec_id) {
+        bail!(
+            "C0 D3D11VA only supports H.264 (codec_id {})",
+            (*codecpar).codec_id as i32
+        );
     }
-    let dctx = avcodec_alloc_context3(dec);
+    let (dec, dctx) = require_decoder(codecpar)?;
     averr(avcodec_parameters_to_context(dctx, codecpar), "params_to_ctx")?;
     allow_d3d11va_h264_baseline(dctx);
 
-    let hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
-    if hwdev.is_null() {
-        bail!("av_hwdevice_ctx_alloc");
-    }
-    let hwdc = (*hwdev).data as *mut AVHWDeviceContext;
-    let d3dctx = (*hwdc).hwctx as *mut AVD3D11VADeviceContext;
-    // AddRef : ffmpeg Release ce device au teardown. On garde un +1 en fuyant un clone.
-    let dev_clone = gpu.device.clone();
-    (*d3dctx).device = dev_clone.as_raw() as *mut ID3D11Device;
-    std::mem::forget(dev_clone);
-    averr(av_hwdevice_ctx_init(hwdev), "hwdevice_ctx_init")?;
-
-    (*dctx).hw_device_ctx = av_buffer_ref(hwdev);
-    (*dctx).get_format = Some(get_hw_format);
+    let hwdev = attach_d3d11va(dctx, gpu)?;
     averr(avcodec_open2(dctx, dec, ptr::null_mut()), "avcodec_open2(dec)")?;
 
     // ---- encodeur (ouvert paresseusement à la 1re frame : il lui faut ses dims + hw_frames_ctx) ----
@@ -494,6 +531,37 @@ pub(crate) struct Decoder {
     has_peek: bool,
 }
 
+/// Owns the FFmpeg resources allocated while `Decoder::open` is still fallible.
+/// Once a complete `Decoder` exists, `into_raw` transfers the same three pointers
+/// to it and disarms this guard so exactly one Drop path remains responsible.
+struct DecoderOpenResources {
+    fmt: *mut AVFormatContext,
+    dctx: *mut AVCodecContext,
+    hwdev: *mut AVBufferRef,
+}
+
+impl DecoderOpenResources {
+    unsafe fn cleanup(&mut self) {
+        avcodec_free_context(&mut self.dctx);
+        av_buffer_unref(&mut self.hwdev);
+        avformat_close_input(&mut self.fmt);
+    }
+
+    unsafe fn into_raw(mut self) -> (*mut AVFormatContext, *mut AVCodecContext, *mut AVBufferRef) {
+        let resources = (self.fmt, self.dctx, self.hwdev);
+        self.fmt = ptr::null_mut();
+        self.dctx = ptr::null_mut();
+        self.hwdev = ptr::null_mut();
+        resources
+    }
+}
+
+impl Drop for DecoderOpenResources {
+    fn drop(&mut self) {
+        unsafe { self.cleanup() };
+    }
+}
+
 // SAFETY: `Decoder` only owns FFI pointers into FFmpeg's own heap-allocated state, which
 // has no OS thread affinity — safe to create on one thread and hand off to another as long
 // as it's touched from a single thread at a time (never concurrently), which is exactly the
@@ -516,47 +584,56 @@ impl Decoder {
             avformat_open_input(&mut fmt, cpath.as_ptr(), ptr::null_mut(), ptr::null_mut()),
             "open_input",
         )?;
-        averr(avformat_find_stream_info(fmt, ptr::null_mut()), "find_stream_info")?;
-        let vidx = av_find_best_stream(fmt, AVMediaType::AVMEDIA_TYPE_VIDEO, -1, -1, ptr::null_mut(), 0);
+        let mut resources = DecoderOpenResources {
+            fmt,
+            dctx: ptr::null_mut(),
+            hwdev: ptr::null_mut(),
+        };
+        averr(
+            avformat_find_stream_info(resources.fmt, ptr::null_mut()),
+            "find_stream_info",
+        )?;
+        let vidx = av_find_best_stream(
+            resources.fmt,
+            AVMediaType::AVMEDIA_TYPE_VIDEO,
+            -1,
+            -1,
+            ptr::null_mut(),
+            0,
+        );
         if vidx < 0 {
             bail!("aucun flux vidéo dans {path}");
         }
-        let stream = sn_fmt_stream(fmt, vidx);
+        let stream = sn_fmt_stream(resources.fmt, vidx);
         let codecpar = (*stream).codecpar;
-        let dec = avcodec_find_decoder((*codecpar).codec_id);
-        let dctx = avcodec_alloc_context3(dec);
-        averr(avcodec_parameters_to_context(dctx, codecpar), "params_to_ctx")?;
-        allow_d3d11va_h264_baseline(dctx);
+        let codec_id = (*codecpar).codec_id;
+        let (dec, dctx) = require_decoder(codecpar)?;
+        resources.dctx = dctx;
+        averr(
+            avcodec_parameters_to_context(resources.dctx, codecpar),
+            "params_to_ctx",
+        )?;
+        allow_d3d11va_h264_baseline(resources.dctx);
 
-        // Backend CPU : on n'attache AUCUN hw_device_ctx et on ne force pas `get_format`,
-        // donc libavcodec choisit son décodeur logiciel et sort en mémoire système. Passer
-        // le device WARP à D3D11VA ne marcherait pas de toute façon — WARP n'expose pas
-        // d'`ID3D11VideoDevice` (`tests/warp_device_cannot_decode.rs`).
-        let cpu = if gpu.backend == Backend::Cpu {
-            // `threads = 0` : libavcodec prend le nombre de cœurs. C'est le seul réglage
-            // qui compte vraiment ici — sans lui le décodage logiciel est mono-thread et
-            // le benchmark mesurerait surtout ça.
-            (*dctx).thread_count = 0;
-            Some(CpuFrames::new(gpu)?)
-        } else {
+        // Hardware D3D11VA is the H.264 capture path. WARP has no video decoder
+        // (`tests/warp_device_cannot_decode.rs`). AV1/VP9 (legacy WebMs, #554)
+        // take the same software CpuFrames axis as Backend::Cpu.
+        let want_hw = gpu.backend != Backend::Cpu && d3d11va_for_codec(codec_id);
+        let cpu = if want_hw {
             None
+        } else {
+            (*resources.dctx).thread_count = 0;
+            Some(CpuFrames::new(gpu)?)
         };
 
-        let hwdev = if cpu.is_some() {
-            ptr::null_mut()
-        } else {
-            let hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
-            let hwdc = (*hwdev).data as *mut AVHWDeviceContext;
-            let d3dctx = (*hwdc).hwctx as *mut AVD3D11VADeviceContext;
-            let dev_clone = gpu.device.clone();
-            (*d3dctx).device = dev_clone.as_raw() as *mut ID3D11Device;
-            std::mem::forget(dev_clone);
-            averr(av_hwdevice_ctx_init(hwdev), "hwdevice_ctx_init")?;
-            (*dctx).hw_device_ctx = av_buffer_ref(hwdev);
-            (*dctx).get_format = Some(get_hw_format);
-            hwdev
-        };
-        averr(avcodec_open2(dctx, dec, ptr::null_mut()), "avcodec_open2")?;
+        if want_hw {
+            resources.hwdev = attach_d3d11va(resources.dctx, gpu)?;
+        }
+        averr(
+            avcodec_open2(resources.dctx, dec, ptr::null_mut()),
+            "avcodec_open2",
+        )?;
+        let (fmt, dctx, hwdev) = resources.into_raw();
 
         Ok(Decoder {
             fmt,
@@ -581,9 +658,18 @@ impl Decoder {
     /// `next`, donc les deux doivent rendre la même chose. Le temps (`cur_time_sec`), lui,
     /// continue de se lire sur la vraie frame décodée.
     pub(crate) fn cur_frame(&self) -> *mut AVFrame {
-        match &self.cpu {
+        let frame = match &self.cpu {
             Some(cpu) => cpu.current(),
             None => self.frame,
+        };
+        // `AVFrame*` identifies the reusable container, not whether it currently contains a
+        // presentable frame. It stays allocated before the first decode and can be unreffed by
+        // a seek that runs to EOF. Returning that non-null shell let Player's webcam hold path
+        // feed a null D3D11 texture to the compositor on replay after #554's AV1 clip.
+        if frame.is_null() || unsafe { (*frame).data[0].is_null() } {
+            ptr::null_mut()
+        } else {
+            frame
         }
     }
 
@@ -1604,6 +1690,553 @@ mod tests {
                 av_frame_free(&mut (src as *mut _));
                 av_frame_free(&mut (dst as *mut _));
             }
+        }
+    }
+
+    #[test]
+    fn d3d11va_is_h264_only() {
+        assert!(d3d11va_for_codec(AVCodecID::AV_CODEC_ID_H264));
+        assert!(!d3d11va_for_codec(AVCodecID::AV_CODEC_ID_AV1));
+        assert!(!d3d11va_for_codec(AVCodecID::AV_CODEC_ID_VP9));
+    }
+
+    #[test]
+    fn require_decoder_rejects_none() {
+        let err = unsafe { require_decoder_id(AVCodecID::AV_CODEC_ID_NONE) }
+            .expect_err("NONE must not allocate a context");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("codec_id"), "{msg}");
+    }
+
+    fn ffmpeg_exe() -> std::path::PathBuf {
+        let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut candidates =
+            vec![crate_dir.join("../thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared/bin/ffmpeg.exe")];
+        if let Some(dir) = std::env::var_os("FFMPEG_DIR") {
+            candidates.push(std::path::PathBuf::from(dir).join("bin").join("ffmpeg.exe"));
+        }
+        candidates
+            .into_iter()
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| {
+                panic!("ffmpeg.exe not found next to FFMPEG_DIR / crates/thirdparty")
+            })
+    }
+
+    fn ffprobe_exe() -> std::path::PathBuf {
+        let ffprobe = ffmpeg_exe().with_file_name("ffprobe.exe");
+        assert!(
+            ffprobe.is_file(),
+            "ffprobe.exe not found next to ffmpeg.exe: {ffprobe:?}"
+        );
+        ffprobe
+    }
+
+    fn encode_color(codec_args: &[&str], filename: &str) -> std::path::PathBuf {
+        encode_color_for_duration(codec_args, filename, "0.4")
+    }
+
+    fn encode_color_for_duration(
+        codec_args: &[&str],
+        filename: &str,
+        duration_sec: &str,
+    ) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("openscreen-554-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let out = dir.join(filename);
+        let ff = ffmpeg_exe();
+        let mut cmd = std::process::Command::new(&ff);
+        let input = format!("color=c=red:s=64x64:d={duration_sec}");
+        cmd.args(["-y", "-f", "lavfi", "-i", input.as_str()]);
+        cmd.args(codec_args);
+        cmd.arg(&out);
+        let output = cmd.output().unwrap_or_else(|e| panic!("spawn {ff:?}: {e}"));
+        assert!(
+            output.status.success() && out.is_file(),
+            "ffmpeg {cmd:?} failed status={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        out
+    }
+
+    unsafe fn allocated_decoder_open_resources(filename: &str) -> DecoderOpenResources {
+        let path = encode_color(&["-c:v", "libopenh264", "-b:v", "200k"], filename);
+        let cpath = CString::new(path.to_string_lossy().as_bytes()).expect("fixture path CString");
+        let mut fmt = ptr::null_mut();
+        averr(
+            avformat_open_input(&mut fmt, cpath.as_ptr(), ptr::null_mut(), ptr::null_mut()),
+            "test open_input",
+        )
+        .expect("open fixture");
+        averr(
+            avformat_find_stream_info(fmt, ptr::null_mut()),
+            "test find_stream_info",
+        )
+        .expect("find fixture streams");
+        let vidx = av_find_best_stream(
+            fmt,
+            AVMediaType::AVMEDIA_TYPE_VIDEO,
+            -1,
+            -1,
+            ptr::null_mut(),
+            0,
+        );
+        assert!(vidx >= 0, "fixture video stream");
+        let codecpar = (*sn_fmt_stream(fmt, vidx)).codecpar;
+        let (_, dctx) = require_decoder(codecpar).expect("fixture decoder context");
+        let hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
+        assert!(!hwdev.is_null(), "test hardware-device context");
+        DecoderOpenResources { fmt, dctx, hwdev }
+    }
+
+    #[test]
+    fn decoder_open_resources_cleanup_nulls_every_owned_pointer() {
+        unsafe {
+            let mut resources =
+                allocated_decoder_open_resources("decoder-open-resources-cleanup.mp4");
+            resources.cleanup();
+            assert!(resources.dctx.is_null());
+            assert!(resources.hwdev.is_null());
+            assert!(resources.fmt.is_null());
+        }
+    }
+
+    #[test]
+    fn decoder_open_resources_release_transfers_every_pointer_once() {
+        unsafe {
+            let resources = allocated_decoder_open_resources("decoder-open-resources-release.mp4");
+            let (mut fmt, mut dctx, mut hwdev) = resources.into_raw();
+            assert!(!dctx.is_null());
+            assert!(!hwdev.is_null());
+            assert!(!fmt.is_null());
+            avcodec_free_context(&mut dctx);
+            av_buffer_unref(&mut hwdev);
+            avformat_close_input(&mut fmt);
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct EbmlElement {
+        id: u64,
+        start: usize,
+        size_offset: usize,
+        size_width: usize,
+        data_start: usize,
+        data_end: usize,
+        unknown_size: bool,
+    }
+
+    fn vint_width(first: u8, at: usize) -> usize {
+        let width = first.leading_zeros() as usize + 1;
+        assert!(width <= 8, "invalid EBML vint at offset {at:#x}");
+        width
+    }
+
+    fn read_ebml_id(bytes: &[u8], at: usize) -> (u64, usize) {
+        let first = *bytes
+            .get(at)
+            .unwrap_or_else(|| panic!("missing EBML id at {at:#x}"));
+        let width = vint_width(first, at);
+        assert!(width <= 4, "EBML id is wider than four bytes at {at:#x}");
+        let end = at.checked_add(width).expect("EBML id offset overflow");
+        let encoded = bytes
+            .get(at..end)
+            .unwrap_or_else(|| panic!("truncated EBML id at {at:#x}"));
+        let id = encoded
+            .iter()
+            .fold(0u64, |value, byte| (value << 8) | u64::from(*byte));
+        (id, width)
+    }
+
+    fn read_ebml_size(bytes: &[u8], at: usize) -> (Option<usize>, usize) {
+        let first = *bytes
+            .get(at)
+            .unwrap_or_else(|| panic!("missing EBML size at {at:#x}"));
+        let width = vint_width(first, at);
+        let end = at.checked_add(width).expect("EBML size offset overflow");
+        let encoded = bytes
+            .get(at..end)
+            .unwrap_or_else(|| panic!("truncated EBML size at {at:#x}"));
+        let value_mask = if width == 8 { 0 } else { 0xffu8 >> width };
+        let value = encoded[1..]
+            .iter()
+            .fold(u64::from(first & value_mask), |value, byte| {
+                (value << 8) | u64::from(*byte)
+            });
+        let unknown_value = (1u64 << (7 * width)) - 1;
+        if value == unknown_value {
+            (None, width)
+        } else {
+            let value = usize::try_from(value).expect("EBML size does not fit usize");
+            (Some(value), width)
+        }
+    }
+
+    fn ebml_element_at(bytes: &[u8], start: usize, parent_end: usize) -> EbmlElement {
+        let (id, id_width) = read_ebml_id(bytes, start);
+        let size_offset = start
+            .checked_add(id_width)
+            .expect("EBML size offset overflow");
+        let (size, size_width) = read_ebml_size(bytes, size_offset);
+        let data_start = size_offset
+            .checked_add(size_width)
+            .expect("EBML payload offset overflow");
+        assert!(
+            data_start <= parent_end,
+            "EBML header exceeds parent at {start:#x}"
+        );
+        let data_end = match size {
+            Some(size) => data_start
+                .checked_add(size)
+                .expect("EBML payload offset overflow"),
+            None => parent_end,
+        };
+        assert!(
+            data_end <= parent_end,
+            "EBML element {id:#x} exceeds its parent"
+        );
+        EbmlElement {
+            id,
+            start,
+            size_offset,
+            size_width,
+            data_start,
+            data_end,
+            unknown_size: size.is_none(),
+        }
+    }
+
+    fn ebml_children(bytes: &[u8], start: usize, end: usize) -> Vec<EbmlElement> {
+        let mut children = Vec::new();
+        let mut at = start;
+        while at < end {
+            let child = ebml_element_at(bytes, at, end);
+            assert!(
+                child.data_end > at,
+                "empty EBML element cannot advance at {at:#x}"
+            );
+            children.push(child);
+            at = child.data_end;
+            if child.unknown_size {
+                assert_eq!(
+                    at, end,
+                    "unknown-sized child must consume the parent remainder"
+                );
+            }
+        }
+        assert_eq!(at, end, "EBML children did not exactly fill their parent");
+        children
+    }
+
+    fn exactly_one(children: &[EbmlElement], id: u64, label: &str) -> EbmlElement {
+        let found: Vec<_> = children
+            .iter()
+            .copied()
+            .filter(|child| child.id == id)
+            .collect();
+        assert_eq!(
+            found.len(),
+            1,
+            "expected exactly one {label}, found {}",
+            found.len()
+        );
+        found[0]
+    }
+
+    /// Turn the pinned ffmpeg's valid AV1 WebM into the three malformed-but-decodable
+    /// characteristics from #554. This is deliberately a structural EBML edit: a raw byte
+    /// search could hit an AV1 payload byte and produce a fixture that only looked relevant.
+    fn make_legacy_av1_fixture(filename: &str) -> std::path::PathBuf {
+        const SEGMENT_ID: u64 = 0x1853_8067;
+        const TRACKS_ID: u64 = 0x1654_ae6b;
+        const TRACK_ENTRY_ID: u64 = 0xae;
+        const CODEC_ID_ID: u64 = 0x86;
+        const DEFAULT_DURATION_ID: u64 = 0x23e383;
+        const CODEC_PRIVATE_ID: u64 = 0x63a2;
+        const CLUSTER_ID: u64 = 0x1f43_b675;
+
+        // One frame is intentional: after DefaultDuration is removed, there is no second
+        // timestamp from which avformat_find_stream_info can infer a replacement frame rate.
+        let path = encode_color_for_duration(
+            &[
+                "-c:v",
+                "libaom-av1",
+                "-cpu-used",
+                "8",
+                "-usage",
+                "realtime",
+                "-b:v",
+                "50k",
+                "-output_ts_offset",
+                "0.4",
+            ],
+            filename,
+            "0.04",
+        );
+        let mut bytes = std::fs::read(&path).expect("read generated AV1 WebM");
+        let original = bytes.clone();
+        let top_level = ebml_children(&bytes, 0, bytes.len());
+        let segment = exactly_one(&top_level, SEGMENT_ID, "Segment");
+        assert!(
+            !segment.unknown_size,
+            "generated Segment must have a finite size"
+        );
+        let segment_children = ebml_children(&bytes, segment.data_start, segment.data_end);
+        let tracks = exactly_one(&segment_children, TRACKS_ID, "Tracks");
+        let cluster = exactly_one(&segment_children, CLUSTER_ID, "Cluster");
+        assert!(
+            !cluster.unknown_size,
+            "generated Cluster must start with a finite size"
+        );
+
+        let track_entries: Vec<_> = ebml_children(&bytes, tracks.data_start, tracks.data_end)
+            .into_iter()
+            .filter(|child| child.id == TRACK_ENTRY_ID)
+            .collect();
+        let av1_tracks: Vec<_> = track_entries
+            .iter()
+            .copied()
+            .filter(|entry| {
+                let children = ebml_children(&bytes, entry.data_start, entry.data_end);
+                children.iter().any(|child| {
+                    child.id == CODEC_ID_ID && &bytes[child.data_start..child.data_end] == b"V_AV1"
+                })
+            })
+            .collect();
+        assert_eq!(av1_tracks.len(), 1, "expected exactly one V_AV1 TrackEntry");
+        let track_children =
+            ebml_children(&bytes, av1_tracks[0].data_start, av1_tracks[0].data_end);
+        let codec_private = exactly_one(&track_children, CODEC_PRIVATE_ID, "AV1 CodecPrivate");
+        let default_duration = exactly_one(&track_children, DEFAULT_DURATION_ID, "DefaultDuration");
+
+        assert!(
+            codec_private.data_start < codec_private.data_end,
+            "empty AV1 CodecPrivate"
+        );
+        assert_eq!(
+            bytes[codec_private.data_start], 0x81,
+            "pinned encoder's AV1CodecConfigurationRecord layout changed"
+        );
+        bytes[codec_private.data_start] = 0xff;
+
+        let default_duration_len = default_duration.data_end - default_duration.start;
+        assert!(
+            (3..=128).contains(&default_duration_len),
+            "DefaultDuration cannot be replaced by a one-byte-size Void"
+        );
+        let void_payload_len = default_duration_len - 2;
+        assert!(
+            void_payload_len <= 126,
+            "one-byte Void size would become unknown"
+        );
+        bytes[default_duration.start] = 0xec;
+        bytes[default_duration.start + 1] = 0x80 | void_payload_len as u8;
+        bytes[default_duration.start + 2..default_duration.data_end].fill(0);
+
+        assert!(
+            (1..=8).contains(&cluster.size_width),
+            "invalid Cluster size width {}",
+            cluster.size_width
+        );
+        bytes[cluster.size_offset] = 0xff >> (cluster.size_width - 1);
+        bytes[cluster.size_offset + 1..cluster.data_start].fill(0xff);
+
+        assert_eq!(
+            bytes.len(),
+            original.len(),
+            "fixture patch must preserve file length"
+        );
+        let allowed = [
+            codec_private.data_start..codec_private.data_start + 1,
+            default_duration.start..default_duration.data_end,
+            cluster.size_offset..cluster.data_start,
+        ];
+        let changed: Vec<_> = original
+            .iter()
+            .zip(&bytes)
+            .enumerate()
+            .filter_map(|(index, (before, after))| (before != after).then_some(index))
+            .collect();
+        assert!(!changed.is_empty(), "fixture patch changed no bytes");
+        assert!(
+            changed
+                .iter()
+                .all(|index| allowed.iter().any(|range| range.contains(index))),
+            "fixture patch changed bytes outside the three intended EBML fields: {changed:?}"
+        );
+        for range in &allowed {
+            assert!(
+                changed.iter().any(|index| range.contains(index)),
+                "fixture patch did not change intended range {range:?}"
+            );
+        }
+        std::fs::write(&path, &bytes).expect("write structurally patched AV1 WebM");
+
+        let ffprobe = ffprobe_exe();
+        let output = std::process::Command::new(&ffprobe)
+            .args([
+                "-v",
+                "warning",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,avg_frame_rate",
+                "-of",
+                "default=noprint_wrappers=1",
+            ])
+            .arg(&path)
+            .output()
+            .unwrap_or_else(|e| panic!("spawn {ffprobe:?}: {e}"));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "ffprobe failed status={} stdout={stdout} stderr={stderr}",
+            output.status
+        );
+        assert!(
+            stdout.contains("codec_name=av1"),
+            "ffprobe stdout: {stdout}"
+        );
+        assert!(
+            stdout.contains("avg_frame_rate=0/0"),
+            "ffprobe stdout: {stdout}"
+        );
+        assert!(
+            stderr.contains("Unknown version 127 of AV1CodecConfigurationRecord"),
+            "ffprobe stderr: {stderr}"
+        );
+        assert!(
+            stderr
+                .to_ascii_lowercase()
+                .contains("unknown-sized element"),
+            "ffprobe stderr: {stderr}"
+        );
+
+        if let Some(out) = std::env::var_os("OPENSCREEN_554_FIXTURE_OUT") {
+            let out = std::path::PathBuf::from(out);
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent).expect("create fixture output directory");
+            }
+            std::fs::copy(&path, &out).expect("copy verified issue 554 fixture");
+            println!("ISSUE554_FIXTURE={}", out.display());
+        }
+        path
+    }
+
+    unsafe fn first_decoded_frame(dec: &mut Decoder) -> *mut AVFrame {
+        let frame = dec
+            .next()
+            .unwrap_or_else(|e| panic!("Decoder::next: {e:#}"));
+        assert!(!frame.is_null(), "expected a decoded frame, got null (EOF)");
+        assert!(
+            (*frame).width > 0 && (*frame).height > 0,
+            "decoded frame has no pixels ({}x{})",
+            (*frame).width,
+            (*frame).height
+        );
+        frame
+    }
+
+    #[test]
+    fn av1_webm_opens_on_software_path() {
+        let gpu = Gpu::create(false).expect("Hardware GPU");
+        assert_eq!(gpu.backend, Backend::Hardware);
+        let path = make_legacy_av1_fixture("tiny-legacy.webm");
+        let mut dec = unsafe { Decoder::open(path.to_str().expect("utf8 path"), &gpu) }
+            .unwrap_or_else(|e| panic!("AV1 Decoder::open: {e:#}"));
+        assert!(
+            dec.cpu.is_some(),
+            "AV1 on Hardware must use CpuFrames, not D3D11VA"
+        );
+        let frame = unsafe { first_decoded_frame(&mut dec) };
+        assert_eq!(unsafe { (*frame).width }, 64);
+        assert_eq!(unsafe { (*frame).height }, 64);
+    }
+
+    #[test]
+    fn h264_opens_on_d3d11va() {
+        let gpu = Gpu::create(false).expect("Hardware GPU");
+        assert_eq!(gpu.backend, Backend::Hardware);
+        let path = encode_color(&["-c:v", "libopenh264", "-b:v", "200k"], "tiny.mp4");
+        let mut dec = unsafe { Decoder::open(path.to_str().expect("utf8 path"), &gpu) }
+            .unwrap_or_else(|e| panic!("H.264 Decoder::open: {e:#}"));
+        assert!(
+            dec.cpu.is_none(),
+            "H.264 on Hardware must keep D3D11VA"
+        );
+        unsafe { first_decoded_frame(&mut dec) };
+    }
+
+    #[test]
+    fn current_frame_requires_pixels_and_recovers_after_eof_seek() {
+        let gpu = Gpu::create(false).expect("Hardware GPU");
+        assert_eq!(gpu.backend, Backend::Hardware);
+        let path = encode_color(
+            &["-c:v", "libopenh264", "-b:v", "200k"],
+            "current-frame.mp4",
+        );
+        let mut dec = unsafe { Decoder::open(path.to_str().expect("utf8 path"), &gpu) }
+            .unwrap_or_else(|e| panic!("H.264 Decoder::open: {e:#}"));
+
+        assert!(
+            dec.cur_frame().is_null(),
+            "allocated AVFrame without pixels is not current"
+        );
+        unsafe { first_decoded_frame(&mut dec) };
+        assert!(
+            !dec.cur_frame().is_null(),
+            "decoded frame must be presentable"
+        );
+
+        let unavailable = unsafe { dec.seek_to(10.0) }.expect("seek beyond EOF must not error");
+        assert!(
+            unavailable.is_null(),
+            "seek beyond EOF must report no target frame"
+        );
+        assert!(
+            dec.cur_frame().is_null(),
+            "unreffed AVFrame shell after EOF must not be exposed to the compositor"
+        );
+
+        let recovered = unsafe { dec.seek_to(0.0) }.expect("seek back to start");
+        assert!(
+            !recovered.is_null(),
+            "seek back to start must decode a frame"
+        );
+        assert!(
+            !dec.cur_frame().is_null(),
+            "recovered frame must be presentable"
+        );
+    }
+
+    /// Playhead crossing clips is `Decoder::open` of the next source on the
+    /// same `Gpu` (#554). H.264 must stay on D3D11VA after an AV1 software
+    /// decoder has been opened and dropped.
+    #[test]
+    fn switching_h264_then_av1_then_h264_stays_alive() {
+        let gpu = Gpu::create(false).expect("Hardware GPU");
+        assert_eq!(gpu.backend, Backend::Hardware);
+        let h264_path = encode_color(&["-c:v", "libopenh264", "-b:v", "200k"], "switch-h264.mp4");
+        let av1_path = make_legacy_av1_fixture("switch-legacy-av1.webm");
+        let h264 = h264_path.to_str().expect("utf8");
+        let av1 = av1_path.to_str().expect("utf8");
+
+        unsafe {
+            let mut a = Decoder::open(h264, &gpu).unwrap_or_else(|e| panic!("H.264 open: {e:#}"));
+            assert!(a.cpu.is_none(), "first clip must stay D3D11VA");
+            first_decoded_frame(&mut a);
+            drop(a);
+
+            let mut b = Decoder::open(av1, &gpu).unwrap_or_else(|e| panic!("AV1 open after H.264: {e:#}"));
+            assert!(b.cpu.is_some(), "AV1 clip must use CpuFrames");
+            first_decoded_frame(&mut b);
+            drop(b);
+
+            let mut c = Decoder::open(h264, &gpu).unwrap_or_else(|e| panic!("H.264 reopen: {e:#}"));
+            assert!(c.cpu.is_none(), "H.264 after AV1 must keep D3D11VA");
+            first_decoded_frame(&mut c);
         }
     }
 }
