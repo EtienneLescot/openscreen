@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "録画",
 		"noTranscript": "文字起こしがまだありません",
-		"title": "現在の文字起こし",
+		"title": "文字起こし",
 		"restoreWord": "「{{word}}」を元に戻す",
 		"revertWord": "「{{original}}」に戻す",
 		"editingHint": "ダブルクリックで単語を修正、Backspace で映像からカット。",

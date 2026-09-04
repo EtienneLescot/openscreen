@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "Enregistrement",
 		"noTranscript": "Aucune transcription pour l'instant",
-		"title": "Transcription actuelle",
+		"title": "Transcription",
 		"restoreWord": "Restaurer « {{word}} »",
 		"revertWord": "Rétablir « {{original}} »",
 		"editingHint": "Double-cliquez sur un mot pour le corriger, Retour arrière le coupe du film.",

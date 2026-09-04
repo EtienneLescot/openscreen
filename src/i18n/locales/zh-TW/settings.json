@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "錄影",
 		"noTranscript": "尚無逐字稿",
-		"title": "目前的逐字稿",
+		"title": "逐字稿",
 		"restoreWord": "還原「{{word}}」",
 		"revertWord": "還原為「{{original}}」",
 		"editingHint": "雙擊單字即可修正，Backspace 將其從影片中剪掉。",

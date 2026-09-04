@@ -49,7 +49,7 @@ import {
 import { useEffect, useRef } from "react";
 
 import { attachDriver, SCENE_QUERIES } from "./driver";
-import { CONTROLS, CURSORS, PANELS } from "./generated";
+import { CONTROLS, CURSORS, INSPECTOR, PANELS } from "./generated";
 import {
 	BEATS,
 	CLIPS,
@@ -224,7 +224,7 @@ export default function Recreation() {
 								{PANELS.cursor.title}
 							</h4>
 							<h4 className={styles.panelTitle} data-pane="transcript">
-								Current transcription
+								{INSPECTOR.title}
 							</h4>
 						</header>
 
@@ -337,7 +337,7 @@ export default function Recreation() {
 								/>
 							</div>
 
-							{/* ── Current transcription ── */}
+							{/* ── Transcript ── */}
 							<div className={styles.pane} data-pane="transcript">
 								<span className={styles.flowMask}>
 									<p className={styles.flow} ref={flow}>

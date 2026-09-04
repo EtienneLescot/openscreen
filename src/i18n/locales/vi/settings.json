@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "Bản ghi",
 		"noTranscript": "Chưa có bản chép lời",
-		"title": "Bản chép lời hiện tại",
+		"title": "Bản chép lời",
 		"restoreWord": "Khôi phục \"{{word}}\"",
 		"revertWord": "Khôi phục \"{{original}}\"",
 		"editingHint": "Nhấp đúp vào một từ để sửa nó, Backspace cắt nó khỏi video.",

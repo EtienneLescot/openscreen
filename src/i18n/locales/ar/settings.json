@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "التسجيل",
 		"noTranscript": "لا يوجد نص بعد",
-		"title": "النص الحالي",
+		"title": "النص",
 		"restoreWord": "استعادة \"{{word}}\"",
 		"revertWord": "استعادة \"{{original}}\"",
 		"editingHint": "انقر نقرًا مزدوجًا على كلمة لتصحيحها، واضغط Backspace لقطعها من الفيلم.",

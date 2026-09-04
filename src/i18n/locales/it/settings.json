@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "Registrazione",
 		"noTranscript": "Ancora nessuna trascrizione",
-		"title": "Trascrizione corrente",
+		"title": "Trascrizione",
 		"restoreWord": "Ripristina «{{word}}»",
 		"revertWord": "Ripristina «{{original}}»",
 		"editingHint": "Fai doppio clic su una parola per correggerla, Backspace la taglia dal video.",

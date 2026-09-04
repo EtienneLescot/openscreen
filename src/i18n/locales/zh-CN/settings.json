@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "录制",
 		"noTranscript": "暂无转录",
-		"title": "当前转录",
+		"title": "转录",
 		"restoreWord": "恢复“{{word}}”",
 		"revertWord": "还原为“{{original}}”",
 		"editingHint": "双击单词即可修正，Backspace 将其从影片中剪掉。",

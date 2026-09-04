@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "Kayıt",
 		"noTranscript": "Henüz döküm yok",
-		"title": "Geçerli döküm",
+		"title": "Metin Dökümü",
 		"restoreWord": "\"{{word}}\" kelimesini geri al",
 		"revertWord": "\"{{original}}\" haline getir",
 		"editingHint": "Bir kelimeye çift tıklayarak düzeltin, Backspace onu videodan keser.",
