@@ -1161,9 +1161,12 @@ export function removeRegion(document: AxcutDocument, kind: RegionKind, id: stri
 				...document,
 				timeline: {
 					...document.timeline,
-					trimRanges: dropTrimPillsByIds(document.timeline.trimRanges, document.timeline.clips, [
-						id,
-					]),
+					trimRanges: dropTrimPillsByIds(
+						document.timeline.trimRanges,
+						document.timeline.clips,
+						[id],
+						document.timeline.insertRanges ?? [],
+					),
 				},
 			};
 		case "speed": {

@@ -371,7 +371,12 @@ export function useTimeline() {
 			// the trim at the wrong source position.
 			const playhead = playheadSec();
 			const end = playhead + durationSec;
-			const resolved = resolveTimelineSpanToTrim(playhead, end, document.timeline.clips);
+			const resolved = resolveTimelineSpanToTrim(
+				playhead,
+				end,
+				document.timeline.clips,
+				document.timeline.insertRanges ?? [],
+			);
 			const asset =
 				document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
 			if (!resolved && !asset) return;
@@ -952,6 +957,7 @@ export function useTimeline() {
 						document.timeline.trimRanges,
 						document.timeline.clips,
 						trimIds,
+						document.timeline.insertRanges ?? [],
 					),
 				},
 				legacyEditor:

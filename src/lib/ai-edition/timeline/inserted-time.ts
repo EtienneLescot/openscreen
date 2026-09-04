@@ -204,6 +204,7 @@ export interface InsertedWordMark {
 export function insertedWordMarks(
 	transcripts: ReadonlyArray<{ assetId: string; words: ReadonlyArray<AxcutWord> }>,
 	clips: readonly AxcutClip[],
+	insertRanges: readonly AxcutInsertRange[],
 ): InsertedWordMark[] {
 	const byAsset = new Map<string, ReadonlyArray<AxcutWord>>();
 	for (const transcript of transcripts) {
@@ -228,7 +229,7 @@ export function insertedWordMarks(
 				clipId: clip.id,
 				wordId: word.id,
 				text: word.text,
-				atRawSec: clip.timelineStartSec + (word.startSec - clip.sourceStartSec),
+				atRawSec: sourceToTimelineSec(clip, word.startSec, insertRanges),
 			});
 		}
 	});
