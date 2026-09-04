@@ -245,6 +245,34 @@ describe("DocumentService", () => {
 		});
 	});
 
+	describe("onProjectRead", () => {
+		it("announces every document it hands out, after the relink", async () => {
+			// The read allow-list lives in the main process and is in memory: a picker's
+			// approval is gone by the next launch. This callback is how a project reopened
+			// tomorrow can still read the media it declares — and it must fire with the
+			// RELINKED paths, since those are the ones the renderer will ask for.
+			const seen: string[][] = [];
+			const service = new DocumentService(tempDir, mediaDir, (doc) =>
+				seen.push(doc.assets.map((a) => a.originalPath)),
+			);
+			const created = await service.createProject("P");
+			const withAsset = await service.addAsset(created.project.id, {
+				path: path.join(mediaDir, "take.mp4"),
+				label: "take.mp4",
+			});
+			seen.length = 0;
+			await service.getProject(created.project.id);
+			expect(seen).toEqual([withAsset.assets.map((a) => a.originalPath)]);
+		});
+
+		it("is optional, so a service built without it loads as it always did", async () => {
+			const created = await service.createProject("P");
+			await expect(service.getProject(created.project.id)).resolves.toMatchObject({
+				project: { id: created.project.id },
+			});
+		});
+	});
+
 	describe("addAsset", () => {
 		it("appends a video asset and sets primaryAssetId on the first add", async () => {
 			const doc = await service.createProject("P");

@@ -16,6 +16,7 @@ import {
 	shell,
 	systemPreferences,
 } from "electron";
+import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import {
 	type NativeLinuxRecordingRequest,
 	portalCursorMode,
@@ -372,13 +373,37 @@ function approveReadableAudioPath(
 	return approveReadableMediaPath(filePath, hasAllowedImportAudioExtension, trustedDirs);
 }
 
-// For the generic media reads that accept either kind — NOT for the pickers,
-// which must stay type-specific (see `hasAllowedImportMediaExtension`).
-function approveReadableAvPath(
-	filePath?: string | null,
-	trustedDirs?: string[],
-): Promise<string | null> {
-	return approveReadableMediaPath(filePath, hasAllowedImportMediaExtension, trustedDirs);
+/**
+ * A path a generic read may use — and NOT a way to obtain one.
+ *
+ * `approveReadableMediaPath` grants approval to any existing file with a media extension.
+ * Behind a picker or a document load that is the point; behind `read-binary-file` it meant
+ * the renderer could name any media file on the machine and have its bytes handed back,
+ * which is a capability no generic handler should carry (CWE-200).
+ *
+ * Approval is granted in exactly three places now: the recordings directory, a file the user
+ * picked, and the assets a loaded project declares (`approveDocumentMedia`). Everything else
+ * spends one.
+ */
+function readableApprovedPath(filePath?: string | null): string | null {
+	const normalizedPath = normalizeVideoSourcePath(filePath);
+	if (!normalizedPath) return null;
+	if (!isPathAllowed(normalizedPath)) return null;
+	// The extension check stays: an approval granted for a recording must not become a way
+	// to read the project file, the log, or anything else sitting beside it.
+	if (!hasAllowedImportMediaExtension(normalizedPath)) return null;
+	return normalizedPath;
+}
+
+/** Grant the media a loaded project declares. The document is the app's own file, and this
+ *  is what the picker's approval decays into once the app restarts. */
+function approveDocumentMedia(document: AxcutDocument): void {
+	for (const asset of document.assets ?? []) {
+		const media = normalizeVideoSourcePath(asset.originalPath);
+		if (media && hasAllowedImportMediaExtension(media)) approveFilePath(media);
+		const camera = normalizeVideoSourcePath(asset.cameraTrack?.sourcePath);
+		if (camera && hasAllowedImportMediaExtension(camera)) approveFilePath(camera);
+	}
 }
 
 function resolveRecordingOutputPath(fileName: string): string {
@@ -3800,7 +3825,7 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("read-binary-file", async (_, filePath: string) => {
 		try {
-			const normalizedPath = await approveReadableAvPath(filePath);
+			const normalizedPath = readableApprovedPath(filePath);
 			if (!normalizedPath) {
 				return {
 					success: false,
@@ -3830,7 +3855,7 @@ export function registerIpcHandlers(
 	// recording above that can never be loaded whole — see read-file-chunk).
 	ipcMain.handle("get-readable-file-info", async (_, filePath: string) => {
 		try {
-			const normalizedPath = await approveReadableAvPath(filePath);
+			const normalizedPath = readableApprovedPath(filePath);
 			if (!normalizedPath) {
 				return {
 					success: false,
@@ -3866,7 +3891,7 @@ export function registerIpcHandlers(
 		async (_, filePath: string, durationSec: number): Promise<AudioPeaksResult> => {
 			try {
 				// Same approval gate as every other read of a renderer-supplied path.
-				const normalizedPath = await approveReadableAvPath(filePath);
+				const normalizedPath = readableApprovedPath(filePath);
 				if (!normalizedPath) {
 					return { success: false, message: "File path is not approved" };
 				}
@@ -3890,7 +3915,7 @@ export function registerIpcHandlers(
 	// do (2 GiB cap) and a 16 GB machine cannot hold for multi-GB recordings.
 	ipcMain.handle("read-file-chunk", async (_, filePath: string, offset: number, length: number) => {
 		try {
-			const normalizedPath = await approveReadableAvPath(filePath);
+			const normalizedPath = readableApprovedPath(filePath);
 			if (!normalizedPath) {
 				return {
 					success: false,
@@ -4319,6 +4344,7 @@ export function registerIpcHandlers(
 	const aiEditionDocuments = new DocumentService(
 		path.join(app.getPath("userData"), "projects"),
 		RECORDINGS_DIR,
+		approveDocumentMedia,
 	);
 
 	// LlmConfigStore is single-instance for a duller reason — its constructor does

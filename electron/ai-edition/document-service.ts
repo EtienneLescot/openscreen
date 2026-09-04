@@ -157,9 +157,23 @@ export class DocumentService {
 	// `mediaRegistryDir` is where the media-links registry file lives
 	// (RECORDINGS_DIR in production) — see getProject. Injected for the same
 	// reason as `projectsRoot`: this module stays free of any `electron` import.
-	constructor(projectsRoot: string, mediaRegistryDir: string) {
+	/**
+	 * Called with every document this service hands out, so the process that owns the read
+	 * allow-list can grant the media that document declares.
+	 *
+	 * Injected for the same reason as the two paths above: this module stays free of any
+	 * `electron` import. Optional so the tests and the CLI construct it as they always did.
+	 */
+	private readonly onProjectRead?: (document: AxcutDocument) => void;
+
+	constructor(
+		projectsRoot: string,
+		mediaRegistryDir: string,
+		onProjectRead?: (document: AxcutDocument) => void,
+	) {
 		this.projectsRoot = projectsRoot;
 		this.mediaRegistryDir = mediaRegistryDir;
+		this.onProjectRead = onProjectRead;
 	}
 
 	async ensureProjectsDir(): Promise<void> {
@@ -274,7 +288,12 @@ export class DocumentService {
 		// back, and it is not persisted from here: the renderer saves the document
 		// it was given, as it does for any other load-time repair.
 		const migrated = migrateRawDocumentToCurrent(JSON.parse(raw));
-		return documentSchema.parse(await relinkProjectMedia(migrated, this.mediaRegistryDir));
+		const document = documentSchema.parse(
+			await relinkProjectMedia(migrated, this.mediaRegistryDir),
+		);
+		// AFTER the relink, so what is granted is the path the renderer will actually ask for.
+		this.onProjectRead?.(document);
+		return document;
 	}
 
 	async createProject(title: string): Promise<AxcutDocument> {

@@ -105,6 +105,13 @@ export class SttManager {
 	private cancelEpoch = 0;
 
 	/**
+	 * The extraction in flight, if any. `cancelEpoch` alone stops the CHUNK loop, which is
+	 * checked between chunks — so a cancel during the decode left ffmpeg running to
+	 * completion on a file that can be hours long, and the user saw nothing stop.
+	 */
+	private extraction: AbortController | null = null;
+
+	/**
 	 * Attach a sink for the renderer status channel; returns its detach function.
 	 *
 	 * A SET rather than one slot: this used to be a single field that each IPC
@@ -135,6 +142,7 @@ export class SttManager {
 	 */
 	cancel(): void {
 		this.cancelEpoch++;
+		this.extraction?.abort();
 	}
 
 	/**
@@ -243,7 +251,15 @@ export class SttManager {
 		if (!req.sourcePath) {
 			throw new Error("stt:transcribe needs either `samples` or `sourcePath`");
 		}
-		return extractMono16kPcm(req.sourcePath);
+		const controller = new AbortController();
+		this.extraction = controller;
+		try {
+			return await extractMono16kPcm(req.sourcePath, { signal: controller.signal });
+		} finally {
+			// Only if it is still ours: a cancel that started a new run must not have its
+			// controller cleared by the old one unwinding.
+			if (this.extraction === controller) this.extraction = null;
+		}
 	}
 
 	async transcribe(req: SttTranscribeRequest): Promise<SttTranscribeResponse> {

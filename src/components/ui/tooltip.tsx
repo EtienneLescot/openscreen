@@ -20,9 +20,16 @@ function TooltipRoot({ ...props }: React.ComponentProps<typeof TooltipPrimitive.
 	return <TooltipPrimitive.Root data-slot="tooltip" {...props} />;
 }
 
-function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
-	return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />;
-}
+// forwardRef, like PopoverTrigger: `Tooltip` below hands its own ref here, and on React 18
+// a plain function component drops it silently — the ref resolves to null and React logs
+// "Function components cannot be given refs".
+const TooltipTrigger = React.forwardRef<
+	React.ComponentRef<typeof TooltipPrimitive.Trigger>,
+	React.ComponentProps<typeof TooltipPrimitive.Trigger>
+>(({ ...props }, ref) => (
+	<TooltipPrimitive.Trigger ref={ref} data-slot="tooltip-trigger" {...props} />
+));
+TooltipTrigger.displayName = "TooltipTrigger";
 
 function TooltipContent({
 	className,
