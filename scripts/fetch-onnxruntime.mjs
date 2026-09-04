@@ -325,6 +325,13 @@ async function main() {
 		if (targetPlatform !== "win32") fs.chmodSync(dest, 0o755);
 
 		console.log(`  ${banner}`);
+		// Où que viennent les octets, dire de quelle source ils sortent. Pour un artefact
+		// amont c'est le tag ; pour un que nous avons construit (`baseUrl`), c'est le commit
+		// que le workflow a compilé, et c'est la seule chose qui rend le binaire traçable
+		// une fois qu'il ne porte plus le nom de Microsoft.
+		if (spec.baseUrl) {
+			console.log(`  built here from microsoft/onnxruntime@${SOURCE_COMMIT}`);
+		}
 		console.log(`\nVendored -> ${dest}`);
 	} finally {
 		fs.rmSync(tmp, { recursive: true, force: true });
