@@ -4,18 +4,15 @@
 // timeline, and whether the timeline has ANY camera at all — used to gate
 // camera-only preview chrome and settings controls.
 
-import type { AxcutAsset, AxcutCameraTrack, AxcutClip, AxcutInsertRange } from "../schema";
+import type { AxcutAsset, AxcutCameraTrack, AxcutClip } from "../schema";
 import { locateVirtualPosition } from "./virtual-preview";
 
 export function resolveActiveCameraTrack(
 	assets: AxcutAsset[],
 	clips: AxcutClip[],
 	currentTimeSec: number,
-	/** REQUIRED: a clip carrying insertions is longer than its source window, so which clip
-	 *  a timeline second falls on cannot be answered without them (issue #560). */
-	insertRanges: readonly AxcutInsertRange[],
 ): AxcutCameraTrack | null {
-	const position = locateVirtualPosition(clips, currentTimeSec, insertRanges);
+	const position = locateVirtualPosition(clips, currentTimeSec);
 	if (!position) return null;
 	const activeAsset = assets.find((a) => a.id === position.clip.assetId);
 	return activeAsset?.cameraTrack ?? null;

@@ -28,9 +28,10 @@ import {
 	type AxcutLegacyEditor,
 	type AxcutTrimRange,
 	type AxcutZoomRegion,
+	documentSchema,
+	migrateRawDocumentToCurrent,
 } from "../schema";
 import { createId } from "./ids";
-import { parseStoredDocument } from "./load";
 
 const MS_TO_SEC = 1 / 1000;
 const SEC_TO_MS = 1000;
@@ -249,7 +250,7 @@ export function migrateProjectDataToAxcutDocument(
 		legacyEditor,
 	};
 
-	return parseStoredDocument(draft);
+	return documentSchema.parse(migrateRawDocumentToCurrent(draft));
 }
 
 /**

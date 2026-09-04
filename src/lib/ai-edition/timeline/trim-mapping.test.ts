@@ -38,7 +38,7 @@ describe("trimToTimelineSpan", () => {
 				timelineEndSec: 42,
 			}),
 		];
-		expect(trimToTimelineSpan({ assetId: "a", startSec: 5, endSec: 7 }, clips, [])).toEqual({
+		expect(trimToTimelineSpan({ assetId: "a", startSec: 5, endSec: 7 }, clips)).toEqual({
 			start: 5,
 			end: 7,
 		});
@@ -65,7 +65,7 @@ describe("trimToTimelineSpan", () => {
 			}),
 		];
 		// A trim at source 20..22 lives in c2 → timeline 14 + (20-16) = 18..20.
-		expect(trimToTimelineSpan({ assetId: "a", startSec: 20, endSec: 22 }, clips, [])).toEqual({
+		expect(trimToTimelineSpan({ assetId: "a", startSec: 20, endSec: 22 }, clips)).toEqual({
 			start: 18,
 			end: 20,
 		});
@@ -73,8 +73,8 @@ describe("trimToTimelineSpan", () => {
 
 	it("returns null when no clip carries the trim's source region", () => {
 		const clips = [clip({ id: "c1", assetId: "a", sourceStartSec: 0, sourceEndSec: 10 })];
-		expect(trimToTimelineSpan({ assetId: "a", startSec: 40, endSec: 42 }, clips, [])).toBeNull();
-		expect(trimToTimelineSpan({ assetId: "b", startSec: 2, endSec: 4 }, clips, [])).toBeNull();
+		expect(trimToTimelineSpan({ assetId: "a", startSec: 40, endSec: 42 }, clips)).toBeNull();
+		expect(trimToTimelineSpan({ assetId: "b", startSec: 2, endSec: 4 }, clips)).toBeNull();
 	});
 });
 
@@ -99,7 +99,7 @@ describe("resolveTimelineSpanToTrim", () => {
 			}),
 		];
 		// Timeline 18..20 falls in c2 (asset b) → source 16 + (18-14)=20 .. 22.
-		expect(resolveTimelineSpanToTrim(18, 20, clips, [])).toEqual({
+		expect(resolveTimelineSpanToTrim(18, 20, clips)).toEqual({
 			assetId: "b",
 			clipId: "c2",
 			sourceStartSec: 20,
@@ -127,8 +127,8 @@ describe("resolveTimelineSpanToTrim", () => {
 			}),
 		];
 		// Start in c1 → asset a, start in c2 → asset b.
-		expect(resolveTimelineSpanToTrim(2, 4, clips, [])?.assetId).toBe("a");
-		expect(resolveTimelineSpanToTrim(20, 22, clips, [])?.assetId).toBe("b");
+		expect(resolveTimelineSpanToTrim(2, 4, clips)?.assetId).toBe("a");
+		expect(resolveTimelineSpanToTrim(20, 22, clips)?.assetId).toBe("b");
 	});
 
 	it("clamps the span to the carrier clip's extent (no straddling)", () => {
@@ -151,7 +151,7 @@ describe("resolveTimelineSpanToTrim", () => {
 			}),
 		];
 		// Span 10..20 starts in c1; end clamps to c1's end (timeline 14 → source 14).
-		expect(resolveTimelineSpanToTrim(10, 20, clips, [])).toEqual({
+		expect(resolveTimelineSpanToTrim(10, 20, clips)).toEqual({
 			assetId: "a",
 			clipId: "c1",
 			sourceStartSec: 10,
@@ -178,7 +178,7 @@ describe("resolveTimelineSpanToTrim", () => {
 				timelineEndSec: 28,
 			}),
 		];
-		const resolved = resolveTimelineSpanToTrim(18, 21, clips, []);
+		const resolved = resolveTimelineSpanToTrim(18, 21, clips);
 		expect(resolved).not.toBeNull();
 		if (!resolved) return;
 		const back = trimToTimelineSpan(
@@ -188,13 +188,12 @@ describe("resolveTimelineSpanToTrim", () => {
 				endSec: resolved.sourceEndSec,
 			},
 			clips,
-			[],
 		);
 		expect(back).toEqual({ start: 18, end: 21 });
 	});
 
 	it("returns null with no clips", () => {
-		expect(resolveTimelineSpanToTrim(1, 2, [], [])).toBeNull();
+		expect(resolveTimelineSpanToTrim(1, 2, [])).toBeNull();
 	});
 });
 
@@ -271,9 +270,7 @@ describe("coalescedTrimGroups", () => {
 			trim({ id: "t1", assetId: "a", startSec: 8, endSec: 14 }), // -> timeline 8..14
 			trim({ id: "t2", assetId: "a", startSec: 16, endSec: 22 }), // -> timeline 14..20
 		];
-		expect(coalescedTrimGroups(trims, clips, [])).toEqual([
-			{ ids: ["t1", "t2"], start: 8, end: 20 },
-		]);
+		expect(coalescedTrimGroups(trims, clips)).toEqual([{ ids: ["t1", "t2"], start: 8, end: 20 }]);
 	});
 
 	it("groups two independently-created trims snapped to touching clip boundaries", () => {
@@ -302,9 +299,7 @@ describe("coalescedTrimGroups", () => {
 			trim({ id: "t1", assetId: "a", startSec: 7, endSec: 10 }), // -> timeline 7..10
 			trim({ id: "t2", assetId: "b", startSec: 0, endSec: 2 }), // -> timeline 10..12
 		];
-		expect(coalescedTrimGroups(trims, clips, [])).toEqual([
-			{ ids: ["t1", "t2"], start: 7, end: 12 },
-		]);
+		expect(coalescedTrimGroups(trims, clips)).toEqual([{ ids: ["t1", "t2"], start: 7, end: 12 }]);
 	});
 
 	it("keeps a trim separated by a real gap in its own group", () => {
@@ -322,7 +317,7 @@ describe("coalescedTrimGroups", () => {
 			trim({ id: "t1", assetId: "a", startSec: 2, endSec: 4 }),
 			trim({ id: "t2", assetId: "a", startSec: 10, endSec: 12 }),
 		];
-		expect(coalescedTrimGroups(trims, clips, [])).toEqual([
+		expect(coalescedTrimGroups(trims, clips)).toEqual([
 			{ ids: ["t1"], start: 2, end: 4 },
 			{ ids: ["t2"], start: 10, end: 12 },
 		]);
@@ -343,7 +338,7 @@ describe("coalescedTrimGroups", () => {
 			trim({ id: "gone", assetId: "b", startSec: 0, endSec: 2 }), // no clip carries asset b
 			trim({ id: "t1", assetId: "a", startSec: 3, endSec: 5 }),
 		];
-		expect(coalescedTrimGroups(trims, clips, [])).toEqual([{ ids: ["t1"], start: 3, end: 5 }]);
+		expect(coalescedTrimGroups(trims, clips)).toEqual([{ ids: ["t1"], start: 3, end: 5 }]);
 	});
 });
 
@@ -375,17 +370,15 @@ describe("two clips sharing one asset over the same source window", () => {
 		// Without the anchor this returned {3,5} — the first clip — because the loop
 		// stopped at the first clip whose asset and source window matched.
 		expect(
-			trimToTimelineSpan({ assetId: "a", clipId: "c2", startSec: 3, endSec: 5 }, sharedClips(), []),
+			trimToTimelineSpan({ assetId: "a", clipId: "c2", startSec: 3, endSec: 5 }, sharedClips()),
 		).toEqual({ start: 15, end: 17 });
 	});
 
 	it("keeps mapping an un-anchored trim to the first matching clip (pre-v7 behaviour)", () => {
-		expect(trimToTimelineSpan({ assetId: "a", startSec: 3, endSec: 5 }, sharedClips(), [])).toEqual(
-			{
-				start: 3,
-				end: 5,
-			},
-		);
+		expect(trimToTimelineSpan({ assetId: "a", startSec: 3, endSec: 5 }, sharedClips())).toEqual({
+			start: 3,
+			end: 5,
+		});
 	});
 
 	it("draws one pill per clip when each clip carries its own trim", () => {
@@ -394,7 +387,7 @@ describe("two clips sharing one asset over the same source window", () => {
 			trim({ id: "t2", assetId: "a", clipId: "c2", startSec: 3, endSec: 5 }),
 		];
 		// Two pills, 12s apart — not one merged pill, and not two stacked on c1.
-		expect(coalescedTrimGroups(trims, sharedClips(), [])).toEqual([
+		expect(coalescedTrimGroups(trims, sharedClips())).toEqual([
 			{ ids: ["t1"], start: 3, end: 5 },
 			{ ids: ["t2"], start: 15, end: 17 },
 		]);
@@ -404,7 +397,7 @@ describe("two clips sharing one asset over the same source window", () => {
 		// The twin still uses the same asset over the same source range, so an asset-only
 		// match would resurrect the cut on it.
 		const trims = [trim({ id: "orphan", assetId: "a", clipId: "c2", startSec: 3, endSec: 5 })];
-		expect(coalescedTrimGroups(trims, [sharedClips()[0]], [])).toEqual([]);
+		expect(coalescedTrimGroups(trims, [sharedClips()[0]])).toEqual([]);
 	});
 
 	it("still shows a pill when the anchor clip was re-cut past the trim's start", () => {
@@ -421,7 +414,7 @@ describe("two clips sharing one asset over the same source window", () => {
 			}),
 		];
 		expect(
-			trimToTimelineSpan({ assetId: "a", clipId: "c2", startSec: 3, endSec: 5 }, clips, []),
+			trimToTimelineSpan({ assetId: "a", clipId: "c2", startSec: 3, endSec: 5 }, clips),
 		).toEqual({ start: 0, end: 1 });
 	});
 });

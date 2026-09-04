@@ -248,11 +248,7 @@ pub(crate) unsafe fn walk_composited_timeline(
                 clip.webcam,
             );
         }
-        // Une fenêtre source vide ne veut plus dire « rien à faire » : un segment TENU
-        // (issue #560) n'a par construction aucune source à décoder et n'existe que pour
-        // ses images tenues. Sans cette porte, une pause achetée par un mot ajouté était
-        // honorée par le ruler et par la preview et n'exportait rien du tout.
-        if source_end_sec <= clip.source_start_sec && clip.hold_sec <= 0.0 {
+        if source_end_sec <= clip.source_start_sec {
             continue;
         }
 
@@ -306,10 +302,6 @@ pub(crate) unsafe fn walk_composited_timeline(
         }
 
         let frames_before_clip = frames;
-        // La dernière paire composée, gardée hors de la boucle : `'clip_frames` peut casser,
-        // et un clip qui n'existe QUE pour tenir une image n'entre jamais dedans — il faut
-        // pourtant une image à tenir dans les deux cas.
-        let mut last_pair: Option<(*mut AVFrame, *mut AVFrame)> = None;
         'clip_frames: for segment in &speed_segments {
             for segment_frame in 0..segment.frame_count {
                 let target_source_time =
@@ -340,53 +332,12 @@ pub(crate) unsafe fn walk_composited_timeline(
                     let _p = crate::export_probe::scope(crate::export_probe::Stage::Compose);
                     comp.compose_frame(sf, wf, frames as f32, cfg)?;
                 }
-                last_pair = Some((sf, wf));
 
                 on_frame(frames)?;
                 frames += 1;
             }
         }
 
-        // Les images tenues, APRÈS les segments de vitesse et volontairement en dehors
-        // d'eux. Dedans, `stretch_pcm_to_length` étirerait le vrai son du clip à travers le
-        // gel (WSOLA sur une voix, audible). Dehors, le créneau audio est plus long que le
-        // PCM et `min(source.len())` laisse des zéros : le silence est gratuit.
-        //
-        // `ceil`, pas `round` : arrondir perd jusqu'à une demi-image, prise sur la fin de la
-        // narration même que la pause existe pour loger.
-        if clip.hold_sec > 0.0 {
-            if last_pair.is_none() {
-                // Clip tenu seul : rien n'a été composé, alors on va chercher une image une
-                // fois. Un seek qui échoue laisse `last_pair` vide et on n'émet rien plutôt
-                // que de composer du vide.
-                if advance_decoder_to(sdec, clip.source_start_sec, 0.0)?
-                    && advance_decoder_to(wdec, clip.source_start_sec, clip.webcam_offset_sec)?
-                {
-                    let sf = sdec.cur_frame();
-                    let wf = wdec.cur_frame();
-                    if !sf.is_null() && !wf.is_null() {
-                        last_pair = Some((sf, wf));
-                    }
-                }
-            }
-            match last_pair {
-                Some((sf, wf)) => {
-                    let held = ((clip.hold_sec * out_fps as f64).ceil()) as u64;
-                    // Le temps timeline est ÉPINGLÉ sur l'instant tenu : c'est ce qui fige
-                    // aussi les modificateurs (zoom, curseur) au lieu de les laisser courir.
-                    comp.set_timeline_time(Some(clip.source_start_sec as f32));
-                    for _ in 0..held {
-                        comp.compose_frame(sf, wf, frames as f32, cfg)?;
-                        on_frame(frames)?;
-                        frames += 1;
-                    }
-                }
-                None => eprintln!(
-                    "[pipeline] warning: clip #{}: pause de {:.3}s ignorée, aucune image à tenir (screen=\"{}\")",
-                    clip_index, clip.hold_sec, clip.screen,
-                ),
-            }
-        }
         on_clip_end(
             clip_index,
             source_end_sec,

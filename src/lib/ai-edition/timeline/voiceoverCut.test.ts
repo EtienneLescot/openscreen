@@ -84,7 +84,7 @@ describe("a cut authored from the voiceover lane", () => {
 		// wrote `clipId: "vo"` here and removed nothing at all.
 		// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 		const [placement] = voiceoverPlacements([VOICE as any]);
-		const rows = cut(placementRawSec(placement, 2, []), placementRawSec(placement, 3, []));
+		const rows = cut(placementRawSec(placement, 2), placementRawSec(placement, 3));
 		expect(rows).toHaveLength(1);
 		expect(CLIPS.map((c) => c.id)).toContain(rows[0].clipId);
 		expect(filmSec([])).toBeCloseTo(12, 6);
@@ -101,7 +101,7 @@ describe("a cut authored from the voiceover lane", () => {
 			[5, 6],
 			[20, 21],
 		]);
-		expect(coalescedTrimGroups(rows, CLIPS, [])).toHaveLength(1);
+		expect(coalescedTrimGroups(rows, CLIPS)).toHaveLength(1);
 		expect(filmSec(rows)).toBeCloseTo(10, 6);
 	});
 
@@ -109,7 +109,7 @@ describe("a cut authored from the voiceover lane", () => {
 		const rows = cut(5, 7);
 		// Restoring must not leave half the cut behind, with the word still gone and
 		// nothing on the ruler to click.
-		expect(dropTrimPillsByIds(rows, CLIPS, [rows[0].id], [])).toEqual([]);
+		expect(dropTrimPillsByIds(rows, CLIPS, [rows[0].id])).toEqual([]);
 	});
 
 	it("writes nothing where there is no film", () => {

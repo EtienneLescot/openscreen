@@ -141,34 +141,4 @@ describe("captionLane", () => {
 		});
 		expect(texts(corrected, "voiceover")).toContain("Kubernetes words");
 	});
-
-	it("leaves a take's cues alone when the FILM gains an insertion", () => {
-		// An insertion is media inside the clip that carries it, and it lengthens that clip.
-		// A take laid over the film keeps its own position on the timeline — the picture
-		// slides underneath it — so its cues do not move either. Measured per placement,
-		// through the asset the placement actually plays.
-		const paused = doc({
-			timeline: {
-				...doc().timeline,
-				insertRanges: [
-					{
-						id: "i1",
-						assetId: "rec",
-						atSec: 1,
-						durationSec: 1,
-						wordId: "x",
-						reason: "",
-						origin: "user",
-					},
-					// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
-				] as any,
-			},
-		});
-		const before = deriveCaptionCues(doc(), on("voiceover"), {});
-		const after = deriveCaptionCues(paused, on("voiceover"), {});
-		// The insertion names the RECORDING's asset. The take is a different asset laid at
-		// its own timeline position, so nothing about this cue changes.
-		expect(after[0].startMs).toBe(before[0].startMs);
-		expect(after[0].endMs).toBe(before[0].endMs);
-	});
 });

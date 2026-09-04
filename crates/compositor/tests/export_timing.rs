@@ -117,7 +117,6 @@ fn whole_clip(dir: &PathBuf) -> ClipSource {
         source_end_sec: SOURCE_SEC,
         webcam_offset_sec: 0.0,
         has_audio: false,
-        hold_sec: 0.0,
     }
 }
 

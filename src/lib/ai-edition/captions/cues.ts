@@ -22,10 +22,8 @@ import {
 	splitMergedCaptionsByWordBounds,
 } from "@/lib/captioning/annotationsFromCaptions";
 import type { CaptionSegment } from "@/lib/captioning/transcribe";
-import type { AxcutDocument, AxcutInsertRange, AxcutTranscript } from "../schema";
+import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { lanePlacements, type TranscriptPlacement } from "../timeline/aggregated-transcript";
-import { takeInserts } from "../timeline/insert-mapping";
-import { sourceToTimelineSec } from "../timeline/inserted-time";
 import { removedRawSpans } from "../timeline/programme-time";
 import {
 	type CaptionAnchorV,
@@ -100,7 +98,7 @@ export function captionLinesForAsset(
 	transcript: AxcutTranscript,
 	settings: CaptionSettings,
 	translations: CaptionTranslations,
-): CaptionLine[] {
+): CaptionSegment[] {
 	const minWords = settings.minWordsPerLine;
 	const maxWords = settings.maxWordsPerLine;
 
@@ -117,76 +115,7 @@ export function captionLinesForAsset(
 			: translatedWordStream(transcript, translations, settings.language);
 
 	if (stream.length === 0) return [];
-	// Grouped per RUN, never across one. A run is a maximal stretch of words that are all
-	// recorded or all added: the two are spoken over different media — the recording, and the
-	// insertion that added word bought — so a line holding both would have to be in two places
-	// at once, and resolved as one it lands on the recording, an insertion too early.
-	const added = addedWordSpans(transcript);
-	// Polished per RUN, so the flag survives and so the finaliser's neighbours are all the
-	// same kind. Across a run boundary the two lines share a source second and the finaliser
-	// cannot tell them apart; `deoverlapCues` settles that on the ruler instead, where the
-	// insertion has a width.
-	return captionRuns(stream, added).flatMap((run) => {
-		const isAdded = run.length > 0 && overlapsAdded(run[0], added);
-		return polish(groupTimedCaptionWordsIntoLines(run, minWords, maxWords)).map((line) => ({
-			...line,
-			added: isAdded,
-		}));
-	});
-}
-
-function overlapsAdded(
-	word: CaptionSegment,
-	added: Array<{ startSec: number; endSec: number }>,
-): boolean {
-	return added.some(
-		(span) =>
-			(word.startSec < span.endSec && word.endSec > span.startSec) ||
-			// An added word's source span is DEGENERATE — the seconds it is spoken in are the
-			// insertion, not the recording — so a strict overlap never matches it.
-			(word.startSec >= span.startSec && word.endSec <= span.endSec),
-	);
-}
-
-/** A caption line, and whether it is spoken over inserted media rather than the recording.
- *  Only the grouping pass knows which is which, and every edge below depends on it. */
-export type CaptionLine = CaptionSegment & { added: boolean };
-
-/** Where the transcript's ADDED words sit, in source time. */
-function addedWordSpans(transcript: AxcutTranscript): Array<{ startSec: number; endSec: number }> {
-	return transcript.words
-		.filter((word) => word.source === "synth" && word.text.trim().length > 0)
-		.map((word) => ({ startSec: word.startSec, endSec: word.endSec }))
-		.sort((a, b) => a.startSec - b.startSec);
-}
-
-/**
- * The stream cut into maximal all-recorded / all-added runs.
- *
- * Membership is decided by OVERLAP with an added word's source span rather than by identity,
- * because a translated stream is rebuilt as pseudo-words and no longer carries the original
- * ids — the spans are the one thing both streams keep.
- */
-function captionRuns(
-	stream: CaptionSegment[],
-	added: Array<{ startSec: number; endSec: number }>,
-): CaptionSegment[][] {
-	if (added.length === 0) return [stream];
-	const isAdded = (word: CaptionSegment) => overlapsAdded(word, added);
-	const runs: CaptionSegment[][] = [];
-	let current: CaptionSegment[] = [];
-	let currentIsAdded: boolean | null = null;
-	for (const word of stream) {
-		const flag = isAdded(word);
-		if (currentIsAdded !== null && flag !== currentIsAdded) {
-			runs.push(current);
-			current = [];
-		}
-		currentIsAdded = flag;
-		current.push(word);
-	}
-	if (current.length > 0) runs.push(current);
-	return runs;
+	return polish(groupTimedCaptionWordsIntoLines(stream, minWords, maxWords));
 }
 
 function originalWordStream(transcript: AxcutTranscript): CaptionSegment[] {
@@ -234,10 +163,6 @@ export function sourceSpanToTimelineSpans(
 	 *  window and the ruler head, which both providers carry (issue #560). `AxcutClip`
 	 *  stays structurally assignable, so every existing caller is unaffected. */
 	clips: TranscriptPlacement[],
-	inserts: readonly AxcutInsertRange[] = [],
-	/** True for a span spoken over INSERTED media rather than the recording. The two occupy
-	 *  opposite sides of the same source second, so every edge flips with it. */
-	overInsertedMedia = false,
 ): Array<{ startSec: number; endSec: number }> {
 	const out: Array<{ startSec: number; endSec: number }> = [];
 	for (const clip of clips) {
@@ -247,17 +172,11 @@ export function sourceSpanToTimelineSpans(
 		const e = Math.min(endSec, clipSourceEnd);
 		if (e <= s) continue;
 		out.push({
-			// An ADDED span IS the insertion: it opens before the inserted media and closes
-			// after it, which is exactly the stretch of ruler that media occupies. A RECORDED
-			// span lives BETWEEN insertions, so both its edges are the other way round — and
-			// its START is the one that matters, because an added word is anchored at the END
-			// of the word it follows and the next recorded word begins at that very second.
-			// Mapped with the opening edge, that line landed inside the insertion, printed on
-			// top of the added one.
-			startSec: sourceToTimelineSec(clip, s, inserts, overInsertedMedia ? "opens" : "closes"),
-			endSec: sourceToTimelineSec(clip, e, inserts, overInsertedMedia ? "closes" : "opens"),
+			startSec: clip.timelineStartSec + (s - clip.sourceStartSec),
+			endSec: clip.timelineStartSec + (e - clip.sourceStartSec),
 		});
 	}
+	// Onto the ruler the viewer actually sees. Expanding BOTH ends does the whole job:
 	return out;
 }
 
@@ -281,12 +200,7 @@ export function deriveCaptionCues(
 		// `?? []` for the same reason `insertRanges` has one: the key is additive, so a
 		// document written before it — or hand-built, never through the schema — has none.
 		document.audioTracks ?? [],
-		removedRawSpans(
-			document.timeline.clips,
-			document.timeline.trimRanges,
-			document.timeline.insertRanges ?? [],
-		),
-		(groupId) => takeInserts(document, groupId),
+		removedRawSpans(document.timeline.clips, document.timeline.trimRanges),
 	);
 	if (placements.length === 0) return [];
 
@@ -299,7 +213,7 @@ export function deriveCaptionCues(
 	// every voiceover cue early.
 	// A transcript is only projected once per asset even when several clips draw
 	// from it (line grouping is the expensive part, clipping is cheap).
-	const linesByAsset = new Map<string, CaptionLine[]>();
+	const linesByAsset = new Map<string, CaptionSegment[]>();
 	const cues: CaptionCue[] = [];
 	let n = 0;
 
@@ -318,8 +232,6 @@ export function deriveCaptionCues(
 				line.startSec,
 				line.endSec,
 				placements,
-				document.timeline.insertRanges ?? [],
-				line.added,
 			)) {
 				const startMs = Math.round(span.startSec * 1000);
 				const endMs = Math.max(Math.round(span.endSec * 1000), startMs + 1);

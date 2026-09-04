@@ -41,7 +41,6 @@ import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
-import { takeInserts } from "@/lib/ai-edition/timeline/insert-mapping";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { takeProgramme } from "@/lib/ai-edition/timeline/take-programme";
 import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
@@ -520,15 +519,10 @@ function clipAssetIsResolvable(
 /**
  * Returns `PlaybackSegment[]`, not `AxcutClip[]`: a held segment carries `heldSec`, and
  * widening it away here is what kept the pause from ever reaching the compositor. Every
- * caller maps it to `holdSec` on the clip input (issue #560).
  */
 export function resolveVisibleClips(document: AxcutDocument): PlaybackSegment[] {
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
-	return resolvePlaybackSegments(
-		document.timeline.clips,
-		document.timeline.trimRanges,
-		document.timeline.insertRanges,
-	)
+	return resolvePlaybackSegments(document.timeline.clips, document.timeline.trimRanges)
 		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
 		.filter((clip) => clipAssetIsResolvable(clip, assetById));
 }
@@ -573,9 +567,7 @@ export function buildSceneDescription(
 	// The one removed set, hoisted out of the map: every voiceover asks it the same
 	// question, and it does not depend on the track.
 	// Placed once: the projection below counts them, so a track after a pause lands where
-	// the ruler says rather than D seconds early.
-	const filmInserts = document.timeline.insertRanges ?? [];
-	const removed = removedRawSpans(projectedClips, document.timeline.trimRanges, filmInserts);
+	const removed = removedRawSpans(projectedClips, document.timeline.trimRanges);
 	// The take's pills, keyed by group. A voiceover is walked ONCE per pill and never per
 	// stored fragment: the document keeps one fragment per clip a take covers, so walking
 	// them separately would emit overlapping entries and `overlay_track_pcm` sums with `+=`
@@ -595,7 +587,6 @@ export function buildSceneDescription(
 			projectedClips,
 			document.timeline.trimRanges,
 			track.startMs / 1000,
-			filmInserts,
 			rawSpeedRegions,
 		);
 		// Length is measured WITHOUT speed, position WITH it — the two do different
@@ -612,13 +603,11 @@ export function buildSceneDescription(
 				projectedClips,
 				document.timeline.trimRanges,
 				track.endMs / 1000,
-				filmInserts,
 			) -
 			projectRawTimelineSecToPlayback(
 				projectedClips,
 				document.timeline.trimRanges,
 				track.startMs / 1000,
-				filmInserts,
 			);
 		const spanSec = trimmedSpanSec;
 		if (spanSec <= 0) return [];
@@ -654,10 +643,7 @@ export function buildSceneDescription(
 			// file the take covers, which is the honest fallback once the cuts are taken out.
 			const voWindowSec =
 				sourceDurationSec > 0 ? Math.max(0, sourceDurationSec - offsetSec) : rawSpanSec;
-			// One walk: the cuts take time away, the take's own insertions add it, and the
-			// walk resolves them together so a second insertion lands after the first one's
-			// hold rather than inside it.
-			const kept = takeProgramme(pill, removed, takeInserts(document, groupId), rawSpeedRegions)
+			const kept = takeProgramme(pill, removed)
 				.filter((piece) => piece.kind === "play")
 				.map((piece) => ({
 					...base,
@@ -665,7 +651,6 @@ export function buildSceneDescription(
 						projectedClips,
 						document.timeline.trimRanges,
 						piece.rawStartSec,
-						filmInserts,
 						rawSpeedRegions,
 					),
 					trimStartSec: piece.sourceStartSec,
@@ -731,7 +716,6 @@ export function buildSceneDescription(
 				hasAudio: true,
 				// A held segment has an empty source window and exists only for the frames it
 				// holds; every other clip holds nothing.
-				holdSec: clip.heldSec ?? 0,
 			},
 		];
 	});
@@ -777,7 +761,6 @@ export function buildSceneDescription(
 		visibleClips,
 		document.timeline.clips,
 		() => createId("zoom"),
-		document.timeline.insertRanges ?? [],
 	);
 	// Same raw→source projection as the zoom regions above, for the same reason: annotations are
 	// authored in RAW document time and the compositor matches each frame's SOURCE time.
@@ -814,7 +797,6 @@ export function buildSceneDescription(
 		visibleClips,
 		document.timeline.clips,
 		() => createId("ann"),
-		document.timeline.insertRanges ?? [],
 	);
 	const projectedCameraFullscreenRegions = projectRegionsToSource(
 		((document.legacyEditor as Record<string, unknown> | null)?.cameraFullscreenRegions as
@@ -823,7 +805,6 @@ export function buildSceneDescription(
 		visibleClips,
 		document.timeline.clips,
 		() => createId("camfull"),
-		document.timeline.insertRanges ?? [],
 	);
 	// Speed regions carry an extra `speed` field the standard `rangeSchema` does not, so we
 	// can't read from `document.timeline.speedRanges` today (see SceneDescription.speedRegions
@@ -838,7 +819,6 @@ export function buildSceneDescription(
 		visibleClips,
 		document.timeline.clips,
 		() => createId("speed"),
-		document.timeline.insertRanges ?? [],
 	);
 
 	// Webcam rect, single source of truth between preview & native :

@@ -364,10 +364,6 @@ pub struct ClipInput {
     pub webcam_offset_sec: f64,
     /// `false` évite une ouverture ffmpeg vouée à échouer et réserve du silence à ce clip.
     pub has_audio: bool,
-    /// Secondes de sortie pendant lesquelles ce clip TIENT sa dernière image, en silence.
-    /// Une pause achetée par un mot ajouté (issue #560) : le ruler et la preview la
-    /// respectaient déjà, l'export l'ignorait, faute d'une fenêtre source non vide.
-    pub hold_sec: f64,
 }
 
 /// Taille/cadence/codec de sortie voulus par l'app (modale d'export). Tous optionnels :
@@ -504,7 +500,6 @@ pub fn export_multi(
             source_end_sec: c.source_end_sec,
             webcam_offset_sec: c.webcam_offset_sec,
             has_audio: c.has_audio,
-            hold_sec: c.hold_sec,
         })
         .collect();
     Ok(AsyncTask::new(ExportMultiTask {
@@ -662,7 +657,6 @@ pub fn export_gif(
             source_end_sec: c.source_end_sec,
             webcam_offset_sec: c.webcam_offset_sec,
             has_audio: c.has_audio,
-            hold_sec: c.hold_sec,
         })
         .collect();
     let gif_params = params

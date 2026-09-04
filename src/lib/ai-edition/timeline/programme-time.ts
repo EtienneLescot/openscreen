@@ -18,8 +18,7 @@
 // Storage does not change: a trim stays source-time anchored to a clip. This is the
 // derived READING of those rows, computed on demand and never written back.
 
-import type { AxcutClip, AxcutInsertRange, AxcutTrimRange } from "../schema";
-import { assignInsertsToClips, sourceToTimelineSec } from "./inserted-time";
+import type { AxcutClip, AxcutTrimRange } from "../schema";
 import { type Interval, subtractInterval } from "./intervals";
 import { trimAppliesToClip } from "./trim-mapping";
 
@@ -48,39 +47,22 @@ export interface RemovedRawSpan extends RawSpan {
  * source length to measure, and falls back to the ruler geometry it was given — matching
  * the pass-through branch `resolvePlaybackSegments` takes for the same clips.
  */
-/** A clip's whole stretch of timeline — its source window PLUS the media inserted inside it.
- *
- *  Computed, not read off `timelineEndSec`: derived the same way `reflowClipsForInserts`
- *  writes it, so a clip whose stored geometry is stale or half-written cannot make this lie.
- *  Leaving the insertions out was its own bug — the extent then ended short by exactly the
- *  inserted time, and `removedRawSpans` reported a phantom hole at the tail of every clip
- *  carrying one, which the audio paths cut as if a trim had taken it. */
-function clipRawExtent(clip: AxcutClip, ownInserts: readonly AxcutInsertRange[]): RawSpan {
+function clipRawExtent(clip: AxcutClip): RawSpan {
 	const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
 	if (sourceEnd <= clip.sourceStartSec) {
 		return { startSec: clip.timelineStartSec, endSec: clip.timelineEndSec };
 	}
-	const owed = ownInserts.reduce((sum, insert) => sum + insert.durationSec, 0);
 	return {
 		startSec: clip.timelineStartSec,
-		endSec: clip.timelineStartSec + (sourceEnd - clip.sourceStartSec) + owed,
+		endSec: clip.timelineStartSec + (sourceEnd - clip.sourceStartSec),
 	};
 }
 
-/** Source interval → timeline, through the clip that carries it.
- *
- *  `"closes"` on the end is what makes an insertion INSIDE a kept stretch part of it: the
- *  film plays those seconds, so they belong to the span. An insertion at the stretch's own
- *  start belongs to whatever came before — and if a trim took that, it is gone with it,
- *  which is right: the moment it follows is not in the film any more. */
-function sourceToRaw(
-	clip: AxcutClip,
-	interval: Interval,
-	insertRanges: readonly AxcutInsertRange[],
-): RawSpan {
+/** Source interval → raw, through the clip that carries it. */
+function sourceToRaw(clip: AxcutClip, interval: Interval): RawSpan {
 	return {
-		startSec: sourceToTimelineSec(clip, interval.startSec, insertRanges, "opens"),
-		endSec: sourceToTimelineSec(clip, interval.endSec, insertRanges, "closes"),
+		startSec: clip.timelineStartSec + (interval.startSec - clip.sourceStartSec),
+		endSec: clip.timelineStartSec + (interval.endSec - clip.sourceStartSec),
 	};
 }
 
@@ -107,27 +89,19 @@ function keptSourceIntervals(clip: AxcutClip, trimRanges: AxcutTrimRange[]): Int
  *
  * Zero-length spans are dropped, so a caller can trust `endSec > startSec`.
  */
-export function keptRawSpans(
-	clips: AxcutClip[],
-	trimRanges: AxcutTrimRange[],
-	/** REQUIRED, not defaulted. A clip carrying insertions is longer than its source window,
-	 *  so a caller that omits these gets an answer that is plausible and wrong by exactly the
-	 *  inserted time, with nothing to catch it (issue #560). */
-	insertRanges: readonly AxcutInsertRange[],
-): RawSpan[] {
+export function keptRawSpans(clips: AxcutClip[], trimRanges: AxcutTrimRange[]): RawSpan[] {
 	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
-	const owners = assignInsertsToClips(ordered, insertRanges);
 	const spans: RawSpan[] = [];
 	for (const clip of ordered) {
 		const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
 		if (sourceEnd <= clip.sourceStartSec) {
 			// Duration not probed yet — the whole raw clip passes through unnarrowed.
-			const extent = clipRawExtent(clip, owners.get(clip.id) ?? []);
+			const extent = clipRawExtent(clip);
 			if (extent.endSec > extent.startSec) spans.push(extent);
 			continue;
 		}
 		for (const iv of keptSourceIntervals(clip, trimRanges)) {
-			const span = sourceToRaw(clip, iv, insertRanges);
+			const span = sourceToRaw(clip, iv);
 			if (span.endSec > span.startSec) spans.push(span);
 		}
 	}
@@ -152,20 +126,15 @@ export function keptRawSpans(
 export function removedRawSpans(
 	clips: AxcutClip[],
 	trimRanges: AxcutTrimRange[],
-	/** REQUIRED, not defaulted. A clip carrying insertions is longer than its source window,
-	 *  so a caller that omits these gets an answer that is plausible and wrong by exactly the
-	 *  inserted time, with nothing to catch it (issue #560). */
-	insertRanges: readonly AxcutInsertRange[],
 ): RemovedRawSpan[] {
 	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
 	if (ordered.length === 0) return [];
-	const owners = assignInsertsToClips(ordered, insertRanges);
 
 	const removed: RemovedRawSpan[] = [];
 	let cursor = 0; // raw end of the programme walked so far
 
 	for (const clip of ordered) {
-		const extent = clipRawExtent(clip, owners.get(clip.id) ?? []);
+		const extent = clipRawExtent(clip);
 		// The unfilmed stretch before this clip. `max` rather than a bare subtraction so
 		// two clips overlapping on the ruler contribute no negative gap.
 		if (extent.startSec > cursor) {
@@ -185,12 +154,12 @@ export function removedRawSpans(
 			.filter((trim) => trimAppliesToClip(trim, clip))
 			.map((trim) => ({
 				id: trim.id,
-				...sourceToRaw(clip, { startSec: trim.startSec, endSec: trim.endSec }, insertRanges),
+				...sourceToRaw(clip, { startSec: trim.startSec, endSec: trim.endSec }),
 			}));
 
 		let holeStart = extent.startSec;
 		for (const iv of kept) {
-			const span = sourceToRaw(clip, iv, insertRanges);
+			const span = sourceToRaw(clip, iv);
 			if (span.startSec > holeStart) {
 				removed.push(taggedHole(holeStart, span.startSec, applicable));
 			}

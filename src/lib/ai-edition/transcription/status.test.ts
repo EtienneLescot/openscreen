@@ -274,7 +274,6 @@ function doc(assetIds: string[], clipAssetIds: string[]): AxcutDocument {
 			})),
 			gaps: [],
 			trimRanges: [],
-			insertRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],

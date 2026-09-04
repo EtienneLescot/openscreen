@@ -74,13 +74,7 @@ export function NativeCompositorOverlay() {
 		return resolveVisibleClips(document);
 	}, [document]);
 	const activePosition = useMemo(
-		() =>
-			resolveNativePosition(
-				currentTimeSec,
-				nativeClips,
-				document?.timeline.clips ?? [],
-				document?.timeline.insertRanges ?? [],
-			),
+		() => resolveNativePosition(currentTimeSec, nativeClips, document?.timeline.clips ?? []),
 		[nativeClips, currentTimeSec, document],
 	);
 	const activeClip = activePosition?.clip ?? null;

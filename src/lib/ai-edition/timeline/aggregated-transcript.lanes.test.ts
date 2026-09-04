@@ -88,20 +88,6 @@ describe("voiceoverPlacements", () => {
 			[4, 4, 6],
 		]);
 	});
-
-	it("maps the words after an insertion to the moment they actually occupy", () => {
-		// The reason this stopped being per-fragment. Source 4 is heard at ruler 5, because
-		// the pause before it took a second of the take's span.
-		const placements = voiceoverPlacements(
-			[track({ id: "f1", trackId: "T", startMs: 0, endMs: 6000, offsetMs: 0 })],
-			[],
-			() => [{ id: "i1", wordId: "w1", atSourceSec: 4, durationSec: 1 }],
-		);
-		expect(placements.map((p) => [p.timelineStartSec, p.sourceStartSec, p.sourceEndSec])).toEqual([
-			[0, 0, 4],
-			[5, 4, 5],
-		]);
-	});
 });
 
 describe("lanePlacements", () => {
@@ -141,7 +127,6 @@ describe("lanePlacements", () => {
 			lanePlacements("voiceover", CLIPS, [track({ id: "t1" })]),
 			// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 			[transcript as any],
-			[],
 			[],
 			[],
 		);
@@ -216,7 +201,7 @@ describe("one programme, two lanes", () => {
 	const VO = track({ id: "vo_1", startMs: 0, endMs: 12000, offsetMs: 0, durationSec: 12 });
 
 	function lanes(trims: (typeof TRIM)[]) {
-		const removed = removedRawSpans(CLIPS_2, trims, []);
+		const removed = removedRawSpans(CLIPS_2, trims);
 		const transcripts = [secondsTranscript("asset_rec", 12), secondsTranscript("asset_vo", 12)];
 		const build = (lane: "recording" | "voiceover") =>
 			buildAggregatedSections(
@@ -225,7 +210,6 @@ describe("one programme, two lanes", () => {
 				transcripts as any,
 				[],
 				removed,
-				[],
 			);
 		return { recording: build("recording"), voiceover: build("voiceover") };
 	}
@@ -258,14 +242,13 @@ describe("one programme, two lanes", () => {
 
 	it("removes a word over an inter-clip gap, with nothing to restore", () => {
 		const gapped = [CLIPS_2[0], { ...CLIPS_2[1], timelineStartSec: 8, timelineEndSec: 14 }];
-		const removed = removedRawSpans(gapped, [], []);
+		const removed = removedRawSpans(gapped, []);
 		const sections = buildAggregatedSections(
 			voiceoverPlacements([track({ id: "vo_1", startMs: 0, endMs: 14000, durationSec: 14 })]),
 			// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 			[secondsTranscript("asset_vo", 14)] as any,
 			[],
 			removed,
-			[],
 		);
 		const w6 = sections.flatMap((s) => s.words).find((w) => w.word.id === "w6"); // raw 6..7
 		expect(w6?.kept).toBe(false);
@@ -283,8 +266,7 @@ describe("one programme, two lanes", () => {
 			// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 			[secondsTranscript("asset_vo", 20)] as any,
 			[],
-			removedRawSpans(CLIPS_2, [], []),
-			[],
+			removedRawSpans(CLIPS_2, []),
 		);
 		const w15 = sections.flatMap((s) => s.words).find((w) => w.word.id === "w15");
 		expect(w15?.kept).toBe(true);
@@ -294,14 +276,14 @@ describe("one programme, two lanes", () => {
 		// The cue used to be resolved into a clip id, which only the recording lane has —
 		// so this returned null for every moment of every voiceover.
 		const { voiceover } = lanes([]);
-		expect(findCueWordId(voiceover, 4.5, [])).toBe("vo_1:w4");
-		expect(findCueWordId(voiceover, 0.5, [])).toBe("vo_1:w0");
+		expect(findCueWordId(voiceover, 4.5)).toBe("vo_1:w4");
+		expect(findCueWordId(voiceover, 0.5)).toBe("vo_1:w0");
 	});
 
 	it("reads a word's raw moment through its own placement", () => {
 		// A take starting 3s along the ruler, 5s into its file: its source 6 is raw 4.
 		const placement = { id: "p", assetId: "a", sourceStartSec: 5, timelineStartSec: 3 };
-		expect(placementRawSec(placement, 6, [])).toBe(4);
+		expect(placementRawSec(placement, 6)).toBe(4);
 	});
 
 	it("contributes no placement for a looping take", () => {
@@ -315,53 +297,3 @@ describe("one programme, two lanes", () => {
 // ─── The cue, after an insertion ─────────────────────────────────────────────
 // `findCueWordId` carries its own inverse of the affine map — the fourth copy in the tree.
 // It needs no insertion term of its own PROVIDED each placement is affine, which is exactly
-// what walking the take by play pieces buys. Asserted rather than assumed.
-
-describe("the karaoke highlight after a pause", () => {
-	const TAKE = track({ id: "vo", startMs: 0, endMs: 6000, offsetMs: 0, durationSec: 6 });
-	const WORDS = {
-		assetId: "asset_vo",
-		language: "en",
-		segments: [],
-		words: [0, 1, 2, 3, 4, 5].map((i) => ({
-			id: `w${i}`,
-			segmentId: "s",
-			text: `w${i}`,
-			startSec: i + 0.1,
-			endSec: i + 0.9,
-		})),
-	};
-
-	const sectionsWith = (
-		inserts: Array<{ id: string; wordId: string; atSourceSec: number; durationSec: number }>,
-	) =>
-		buildAggregatedSections(
-			// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
-			voiceoverPlacements([TAKE as any], [], () => inserts),
-			// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
-			[WORDS as any],
-			[],
-			[],
-			[],
-		);
-
-	it("tracks the voice with no insertion", () => {
-		expect(findCueWordId(sectionsWith([]), 4.5, [])).toBe("vo:w4");
-	});
-
-	it("follows the word D later once a pause has pushed it there", () => {
-		// A one-second pause at source 3: source 4 is now heard at ruler 5.
-		const inserts = [{ id: "i1", wordId: "w3", atSourceSec: 3, durationSec: 1 }];
-		const sections = sectionsWith(inserts);
-		expect(findCueWordId(sections, 5.5, [])).toBe("vo#1:w4");
-		// And it is NOT still answering with the pre-pause mapping.
-		expect(findCueWordId(sections, 4.5, [])).not.toBe("vo:w4");
-	});
-
-	it("highlights nothing while the voice is parked", () => {
-		// No word is being said during the pause, so the karaoke goes quiet rather than
-		// leaving a word lit that has already been spoken.
-		const inserts = [{ id: "i1", wordId: "w3", atSourceSec: 3, durationSec: 1 }];
-		expect(findCueWordId(sectionsWith(inserts), 3.5, [])).toBeNull();
-	});
-});

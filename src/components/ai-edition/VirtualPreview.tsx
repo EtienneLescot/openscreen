@@ -16,19 +16,16 @@ import {
 import type {
 	AxcutAudioTrack,
 	AxcutClip,
-	AxcutInsertRange,
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
-import { insertionEnteredBetween, rulerInserts } from "@/lib/ai-edition/timeline/inserted-time";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
 	consumedSourceSec,
-	type TakeInsert,
 	type TakePiece,
 	takePlaybackAt,
 	takeProgramme,
@@ -215,8 +212,6 @@ interface VirtualPreviewProps {
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
 	trimRanges?: AxcutTrimRange[];
-	/** The media added words inserted — it lengthens playback, it does not cut it. */
-	insertRanges?: AxcutInsertRange[];
 	seekTarget?: { timeSec: number; isSource?: boolean; requestId: number } | null;
 	onTimeChange?: (timeSec: number) => void;
 	onLoadedMetadata?: (
@@ -263,7 +258,6 @@ export function VirtualPreview({
 	zoomRegions = [],
 	speedRegions = [],
 	trimRanges = [],
-	insertRanges = [],
 	seekTarget,
 	onTimeChange,
 	onLoadedMetadata,
@@ -562,76 +556,26 @@ export function VirtualPreview({
 	trimRangesRef.current = trimRanges;
 	// What the film no longer contains, recomputed only when the cuts move — the rAF asks
 	// it once per voiceover per frame, and walking every trim there would be wasteful.
-	// The film's insertions, placed on the raw ruler once. The projection needs them or every
-	// track after one lands D seconds early — the bug this argument exists to close.
-	/** The insertion currently playing, if any.
-	 *
-	 *  An added word inserts MEDIA inside the clip (issue #560). There is no generator for it
-	 *  yet, so the stand-in is a fixed frame and silence — but it is a piece of media on the
-	 *  timeline like any other, and playback runs THROUGH it rather than around it.
-	 *
-	 *  The `<video>` cannot supply those seconds: they are not in the file. So it is PARKED
-	 *  for the insertion's duration — paused, which holds the frame the insertion stands for
-	 *  and silences the recording under it — and a wall clock runs the insertion out.
-	 *
-	 *  Parked, not re-seeked: writing `currentTime` every frame to a still-playing element
-	 *  is a seek storm the decoder never settles out of, and that is what "playback stops at
-	 *  the insertion" actually was. The cost is that `<video>.paused` stops answering "is the
-	 *  film stopped?" — see `filmPlaying` in the tick. */
-	const insertionRef = useRef<{ rawSec: number; durationSec: number; startedAtMs: number } | null>(
-		null,
-	);
-	/** How far into the insertion the wall clock has run, in seconds. Read by
-	 *  `updateVirtualTime` so the RULER position it publishes crosses the insertion while the
-	 *  RAW second it publishes alongside stands still at the insertion's own moment. */
-	const insertionElapsedRef = useRef(0);
-	// The ranges themselves for anything that maps through a clip; their timeline positions
-	// for the one thing that asks "did this frame run into one".
-	const insertRangesRef = useRef(insertRanges);
-	insertRangesRef.current = insertRanges;
-	const filmInsertsRef = useRef(rulerInserts(insertRanges, clips));
-	filmInsertsRef.current = useMemo(() => rulerInserts(insertRanges, clips), [insertRanges, clips]);
+	// The film's pauses, placed on the raw ruler once. The projection needs them or every
+	// track after a pause lands D seconds early — the bug this argument exists to close.
 	// One walk per take, recomputed only when the cuts or the insertions move. The rAF asks
 	// it every frame per track, and walking on each would be wasteful.
-	// The take's own insertions, resolved from the ranges this component already receives.
-	// `resolveInsertPlacement` needs assets to tell the lanes apart, and the preview has
-	// none — but a range naming an AUDIO asset is exactly one whose asset is not a clip's,
-	// which is the same test, available here.
-	const clipAssetIds = useMemo(() => new Set(clips.map((c) => c.assetId)), [clips]);
-	const takeInsertsByGroup = useCallback(
-		(groupId: string): TakeInsert[] => {
-			const pill = collapseTracksToPills(audioTracks).find((t) => trackGroupId(t) === groupId);
-			if (!pill) return [];
-			return insertRanges
-				.filter((range) => range.assetId === pill.assetId && !clipAssetIds.has(range.assetId))
-				.map((range) => ({
-					id: range.id,
-					wordId: range.wordId,
-					atSourceSec: range.atSec,
-					durationSec: range.durationSec,
-				}));
-		},
-		[audioTracks, insertRanges, clipAssetIds],
-	);
 	const takePiecesRef = useRef<Map<string, TakePiece[]>>(new Map());
 	const takeHeadsRef = useRef<Map<string, string>>(new Map());
-	const removedRef = useRef(removedRawSpans(clips, trimRanges, insertRanges));
-	removedRef.current = useMemo(
-		() => removedRawSpans(clips, trimRanges, insertRanges),
-		[clips, trimRanges, insertRanges],
-	);
+	const removedRef = useRef(removedRawSpans(clips, trimRanges));
+	removedRef.current = useMemo(() => removedRawSpans(clips, trimRanges), [clips, trimRanges]);
 	const takeWalks = useMemo(() => {
 		const pieces = new Map<string, TakePiece[]>();
 		const heads = new Map<string, string>();
-		const removed = removedRawSpans(clips, trimRanges, insertRanges);
+		const removed = removedRawSpans(clips, trimRanges);
 		for (const pill of collapseTracksToPills(audioTracks)) {
 			if (pill.kind !== "voiceover" || pill.loop) continue;
 			const groupId = trackGroupId(pill);
 			heads.set(groupId, pill.id);
-			pieces.set(groupId, takeProgramme(pill, removed, takeInsertsByGroup(groupId)));
+			pieces.set(groupId, takeProgramme(pill, removed));
 		}
 		return { pieces, heads };
-	}, [audioTracks, clips, trimRanges, takeInsertsByGroup, insertRanges]);
+	}, [audioTracks, clips, trimRanges]);
 	takePiecesRef.current = takeWalks.pieces;
 	takeHeadsRef.current = takeWalks.heads;
 	// Trim-narrowed (`resolvePlaybackSegments`) — used ONLY to detect "has the <video>'s own
@@ -645,8 +589,8 @@ export function VirtualPreview({
 	// source time to a RAW virtual time that jumps discontinuously by exactly the trim's
 	// width the moment the video itself jumps — matching the marker's own pixel span.
 	const playbackClips = useMemo(
-		() => resolvePlaybackSegments(clips, trimRanges, insertRanges),
-		[clips, trimRanges, insertRanges],
+		() => resolvePlaybackSegments(clips, trimRanges),
+		[clips, trimRanges],
 	);
 	const playbackClipsRef = useRef(playbackClips);
 	playbackClipsRef.current = playbackClips;
@@ -695,25 +639,6 @@ export function VirtualPreview({
 			if (!v || !Number.isFinite(v.currentTime)) {
 				return;
 			}
-			// Run the insertion out FIRST: everything below is positioned against a clock that
-			// crosses it — the imported tracks especially, which sit on the programme clock
-			// exactly as they do in the render's output stream.
-			const insertion = insertionRef.current;
-			if (insertion) {
-				const elapsedSec = (performance.now() - insertion.startedAtMs) / 1000;
-				// `!v.paused` means something un-parked the element under us — the transport.
-				if (elapsedSec >= insertion.durationSec || !v.paused) {
-					insertionRef.current = null;
-					insertionElapsedRef.current = 0;
-					if (v.paused) void v.play().catch(() => undefined);
-				} else {
-					insertionElapsedRef.current = elapsedSec;
-				}
-			}
-			// A PARKED element is not a stopped film, and this is the question every gate
-			// below actually means: the picture is held on the insertion's frame on purpose
-			// while the programme keeps running over it.
-			const filmPlaying = !v.paused || insertionRef.current !== null;
 			for (const audio of [primaryAudioRef.current, supplementalAudioRef.current]) {
 				if (!audio) continue;
 				const target = resolveAudioTrackPlayback(v.currentTime, audio.duration);
@@ -750,20 +675,12 @@ export function VirtualPreview({
 			// was never given a faster `playbackRate`, but seeking it twice as fast
 			// amounts to the same thing. Dividing raw time by the rate turns that
 			// back into 1x wall-clock, which is what the render does too.
-			// `+ insertionElapsedSec`, and only here: the RAW playhead stands still at the
-			// insertion's moment for its whole duration — none of those seconds come from the
-			// recording — and the projection of that moment is where the insertion OPENS
-			// (`expandRawSec` and this walk both give the last recorded frame its own instant).
-			// Adding the elapsed walks the programme through the inserted media, which is what
-			// the mixer downstream is doing over the same seconds.
-			const outputTimeSec =
-				projectRawTimelineSecToPlayback(
-					clipsRef.current,
-					trimRangesRef.current,
-					virtualTimeSecRef.current,
-					insertRangesRef.current,
-					speedRegionsRef.current,
-				) + insertionElapsedRef.current;
+			const outputTimeSec = projectRawTimelineSecToPlayback(
+				clipsRef.current,
+				trimRangesRef.current,
+				virtualTimeSecRef.current,
+				speedRegionsRef.current,
+			);
 			for (const track of audioTracksRef.current) {
 				const el = audioTrackElsRef.current.get(track.id);
 				if (!el) continue;
@@ -771,7 +688,6 @@ export function VirtualPreview({
 					clipsRef.current,
 					trimRangesRef.current,
 					track.startMs / 1000,
-					insertRangesRef.current,
 					speedRegionsRef.current,
 				);
 				// Length is measured WITHOUT speed, position WITH it. A trim REMOVES
@@ -786,13 +702,11 @@ export function VirtualPreview({
 						clipsRef.current,
 						trimRangesRef.current,
 						track.endMs / 1000,
-						insertRangesRef.current,
 					) -
 						projectRawTimelineSecToPlayback(
 							clipsRef.current,
 							trimRangesRef.current,
 							track.startMs / 1000,
-							insertRangesRef.current,
 						),
 				);
 				// A voiceover follows the cuts AND its own insertions, through one walk over
@@ -855,7 +769,7 @@ export function VirtualPreview({
 						// media metadata not ready yet
 					}
 				}
-				if (filmPlaying && trackTarget.shouldPlay && el.paused) {
+				if (!v.paused && trackTarget.shouldPlay && el.paused) {
 					// Resume a context suspended by autoplay policy, exactly as the primary
 					// loop does above — otherwise a track that starts while the primary
 					// element is silent (its span is over, or a recording with no separate
@@ -865,7 +779,7 @@ export function VirtualPreview({
 					}
 					const playback = el.play();
 					if (playback) void playback.catch(() => undefined);
-				} else if ((!filmPlaying || !trackTarget.shouldPlay) && !el.paused) {
+				} else if ((v.paused || !trackTarget.shouldPlay) && !el.paused) {
 					el.pause();
 				}
 			}
@@ -874,7 +788,7 @@ export function VirtualPreview({
 			// bypasses React state entirely.
 			if (clockRef) {
 				clockRef.current.sourceTimeSec = v.currentTime;
-				clockRef.current.isPlaying = filmPlaying;
+				clockRef.current.isPlaying = !v.paused;
 				clockRef.current.playbackRate = v.playbackRate;
 				clockRef.current.virtualTimeSec = virtualTimeSecRef.current;
 			}
@@ -919,7 +833,6 @@ export function VirtualPreview({
 						activeSourceId,
 						v.currentTime,
 						activeClipIdRef.current ?? undefined,
-						insertRangesRef.current,
 					);
 					if (nextKeptSegment) {
 						// `findRawClipForSegment` is the ONE definition of the segment-id
@@ -930,11 +843,7 @@ export function VirtualPreview({
 						if (rawClip) {
 							activeClipIdRef.current = rawClip.id;
 						}
-						const rawTargetTime = getRawVirtualStartTime(
-							nextKeptSegment,
-							clipsRef.current,
-							insertRangesRef.current,
-						);
+						const rawTargetTime = getRawVirtualStartTime(nextKeptSegment, clipsRef.current);
 						seekToVirtualTimeRef.current?.(rawTargetTime, true);
 						return;
 					}
@@ -970,7 +879,7 @@ export function VirtualPreview({
 			// `clockRef` et `setSourceTimeSec` ci-dessus continuent d'être publiés : la webcam
 			// et le calque curseur ont besoin du temps source même à l'arrêt. Seule la
 			// position de la TIMELINE cesse d'être dictée par le média.
-			if (!filmPlaying) {
+			if (v.paused) {
 				return;
 			}
 			if (clipsRef.current.length === 0) {
@@ -991,7 +900,6 @@ export function VirtualPreview({
 					activeSourceId,
 					0.05,
 					activeClipIdRef.current ?? undefined,
-					insertRangesRef.current,
 				);
 				if (pos) {
 					activeClipIdRef.current = pos.clip.id;
@@ -1005,7 +913,6 @@ export function VirtualPreview({
 				activeSourceId,
 				0.05,
 				activeClipIdRef.current ?? undefined,
-				insertRangesRef.current,
 			);
 			if (!position) {
 				// ponytail: fall back to timeline order so cross-asset / reordered
@@ -1041,32 +948,7 @@ export function VirtualPreview({
 				seekToVirtualTimeRef.current?.(nextClip.timelineStartSec, true);
 				return;
 			}
-			const nextRawTime = clampVirtualTime(clipsRef.current, position.virtualTimeSec);
-			// The first insertion this frame ran into — the rule, and why it is half-open,
-			// lives with the other ruler arithmetic.
-			const entering = insertionRef.current
-				? undefined
-				: insertionEnteredBetween(virtualTimeSecRef.current, nextRawTime, filmInsertsRef.current);
-			if (entering) {
-				insertionRef.current = {
-					rawSec: entering.atRawSec,
-					durationSec: entering.durationSec,
-					startedAtMs: performance.now(),
-				};
-				insertionElapsedRef.current = 0;
-				// Parks the picture on the frame the insertion stands for, and silences the
-				// recording under it. Both are what the insertion IS.
-				v.pause();
-				// The insertion's own moment, not the frame we happened to land on: the
-				// transcript cue, the caption lookup and the audio mix all read this, and
-				// through the insertion the RECORDING really is at that one instant.
-				updateVirtualTime(entering.atRawSec);
-				return;
-			}
-			// While an insertion plays the element is parked, so the position it reports stands
-			// still at where the insertion opens. Its own wall clock is what carries the
-			// playhead across it — nothing else is moving. Zero the rest of the time.
-			updateVirtualTime(nextRawTime + insertionElapsedRef.current);
+			updateVirtualTime(clampVirtualTime(clipsRef.current, position.virtualTimeSec));
 		};
 		raf = window.requestAnimationFrame(tick);
 		return () => window.cancelAnimationFrame(raf);
@@ -1165,12 +1047,7 @@ export function VirtualPreview({
 
 	const seekToVirtualTime = useCallback(
 		(nextVirtualTimeSec: number, preservePlayback = false, forceResume = false) => {
-			// A seek ends the insertion that was playing: the playhead is somewhere else now,
-			// so the frame it parked on is not the frame any more. The rAF's own seeks (clip
-			// advance, trim skip) are gated on `!v.paused` and so never land here mid-insertion.
-			insertionRef.current = null;
-			insertionElapsedRef.current = 0;
-			const position = locateVirtualPosition(clips, nextVirtualTimeSec, insertRanges);
+			const position = locateVirtualPosition(clips, nextVirtualTimeSec);
 			if (!position) {
 				videoRef.current?.pause();
 				updateVirtualTime(0);
@@ -1238,7 +1115,7 @@ export function VirtualPreview({
 				});
 			}
 		},
-		[applySourceTime, clips, videoSources, sourceIndex, updateVirtualTime, insertRanges],
+		[applySourceTime, clips, videoSources, sourceIndex, updateVirtualTime],
 	);
 
 	const seekToSourceTime = useCallback(
@@ -1277,11 +1154,7 @@ export function VirtualPreview({
 			// the one that has to come back. An asset switch queued in the
 			// meantime is newer intent still, so it wins outright.
 			if (!pendingSeekRef.current) {
-				const position = locateVirtualPosition(
-					clipsRef.current,
-					virtualTimeSecRef.current,
-					insertRangesRef.current,
-				);
+				const position = locateVirtualPosition(clipsRef.current, virtualTimeSecRef.current);
 				// `locateVirtualPosition` answers for whatever clip the playhead
 				// is on, which after a boundary advance can belong to a DIFFERENT
 				// asset — its source time would be a meaningless offset into the

@@ -6,8 +6,10 @@ import { useEditorDialogActions } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { createId } from "@/lib/ai-edition/document/ids";
-import { parseStoredDocument } from "@/lib/ai-edition/document/load";
-import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
+import {
+	migrateProjectDataToAxcutDocument,
+	migrateRawDocumentToCurrent,
+} from "@/lib/ai-edition/document/migrate";
 import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
@@ -19,11 +21,7 @@ import {
 	setDocumentWordText,
 } from "@/lib/ai-edition/document/transcript";
 import { isModalOpen } from "@/lib/ai-edition/modalGuard";
-import {
-	type AxcutAudioTrack,
-	type AxcutClip,
-	type AxcutInsertRange,
-} from "@/lib/ai-edition/schema";
+import { type AxcutAudioTrack, type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
@@ -94,17 +92,15 @@ const NO_AUDIO_TRACKS: AxcutAudioTrack[] = [];
 function NativePlaybackSync({
 	visibleClips,
 	clips,
-	insertRanges,
 }: {
 	visibleClips: AxcutClip[];
 	clips: AxcutClip[];
-	insertRanges: readonly AxcutInsertRange[];
 }) {
 	const playing = useProjectStore((s) => s.playing);
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 	// visibleClips = trim-compressed native stream; `clips` = RAW layout currentTimeSec
 	// is measured against. resolveNativePosition needs both (see timelineMap).
-	useNativePlaybackSync(playing, currentTimeSec, visibleClips, clips, insertRanges);
+	useNativePlaybackSync(playing, currentTimeSec, visibleClips, clips);
 	return null;
 }
 
@@ -587,7 +583,7 @@ export function NewEditorShell() {
 			const isAxcutDocument =
 				typeof raw === "object" && raw !== null && "schemaVersion" in raw && "timeline" in raw;
 			const doc = isAxcutDocument
-				? parseStoredDocument(raw) // disk-load: upgrade, validate, reconcile clip geometry
+				? documentSchema.parse(migrateRawDocumentToCurrent(raw)) // disk-load: upgrade v3/v4 → v5, then validate
 				: migrateProjectDataToAxcutDocument(raw as EditorProjectData);
 			const saved = await nativeBridgeClient.aiEdition.save(doc);
 			if (saved.success && saved.document) {
@@ -666,12 +662,7 @@ export function NewEditorShell() {
 			void enqueueTimelineWrite(async () => {
 				const doc = useProjectStore.getState().document;
 				if (!doc) return;
-				const next = dropTrimPillsByIds(
-					doc.timeline.trimRanges,
-					doc.timeline.clips,
-					trimIds,
-					doc.timeline.insertRanges ?? [],
-				);
+				const next = dropTrimPillsByIds(doc.timeline.trimRanges, doc.timeline.clips, trimIds);
 				if (next.length === doc.timeline.trimRanges.length) return;
 				await saveDocument(
 					{ ...doc, timeline: { ...doc.timeline, trimRanges: next } },
@@ -1090,7 +1081,7 @@ export function NewEditorShell() {
 		// (properties kept, position taken from the playhead).
 		if (sel.kind === "trim") {
 			const { coalescedTrimGroups } = await import("@/lib/ai-edition/timeline/trim-mapping");
-			const group = coalescedTrimGroups(tl.trimRanges, tl.clips, tl.insertRanges ?? []).find((g) =>
+			const group = coalescedTrimGroups(tl.trimRanges, tl.clips).find((g) =>
 				g.ids.includes(sel.id),
 			);
 			if (!group) return;
@@ -1352,7 +1343,6 @@ export function NewEditorShell() {
 		isMac,
 		togglePlay,
 		handleSeek,
-		openVoiceoverFlow,
 	]);
 
 	const showTimeline = mode !== "rec";
@@ -1438,11 +1428,7 @@ export function NewEditorShell() {
 			className={v4.app}
 			style={{ gridTemplateRows: `58px 1fr ${showTimeline ? timelineRow : "0px"}` }}
 		>
-			<NativePlaybackSync
-				visibleClips={visibleClips}
-				clips={clips}
-				insertRanges={document?.timeline.insertRanges ?? []}
-			/>
+			<NativePlaybackSync visibleClips={visibleClips} clips={clips} />
 			<EditorTopBar
 				mode={mode}
 				onModeChange={setMode}
@@ -1527,7 +1513,6 @@ export function NewEditorShell() {
 									speedRegions={tl.speedRegions}
 									cameraFullscreenRegions={tl.cameraFullscreenRegions}
 									trimRanges={tl.trimRanges}
-									insertRanges={document?.timeline?.insertRanges ?? []}
 									selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
 									onZoomFocusChange={tl.updateZoomFocusLive}
 									onZoomFocusCommit={() => void tl.commitZoomFocus()}

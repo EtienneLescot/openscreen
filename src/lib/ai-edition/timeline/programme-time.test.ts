@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { projectRawTimelineSecToPlayback, resolvePlaybackSegments } from "../document/timeline";
-import type { AxcutClip, AxcutInsertRange, AxcutTrimRange } from "../schema";
+import type { AxcutClip, AxcutTrimRange } from "../schema";
 import { keptRawSpans, removalAt, removedRawSpans, subtractRemoved } from "./programme-time";
 
 function clip(over: Partial<AxcutClip> & { id: string }): AxcutClip {
@@ -114,7 +114,7 @@ describe("keptRawSpans agrees with playback", () => {
 				(sum, seg) => sum + ((seg.sourceEndSec ?? seg.sourceStartSec) - seg.sourceStartSec),
 				0,
 			);
-			const kept = keptRawSpans(clips, trims, []);
+			const kept = keptRawSpans(clips, trims);
 			expect(total(kept), `seed ${seed} total`).toBeCloseTo(played, 6);
 
 			// The sum alone is blind to ORDER, and order is the whole reason this walk was
@@ -125,7 +125,7 @@ describe("keptRawSpans agrees with playback", () => {
 			let before = 0;
 			for (const [i, span] of kept.entries()) {
 				expect(
-					projectRawTimelineSecToPlayback(clips, trims, span.startSec, []),
+					projectRawTimelineSecToPlayback(clips, trims, span.startSec),
 					`seed ${seed} span ${i}`,
 				).toBeCloseTo(before, 6);
 				before += span.endSec - span.startSec;
@@ -153,7 +153,7 @@ describe("keptRawSpans agrees with playback", () => {
 				timelineEndSec: 6,
 			}),
 		];
-		expect(keptRawSpans(clips, [], []).map((s) => s.startSec)).toEqual([0, 6]);
+		expect(keptRawSpans(clips, []).map((s) => s.startSec)).toEqual([0, 6]);
 	});
 
 	it("leaves the projection identical to what it produced before the lift", () => {
@@ -161,13 +161,13 @@ describe("keptRawSpans agrees with playback", () => {
 		const trims = [trim({ id: "t1", clipId: "c1", startSec: 2, endSec: 4 })];
 		// Raw 2..4 is gone, so everything after it plays 2s earlier; inside the cut the
 		// playhead lands on the output edge just before it.
-		expect(projectRawTimelineSecToPlayback(clips, trims, 1, [])).toBeCloseTo(1, 6);
-		expect(projectRawTimelineSecToPlayback(clips, trims, 3, [])).toBeCloseTo(2, 6);
-		expect(projectRawTimelineSecToPlayback(clips, trims, 6, [])).toBeCloseTo(4, 6);
-		expect(projectRawTimelineSecToPlayback(clips, trims, 20, [])).toBeCloseTo(18, 6);
+		expect(projectRawTimelineSecToPlayback(clips, trims, 1)).toBeCloseTo(1, 6);
+		expect(projectRawTimelineSecToPlayback(clips, trims, 3)).toBeCloseTo(2, 6);
+		expect(projectRawTimelineSecToPlayback(clips, trims, 6)).toBeCloseTo(4, 6);
+		expect(projectRawTimelineSecToPlayback(clips, trims, 20)).toBeCloseTo(18, 6);
 		// Past the programme the projection is the identity, which is what lets a voiceover
 		// hang off the end and keep playing.
-		expect(projectRawTimelineSecToPlayback(clips, trims, 25, [])).toBeCloseTo(23, 6);
+		expect(projectRawTimelineSecToPlayback(clips, trims, 25)).toBeCloseTo(23, 6);
 	});
 });
 
@@ -178,8 +178,8 @@ describe("removedRawSpans", () => {
 			trim({ id: "t1", clipId: "c1", startSec: 2, endSec: 4 }),
 			trim({ id: "t2", clipId: "c2", startSec: 15, endSec: 16 }),
 		];
-		const kept = [...keptRawSpans(clips, trims, [])].sort((a, b) => a.startSec - b.startSec);
-		const removed = removedRawSpans(clips, trims, []);
+		const kept = [...keptRawSpans(clips, trims)].sort((a, b) => a.startSec - b.startSec);
+		const removed = removedRawSpans(clips, trims);
 		const all = [...kept, ...removed].sort((a, b) => a.startSec - b.startSec);
 
 		let cursor = 0;
@@ -201,7 +201,7 @@ describe("removedRawSpans", () => {
 				timelineEndSec: 23,
 			}),
 		];
-		const gap = removedRawSpans(clips, [], []).find((s) => s.startSec === 10);
+		const gap = removedRawSpans(clips, []).find((s) => s.startSec === 10);
 		expect(gap).toMatchObject({ startSec: 10, endSec: 13 });
 		// No trim took it, so the pane must not offer a restore.
 		expect(gap?.trimIds).toEqual([]);
@@ -210,7 +210,7 @@ describe("removedRawSpans", () => {
 	it("removes a trimmed tail of the last clip but never the time past it", () => {
 		const clips = [twoClips()[0]];
 		const trims = [trim({ id: "t1", clipId: "c1", startSec: 8, endSec: 10 })];
-		const removed = removedRawSpans(clips, trims, []);
+		const removed = removedRawSpans(clips, trims);
 		expect(removed).toEqual([{ startSec: 8, endSec: 10, trimIds: ["t1"] }]);
 		// Raw 12 is unfilmed, not removed — the distinction a voiceover overhanging the
 		// programme depends on.
@@ -225,7 +225,7 @@ describe("removedRawSpans", () => {
 		// playback walk cuts on overlap, per clip, and this must match it.
 		const clips = twoClips();
 		const trims = [trim({ id: "t1", startSec: 5, endSec: 15 })]; // no clipId
-		const removed = removedRawSpans(clips, trims, []);
+		const removed = removedRawSpans(clips, trims);
 		expect(removalAt(removed, 6)).toMatchObject({ trimIds: ["t1"] }); // inside c1
 		expect(removalAt(removed, 12)).toMatchObject({ trimIds: ["t1"] }); // inside c2
 		expect(removalAt(removed, 2)).toBeNull();
@@ -240,24 +240,22 @@ describe("removedRawSpans", () => {
 		];
 		// `subtractInterval` merges the two into one hole; both ids come with it, so
 		// restoring from the pane can drop the whole pill.
-		expect(removedRawSpans(clips, trims, [])).toEqual([
+		expect(removedRawSpans(clips, trims)).toEqual([
 			{ startSec: 2, endSec: 7, trimIds: ["t1", "t2"] },
 		]);
 	});
 
 	it("returns nothing for a document with no clips", () => {
-		expect(removedRawSpans([], [trim({ id: "t1" })], [])).toEqual([]);
+		expect(removedRawSpans([], [trim({ id: "t1" })])).toEqual([]);
 	});
 });
 
 describe("subtractRemoved", () => {
 	it("splits a span that crosses a cut into the pieces that survive", () => {
 		const clips = twoClips();
-		const removed = removedRawSpans(
-			clips,
-			[trim({ id: "t1", clipId: "c1", startSec: 3, endSec: 5 })],
-			[],
-		);
+		const removed = removedRawSpans(clips, [
+			trim({ id: "t1", clipId: "c1", startSec: 3, endSec: 5 }),
+		]);
 		// A voiceover from raw 1 to raw 8 plays as two pieces, not as one take cut short.
 		expect(subtractRemoved(1, 8, removed)).toEqual([
 			{ startSec: 1, endSec: 3 },
@@ -267,141 +265,12 @@ describe("subtractRemoved", () => {
 
 	it("yields nothing for a span buried inside a cut, and the whole span when untouched", () => {
 		const clips = twoClips();
-		const removed = removedRawSpans(
-			clips,
-			[trim({ id: "t1", clipId: "c1", startSec: 3, endSec: 8 })],
-			[],
-		);
+		const removed = removedRawSpans(clips, [
+			trim({ id: "t1", clipId: "c1", startSec: 3, endSec: 8 }),
+		]);
 		expect(subtractRemoved(4, 6, removed)).toEqual([]);
 		expect(subtractRemoved(10, 14, removed)).toEqual([{ startSec: 10, endSec: 14 }]);
 		// Past the programme is not removed, so an overhanging take keeps its tail.
 		expect(subtractRemoved(18, 25, removed)).toEqual([{ startSec: 18, endSec: 25 }]);
-	});
-});
-
-// ─── The insertion the projection has to walk over ──────────────────────────
-// An insertion is media INSIDE a clip, so the clip carrying it is that much longer and the
-// insertion's seconds are timeline seconds like any other. The projection's job is unchanged
-// by that — timeline in, output out — but it has to be TOLD, because it walks each clip's
-// kept SOURCE stretches and those are shorter than the clip.
-
-describe("projectRawTimelineSecToPlayback across an insertion", () => {
-	// One second inserted at source 5 of the first clip, so that clip runs 0..11 and the
-	// second one starts at 11.
-	const inserted: AxcutInsertRange[] = [
-		{
-			id: "i1",
-			assetId: "a1",
-			atSec: 5,
-			durationSec: 1,
-			wordId: "w1",
-			reason: "",
-			origin: "user",
-		},
-	];
-	const clips = [
-		clip({
-			id: "c1",
-			sourceStartSec: 0,
-			sourceEndSec: 10,
-			timelineStartSec: 0,
-			timelineEndSec: 11,
-		}),
-		clip({
-			id: "c2",
-			sourceStartSec: 0,
-			sourceEndSec: 10,
-			timelineStartSec: 11,
-			timelineEndSec: 21,
-		}),
-	];
-
-	it("is the identity when nothing is cut — the insertion is already in the film", () => {
-		// This is what one clock buys. Under two, the walk had to re-add the insertion here
-		// and every reader that forgot to had its audio landing a second early.
-		expect(projectRawTimelineSecToPlayback(clips, [], 3, inserted)).toBeCloseTo(3, 6);
-		expect(projectRawTimelineSecToPlayback(clips, [], 8, inserted)).toBeCloseTo(8, 6);
-		expect(projectRawTimelineSecToPlayback(clips, [], 15, inserted)).toBeCloseTo(15, 6);
-	});
-
-	it("keeps the insertion's own seconds when a trim takes the film around it", () => {
-		// Cutting source 0..2 of the first clip removes two seconds of RECORDING. The second
-		// the added word bought is not recording, so it survives.
-		const trims = [trim({ id: "t1", clipId: "c1", startSec: 0, endSec: 2 })];
-		expect(projectRawTimelineSecToPlayback(clips, trims, 8, inserted)).toBeCloseTo(6, 6);
-	});
-
-	it("loses an insertion whose own moment a trim removed", () => {
-		// The moment it follows is not in the film any more, so neither is it — the same
-		// rule `resolvePlaybackSegments` follows.
-		const trims = [trim({ id: "t1", clipId: "c1", startSec: 4, endSec: 6 })];
-		const out = projectRawTimelineSecToPlayback(clips, trims, 11, inserted);
-		// 10s of recording, less the 2s cut, and the insertion gone with it.
-		expect(out).toBeCloseTo(8, 6);
-	});
-
-	it("compresses the film around an insertion, and the insertion with it", () => {
-		// A 2x region halves whatever timeline it covers. The insertion is timeline, so it
-		// is halved too — the film is one thing, and speed is a property of the film.
-		const speed = [{ startMs: 0, endMs: 21_000, speed: 2 }];
-		expect(projectRawTimelineSecToPlayback(clips, [], 8, inserted, speed)).toBeCloseTo(4, 6);
-	});
-});
-
-// ─── The hole an insertion is not ────────────────────────────────────────────
-// `clipRawExtent` measured a clip by its SOURCE window, so a clip carrying insertions
-// ended short by exactly the inserted time — and `removedRawSpans`, walking clip to clip,
-// reported the difference as a gap nothing had removed. Everything that cuts on removed
-// spans then cut there: a voiceover crossing it went silent for the insertion's length, in
-// the preview and in the exported mix, and its words were struck through in the transcript
-// pane. The user heard the voice drop out exactly where they added a word (issue #560).
-
-describe("an insertion is not a hole in the programme", () => {
-	const inserted: AxcutInsertRange[] = [
-		{
-			id: "i1",
-			assetId: "a1",
-			atSec: 5,
-			durationSec: 1,
-			wordId: "w1",
-			reason: "",
-			origin: "user",
-		},
-	];
-	const clips = [
-		clip({
-			id: "c1",
-			sourceStartSec: 0,
-			sourceEndSec: 10,
-			timelineStartSec: 0,
-			timelineEndSec: 11,
-		}),
-		clip({
-			id: "c2",
-			sourceStartSec: 0,
-			sourceEndSec: 10,
-			timelineStartSec: 11,
-			timelineEndSec: 21,
-		}),
-	];
-
-	it("reports nothing removed when nothing was trimmed", () => {
-		expect(removedRawSpans(clips, [], inserted)).toEqual([]);
-	});
-
-	it("covers the insertion's own seconds as kept programme", () => {
-		const spans = keptRawSpans(clips, [], inserted);
-		const covers = (sec: number) => spans.some((s) => sec >= s.startSec && sec < s.endSec);
-		// 5.5 is inside the inserted media, 10.5 is the first clip's last second.
-		expect(covers(5.5)).toBe(true);
-		expect(covers(10.5)).toBe(true);
-	});
-
-	it("still reports a real gap between two clips", () => {
-		const apart = [clips[0], clip({ ...clips[1], timelineStartSec: 13, timelineEndSec: 23 })];
-		const removed = removedRawSpans(apart, [], inserted);
-		expect(removed).toHaveLength(1);
-		expect(removed[0].startSec).toBeCloseTo(11, 6);
-		expect(removed[0].endSec).toBeCloseTo(13, 6);
 	});
 });

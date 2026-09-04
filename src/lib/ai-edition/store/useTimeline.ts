@@ -371,12 +371,7 @@ export function useTimeline() {
 			// the trim at the wrong source position.
 			const playhead = playheadSec();
 			const end = playhead + durationSec;
-			const resolved = resolveTimelineSpanToTrim(
-				playhead,
-				end,
-				document.timeline.clips,
-				document.timeline.insertRanges ?? [],
-			);
+			const resolved = resolveTimelineSpanToTrim(playhead, end, document.timeline.clips);
 			const asset =
 				document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
 			if (!resolved && !asset) return;
@@ -957,7 +952,6 @@ export function useTimeline() {
 						document.timeline.trimRanges,
 						document.timeline.clips,
 						trimIds,
-						document.timeline.insertRanges ?? [],
 					),
 				},
 				legacyEditor:
@@ -1460,7 +1454,6 @@ export function useTimeline() {
 		audioTracks: document?.audioTracks ?? [],
 		// The pauses added words created. The ruler counts them; nothing else in the
 		// timeline store writes them (see `document/transcript.ts`).
-		insertRanges: document?.timeline.insertRanges ?? [],
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
 		speedRegions,
 		cameraFullscreenRegions,

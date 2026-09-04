@@ -51,7 +51,6 @@ function doc(assets: AxcutAsset[], clips: AxcutClip[]): AxcutDocument {
 			clips,
 			gaps: [],
 			trimRanges: [],
-			insertRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],

@@ -51,7 +51,6 @@ import type {
 	AxcutAsset,
 	AxcutAudioTrack,
 	AxcutClip,
-	AxcutInsertRange,
 	AxcutTranscript,
 	AxcutTrimRange,
 	AxcutWord,
@@ -79,7 +78,6 @@ import {
 } from "@/lib/ai-edition/timeline/aggregated-transcript";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
-import { takeInserts } from "@/lib/ai-edition/timeline/insert-mapping";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import type {
 	AssetTranscriptionView,
@@ -111,9 +109,6 @@ import { CaptionsPane } from "./CaptionsPane";
 import styles from "./NewEditorShell.module.css";
 import { useTranscriptionLabel } from "./TranscriptionStatus";
 import { transcriptionBusyLabel } from "./transcriptionBusyLabel";
-
-/** Stable identity, so the memos below are not invalidated every render by a fresh `[]`. */
-const EMPTY_INSERT_RANGES: readonly AxcutInsertRange[] = [];
 
 interface PaneProps {
 	title: string;
@@ -888,20 +883,11 @@ export function TranscriptPane({
 	// From the RECORDING clips and the whole trim set, never from `placements`: the
 	// programme is one thing, and the voiceover lane is asking whether the film still
 	// contains a moment — not whether some trim happens to name an audio fragment.
-	const insertRanges = document?.timeline.insertRanges ?? EMPTY_INSERT_RANGES;
-	const removed = useMemo(
-		() => removedRawSpans(clips, trimRanges, insertRanges),
-		[clips, trimRanges, insertRanges],
-	);
+	const removed = useMemo(() => removedRawSpans(clips, trimRanges), [clips, trimRanges]);
 	// The take's placements are fed the cuts AND its own insertions, so a word after a pause
-	// is struck through — and highlighted — at the moment it is actually heard (issue #560).
-	const insertsFor = useCallback(
-		(groupId: string) => (document ? takeInserts(document, groupId) : []),
-		[document],
-	);
 	const voiceover = useMemo(
-		() => voiceoverPlacements(audioTracks, removed, insertsFor),
-		[audioTracks, removed, insertsFor],
+		() => voiceoverPlacements(audioTracks, removed),
+		[audioTracks, removed],
 	);
 	const activeLane = resolveCaptionLane(document, captionSettings);
 	const setLane = useCallback(
@@ -913,8 +899,8 @@ export function TranscriptPane({
 	const placements = activeLane === "voiceover" ? voiceover : clips;
 
 	const sections = useMemo(
-		() => buildAggregatedSections(placements, transcripts, assets, removed, insertRanges),
-		[placements, transcripts, assets, removed, insertRanges],
+		() => buildAggregatedSections(placements, transcripts, assets, removed),
+		[placements, transcripts, assets, removed],
 	);
 
 	// `currentTimeSec` is the RAW/document timeline (same referential as the ruler, see
@@ -923,8 +909,8 @@ export function TranscriptPane({
 	// id is something only the recording lane has — so the voiceover lane never
 	// highlighted. Raw seconds are the coordinate both lanes share.
 	const cueWordId = useMemo(
-		() => findCueWordId(sections, currentTimeSec, insertRanges),
-		[sections, currentTimeSec, insertRanges],
+		() => findCueWordId(sections, currentTimeSec),
+		[sections, currentTimeSec],
 	);
 
 	const laneSwitch =
@@ -1035,7 +1021,6 @@ export function TranscriptPane({
 						undefined
 					}
 					cueWordId={cueWordId}
-					insertRanges={insertRanges}
 					onSeek={onSeek}
 					onTrimTimelineSpan={onTrimTimelineSpan}
 					onRemoveTrimRanges={onRemoveTrimRanges}
@@ -1067,7 +1052,6 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	busyLabel,
 	lane,
 	cueWordId,
-	insertRanges,
 	onSeek,
 	onTrimTimelineSpan,
 	onRemoveTrimRanges,
@@ -1083,10 +1067,6 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	 *  CLIP frame, and a voiceover placement has no clip to hold. */
 	lane: TranscriptLane;
 	cueWordId: string | null;
-	/** The insertions this placement carries: the block maps its words' SOURCE spans onto
-	 *  the ruler to author a cut, and a clip carrying insertions is longer than its source
-	 *  window (issue #560). */
-	insertRanges: readonly AxcutInsertRange[];
 	onSeek: (sec: number) => void;
 	onTrimTimelineSpan: (startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRanges: (trimIds: string[]) => void;
@@ -1106,14 +1086,13 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	// to do with the word the user deleted.
 	const toRawSpan = useCallback(
 		(startSec: number, endSec: number): [number, number] => {
-			const extent = placementRawExtent(clip, insertRanges);
+			const extent = placementRawExtent(clip);
 			const lo = extent?.startSec ?? clip.timelineStartSec;
 			const hi = extent?.endSec ?? Number.POSITIVE_INFINITY;
-			const clamp = (sec: number) =>
-				Math.min(Math.max(placementRawSec(clip, sec, insertRanges), lo), hi);
+			const clamp = (sec: number) => Math.min(Math.max(placementRawSec(clip, sec), lo), hi);
 			return [clamp(startSec), clamp(endSec)];
 		},
-		[clip, insertRanges],
+		[clip],
 	);
 	const filename = asset?.label ?? clip.assetId;
 	const sourceRangeLabel =
@@ -1281,6 +1260,13 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			// timeline time (the pause gesture) it is a silent freeze frame. Drop this gate
 			// when TTS lands.
 			if (!import.meta.env.DEV) return;
+			// Not on the voiceover lane. `insertRangeSchema` has no `clipId`, and the pause an
+			// a voiceover placement has no clip to hold. Refused with a reason rather than
+			// left to write a record nothing can read.
+			if (lane === "voiceover") {
+				toast.error(ts("transcript.insertRecordingOnly"));
+				return;
+			}
 			if (busy || !seed.trim()) return;
 			const editor = editorRef.current;
 			const selection = globalThis.getSelection();

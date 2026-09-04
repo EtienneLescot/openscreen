@@ -51,7 +51,6 @@ function makeDoc(): AxcutDocument {
 			clips: [],
 			gaps: [],
 			trimRanges: [],
-			insertRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],

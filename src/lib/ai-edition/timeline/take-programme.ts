@@ -24,40 +24,22 @@
 // playing on top of itself. `anchorAudioTrackFragments` is untouched and stays correct for
 // the music and loop paths that still read it.
 
-import type { PlaybackSpeedRegion } from "../document/timeline";
-import { rawSpanForOutDuration } from "../document/timeline";
 import type { AxcutAudioTrack } from "../schema";
 import type { RemovedRawSpan } from "./programme-time";
 
 /** One stretch of a take, in playback order. */
 export interface TakePiece {
 	/**
-	 * `play` — the file is heard. `hold` — the voice is parked on one source moment while
-	 * the timeline runs on (an insertion). `removed` — the film lost this stretch, so the
-	 * take is silent through it, its own clock still running underneath.
+	 * `play` — the file is heard. `removed` — the film lost this stretch, so the take is
+	 * silent through it, its own clock still running underneath.
 	 */
-	kind: "play" | "hold" | "removed";
-	/** Stored RAW ruler seconds. Insertions occupy raw time here because they consume it
-	 *  from the take's own span — they do not create programme time. */
+	kind: "play" | "removed";
+	/** Stored RAW ruler seconds. */
 	rawStartSec: number;
 	rawEndSec: number;
-	/** The take's own file. Equal on a `hold`: the moment the voice is parked on. */
+	/** The take's own file. */
 	sourceStartSec: number;
 	sourceEndSec: number;
-	/** The insertion that produced a `hold`. */
-	holdId?: string;
-	/** The word that insertion exists for. */
-	wordId?: string;
-}
-
-/** An insertion inside one take, in the take's own source seconds. */
-export interface TakeInsert {
-	id: string;
-	wordId: string;
-	atSourceSec: number;
-	/** OUTPUT seconds. A voice plays at 1x in the mix, so a pause for a spoken word is
-	 *  measured on the take's own clock, not on a raw ruler a speed region compresses. */
-	durationSec: number;
 }
 
 const EPSILON_SEC = 1e-9;
@@ -76,8 +58,6 @@ const EPSILON_SEC = 1e-9;
 export function takeProgramme(
 	pill: Pick<AxcutAudioTrack, "startMs" | "endMs" | "offsetMs">,
 	removed: readonly RemovedRawSpan[],
-	inserts: readonly TakeInsert[],
-	speedRegions: PlaybackSpeedRegion[] = [],
 ): TakePiece[] {
 	const rawStart = pill.startMs / 1000;
 	const rawEnd = Math.max(rawStart, pill.endMs / 1000);
@@ -86,9 +66,6 @@ export function takeProgramme(
 	// Every boundary the walk has to stop at, on the RAW ruler, resolved sequentially:
 	// an insertion's raw moment depends on the holds before it, so it cannot be mapped in
 	// one pass up front.
-	const pending = [...inserts]
-		.filter((ins) => ins.durationSec > 0)
-		.sort((a, b) => a.atSourceSec - b.atSourceSec || a.id.localeCompare(b.id));
 
 	const cuts = [...removed]
 		.filter((span) => span.endSec > rawStart && span.startSec < rawEnd)
@@ -97,10 +74,9 @@ export function takeProgramme(
 	const pieces: TakePiece[] = [];
 	let raw = rawStart;
 	let source = sourceStart;
-	let nextInsert = 0;
 	let nextCut = 0;
 
-	const push = (kind: TakePiece["kind"], rawTo: number, sourceTo: number, ins?: TakeInsert) => {
+	const push = (kind: TakePiece["kind"], rawTo: number, sourceTo: number) => {
 		if (rawTo - raw <= EPSILON_SEC) return;
 		pieces.push({
 			kind,
@@ -108,7 +84,6 @@ export function takeProgramme(
 			rawEndSec: rawTo,
 			sourceStartSec: source,
 			sourceEndSec: sourceTo,
-			...(ins ? { holdId: ins.id, wordId: ins.wordId } : {}),
 		});
 		raw = rawTo;
 		source = sourceTo;
@@ -121,43 +96,14 @@ export function takeProgramme(
 	// so the bound is enforced. Counting passes rather than watching `raw` on purpose: a
 	// pass that consumes a zero-length insertion makes real progress without moving `raw`,
 	// and a no-progress test would cut the walk short on a legitimate document.
-	const maxPasses = 4 * (removed.length + inserts.length + 2);
+	const maxPasses = 4 * (removed.length + 2);
 	let passes = 0;
 	while (raw < rawEnd - EPSILON_SEC) {
 		if (passes++ > maxPasses) break;
-		// Skip cuts and insertions the walk has already passed.
+		// Skip cuts the walk has already passed.
 		while (nextCut < cuts.length && cuts[nextCut].endSec <= raw + EPSILON_SEC) nextCut++;
-		while (nextInsert < pending.length && pending[nextInsert].atSourceSec <= source - EPSILON_SEC) {
-			// Its moment is behind the source cursor: a cut swallowed it, or two inserts
-			// share a moment and the first already consumed it. Either way it buys nothing.
-			nextInsert++;
-		}
 
 		const cut = cuts[nextCut];
-		const insert = pending[nextInsert];
-
-		// Sitting exactly on an insertion's moment: hold before anything else, so two
-		// inserts at one moment become two adjacent holds rather than one merged stretch.
-		if (insert && insert.atSourceSec <= source + EPSILON_SEC) {
-			const held = Math.min(
-				rawSpanForOutDuration(raw, insert.durationSec, speedRegions),
-				rawEnd - raw,
-			);
-			nextInsert++;
-			if (held > EPSILON_SEC) {
-				pieces.push({
-					kind: "hold",
-					rawStartSec: raw,
-					rawEndSec: raw + held,
-					sourceStartSec: source,
-					sourceEndSec: source,
-					holdId: insert.id,
-					wordId: insert.wordId,
-				});
-				raw += held;
-			}
-			continue;
-		}
 
 		// Inside a cut: silent to the cut's end, both cursors running.
 		if (cut && cut.startSec <= raw + EPSILON_SEC) {
@@ -169,7 +115,6 @@ export function takeProgramme(
 		// Otherwise play up to whichever boundary comes first.
 		let to = rawEnd;
 		if (cut) to = Math.min(to, cut.startSec);
-		if (insert) to = Math.min(to, raw + (insert.atSourceSec - source));
 		push("play", Math.max(raw, to), source + (Math.max(raw, to) - raw));
 	}
 
@@ -200,16 +145,11 @@ export function consumedSourceSec(pieces: readonly TakePiece[]): number {
 export function takePlaybackAt(
 	pieces: readonly TakePiece[],
 	rawSec: number,
-): { targetTimeSec: number; shouldPlay: boolean; heldBy?: string } | null {
+): { targetTimeSec: number; shouldPlay: boolean } | null {
 	for (const piece of pieces) {
 		if (rawSec < piece.rawStartSec) break;
 		if (rawSec >= piece.rawEndSec) continue;
-		if (piece.kind === "hold") {
-			// Parked on ONE source moment, not clamped to a moving target: resuming from the
-			// post-insert source would restart the narration on the wrong word, and a target
-			// that drifts every frame would re-seek a paused element every frame.
-			return { targetTimeSec: piece.sourceStartSec, shouldPlay: false, heldBy: piece.holdId };
-		}
+
 		const target = piece.sourceStartSec + (rawSec - piece.rawStartSec);
 		return { targetTimeSec: target, shouldPlay: piece.kind === "play" };
 	}

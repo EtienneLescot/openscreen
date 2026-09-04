@@ -17,8 +17,7 @@
 // against the COMPRESSED segment layout, which slips every region after a trim
 // forward by the trimmed duration.
 
-import type { PlaybackSegment } from "../document/timeline";
-import type { AxcutClip, AxcutInsertRange } from "../schema";
+import type { AxcutClip } from "../schema";
 import { ventilateSpanAcrossClips } from "./region-ventilation";
 import { findRawClipForSegment, getRawVirtualStartTime } from "./virtual-preview";
 
@@ -96,11 +95,6 @@ export function anchoredToRawSpanSec(
 ): { startSec: number; endSec: number } | null {
 	const clip = clips.find((c) => c.id === fragment.clipId);
 	if (!clip) return null;
-	// ponytail: plain shift, wrong by the clip's own insertions for a region anchored past
-	// one — the pill is drawn early while `projectRegionsToSource` exports it on the right
-	// frames. Route through `sourceToTimelineSec` when zoom/annotation pills need to agree
-	// with the effect; it means threading the ranges through `anchorRegionsWithDerivedMs`
-	// and its 15 callers, which is its own change.
 	return {
 		startSec: clip.timelineStartSec + (fragment.sourceStartSec - clip.sourceStartSec),
 		endSec: clip.timelineStartSec + (fragment.sourceEndSec - clip.sourceStartSec),
@@ -405,19 +399,11 @@ export function anchorRegionsWithDerivedMs<
  * the gap.
  */
 export function segmentRawSpanSec(
-	segment: PlaybackSegment,
+	segment: AxcutClip,
 	rawClips: AxcutClip[],
-	/** REQUIRED, not defaulted. A clip carrying insertions is longer than its source window,
-	 *  so a caller that omits these gets an answer that is plausible and wrong by exactly the
-	 *  inserted time, with nothing to catch it (issue #560). */
-	insertRanges: readonly AxcutInsertRange[],
 ): { startSec: number; endSec: number } {
-	const startSec = getRawVirtualStartTime(segment, rawClips, insertRanges);
-	// A held segment's source window is the single frame it shows, so its source length
-	// is zero — its RAW span is the pause it carries. Without this the playhead could
-	// never be inside it and would step straight over the pause.
-	const lenSec =
-		segment.heldSec ?? (segment.sourceEndSec ?? segment.sourceStartSec) - segment.sourceStartSec;
+	const startSec = getRawVirtualStartTime(segment, rawClips);
+	const lenSec = (segment.sourceEndSec ?? segment.sourceStartSec) - segment.sourceStartSec;
 	return { startSec, endSec: startSec + lenSec };
 }
 
@@ -573,21 +559,14 @@ export function projectRegionsToSource<
 	T extends { id: string; startMs: number; endMs: number } & RegionClipAnchor,
 >(
 	regions: T[],
-	visibleSegments: PlaybackSegment[],
+	visibleSegments: AxcutClip[],
 	rawClips: AxcutClip[],
 	makeId: () => string,
-	/** The insertions the clips carry. A segment after one starts that much further along
-	 *  the timeline, and an UNANCHORED region — a caption cue, which is built fresh each
-	 *  time and has no clip anchor — is placed by intersecting with exactly that extent.
-	 *  Without them the caption landed on the wrong stretch of source (issue #560).
-	 *
-	 *  REQUIRED for the same reason as its neighbours: omitting it is silently wrong. */
-	insertRanges: readonly AxcutInsertRange[],
 ): (T & { clipIndex?: number; underTrim?: boolean })[] {
 	// RAW extents + owning raw clip per visible segment. Both are only consulted by the
 	// path that needs them (raw fallback / anchor match), but resolving them once keeps
 	// the per-region loop free of repeated lookups.
-	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips, insertRanges));
+	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
 	const segmentRawClipIds = visibleSegments.map((seg) => findRawClipForSegment(seg, rawClips)?.id);
 	const out: (T & { clipIndex?: number; underTrim?: boolean })[] = [];
 	for (const region of regions) {
@@ -660,7 +639,7 @@ export function projectRegionsToSource<
 
 export interface NativePosition {
 	/** The trim-narrowed playback segment (from `visibleSegments`) that is active. */
-	clip: PlaybackSegment;
+	clip: AxcutClip;
 	/** Its index in `visibleSegments`, matching `SceneDescription.clips` / native `clip_index`. */
 	clipIndex: number;
 	/** Screen-source seconds the native decoder should present for this segment. */
@@ -696,31 +675,20 @@ const NATIVE_EOF_MARGIN_SEC = 0.033;
  */
 export function resolveNativePosition(
 	rawSec: number,
-	visibleSegments: PlaybackSegment[],
+	visibleSegments: AxcutClip[],
 	rawClips: AxcutClip[],
-	/** REQUIRED, not defaulted. A clip carrying insertions is longer than its source window,
-	 *  so a caller that omits these gets an answer that is plausible and wrong by exactly the
-	 *  inserted time, with nothing to catch it (issue #560). */
-	insertRanges: readonly AxcutInsertRange[],
 ): NativePosition | null {
 	if (!Number.isFinite(rawSec) || visibleSegments.length === 0) return null;
-	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips, insertRanges));
+	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
 
 	// Segment whose RAW extent contains the playhead (last segment's end inclusive).
 	const index = spans.findIndex((s, i) => {
 		const isLast = i === spans.length - 1;
 		return rawSec >= s.startSec && (rawSec < s.endSec || (isLast && rawSec <= s.endSec));
 	});
-	if (index < 0) return positionUnderCut(rawSec, visibleSegments, rawClips, insertRanges);
+	if (index < 0) return positionUnderCut(rawSec, visibleSegments, rawClips);
 
 	const seg = visibleSegments[index];
-	// Inside a pause the source clock does not advance: the whole point of the segment
-	// is created time over one held frame. Clamping here is what stops the raw-playhead
-	// delta — which DOES advance through the pause — from pushing the decoder past the
-	// held frame into the content that belongs after it.
-	if (seg.heldSec !== undefined) {
-		return { clip: seg, clipIndex: index, sourceTimeSec: seg.sourceStartSec };
-	}
 	const segSourceEnd = seg.sourceEndSec ?? seg.sourceStartSec;
 	const unclamped = seg.sourceStartSec + (rawSec - spans[index].startSec);
 	const maxSource = Math.max(seg.sourceStartSec, segSourceEnd - NATIVE_EOF_MARGIN_SEC);
@@ -746,7 +714,6 @@ function positionUnderCut(
 	rawSec: number,
 	visibleSegments: AxcutClip[],
 	rawClips: AxcutClip[],
-	insertRanges: readonly AxcutInsertRange[],
 ): NativePosition {
 	const rawClip = rawClipAt(rawSec, rawClips);
 	if (rawClip) {
@@ -771,7 +738,7 @@ function positionUnderCut(
 		}
 	}
 
-	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips, insertRanges));
+	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
 	const next = spans.findIndex((s) => s.startSec >= rawSec);
 	const index = next >= 0 ? next : visibleSegments.length - 1;
 	const seg = visibleSegments[index];

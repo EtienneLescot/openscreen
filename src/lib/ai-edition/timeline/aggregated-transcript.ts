@@ -14,18 +14,10 @@
 // names a word a filler. The transcript view shows plain text for every
 // kept word; the user or the LLM decides what to mark as skipped.
 
-import { collapseTracksToPills, trackGroupId } from "../document/audioTracks";
-import type {
-	AxcutAsset,
-	AxcutAudioTrack,
-	AxcutClip,
-	AxcutInsertRange,
-	AxcutTranscript,
-	AxcutWord,
-} from "../schema";
-import { sourceToTimelineSec, timelineToSourceSec } from "./inserted-time";
+import { collapseTracksToPills } from "../document/audioTracks";
+import type { AxcutAsset, AxcutAudioTrack, AxcutClip, AxcutTranscript, AxcutWord } from "../schema";
 import { type RawSpan, type RemovedRawSpan, removalAt } from "./programme-time";
-import { type TakeInsert, takeProgramme } from "./take-programme";
+import { takeProgramme } from "./take-programme";
 
 /**
  * The unit the aggregation actually runs over: one stretch of ONE asset's source
@@ -63,28 +55,16 @@ export type TranscriptLane = "recording" | "voiceover";
  * whether two things coincide; raw time can, which is why kept-or-removed is asked here
  * and not in source time (issue #560).
  */
-export function placementRawSec(
-	placement: TranscriptPlacement,
-	sourceSec: number,
-	insertRanges: readonly AxcutInsertRange[],
-	edge: "opens" | "closes" = "opens",
-): number {
-	return sourceToTimelineSec(placement, sourceSec, insertRanges, edge);
+export function placementRawSec(placement: TranscriptPlacement, sourceSec: number): number {
+	return placement.timelineStartSec + (sourceSec - placement.sourceStartSec);
 }
 
 /** The placement's own stretch of raw ruler, or null when it runs open-ended. */
-export function placementRawExtent(
-	placement: TranscriptPlacement,
-	insertRanges: readonly AxcutInsertRange[],
-): RawSpan | null {
+export function placementRawExtent(placement: TranscriptPlacement): RawSpan | null {
 	if (placement.sourceEndSec === undefined) return null;
 	return {
 		startSec: placement.timelineStartSec,
-		// `"closes"` on the end: the media inserted inside this placement is part of its
-		// stretch of ruler, so the extent has to reach past the last one. Ending short left
-		// the final seconds of every such clip belonging to no section at all, and the
-		// highlight simply went out there.
-		endSec: placementRawSec(placement, placement.sourceEndSec, insertRanges, "closes"),
+		endSec: placementRawSec(placement, placement.sourceEndSec),
 	};
 }
 
@@ -234,7 +214,6 @@ export function buildClipSection(
 	transcript: AxcutTranscript | null,
 	asset: AxcutAsset | null,
 	removed: RemovedRawSpan[],
-	insertRanges: readonly AxcutInsertRange[],
 ): ClipSection {
 	const words = transcript
 		? withSilenceGaps(
@@ -246,10 +225,7 @@ export function buildClipSection(
 	const tagged: ClipWord[] = words.map((word) => {
 		// The word's CENTRE, mirroring the rule the identity filter used, so the recording
 		// lane's tagging does not shift under this change.
-		const covering = removalAt(
-			removed,
-			placementRawSec(clip, (word.startSec + word.endSec) / 2, insertRanges),
-		);
+		const covering = removalAt(removed, placementRawSec(clip, (word.startSec + word.endSec) / 2));
 		return {
 			id: clipWordId(clip.id, word.id),
 			word,
@@ -315,7 +291,6 @@ export function buildAggregatedSections(
 	transcripts: AxcutTranscript[],
 	assets: AxcutAsset[],
 	removed: RemovedRawSpan[],
-	insertRanges: readonly AxcutInsertRange[],
 ): ClipSection[] {
 	const transcriptById = new Map(transcripts.map((t) => [t.assetId, t]));
 	const assetById = new Map(assets.map((a) => [a.id, a]));
@@ -325,7 +300,6 @@ export function buildAggregatedSections(
 			transcriptById.get(clip.assetId) ?? null,
 			assetById.get(clip.assetId) ?? null,
 			removed,
-			insertRanges,
 		),
 	);
 }
@@ -353,13 +327,12 @@ export function voiceoverPlacements(
 	 *  insertions the walk yields one piece per take, which is what this always produced. */
 	removed: readonly RemovedRawSpan[] = [],
 	/** This take's own insertions, by group id. */
-	insertsFor: (groupId: string) => readonly TakeInsert[] = () => [],
 ): TranscriptPlacement[] {
 	return collapseTracksToPills(audioTracks)
 		.filter((pill) => pill.kind === "voiceover" && !pill.loop)
 		.sort((a, b) => a.startMs - b.startMs || a.id.localeCompare(b.id))
 		.flatMap((pill) =>
-			takeProgramme(pill, removed, insertsFor(trackGroupId(pill)))
+			takeProgramme(pill, removed)
 				.filter((piece) => piece.kind === "play")
 				.map((piece, i) => ({
 					// Namespaced by piece so two stretches of one take never collide on a word id.
@@ -378,9 +351,8 @@ export function lanePlacements(
 	clips: AxcutClip[],
 	audioTracks: AxcutAudioTrack[],
 	removed: readonly RemovedRawSpan[] = [],
-	insertsFor: (groupId: string) => readonly TakeInsert[] = () => [],
 ): TranscriptPlacement[] {
-	return lane === "voiceover" ? voiceoverPlacements(audioTracks, removed, insertsFor) : clips;
+	return lane === "voiceover" ? voiceoverPlacements(audioTracks, removed) : clips;
 }
 
 /**
@@ -405,11 +377,7 @@ export function lanePlacements(
  * clip whose media has not been probed) has no extent of its own and runs to the next
  * section's head, then to the end of time.
  */
-export function findCueWordId(
-	sections: ClipSection[],
-	rawSec: number | null,
-	insertRanges: readonly AxcutInsertRange[],
-): string | null {
+export function findCueWordId(sections: ClipSection[], rawSec: number | null): string | null {
 	if (rawSec === null || !Number.isFinite(rawSec)) return null;
 	// No fallback to a neighbouring section: a placement with no transcript simply has no
 	// cue word, and borrowing another's would point at the wrong text.
@@ -420,7 +388,7 @@ export function findCueWordId(
 	let match: ClipSection | null = null;
 	for (const [i, section] of withWords.entries()) {
 		if (rawSec < section.clip.timelineStartSec) break;
-		const extent = placementRawExtent(section.clip, insertRanges);
+		const extent = placementRawExtent(section.clip);
 		const endSec =
 			extent?.endSec ?? withWords[i + 1]?.clip.timelineStartSec ?? Number.POSITIVE_INFINITY;
 		if (rawSec < endSec) {
@@ -431,14 +399,7 @@ export function findCueWordId(
 	if (!match) return null;
 
 	// Back to the placement's own source clock, which is what the words are stamped in.
-	const { sourceSec: t, insideInsert } = timelineToSourceSec(match.clip, rawSec, insertRanges);
-	// Inside an insertion, the word being spoken is the one that bought it — those seconds
-	// exist for no other reason. There is no source second in there to find it by, which is
-	// why the added word could never be highlighted before.
-	if (insideInsert) {
-		const own = match.words.find((cw) => cw.word.id === insideInsert.wordId);
-		if (own) return own.id;
-	}
+	const t = match.clip.sourceStartSec + (rawSec - match.clip.timelineStartSec);
 	let previous: string | null = null;
 	for (const cw of match.words) {
 		if (isSilenceWord(cw.word)) continue;

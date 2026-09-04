@@ -18,7 +18,7 @@
  * re-aligns them.
  */
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import type { AxcutClip, AxcutInsertRange } from "@/lib/ai-edition/schema";
+import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { resolveNativePosition } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	getCurrentNativeViewId,
@@ -34,22 +34,13 @@ export function useNativePlaybackSync(
 	visibleSegments: readonly AxcutClip[],
 	/** RAW clip layout (`document.timeline.clips`) `currentTimeSec` is expressed against. */
 	rawClips: readonly AxcutClip[],
-	/** The insertions those clips carry — a clip is longer than its source window by them,
-	 *  so a segment's place on the timeline cannot be found without them (issue #560). */
-	insertRanges: readonly AxcutInsertRange[],
 ): void {
 	const activePosition = useMemo(
-		() => resolveNativePosition(currentTimeSec, [...visibleSegments], [...rawClips], insertRanges),
-		[visibleSegments, rawClips, currentTimeSec, insertRanges],
+		() => resolveNativePosition(currentTimeSec, [...visibleSegments], [...rawClips]),
+		[visibleSegments, rawClips, currentTimeSec],
 	);
 	const activeClipId = activePosition?.clip.id ?? null;
 	const sourceTimeSec = activePosition?.sourceTimeSec ?? null;
-	// A pause holds ONE frame for its whole length. Free-running the decoder through it
-	// would play what comes after instead, and the app clock — which does traverse the
-	// pause — would then re-seek on the drift and stutter. Pausing the decoder is what
-	// makes the pause a pause; the webcam holds with the screen because both derive
-	// from the one asset source clock the pause stops advancing.
-	const held = activePosition?.clip.heldSec !== undefined;
 
 	// Reactive "is a native view active?" so activation mid-session re-pushes the
 	// current transport/playhead (time & playing aren't memoised in the store).
@@ -63,8 +54,8 @@ export function useNativePlaybackSync(
 		if (!active) {
 			return;
 		}
-		setNativePlaying(playing && !held);
-	}, [active, playing, held]);
+		setNativePlaying(playing);
+	}, [active, playing]);
 
 	// Scrub/step while paused OR periodic resync during playback when drift > 100ms
 	const lastSyncedSourceTimeRef = useRef<number | null>(null);
@@ -76,16 +67,6 @@ export function useNativePlaybackSync(
 			return;
 		}
 		const now = performance.now();
-
-		// Inside a pause while playing: the decoder is parked on the held frame (see the
-		// transport effect). Refresh the drift refs every run so the check never reads a
-		// correctly-frozen source clock as divergence and fights itself with seeks.
-		if (playing && held) {
-			setNativeTime(sourceTimeSec);
-			lastSyncedSourceTimeRef.current = sourceTimeSec;
-			lastSyncedWallTimeRef.current = now;
-			return;
-		}
 
 		// When clip changes, let setActiveClip handle the atomic clip-switch-and-seek.
 		if (lastActiveClipIdRef.current !== activeClipId) {
@@ -114,5 +95,5 @@ export function useNativePlaybackSync(
 			lastSyncedSourceTimeRef.current = sourceTimeSec;
 			lastSyncedWallTimeRef.current = now;
 		}
-	}, [active, playing, held, activeClipId, sourceTimeSec]);
+	}, [active, playing, activeClipId, sourceTimeSec]);
 }

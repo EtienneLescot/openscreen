@@ -106,7 +106,6 @@ const sampleDoc: AxcutDocument = {
 		],
 		gaps: [],
 		trimRanges: [],
-		insertRanges: [],
 		muteRanges: [],
 		speedRanges: [],
 		captionRanges: [],
