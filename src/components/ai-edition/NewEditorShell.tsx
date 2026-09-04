@@ -6,10 +6,8 @@ import { useEditorDialogActions } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { createId } from "@/lib/ai-edition/document/ids";
-import {
-	migrateProjectDataToAxcutDocument,
-	migrateRawDocumentToCurrent,
-} from "@/lib/ai-edition/document/migrate";
+import { parseStoredDocument } from "@/lib/ai-edition/document/load";
+import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
 import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
@@ -25,7 +23,6 @@ import {
 	type AxcutAudioTrack,
 	type AxcutClip,
 	type AxcutInsertRange,
-	documentSchema,
 } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
@@ -583,7 +580,7 @@ export function NewEditorShell() {
 			const isAxcutDocument =
 				typeof raw === "object" && raw !== null && "schemaVersion" in raw && "timeline" in raw;
 			const doc = isAxcutDocument
-				? documentSchema.parse(migrateRawDocumentToCurrent(raw)) // disk-load: upgrade v3/v4 → v5, then validate
+				? parseStoredDocument(raw) // disk-load: upgrade, validate, reconcile clip geometry
 				: migrateProjectDataToAxcutDocument(raw as EditorProjectData);
 			const saved = await nativeBridgeClient.aiEdition.save(doc);
 			if (saved.success && saved.document) {
