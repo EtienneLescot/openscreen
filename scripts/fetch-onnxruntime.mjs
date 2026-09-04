@@ -52,6 +52,18 @@ const ROOT = path.join(__dirname, "..");
  * direction to fail in.
  */
 const VERSION = "1.27.1";
+
+/**
+ * The upstream commit `v${VERSION}` pointed at when it was reviewed.
+ *
+ * `v1.27.1` is a LIGHTWEIGHT tag — it points straight at a commit and can be moved by
+ * anyone with push rights upstream. Nothing here fetches source at install time, so this
+ * does not affect `npm run fetch:onnxruntime`; it matters to
+ * `.github/workflows/build-onnxruntime-macos.yml`, which builds the library and would
+ * otherwise attest an artifact to "whatever that tag meant that morning". The workflow
+ * resolves the tag and refuses to build if it no longer resolves here.
+ */
+const SOURCE_COMMIT = "df2ba1cf8108aa63627cf4cdf8f807880b938616";
 const BASE = `https://github.com/microsoft/onnxruntime/releases/download/v${VERSION}`;
 
 /**

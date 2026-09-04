@@ -66,6 +66,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job compiles third-party source in the same workspace. Leaving the
+          # token in .git/config would put it within reach of ONNX Runtime's own build
+          # scripts — and this workflow holds `attestations: write`. Same setting
+          # build.yml, docs.yml and nix-build.yml already use.
+          persist-credentials: false
 
       - name: Read the pinned version from fetch-onnxruntime.mjs
         id: pin
@@ -77,8 +83,11 @@ jobs:
           set -euo pipefail
           VERSION="$(sed -n 's/^const VERSION = "\(.*\)";$/\1/p' scripts/fetch-onnxruntime.mjs)"
           [ -n "$VERSION" ] || { echo "::error::VERSION not found in scripts/fetch-onnxruntime.mjs"; exit 1; }
+          COMMIT="$(sed -n 's/^const SOURCE_COMMIT = "\(.*\)";$/\1/p' scripts/fetch-onnxruntime.mjs)"
+          [ -n "$COMMIT" ] || { echo "::error::SOURCE_COMMIT not found in scripts/fetch-onnxruntime.mjs"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Building ONNX Runtime v$VERSION"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "Building ONNX Runtime v$VERSION at $COMMIT"
 
       - name: Read the deployment floor from electron-builder.json5
         id: floor
@@ -95,10 +104,28 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: microsoft/onnxruntime
-          ref: v${{ steps.pin.outputs.version }}
+          # The COMMIT, not the tag. `v1.27.1` upstream is a lightweight tag — it points
+          # straight at a commit and can be moved. Building from a tag would mean
+          # attesting an artifact to "whatever that tag meant this morning", which is
+          # precisely the property this workflow exists to provide.
+          ref: ${{ steps.pin.outputs.commit }}
           path: onnxruntime-src
           submodules: recursive
           fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check the pinned commit is still what the tag names
+        # Not fatal to the build — the commit above is what gets built either way — but a
+        # tag that has moved means the pin and the version string no longer describe the
+        # same thing, and somebody should look before adopting the artifact.
+        run: |
+          set -euo pipefail
+          TAGGED="$(git -C onnxruntime-src ls-remote https://github.com/microsoft/onnxruntime "refs/tags/v${{ steps.pin.outputs.version }}" | cut -f1)"
+          if [ "$TAGGED" != "${{ steps.pin.outputs.commit }}" ]; then
+            echo "::error::v${{ steps.pin.outputs.version }} now resolves to ${TAGGED:-nothing}, not the pinned ${{ steps.pin.outputs.commit }}"
+            exit 1
+          fi
+          echo "v${{ steps.pin.outputs.version }} still resolves to ${{ steps.pin.outputs.commit }}"
 
       - name: Read the runner image
         id: image
@@ -240,6 +267,8 @@ jobs:
           ARCHIVE="onnxruntime-osx-arm64-${V}.tgz"
           {
             echo "## ONNX Runtime ${V}, macOS arm64, deployment target ${{ steps.floor.outputs.floor }}"
+            echo ""
+            echo "- Source: microsoft/onnxruntime@\`${{ steps.pin.outputs.commit }}\`"
             echo ""
             echo "- Result: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
