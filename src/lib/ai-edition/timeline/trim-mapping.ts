@@ -14,7 +14,8 @@
 // clip) share a coordinate space: without the anchor, "which clip is this cut on?"
 // had no answer and each caller invented its own. See `trimAppliesToClip`.
 
-import type { AxcutClip, AxcutTrimRange } from "../schema";
+import type { AxcutClip, AxcutInsertRange, AxcutTrimRange } from "../schema";
+import { sourceToTimelineSec, timelineToSourceSec } from "./inserted-time";
 import { type CoalescedSpan, ventilateSpanAcrossClips } from "./region-ventilation";
 import { coalesceByIdentity, regionIdentityKey } from "./timelineMap";
 
@@ -68,6 +69,9 @@ export function trimAppliesToClip(
 export function trimToTimelineSpan(
 	trim: TrimAnchor,
 	clips: AxcutClip[],
+	/** REQUIRED: a clip carrying insertions is longer than its source window, so this is not
+	 *  a plain shift (issue #560). */
+	insertRanges: readonly AxcutInsertRange[],
 ): { start: number; end: number } | null {
 	for (const c of clips) {
 		if (!trimAppliesToClip(trim, c)) continue;
@@ -78,7 +82,7 @@ export function trimToTimelineSpan(
 				: trim.startSec >= c.sourceStartSec && trim.startSec <= srcEnd;
 		if (carries) {
 			const map = (s: number) =>
-				c.timelineStartSec + (Math.min(Math.max(s, c.sourceStartSec), srcEnd) - c.sourceStartSec);
+				sourceToTimelineSec(c, Math.min(Math.max(s, c.sourceStartSec), srcEnd), insertRanges);
 			return { start: map(trim.startSec), end: map(trim.endSec) };
 		}
 	}
@@ -140,11 +144,12 @@ export function ventilateTimelineSpanToTrims(
 export function coalescedTrimGroups(
 	trimRanges: AxcutTrimRange[],
 	clips: AxcutClip[],
+	insertRanges: readonly AxcutInsertRange[],
 	epsilonSec?: number,
 ): CoalescedSpan[] {
 	const spans = trimRanges
 		.map((t) => {
-			const mapped = trimToTimelineSpan(t, clips);
+			const mapped = trimToTimelineSpan(t, clips, insertRanges);
 			return mapped
 				? {
 						id: t.id,
@@ -183,10 +188,12 @@ export function resolveTrimPillIds(
 	trimRanges: AxcutTrimRange[],
 	clips: AxcutClip[],
 	id: string,
+	insertRanges: readonly AxcutInsertRange[],
 	epsilonSec?: number,
 ): string[] {
 	return (
-		coalescedTrimGroups(trimRanges, clips, epsilonSec).find((g) => g.ids.includes(id))?.ids ?? [id]
+		coalescedTrimGroups(trimRanges, clips, insertRanges, epsilonSec).find((g) => g.ids.includes(id))
+			?.ids ?? [id]
 	);
 }
 
@@ -201,11 +208,14 @@ export function dropTrimPillsByIds(
 	trimRanges: AxcutTrimRange[],
 	clips: AxcutClip[],
 	ids: Iterable<string>,
+	insertRanges: readonly AxcutInsertRange[],
 	epsilonSec?: number,
 ): AxcutTrimRange[] {
 	const under = new Set<string>();
 	for (const id of ids) {
-		for (const member of resolveTrimPillIds(trimRanges, clips, id, epsilonSec)) under.add(member);
+		for (const member of resolveTrimPillIds(trimRanges, clips, id, insertRanges, epsilonSec)) {
+			under.add(member);
+		}
 	}
 	if (under.size === 0) return trimRanges;
 	return trimRanges.filter((t) => !under.has(t.id));
@@ -225,6 +235,9 @@ export function resolveTimelineSpanToTrim(
 	startSec: number,
 	endSec: number,
 	clips: AxcutClip[],
+	/** REQUIRED: a clip carrying insertions is longer than its source window, so this is not
+	 *  a plain shift (issue #560). */
+	insertRanges: readonly AxcutInsertRange[],
 ): TrimSourceRange | null {
 	if (clips.length === 0) return null;
 	const lo = Math.min(startSec, endSec);
@@ -246,7 +259,7 @@ export function resolveTimelineSpanToTrim(
 		Math.min(lo, carrier.timelineStartSec + srcLen),
 	);
 	const tEnd = Math.max(tStart, Math.min(hi, carrier.timelineStartSec + srcLen));
-	const toSrc = (t: number) => carrier.sourceStartSec + (t - carrier.timelineStartSec);
+	const toSrc = (t: number) => timelineToSourceSec(carrier, t, insertRanges).sourceSec;
 	return {
 		assetId: carrier.assetId,
 		clipId: carrier.id,

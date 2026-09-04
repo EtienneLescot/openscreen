@@ -110,15 +110,11 @@ function doc(inserts: AxcutInsertRange[], over: Partial<AxcutDocument> = {}): Ax
 }
 
 describe("resolveInsertPlacement", () => {
-	it("gives a recording insert its raw moment, through the clip that plays it", () => {
+	it("leaves a recording insert to `rulerInserts`, the one place that places one", () => {
+		// It used to answer with a raw second of its own, from a plain shift the clip's own
+		// insertions made wrong — a second, contradictory answer that nothing read.
 		const row = insert({ id: "i1", atSec: 3 });
-		expect(resolveInsertPlacement(row, doc([row]))).toEqual({ lane: "recording", atRawSec: 3 });
-	});
-
-	it("resolves through the SECOND clip when that is the one holding the source moment", () => {
-		// Two clips over one media at different source positions: source 22 is raw 8.
-		const row = insert({ id: "i1", atSec: 22 });
-		expect(resolveInsertPlacement(row, doc([row]))).toEqual({ lane: "recording", atRawSec: 8 });
+		expect(resolveInsertPlacement(row, doc([row]))).toBeNull();
 	});
 
 	it("leaves a voiceover insert UNPROJECTED, naming the take and a source second", () => {

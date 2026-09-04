@@ -131,7 +131,7 @@ describe("insertedWordMarks", () => {
 	];
 
 	it("paints a word on a split boundary exactly once", () => {
-		const marks = insertedWordMarks([{ assetId: "a1", words: [synth("w_edge", 5)] }], split);
+		const marks = insertedWordMarks([{ assetId: "a1", words: [synth("w_edge", 5)] }], split, []);
 		expect(marks).toHaveLength(1);
 		expect(marks[0]).toMatchObject({ clipId: "c2", atRawSec: 5 });
 	});
@@ -140,6 +140,7 @@ describe("insertedWordMarks", () => {
 		const marks = insertedWordMarks(
 			[{ assetId: "a1", words: [synth("early", 2), synth("late", 7)] }],
 			split,
+			[],
 		);
 		expect(marks.map((m) => [m.clipId, m.atRawSec])).toEqual([
 			["c1", 2],
@@ -149,17 +150,19 @@ describe("insertedWordMarks", () => {
 
 	it("keeps a word at the very end of the last clip", () => {
 		// Half-open everywhere but the tail, or the final word of a project vanishes.
-		const marks = insertedWordMarks([{ assetId: "a1", words: [synth("w_end", 10)] }], split);
+		const marks = insertedWordMarks([{ assetId: "a1", words: [synth("w_end", 10)] }], split, []);
 		expect(marks.map((m) => m.wordId)).toEqual(["w_end"]);
 	});
 
 	it("ignores words nobody added", () => {
 		const spoken = { id: "w1", segmentId: "s", text: "w1", startSec: 2, endSec: 3 } as AxcutWord;
-		expect(insertedWordMarks([{ assetId: "a1", words: [spoken] }], split)).toEqual([]);
+		expect(insertedWordMarks([{ assetId: "a1", words: [spoken] }], split, [])).toEqual([]);
 	});
 
 	it("ignores a transcript no clip draws on", () => {
-		expect(insertedWordMarks([{ assetId: "other", words: [synth("w1", 2)] }], split)).toEqual([]);
+		expect(insertedWordMarks([{ assetId: "other", words: [synth("w1", 2)] }], split, [])).toEqual(
+			[],
+		);
 	});
 });
 

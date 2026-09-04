@@ -770,7 +770,7 @@ export function V4Timeline({
 	// the clip through a reorder for free, with no ruler arithmetic of its own.
 	const insertedWordsByClip = useMemo(() => {
 		const out = new Map<string, InsertedWordMark[]>();
-		for (const mark of insertedWordMarks(tl.transcripts, clips)) {
+		for (const mark of insertedWordMarks(tl.transcripts, clips, tl.insertRanges ?? [])) {
 			const list = out.get(mark.clipId);
 			if (list) list.push(mark);
 			else out.set(mark.clipId, [mark]);
@@ -783,7 +783,11 @@ export function V4Timeline({
 	// coalesced into one pill. This is what makes growing a trim across a
 	// junction look like one continuously-growing pill instead of visibly
 	// splitting, aligning trims with how zoom/speed/annotation already behave.
-	const trimPills: LanePill[] = coalescedTrimGroups(tl.trimRanges, clips).map((g) => ({
+	const trimPills: LanePill[] = coalescedTrimGroups(
+		tl.trimRanges,
+		clips,
+		tl.insertRanges ?? [],
+	).map((g) => ({
 		id: g.ids[0],
 		kind: "trim",
 		start: g.start,
@@ -1009,7 +1013,7 @@ export function V4Timeline({
 					let ranges = ventilateTimelineSpanToTrims(s, en, clips);
 					if (ranges.length === 0) {
 						// Span sits in a gap / past the end: fall back to the nearest clip.
-						const resolved = resolveTimelineSpanToTrim(s, en, clips);
+						const resolved = resolveTimelineSpanToTrim(s, en, clips, tl.insertRanges ?? []);
 						if (!resolved) return;
 						ranges = [resolved];
 					}

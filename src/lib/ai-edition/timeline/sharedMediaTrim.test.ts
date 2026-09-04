@@ -85,7 +85,7 @@ describe("repro: trim on clip 2 of two clips sharing one media", () => {
 		]);
 
 		// 2. Ruler — one pill, over clip 2 (timeline 11.8 + 8.4 = 20.2 … 22.2).
-		const pills = coalescedTrimGroups(next.timeline.trimRanges, next.timeline.clips);
+		const pills = coalescedTrimGroups(next.timeline.trimRanges, next.timeline.clips, []);
 		expect(pills).toHaveLength(1);
 		expect(pills[0].start).toBeCloseTo(20.2, 6);
 		expect(pills[0].end).toBeCloseTo(22.2, 6);

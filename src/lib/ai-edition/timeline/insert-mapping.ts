@@ -23,14 +23,7 @@
 import { trackGroupId } from "../document/audioTracks";
 import type { AxcutDocument, AxcutInsertRange } from "../schema";
 
-/** A pause in the film: the clip holds a frame at this raw moment. */
-export interface RecordingInsertPlacement {
-	lane: "recording";
-	/** Raw ruler second — insertions occupy zero raw time, so this is a point. */
-	atRawSec: number;
-}
-
-/** A silence inside a take: no picture, no ruler growth of its own. */
+/** A silence inside a take: no picture of its own. */
 export interface VoiceoverInsertPlacement {
 	lane: "voiceover";
 	/** The user-visible take, not one of its stored fragments. */
@@ -39,11 +32,12 @@ export interface VoiceoverInsertPlacement {
 	atSourceSec: number;
 }
 
-export type InsertPlacement = RecordingInsertPlacement | VoiceoverInsertPlacement;
+export type InsertPlacement = VoiceoverInsertPlacement;
 
 /**
- * Where this insertion belongs, or null when nothing carries it any more — a clip whose
- * source range no longer contains the moment, or a take that has been deleted.
+ * Which TAKE carries this insertion, or null — a recording's insertion, or a take that has
+ * been deleted. Only takes need answering here: an insertion in the film is placed by
+ * `rulerInserts`, which is the one definition of where an insertion sits on the timeline.
  *
  * The lane is read from the ASSET, never from the row: `kind: "audio"` is the only thing
  * that distinguishes a take's transcript from the film's, and it is already the
@@ -54,28 +48,16 @@ export function resolveInsertPlacement(
 	document: AxcutDocument,
 ): InsertPlacement | null {
 	const asset = document.assets.find((a) => a.id === insert.assetId);
-	if (asset?.kind === "audio") {
-		// The first take drawing on this asset whose source window contains the moment.
-		// Inclusive at both edges, matching `rulerInserts`: a pause sits at the END of the
-		// word it follows, which is routinely a window's own boundary.
-		for (const track of document.audioTracks ?? []) {
-			if (track.kind !== "voiceover" || track.assetId !== insert.assetId) continue;
-			const startSec = track.offsetMs / 1000;
-			const endSec = startSec + Math.max(0, track.endMs - track.startMs) / 1000;
-			if (insert.atSec < startSec || insert.atSec > endSec) continue;
-			return { lane: "voiceover", trackGroupId: trackGroupId(track), atSourceSec: insert.atSec };
-		}
-		return null;
-	}
-
-	for (const clip of document.timeline.clips) {
-		if (clip.assetId !== insert.assetId) continue;
-		const sourceEnd = clip.sourceEndSec ?? Number.POSITIVE_INFINITY;
-		if (insert.atSec < clip.sourceStartSec || insert.atSec > sourceEnd) continue;
-		return {
-			lane: "recording",
-			atRawSec: clip.timelineStartSec + (insert.atSec - clip.sourceStartSec),
-		};
+	if (asset?.kind !== "audio") return null;
+	// The first take drawing on this asset whose source window contains the moment.
+	// Inclusive at both edges, matching `rulerInserts`: an insertion sits at the END of the
+	// word it follows, which is routinely a window's own boundary.
+	for (const track of document.audioTracks ?? []) {
+		if (track.kind !== "voiceover" || track.assetId !== insert.assetId) continue;
+		const startSec = track.offsetMs / 1000;
+		const endSec = startSec + Math.max(0, track.endMs - track.startMs) / 1000;
+		if (insert.atSec < startSec || insert.atSec > endSec) continue;
+		return { lane: "voiceover", trackGroupId: trackGroupId(track), atSourceSec: insert.atSec };
 	}
 	return null;
 }

@@ -990,7 +990,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 	// the group's, not the clicked row's. Deleting no longer needs the same expansion here:
 	// `removeRegion` drops the whole pill for every kind (`dropTrimPillsByIds`), which is
 	// what this pane used to have to arrange for itself.
-	const trimGroup = coalescedTrimGroups(tl.trimRanges, tl.clips).find((g) =>
+	const trimGroup = coalescedTrimGroups(tl.trimRanges, tl.clips, tl.insertRanges ?? []).find((g) =>
 		g.ids.includes(selection.id),
 	);
 	if (!trimGroup) return null;

@@ -96,6 +96,11 @@ export function anchoredToRawSpanSec(
 ): { startSec: number; endSec: number } | null {
 	const clip = clips.find((c) => c.id === fragment.clipId);
 	if (!clip) return null;
+	// ponytail: plain shift, wrong by the clip's own insertions for a region anchored past
+	// one — the pill is drawn early while `projectRegionsToSource` exports it on the right
+	// frames. Route through `sourceToTimelineSec` when zoom/annotation pills need to agree
+	// with the effect; it means threading the ranges through `anchorRegionsWithDerivedMs`
+	// and its 15 callers, which is its own change.
 	return {
 		startSec: clip.timelineStartSec + (fragment.sourceStartSec - clip.sourceStartSec),
 		endSec: clip.timelineStartSec + (fragment.sourceEndSec - clip.sourceStartSec),

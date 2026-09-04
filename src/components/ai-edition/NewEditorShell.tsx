@@ -659,7 +659,12 @@ export function NewEditorShell() {
 			void enqueueTimelineWrite(async () => {
 				const doc = useProjectStore.getState().document;
 				if (!doc) return;
-				const next = dropTrimPillsByIds(doc.timeline.trimRanges, doc.timeline.clips, trimIds);
+				const next = dropTrimPillsByIds(
+					doc.timeline.trimRanges,
+					doc.timeline.clips,
+					trimIds,
+					doc.timeline.insertRanges ?? [],
+				);
 				if (next.length === doc.timeline.trimRanges.length) return;
 				await saveDocument(
 					{ ...doc, timeline: { ...doc.timeline, trimRanges: next } },
@@ -1078,7 +1083,7 @@ export function NewEditorShell() {
 		// (properties kept, position taken from the playhead).
 		if (sel.kind === "trim") {
 			const { coalescedTrimGroups } = await import("@/lib/ai-edition/timeline/trim-mapping");
-			const group = coalescedTrimGroups(tl.trimRanges, tl.clips).find((g) =>
+			const group = coalescedTrimGroups(tl.trimRanges, tl.clips, tl.insertRanges ?? []).find((g) =>
 				g.ids.includes(sel.id),
 			);
 			if (!group) return;

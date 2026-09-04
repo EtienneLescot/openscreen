@@ -101,7 +101,7 @@ describe("a cut authored from the voiceover lane", () => {
 			[5, 6],
 			[20, 21],
 		]);
-		expect(coalescedTrimGroups(rows, CLIPS)).toHaveLength(1);
+		expect(coalescedTrimGroups(rows, CLIPS, [])).toHaveLength(1);
 		expect(filmSec(rows)).toBeCloseTo(10, 6);
 	});
 
@@ -109,7 +109,7 @@ describe("a cut authored from the voiceover lane", () => {
 		const rows = cut(5, 7);
 		// Restoring must not leave half the cut behind, with the word still gone and
 		// nothing on the ruler to click.
-		expect(dropTrimPillsByIds(rows, CLIPS, [rows[0].id])).toEqual([]);
+		expect(dropTrimPillsByIds(rows, CLIPS, [rows[0].id], [])).toEqual([]);
 	});
 
 	it("writes nothing where there is no film", () => {
