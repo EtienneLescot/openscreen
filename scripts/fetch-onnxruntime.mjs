@@ -55,6 +55,24 @@ const VERSION = "1.27.1";
 const BASE = `https://github.com/microsoft/onnxruntime/releases/download/v${VERSION}`;
 
 /**
+ * Where a target's archive is fetched from. Upstream unless the entry overrides it.
+ *
+ * The override exists for one reason, and it is not preference: **no published ONNX
+ * Runtime has ever satisfied this app's macOS floor.** Every release from 1.24 on is
+ * built for macOS 14, and every release before it for at least 13.3, while
+ * `electron-builder.json5` declares 13.0 and `before-pack.cjs` refuses anything above
+ * the floor — correctly, since the deployment target decides which symbols the linker
+ * resolves against the OS instead of emitting locally (#515). So `npm run build:mac`
+ * cannot package a macOS bundle at all with the upstream artifact.
+ *
+ * `.github/workflows/build-onnxruntime-macos.yml` builds one with the floor pinned and
+ * prints the `PINNED` entry to paste here. Everything else about this file is
+ * unchanged: an immutable URL, and a SHA-256 verified before the archive is opened.
+ * What moves is who built the bytes, not how much they are trusted.
+ */
+const baseUrlFor = (spec) => spec.baseUrl ?? BASE;
+
+/**
  * Per-target: the upstream artifact slug, its digest, and the library to lift out.
  *
  * `out` is not cosmetic — it is the exact name `ortLibName()` looks for in
@@ -204,7 +222,7 @@ async function download(spec) {
 	const asset = assetName(spec);
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-ort-"));
 	console.log(`Downloading ${asset}\n  from v${VERSION}`);
-	const res = await fetch(`${BASE}/${asset}`);
+	const res = await fetch(`${baseUrlFor(spec)}/${asset}`);
 	if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
 	const bytes = Buffer.from(await res.arrayBuffer());
 
