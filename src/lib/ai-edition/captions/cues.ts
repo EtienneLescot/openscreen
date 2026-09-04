@@ -100,7 +100,7 @@ export function captionLinesForAsset(
 	transcript: AxcutTranscript,
 	settings: CaptionSettings,
 	translations: CaptionTranslations,
-): CaptionSegment[] {
+): CaptionLine[] {
 	const minWords = settings.minWordsPerLine;
 	const maxWords = settings.maxWordsPerLine;
 
@@ -121,11 +121,18 @@ export function captionLinesForAsset(
 	// recorded or all added: the two are spoken over different media — the recording, and the
 	// insertion that added word bought — so a line holding both would have to be in two places
 	// at once, and resolved as one it lands on the recording, an insertion too early.
-	return polish(
-		captionRuns(stream, addedWordSpans(transcript)).flatMap((run) =>
-			groupTimedCaptionWordsIntoLines(run, minWords, maxWords),
-		),
-	);
+	const added = addedWordSpans(transcript);
+	// Polished per RUN, so the flag survives and so the finaliser's neighbours are all the
+	// same kind. Across a run boundary the two lines share a source second and the finaliser
+	// cannot tell them apart; `deoverlapCues` settles that on the ruler instead, where the
+	// insertion has a width.
+	return captionRuns(stream, added).flatMap((run) => {
+		const isAdded = run.length > 0 && overlapsAdded(run[0], added);
+		return polish(groupTimedCaptionWordsIntoLines(run, minWords, maxWords)).map((line) => ({
+			...line,
+			added: isAdded,
+		}));
+	});
 }
 
 function overlapsAdded(
@@ -140,6 +147,10 @@ function overlapsAdded(
 			(word.startSec >= span.startSec && word.endSec <= span.endSec),
 	);
 }
+
+/** A caption line, and whether it is spoken over inserted media rather than the recording.
+ *  Only the grouping pass knows which is which, and every edge below depends on it. */
+export type CaptionLine = CaptionSegment & { added: boolean };
 
 /** Where the transcript's ADDED words sit, in source time. */
 function addedWordSpans(transcript: AxcutTranscript): Array<{ startSec: number; endSec: number }> {
@@ -224,6 +235,9 @@ export function sourceSpanToTimelineSpans(
 	 *  stays structurally assignable, so every existing caller is unaffected. */
 	clips: TranscriptPlacement[],
 	inserts: readonly AxcutInsertRange[] = [],
+	/** True for a span spoken over INSERTED media rather than the recording. The two occupy
+	 *  opposite sides of the same source second, so every edge flips with it. */
+	overInsertedMedia = false,
 ): Array<{ startSec: number; endSec: number }> {
 	const out: Array<{ startSec: number; endSec: number }> = [];
 	for (const clip of clips) {
@@ -233,13 +247,15 @@ export function sourceSpanToTimelineSpans(
 		const e = Math.min(endSec, clipSourceEnd);
 		if (e <= s) continue;
 		out.push({
-			startSec: sourceToTimelineSec(clip, s, inserts, "opens"),
-			// `"closes"` on the end, unconditionally. For an ADDED line that is what gives it
-			// the width of the media it bought — its source span is degenerate. For a RECORDED
-			// line the two edges agree: `finalizeCaptionSegmentsForPlayback` has already
-			// trimmed its end back to just before the next line begins, which is the added
-			// word's own moment, so there is no insertion at or past it to count.
-			endSec: sourceToTimelineSec(clip, e, inserts, "closes"),
+			// An ADDED span IS the insertion: it opens before the inserted media and closes
+			// after it, which is exactly the stretch of ruler that media occupies. A RECORDED
+			// span lives BETWEEN insertions, so both its edges are the other way round — and
+			// its START is the one that matters, because an added word is anchored at the END
+			// of the word it follows and the next recorded word begins at that very second.
+			// Mapped with the opening edge, that line landed inside the insertion, printed on
+			// top of the added one.
+			startSec: sourceToTimelineSec(clip, s, inserts, overInsertedMedia ? "opens" : "closes"),
+			endSec: sourceToTimelineSec(clip, e, inserts, overInsertedMedia ? "closes" : "opens"),
 		});
 	}
 	return out;
@@ -283,7 +299,7 @@ export function deriveCaptionCues(
 	// every voiceover cue early.
 	// A transcript is only projected once per asset even when several clips draw
 	// from it (line grouping is the expensive part, clipping is cheap).
-	const linesByAsset = new Map<string, CaptionSegment[]>();
+	const linesByAsset = new Map<string, CaptionLine[]>();
 	const cues: CaptionCue[] = [];
 	let n = 0;
 
@@ -303,6 +319,7 @@ export function deriveCaptionCues(
 				line.endSec,
 				placements,
 				document.timeline.insertRanges ?? [],
+				line.added,
 			)) {
 				const startMs = Math.round(span.startSec * 1000);
 				const endMs = Math.max(Math.round(span.endSec * 1000), startMs + 1);
