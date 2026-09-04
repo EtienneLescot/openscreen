@@ -710,15 +710,16 @@ describe("captions and a pause", () => {
 describe("a caption line never mixes recorded words with added ones", () => {
 	function docWithAddedWord(): AxcutDocument {
 		const t = transcript();
-		// "really" typed in after "friend", which ends at source 2. It fits in 0.2s of the
-		// silence that is already there and buys 1.8s of inserted media for the rest.
+		// "really" typed in after "friend", which ends at source 2. An added word takes up NO
+		// source time — the seconds it is spoken in are the insertion it buys, which is how
+		// the real documents store it — so its span is degenerate at the moment it follows.
 		t.words = [
 			...t.words.slice(0, 3),
 			{
 				id: "synth_1",
 				segmentId: "seg_1",
 				startSec: 2,
-				endSec: 2.2,
+				endSec: 2,
 				text: "really",
 				source: "synth",
 				// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
@@ -731,14 +732,13 @@ describe("a caption line never mixes recorded words with added ones", () => {
 			transcripts: [t],
 			timeline: {
 				...base.timeline,
-				clips: [{ ...base.timeline.clips[0], timelineEndSec: 11.8 }],
-				// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
+				clips: [{ ...base.timeline.clips[0], timelineEndSec: 12 }],
 				insertRanges: [
 					{
 						id: "i1",
 						assetId: "asset-1",
-						atSec: 2.2,
-						durationSec: 1.8,
+						atSec: 2,
+						durationSec: 2,
 						wordId: "synth_1",
 						reason: "",
 						origin: "user",
@@ -759,6 +759,26 @@ describe("a caption line never mixes recorded words with added ones", () => {
 		expect(added[0].text.toLowerCase()).not.toContain("hello");
 		// And it opens at the recorded words' end, not at their start.
 		expect(added[0].startMs).toBeGreaterThanOrEqual(2000);
+	});
+
+	it("lays the three lines out end to end across the insertion", () => {
+		// The whole rule in one assertion set: the recorded line stops where the added one
+		// begins, the added one spans the media it bought, and what follows is pushed along
+		// by exactly that length.
+		const cues = deriveCaptionCues(docWithAddedWord(), settings, {});
+		const recorded = cues.find((c) => c.text.toLowerCase().includes("hello"));
+		const added = cues.find((c) => c.text.includes("really"));
+		const after = cues.find((c) => c.text.includes("goodbye"));
+		expect(recorded).toBeDefined();
+		expect(added).toBeDefined();
+		expect(after).toBeDefined();
+		// The insertion opens at ruler 2000 and runs 2000ms. Three consecutive facts:
+		// the recorded line STOPS there, the added line COVERS it, and what follows is
+		// pushed along by exactly its length.
+		expect(recorded?.endMs).toBe(2000);
+		expect(added?.startMs).toBe(2000);
+		expect(added?.endMs).toBeGreaterThan(3900);
+		expect(after?.startMs).toBe(6000);
 	});
 
 	it("leaves the recorded line ending before the added one begins", () => {

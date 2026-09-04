@@ -631,7 +631,7 @@ export function VirtualPreview({
 			pieces.set(groupId, takeProgramme(pill, removed, takeInsertsByGroup(groupId)));
 		}
 		return { pieces, heads };
-	}, [audioTracks, clips, trimRanges, takeInsertsByGroup]);
+	}, [audioTracks, clips, trimRanges, takeInsertsByGroup, insertRanges]);
 	takePiecesRef.current = takeWalks.pieces;
 	takeHeadsRef.current = takeWalks.heads;
 	// Trim-narrowed (`resolvePlaybackSegments`) — used ONLY to detect "has the <video>'s own
@@ -1238,7 +1238,7 @@ export function VirtualPreview({
 				});
 			}
 		},
-		[applySourceTime, clips, videoSources, sourceIndex, updateVirtualTime],
+		[applySourceTime, clips, videoSources, sourceIndex, updateVirtualTime, insertRanges],
 	);
 
 	const seekToSourceTime = useCallback(

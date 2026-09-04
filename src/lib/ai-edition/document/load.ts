@@ -22,6 +22,20 @@
 import type { AxcutDocument } from "../schema";
 import { documentSchema, migrateRawDocumentToCurrent } from "../schema";
 import { reflowClipsForInserts } from "./timeline";
+import { withInsertRangesForAllWords, withMarkedAddedWords } from "./transcript";
+
+/**
+ * The whole insertion invariant, in dependency order.
+ *
+ * A word is ADDED, an added word has an INSERTION, and a clip carrying insertions is
+ * LONGER. Each step feeds the next, and reconciling only the last one left a document
+ * carrying an unmarked added word looking perfectly consistent while playing its text over
+ * the recording. Every step is idempotent, so this runs on every load and changes nothing
+ * for a document already in step.
+ */
+export function reconcileInsertions(document: AxcutDocument): AxcutDocument {
+	return reconcileClipsWithInserts(withInsertRangesForAllWords(withMarkedAddedWords(document)));
+}
 
 /** Clip geometry brought back in line with the document's insert ranges. Idempotent. */
 export function reconcileClipsWithInserts(document: AxcutDocument): AxcutDocument {
@@ -42,5 +56,5 @@ export function reconcileClipsWithInserts(document: AxcutDocument): AxcutDocumen
 
 /** Raw JSON (any stored version) → a validated, reconciled document. */
 export function parseStoredDocument(raw: unknown): AxcutDocument {
-	return reconcileClipsWithInserts(documentSchema.parse(migrateRawDocumentToCurrent(raw)));
+	return reconcileInsertions(documentSchema.parse(migrateRawDocumentToCurrent(raw)));
 }

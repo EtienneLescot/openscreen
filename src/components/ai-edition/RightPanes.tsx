@@ -913,8 +913,8 @@ export function TranscriptPane({
 	const placements = activeLane === "voiceover" ? voiceover : clips;
 
 	const sections = useMemo(
-		() => buildAggregatedSections(placements, transcripts, assets, removed),
-		[placements, transcripts, assets, removed],
+		() => buildAggregatedSections(placements, transcripts, assets, removed, insertRanges),
+		[placements, transcripts, assets, removed, insertRanges],
 	);
 
 	// `currentTimeSec` is the RAW/document timeline (same referential as the ruler, see
@@ -923,8 +923,8 @@ export function TranscriptPane({
 	// id is something only the recording lane has — so the voiceover lane never
 	// highlighted. Raw seconds are the coordinate both lanes share.
 	const cueWordId = useMemo(
-		() => findCueWordId(sections, currentTimeSec),
-		[sections, currentTimeSec],
+		() => findCueWordId(sections, currentTimeSec, insertRanges),
+		[sections, currentTimeSec, insertRanges],
 	);
 
 	const laneSwitch =
@@ -1035,6 +1035,7 @@ export function TranscriptPane({
 						undefined
 					}
 					cueWordId={cueWordId}
+					insertRanges={insertRanges}
 					onSeek={onSeek}
 					onTrimTimelineSpan={onTrimTimelineSpan}
 					onRemoveTrimRanges={onRemoveTrimRanges}
@@ -1066,6 +1067,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	busyLabel,
 	lane,
 	cueWordId,
+	insertRanges,
 	onSeek,
 	onTrimTimelineSpan,
 	onRemoveTrimRanges,
@@ -1081,6 +1083,10 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	 *  CLIP frame, and a voiceover placement has no clip to hold. */
 	lane: TranscriptLane;
 	cueWordId: string | null;
+	/** The insertions this placement carries: the block maps its words' SOURCE spans onto
+	 *  the ruler to author a cut, and a clip carrying insertions is longer than its source
+	 *  window (issue #560). */
+	insertRanges: readonly AxcutInsertRange[];
 	onSeek: (sec: number) => void;
 	onTrimTimelineSpan: (startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRanges: (trimIds: string[]) => void;
@@ -1100,13 +1106,14 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	// to do with the word the user deleted.
 	const toRawSpan = useCallback(
 		(startSec: number, endSec: number): [number, number] => {
-			const extent = placementRawExtent(clip);
+			const extent = placementRawExtent(clip, insertRanges);
 			const lo = extent?.startSec ?? clip.timelineStartSec;
 			const hi = extent?.endSec ?? Number.POSITIVE_INFINITY;
-			const clamp = (sec: number) => Math.min(Math.max(placementRawSec(clip, sec), lo), hi);
+			const clamp = (sec: number) =>
+				Math.min(Math.max(placementRawSec(clip, sec, insertRanges), lo), hi);
 			return [clamp(startSec), clamp(endSec)];
 		},
-		[clip],
+		[clip, insertRanges],
 	);
 	const filename = asset?.label ?? clip.assetId;
 	const sourceRangeLabel =

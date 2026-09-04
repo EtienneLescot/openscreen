@@ -150,7 +150,6 @@ describe("captionLane", () => {
 		const paused = doc({
 			timeline: {
 				...doc().timeline,
-				// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 				insertRanges: [
 					{
 						id: "i1",
@@ -161,6 +160,7 @@ describe("captionLane", () => {
 						reason: "",
 						origin: "user",
 					},
+					// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 				] as any,
 			},
 		});

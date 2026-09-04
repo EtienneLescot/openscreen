@@ -13,10 +13,7 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createId } from "../../src/lib/ai-edition/document/ids";
-import {
-	parseStoredDocument,
-	reconcileClipsWithInserts,
-} from "../../src/lib/ai-edition/document/load";
+import { parseStoredDocument, reconcileInsertions } from "../../src/lib/ai-edition/document/load";
 import { removeClip } from "../../src/lib/ai-edition/document/timeline";
 import {
 	type AxcutAsset,
@@ -277,7 +274,7 @@ export class DocumentService {
 		// back, and it is not persisted from here: the renderer saves the document
 		// it was given, as it does for any other load-time repair.
 		const migrated = migrateRawDocumentToCurrent(JSON.parse(raw));
-		return reconcileClipsWithInserts(
+		return reconcileInsertions(
 			documentSchema.parse(await relinkProjectMedia(migrated, this.mediaRegistryDir)),
 		);
 	}

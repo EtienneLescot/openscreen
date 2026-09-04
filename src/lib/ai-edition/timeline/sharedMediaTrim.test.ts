@@ -75,6 +75,7 @@ describe("repro: trim on clip 2 of two clips sharing one media", () => {
 			next.transcripts,
 			next.assets,
 			removedRawSpans(next.timeline.clips, next.timeline.trimRanges, []),
+			[],
 		);
 		expect(sections[0].trimRuns).toHaveLength(0);
 		expect(sections[1].trimRuns).toHaveLength(1);
