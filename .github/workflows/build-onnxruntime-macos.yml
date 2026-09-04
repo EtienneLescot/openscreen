@@ -38,6 +38,13 @@ on:
       - ".github/workflows/build-onnxruntime-macos.yml"
       - "scripts/fetch-onnxruntime.mjs"
 
+# One build per branch. Without this, every push to a branch that touches the paths
+# above starts another 1-2 h build and none of the earlier ones stop: three ran
+# concurrently on this workflow's own PR, the oldest for nearly four hours.
+concurrency:
+  group: onnxruntime-macos-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   # Provenance attestation. `id-token` mints the OIDC token GitHub signs with, and
@@ -52,9 +59,13 @@ jobs:
     # arm64 runner: the only macOS target upstream ships, and the only one the
     # app packages. There is no Intel build to match.
     runs-on: macos-latest
+    # The default is 6 h. This build takes ~10 min on an 8-core M1 with `--parallel 4`
+    # and well over an hour on the runner; a cap turns "pathologically slow" into a
+    # failure somebody sees rather than six hours of quietly burnt minutes.
+    timeout-minutes: 150
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Read the pinned version from fetch-onnxruntime.mjs
         id: pin
@@ -81,7 +92,7 @@ jobs:
           echo "Deployment target: $FLOOR"
 
       - name: Checkout ONNX Runtime
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: microsoft/onnxruntime
           ref: v${{ steps.pin.outputs.version }}
@@ -106,7 +117,7 @@ jobs:
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
 
       - name: Cache the CMake build tree
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: onnxruntime-build
           # Keyed on the version, the floor and the runner image. The image matters:
@@ -134,7 +145,15 @@ jobs:
             -DPython_EXECUTABLE="$(command -v python3)"
 
       - name: Build
-        run: cmake --build onnxruntime-build --config Release --parallel
+        # BOUNDED, deliberately. Bare `--parallel` means "as many jobs as cores", and
+        # ONNX Runtime's C++ translation units are memory-hungry: on a runner with far
+        # less RAM per core than the reference M1, that is how a 10-minute build becomes
+        # an hour of swapping. `nproc`-1 leaves the machine a core to breathe.
+        run: |
+          set -euo pipefail
+          JOBS="$(( $(sysctl -n hw.ncpu) > 2 ? $(sysctl -n hw.ncpu) - 1 : 1 ))"
+          echo "Building with $JOBS jobs on $(sysctl -n hw.ncpu) cores, $(( $(sysctl -n hw.memsize) / 1073741824 )) GiB"
+          cmake --build onnxruntime-build --config Release --parallel "$JOBS"
 
       - name: Verify the deployment target
         # The entire reason this workflow exists. A library that comes out at 14.0
@@ -190,6 +209,7 @@ jobs:
           shasum -a 256 "${DIR}.tgz"
 
       - name: Attest build provenance
+        id: attest
         # A SHA-256 in `fetch-onnxruntime.mjs` says "these are the bytes somebody
         # pinned". It cannot say WHERE they came from — and once the publisher is us
         # rather than Microsoft, that is the question that matters. This binds the
@@ -199,12 +219,12 @@ jobs:
         #     gh attestation verify onnxruntime-osx-arm64-<v>.tgz --repo getopenscreen/openscreen
         #
         # It does not replace the digest pin, it answers a different question. Keep both.
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: onnxruntime-osx-arm64-*.tgz
 
       - name: Upload
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: onnxruntime-osx-arm64
           path: onnxruntime-osx-arm64-*.tgz
@@ -223,7 +243,15 @@ jobs:
             echo ""
             echo "- Result: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ -f "$ARCHIVE" ]; then
+          if [ "${{ steps.attest.outcome }}" != "success" ]; then
+            {
+              echo ""
+              echo "> **Provenance was NOT attested** (\`${{ steps.attest.outcome }}\`)."
+              echo "> Do not adopt this archive: the digest below says what the bytes are,"
+              echo "> nothing says where they came from. Re-run the workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f "$ARCHIVE" ] && [ "${{ steps.attest.outcome }}" = "success" ]; then
             SHA="$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)"
             {
               echo "- Archive: \`${ARCHIVE}\` ($(du -h "$ARCHIVE" | cut -f1))"
