@@ -756,7 +756,11 @@ describe("executeAgentTool", () => {
 		const zoomId = withZoom.zoomRanges[0].id;
 		const removed = executeAgentTool(withZoom, "removeModifier", JSON.stringify({ id: zoomId }));
 		expect(removed.ok).toBe(true);
-		expect(JSON.parse(removed.resultJson)).toMatchObject({ kind: "zoom" });
+		expect(JSON.parse(removed.resultJson)).toMatchObject({
+			kind: "zoom",
+			removed: zoomId,
+			removedIds: [zoomId],
+		});
 		expect(removed.document?.zoomRanges).toHaveLength(0);
 
 		const withSpeed = executeAgentTool(
@@ -772,7 +776,11 @@ describe("executeAgentTool", () => {
 			"removeModifier",
 			JSON.stringify({ id: speedId }),
 		);
-		expect(JSON.parse(removedSpeed.resultJson)).toMatchObject({ kind: "speed" });
+		expect(JSON.parse(removedSpeed.resultJson)).toMatchObject({
+			kind: "speed",
+			removed: speedId,
+			removedIds: [speedId],
+		});
 		expect(
 			(removedSpeed.document?.legacyEditor as Record<string, unknown>).speedRegions,
 		).toHaveLength(0);
@@ -785,6 +793,39 @@ describe("executeAgentTool", () => {
 		);
 		expect(wrong.ok).toBe(false);
 		expect(wrong.resultJson).toMatch(/removeTrim/);
+	});
+
+	it("removeModifier reports every touching modifier row removed with the pill", () => {
+		const added = executeAgentTool(
+			fixtureDocument(),
+			"addZooms",
+			JSON.stringify({
+				regions: [
+					{ startSec: 0, endSec: 10, depth: 3 },
+					{ startSec: 10, endSec: 20, depth: 3 },
+					{ startSec: 20, endSec: 30, depth: 3 },
+				],
+			}),
+		);
+		expect(added.ok).toBe(true);
+		const ids = (JSON.parse(added.resultJson).applied as Array<{ zoomId: string }>).map(
+			(entry) => entry.zoomId,
+		);
+		expect(ids).toHaveLength(3);
+
+		const removed = executeAgentTool(
+			added.document as AxcutDocument,
+			"removeModifier",
+			JSON.stringify({ id: ids[0] }),
+		);
+
+		expect(removed.ok).toBe(true);
+		expect(removed.document?.zoomRanges).toHaveLength(0);
+		expect(JSON.parse(removed.resultJson)).toMatchObject({
+			removed: ids[0],
+			removedIds: ids,
+			kind: "zoom",
+		});
 	});
 
 	it("addZoom reports the CLAMPED span, not the one it was asked for", () => {

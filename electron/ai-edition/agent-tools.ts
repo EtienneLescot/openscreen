@@ -69,6 +69,26 @@ function toMs(sec: number): number {
 	return Math.max(0, Math.round(sec * 1000));
 }
 
+type ModifierKind = Exclude<RegionKind, "trim">;
+
+function modifierIds(document: AxcutDocument, kind: ModifierKind): string[] {
+	const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+	switch (kind) {
+		case "zoom":
+			return document.zoomRanges.map((region) => region.id);
+		case "annotation":
+			return document.annotations.map((region) => region.id);
+		case "speed":
+			return ((legacy.speedRegions as Array<{ id: string }> | undefined) ?? []).map(
+				(region) => region.id,
+			);
+		case "cameraFullscreen":
+			return ((legacy.cameraFullscreenRegions as Array<{ id: string }> | undefined) ?? []).map(
+				(region) => region.id,
+			);
+	}
+}
+
 // For the effect set* tools: keep the stored span unless the caller passes new
 // edges, and normalise so start ≤ end. Input seconds are virtual-timeline time.
 function resolveSpanMs(
@@ -1867,7 +1887,7 @@ export function executeAgentTool(
 			const speedRegions = (legacy.speedRegions as Array<{ id: string }> | undefined) ?? [];
 			const cameraFullscreenRegions =
 				(legacy.cameraFullscreenRegions as Array<{ id: string }> | undefined) ?? [];
-			let kind: RegionKind | null = null;
+			let kind: ModifierKind | null = null;
 			if (document.zoomRanges.some((z) => z.id === id)) kind = "zoom";
 			else if (document.annotations.some((a) => a.id === id)) kind = "annotation";
 			else if (speedRegions.some((s) => s.id === id)) kind = "speed";
@@ -1878,12 +1898,18 @@ export function executeAgentTool(
 						`For a trim use removeTrim; for a clip use removeClip.`,
 				);
 			}
+			const beforeIds = modifierIds(document, kind);
 			const next = removeRegion(document, kind, id);
+			const remainingIds = new Set(modifierIds(next, kind));
+			const removedIds = beforeIds.filter((candidateId) => !remainingIds.has(candidateId));
 			return {
 				ok: true,
 				document: next,
-				resultJson: JSON.stringify({ removed: id, kind }),
-				summary: `removed ${kind} ${id}`,
+				resultJson: JSON.stringify({ removed: id, removedIds, kind }),
+				summary:
+					removedIds.length === 1
+						? `removed ${kind} ${id}`
+						: `removed ${removedIds.length} ${kind} rows: ${removedIds.join(", ")}`,
 			};
 		}
 
