@@ -3,7 +3,13 @@
 
 import { describe, expect, it } from "vitest";
 import type { AxcutClip, AxcutWord } from "../schema";
-import { clipParts, extensionDurationSec, partsLengthSec } from "./clip-parts";
+import {
+	clipParts,
+	clipsWithExtensions,
+	extensionAssetId,
+	extensionDurationSec,
+	partsLengthSec,
+} from "./clip-parts";
 
 const CLIP: AxcutClip = {
 	id: "c1",
@@ -103,5 +109,36 @@ describe("extensionDurationSec", () => {
 
 	it("is nothing at all for nothing at all", () => {
 		expect(extensionDurationSec("  ")).toBe(0);
+	});
+});
+
+// ─── What a player sees ─────────────────────────────────────────────────────
+// The DOM preview already plays several clips over several files and swaps at the boundary.
+// An extension is exactly that, so it is handed a clip rather than taught a new case.
+
+describe("clipsWithExtensions", () => {
+	const transcripts = [{ assetId: "a1", words: [added("synth_1", 4, "really")] }];
+
+	it("splices the extension in as a clip of its own, on its own media", () => {
+		const out = clipsWithExtensions([CLIP], transcripts);
+		expect(out.map((c) => c.assetId)).toEqual(["a1", "ext:synth_1", "a1"]);
+		expect(out[1]).toMatchObject({ sourceStartSec: 0 });
+		expect(out[1].sourceEndSec).toBeCloseTo(6 / 15, 6);
+	});
+
+	it("lays them end to end, so the player's clock never sees a gap", () => {
+		const out = clipsWithExtensions([CLIP], transcripts);
+		expect(out[0].timelineStartSec).toBe(0);
+		for (const [i, clip] of out.slice(0, -1).entries()) {
+			expect(clip.timelineEndSec).toBeCloseTo(out[i + 1].timelineStartSec, 9);
+		}
+	});
+
+	it("returns the clips unchanged when no word was added", () => {
+		expect(clipsWithExtensions([CLIP], [{ assetId: "a1", words: [] }])).toEqual([CLIP]);
+	});
+
+	it("gives the extension an id no real asset can collide with", () => {
+		expect(extensionAssetId("synth_1")).toBe("ext:synth_1");
 	});
 });

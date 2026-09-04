@@ -128,6 +128,50 @@ export function extensionClipPath(assetPath: string, wordId: string, durationSec
 	return `${dir}${sep}${EXTENSIONS_DIR}${sep}${wordId}_${Math.round(durationSec * 1000)}.mp4`;
 }
 
+/** The id an extension's media answers to, so a player that keys sources by asset finds it
+ *  without knowing what an extension is. Prefixed rather than opaque: it can never collide
+ *  with a real asset id, and it says what it is in a log line. */
+export function extensionAssetId(wordId: string): string {
+	return `ext:${wordId}`;
+}
+
+/**
+ * The clips a PLAYER should see: each extension spliced in as a clip of its own.
+ *
+ * The DOM preview already knows how to play several clips over several files and swap at the
+ * boundary. An extension is exactly that — a different file, played for a stretch — so it is
+ * handed one rather than taught a new case. `resolvePlaybackSegments` does the same thing
+ * one layer down, with the trims applied; this is the untrimmed list the player's own clock
+ * maps against.
+ */
+export function clipsWithExtensions(
+	clips: readonly AxcutClip[],
+	transcripts: ReadonlyArray<{ assetId: string; words: readonly AxcutWord[] }>,
+): AxcutClip[] {
+	const wordsByAsset = new Map(transcripts.map((t) => [t.assetId, t.words]));
+	return clips.flatMap((clip) =>
+		clipParts(clip, wordsByAsset.get(clip.assetId) ?? []).map((part) =>
+			part.kind === "extension"
+				? {
+						...clip,
+						id: `${clip.id}__ext_${part.wordId}`,
+						assetId: extensionAssetId(part.wordId),
+						sourceStartSec: 0,
+						sourceEndSec: part.timelineEndSec - part.timelineStartSec,
+						timelineStartSec: part.timelineStartSec,
+						timelineEndSec: part.timelineEndSec,
+					}
+				: {
+						...clip,
+						sourceStartSec: part.sourceStartSec,
+						sourceEndSec: part.sourceEndSec,
+						timelineStartSec: part.timelineStartSec,
+						timelineEndSec: part.timelineEndSec,
+					},
+		),
+	);
+}
+
 /** Hidden, because it is derived: deleting it costs nothing but a regeneration. */
 export const EXTENSIONS_DIR = ".openscreen-extensions";
 
