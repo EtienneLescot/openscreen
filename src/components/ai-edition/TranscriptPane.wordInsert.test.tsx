@@ -60,6 +60,7 @@ function renderPane(words: AxcutWord[] = WORDS, busyAssetIds: string[] = []) {
 		<I18nProvider>
 			<TranscriptPane
 				clips={[CLIP]}
+				audioTracks={[]}
 				transcripts={[transcript]}
 				assets={[ASSET]}
 				trimRanges={[]}

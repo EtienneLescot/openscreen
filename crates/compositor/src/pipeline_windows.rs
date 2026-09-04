@@ -3,8 +3,8 @@
 //! tout le run, deux lectures seulement. Rien dans la boucle ne peut fausser le fps.
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_audio,
-    mix_external_tracks, stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
+    assemble_concatenated_pcm, build_audio_concat_plan, finish_audio, mix_external_tracks,
+    AacEncoder, PlanarPcm,
 };
 use crate::audio_jobs::{decode_and_stretch_clip_audio, ClipAudioJobs};
 use crate::compositor::{Compositor, OUT_H, OUT_W};

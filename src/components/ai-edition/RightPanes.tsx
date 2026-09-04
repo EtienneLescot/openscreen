@@ -1049,7 +1049,6 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	section,
 	busy,
 	busyLabel,
-	lane,
 	cueWordId,
 	onSeek,
 	onTrimTimelineSpan,
@@ -1062,9 +1061,6 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	section: ClipSection;
 	busy: boolean;
 	busyLabel?: string;
-	/** Which lane the block belongs to. Only the insert gesture cares: a pause is a held
-	 *  CLIP frame, and a voiceover placement has no clip to hold. */
-	lane: TranscriptLane;
 	cueWordId: string | null;
 	onSeek: (sec: number) => void;
 	onTrimTimelineSpan: (startSec: number, endSec: number, reason: string) => void;
@@ -1442,7 +1438,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						}}
 					>
 						<Loader2 size={12} className="animate-spin" />
-						{ts("transcript.transcribing")}
+						{busyLabel ?? ts("transcript.transcribing")}
 					</span>
 				) : null}
 			</span>

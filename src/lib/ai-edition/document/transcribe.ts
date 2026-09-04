@@ -79,9 +79,7 @@ export async function transcribeAsset(
 			// case a user cannot otherwise diagnose.
 			backend: status.backend,
 			rtf: status.rtf,
-			...(status.downloadedBytes !== undefined
-				? { downloadedBytes: status.downloadedBytes }
-				: {}),
+			...(status.downloadedBytes !== undefined ? { downloadedBytes: status.downloadedBytes } : {}),
 			...(status.totalBytes !== undefined ? { totalBytes: status.totalBytes } : {}),
 		});
 

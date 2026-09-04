@@ -456,6 +456,9 @@ describe("V4Timeline audio lane drag", () => {
 			multiSelection: [],
 			clipSelection: null,
 			audioTracks: tracks ?? [{ ...makeTrack(), ...trackOverrides }],
+			// The lane reads these for the amber added-word marks (#540); this fixture
+			// is about audio geometry, so it has none.
+			transcripts: [],
 			selectedAudioTrackId: null,
 			selectAudioTrack,
 			placeAudioTrack,

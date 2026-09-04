@@ -140,6 +140,9 @@ function mount(audioTracks: AxcutAudioTrack[]) {
 				onTranscribe={vi.fn()}
 				canTranscribe
 				isTranscribing={false}
+				onSetWordText={vi.fn()}
+				onInsertWord={vi.fn()}
+				onRemoveWords={vi.fn()}
 			/>
 		</I18nProvider>,
 	);
