@@ -92,7 +92,7 @@ impl CursorTrack {
     /// Seul point de construction : garantit que `follow_samples` est toujours dérivé des
     /// échantillons courants. Une piste re-lissée (`smoothed`) recalcule donc aussi son suivi,
     /// pour que la caméra suive la trajectoire que l'utilisateur voit réellement.
-    fn new(samples: Vec<(f32, f32, f32)>, clicks: Vec<f32>, types: Vec<(f32, String)>) -> CursorTrack {
+    pub(crate) fn new(samples: Vec<(f32, f32, f32)>, clicks: Vec<f32>, types: Vec<(f32, String)>) -> CursorTrack {
         let follow_samples = smooth_follow_samples(&samples);
         CursorTrack { samples, follow_samples, clicks, types }
     }

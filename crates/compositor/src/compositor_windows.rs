@@ -1629,14 +1629,7 @@ impl Compositor {
         let scene_ref = self.scene.borrow();
         let cursor_ref = self.cursor.borrow();
         let lp = *self.live_params.borrow();
-        // Toute la géométrie vit dans `frame_geometry::plan_frame` — 353 lignes sans un
-        // appel GPU, partagées avec le backend Metal. Ce qui suit ce destructure est
-        // inchangé, à l'octet près.
-        let crate::frame_geometry::FrameGeometry {
-            scene_preset, mb_taps, source_t, zoom_rotation, padding_scale, cut, s_dst,
-            s_dst_prev, s_ann, s_radius, frame_min_px, w_dst, w_dst_prev, w_px, w_radius,
-            shape_fade,
-        } = crate::frame_geometry::plan_frame(&crate::frame_geometry::FrameGeometryInput {
+        let g = crate::frame_geometry::plan_frame(&crate::frame_geometry::FrameGeometryInput {
             render_px: [self.rw(), self.rh()],
             screen_tex_px: [stw as f32, sth as f32],
             screen_visible_px: [scw, sch],
@@ -1650,6 +1643,23 @@ impl Compositor {
             cursor: cursor_ref.as_ref(),
             timeline_t_override: *self.timeline_t_override.borrow(),
         });
+        let scene_preset = g.scene_preset.clone();
+        let mb_taps = g.mb_taps;
+        let mb_amount = g.mb_amount;
+        let source_t = g.source_t;
+        let zoom_rotation = g.zoom_rotation;
+        let _padding_scale = g.padding_scale;
+        let cut = g.cut;
+        let s_dst = g.s_dst;
+        let s_dst_prev = g.s_dst_prev;
+        let s_ann = g.s_ann;
+        let s_radius = g.s_radius;
+        let frame_min_px = g.frame_min_px;
+        let w_dst = g.w_dst;
+        let w_dst_prev = g.w_dst_prev;
+        let w_px = g.w_px;
+        let w_radius = g.w_radius;
+        let shape_fade = g.shape_fade;
 
 
         self.begin([0.0, 0.0, 0.0, 1.0]);
@@ -1794,7 +1804,7 @@ impl Compositor {
                     color: [0.0, 0.0, 0.0, 1.0],
                     src_prev: [su0_p, sv0_p, su0_p + 2.0 * hu_p, sv0_p + 2.0 * hv_p],
                     dst_prev: s_dst_prev,
-                    mb: [mb_taps, 1.0, 1.0, 0.0],
+                    mb: [mb_taps, mb_amount, 1.0, 0.0],
                     ..Default::default()
                 },
                 &sy,
@@ -1856,175 +1866,71 @@ impl Compositor {
         }
 
         // --- curseur custom : suit le mapping src/dst (zoom+layout), click bounce,
-        // et flou de mouvement par fantômes le long de sa vélocité (frame-1 -> frame) ---
-        // Jeu de sprites résolu par l'app (art du thème + art intégrée pour les états qu'il ne
-        // fournit pas), sinon math dot+ring — fixture/bench sans scène uniquement.
-        let cursor_sprites: HashMap<String, SceneCursorSprite> = self
-            .scene
-            .borrow()
-            .as_ref()
-            .map(|s| s.cursor.cursor_sprites.clone())
-            .unwrap_or_default();
-        // « Clip to canvas » : tronque le curseur aux bords de l'écran (utile quand le padding
-        // crée une marge et que la pointe, près du bord de la vidéo, dépasserait dedans).
-        // Rect englobant tout par défaut = pas d'effet (le mode 4/7 du shader clippe sur `fx`).
-        // Écran incliné : le rect droit d'origine rognerait le curseur sur les parties du plan
-        // qui débordent au-dessus/en dessous, donc on clippe sur la bbox du quad projeté. Un
-        // rect reste une approximation du quadrilatère — `fx` ne sait pas exprimer autre chose —
-        // mais qui ne coupe plus rien de ce qui est réellement affiché.
-        let cursor_bounds: [f32; 4] = match tilt.as_ref() {
-            None => s_dst,
-            Some(quad) => {
-                let (hx, hy) = quad.half_extents_px();
-                [
-                    (quad_center_px[0] - hx) / self.rw(),
-                    (quad_center_px[1] - hy) / self.rh(),
-                    2.0 * hx / self.rw(),
-                    2.0 * hy / self.rh(),
-                ]
-            }
-        };
-        let cursor_clip_rect: [f32; 4] = match self.scene.borrow().as_ref() {
-            Some(s) if s.cursor.clip_to_bounds => cursor_bounds,
-            _ => [-1.0, -1.0, 3.0, 3.0],
-        };
-        // « Show cursor » : piloté par la scène (contrat de l'app) quand elle est posée ; sinon
-        // par `cfg.cursor` (inspector / bench fixture).
-        let cursor_show = scene_ref
-            .as_ref()
-            .map(|s| s.cursor.show)
-            .unwrap_or(cfg.cursor);
-        if cursor_show {
-            let cursor_ref = self.cursor.borrow();
-            if let Some(track) = cursor_ref.as_ref() {
-                let t = self.cursor_t_override.borrow().unwrap_or(frame / FPS);
-                // position sortie à un temps donné via un mapping screen (src rect + dst)
-                let map = |cxy: Option<(f32, f32)>, s0: [f32; 2], h: [f32; 2], dst: [f32; 4]| {
-                    cxy.and_then(|(cx2, cy2)| {
-                        let fx = (cx2 * u_max - s0[0]) / (2.0 * h[0]);
-                        let fy = (cy2 * v_max - s0[1]) / (2.0 * h[1]);
-                        if !(0.0..=1.0).contains(&fx) || !(0.0..=1.0).contains(&fy) {
-                            return None;
-                        }
-                        // Écran incliné : le curseur vit SUR le plan, pas dans un calque
-                        // au-dessus. On garde donc sa position dans le repère DU PLAN et c'est
-                        // le dessin qui projette — position ET sprite. Le poser sur `dst`, le
-                        // rect droit d'origine, le laissait flotter à côté de l'image, l'écart
-                        // se comptant en dizaines de pixels là où le plan s'éloigne le plus.
-                        Some(match tilt.as_ref() {
-                            Some(&quad) => CursorPlacement::Tilted {
-                                plane_pt: [fx, fy],
-                                quad,
-                                center_px: quad_center_px,
-                                screen_px: s_px,
-                                render_px: [self.rw(), self.rh()],
-                            },
-                            None => CursorPlacement::Upright {
-                                center: [dst[0] + fx * dst[2], dst[1] + fy * dst[3]],
-                            },
-                        })
-                    })
-                };
-                let raw_xy = track.at(t);
-                // Hors de [0,1] = pointeur hors du rect source actuel (zoom serré / hors écran) —
-                // état normal en cours de lecture, pas une erreur : rien à dessiner cette frame.
-                let mapped = map(raw_xy, [su0, sv0], [hu, hv], s_dst);
-                if let Some(cur) = mapped {
-                    // taille + amplitude du bounce pilotées par l'inspector (défauts = fixture).
-                    // `padding_scale` : le curseur est un recouvrement synthétique, pas cuit dans
-                    // la vidéo — quand le padding rétrécit l'écran, le curseur doit rétrécir
-                    // pareil pour rester à l'échelle du contenu (sinon sa pointe semble se
-                    // décaler/dériver à mesure que le padding grandit).
-                    let bounce = 1.0 + (track.bounce(t) - 1.0) * lp.cursor_bounce_scale;
-                    // Pas de facteur de tilt ici : sur un plan incliné la taille est convertie
-                    // en fraction du plan puis projetée avec lui (voir `draw_cursor_sprite`),
-                    // donc la réduction vient de la projection. L'ajouter en plus rétrécirait
-                    // le curseur deux fois.
-                    let sz = CURSOR_BASE_SIZE_FRAC
-                        * frame_min_px
-                        * lp.cursor_size_scale
-                        * bounce
-                        * padding_scale;
-                    // flou de mouvement DU CURSEUR, indépendant de cfg.mblur_n (écran/vidéo).
-                    // BUG corrigé : augmenter l'intensité ne faisait auparavant que sur-échantillonner
-                    // (plus de taps) un écart figé d'1 frame (1/60s) -> la traînée ne s'allongeait
-                    // JAMAIS, donc restait quasi invisible quel que soit le réglage. L'intensité doit
-                    // étirer la FENÊTRE temporelle de la traînée, pas seulement sa densité d'échantillons.
-                    // 0 -> 1 frame en arrière (net) ; 1 -> ~8 frames (~130 ms à 60fps, traînée nette).
-                    let blur01 = lp.cursor_motion_blur.clamp(0.0, 1.0);
-                    let has_scene = self.scene.borrow().is_some();
-                    let trail_frames = if has_scene { 1.0 + blur01 * 7.0 } else { 1.0 };
-                    // BUG corrigé : le plancher était 2 (pas 1) -> même à blur=0 le curseur
-                    // passait TOUJOURS par le chemin additif multi-tap (poids 1/taps=0.5 chacun),
-                    // et comme prev≠cur au pixel près, les deux copies à 0.5 d'alpha ne se
-                    // recouvraient jamais parfaitement -> curseur en permanence semi-transparent
-                    // (quasi invisible sur fond clair), même sans aucun flou demandé.
-                    let taps = if has_scene {
-                        (1.0 + blur01 * 10.0).round() as u32 // 0 -> 1 (net) ; 1 -> 11 (traînée)
-                    } else {
-                        cfg.mblur_n // fixture/bench : comportement historique inchangé
-                    };
-                    // L'état est celui de l'instant rendu : la traînée de flou reprend le même
-                    // sprite pour toutes ses copies, un changement d'état en plein mouvement
-                    // n'a pas à laisser une traînée hybride.
-                    let cursor_type = track.type_at(t).map(str::to_string);
-                    let cursor_type = cursor_type.as_deref();
-                    if taps <= 1 {
+        // et flou de mouvement (parité `compositor_macos.rs` et `compositor_linux.rs`) ---
+        if let Some(track) = cursor_ref.as_ref() {
+            let plan = crate::frame_geometry::plan_cursor(
+                &g,
+                &crate::frame_geometry::CursorPlanInput {
+                    render_px: [self.rw(), self.rh()],
+                    u_max,
+                    v_max,
+                    cfg,
+                    live: lp,
+                    scene: scene_ref.as_ref(),
+                    track,
+                    t: self.cursor_t_override.borrow().unwrap_or(frame / FPS),
+                },
+            );
+            if let Some(plan) = plan {
+                let cursor_sprites: HashMap<String, SceneCursorSprite> = scene_ref
+                    .as_ref()
+                    .map(|s| s.cursor.cursor_sprites.clone())
+                    .unwrap_or_default();
+                let cursor_type = plan.cursor_type.as_deref();
+                if plan.taps <= 1 {
+                    self.draw_cur_themed(
+                        &cursor_sprites,
+                        cursor_type,
+                        plan.placement,
+                        plan.size_px,
+                        1.0,
+                        plan.clip,
+                    );
+                } else {
+                    // Flou RÉEL, pas des copies discrètes : accumule les N échantillons dans un
+                    // buffer ISOLÉ (transparent), pas directement sur la scène déjà composée.
+                    self.ctx.ClearRenderTargetView(&self.accum_rtv, &[0.0, 0.0, 0.0, 0.0]);
+                    self.ctx.OMSetRenderTargets(Some(&[Some(self.accum_rtv.clone())]), None);
+                    for k in 0..plan.taps {
+                        let f = k as f32 / (plan.taps - 1) as f32;
+                        let w = crate::frame_geometry::cursor_tap_weight(k, plan.taps);
+                        self.ctx.OMSetBlendState(&self.blend_add, Some(&[w, w, w, w]), 0xffffffff);
                         self.draw_cur_themed(
                             &cursor_sprites,
                             cursor_type,
-                            cur,
-                            sz,
+                            plan.prev_placement.lerp(plan.placement, f),
+                            plan.size_px,
                             1.0,
-                            cursor_clip_rect,
+                            plan.clip,
                         );
-                    } else {
-                        let tp = t - trail_frames / FPS;
-                        let prev = map(track.at(tp), [su0_p, sv0_p], [hu_p, hv_p], s_dst_prev)
-                            .unwrap_or(cur);
-                        // Flou RÉEL, pas des copies discrètes : accumule les N échantillons dans un
-                        // buffer ISOLÉ (transparent), pas directement sur la scène déjà composée.
-                        // BUG précédent : additionner directement sur `self.rtv` revient à AJOUTER
-                        // la couleur du curseur (blanc) à ce qu'il y a déjà dessous — sur un fond
-                        // clair, ajouter du blanc*petit-alpha ne change presque rien de visible
-                        // (déjà proche du blanc) -> curseur quasi invisible. En accumulant d'abord
-                        // dans un buffer à part (parti de zéro, même mécanisme que le motion blur
-                        // écran de `compose_frame_mb`), la somme reste correctement normalisée
-                        // (alpha final ~1 si les échantillons se recouvrent), puis on la composite
-                        // sur la scène par un blend "over" classique — correct quel que soit le fond.
-                        self.ctx.ClearRenderTargetView(&self.accum_rtv, &[0.0, 0.0, 0.0, 0.0]);
-                        self.ctx.OMSetRenderTargets(Some(&[Some(self.accum_rtv.clone())]), None);
-                        let w = 1.0 / taps as f32;
-                        self.ctx.OMSetBlendState(&self.blend_add, Some(&[w, w, w, w]), 0xffffffff);
-                        for k in 0..taps {
-                            let f = k as f32 / (taps - 1) as f32;
-                            self.draw_cur_themed(
-                                &cursor_sprites,
-                                cursor_type,
-                                prev.lerp(cur, f),
-                                sz,
-                                1.0,
-                                cursor_clip_rect,
-                            );
-                        }
-                        // composite le buffer accumulé sur la scène (blend "over" normal, prémultiplié).
-                        self.ctx.OMSetRenderTargets(Some(&[Some(self.rtv.clone())]), None);
-                        self.ctx.PSSetShaderResources(0, Some(&[Some(self.accum_srv.clone())]));
-                        self.ctx.VSSetShader(&self.vs_fs, None);
-                        self.ctx.PSSetShader(&self.ps_tex, None);
-                        self.ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
-                        let vp = D3D11_VIEWPORT {
-                            TopLeftX: 0.0, TopLeftY: 0.0,
-                            Width: self.rw(), Height: self.rh(), MinDepth: 0.0, MaxDepth: 1.0,
-                        };
-                        self.ctx.RSSetViewports(Some(&[vp]));
-                        self.ctx.OMSetBlendState(&self.blend, None, 0xffffffff);
-                        self.ctx.Draw(3, 0);
-                        self.ctx.PSSetShaderResources(0, Some(&[None]));
-                        // restaure l'état de composition standard (VS/PS/topologie quad-strip) pour
-                        // le dessin de la webcam qui suit juste après.
-                        self.bind_compose_state();
                     }
+                    // composite le buffer accumulé sur la scène (blend "over" normal, prémultiplié).
+                    self.ctx.OMSetRenderTargets(Some(&[Some(self.rtv.clone())]), None);
+                    self.ctx.PSSetShaderResources(0, Some(&[Some(self.accum_srv.clone())]));
+                    self.ctx.VSSetShader(&self.vs_fs, None);
+                    self.ctx.PSSetShader(&self.ps_tex, None);
+                    self.ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+                    let vp = D3D11_VIEWPORT {
+                        TopLeftX: 0.0, TopLeftY: 0.0,
+                        Width: self.rw(), Height: self.rh(), MinDepth: 0.0, MaxDepth: 1.0,
+                    };
+                    self.ctx.RSSetViewports(Some(&[vp]));
+                    self.ctx.OMSetBlendState(&self.blend, None, 0xffffffff);
+                    self.ctx.Draw(3, 0);
+                    self.ctx.PSSetShaderResources(0, Some(&[None]));
+                    // restaure l'état de composition standard (VS/PS/topologie quad-strip) pour
+                    // le dessin de la webcam qui suit juste après.
+                    self.bind_compose_state();
                 }
             }
         }
@@ -2126,7 +2032,7 @@ impl Compositor {
                     fx: [w_valid[0], w_valid[1], effect_code, blur_intensity],
                     src_prev: [u0, sv0, u1, sv1], // src fixe (pas de zoom webcam)
                     dst_prev: w_dst_prev,
-                    mb: [mb_taps, 1.0, 1.0, 0.0],
+                    mb: [mb_taps, mb_amount, 1.0, 0.0],
                     ..Default::default()
                 },
                 &wy,

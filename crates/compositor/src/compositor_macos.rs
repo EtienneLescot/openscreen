@@ -2102,7 +2102,7 @@ impl Compositor {
                     color: [0.0, 0.0, 0.0, 1.0],
                     src_prev: [su0, sv0, su1, sv1],
                     dst_prev: g.s_dst_prev,
-                    mb: [g.mb_taps, 1.0, 1.0, 0.0],
+                    mb: [g.mb_taps, g.mb_amount, 1.0, 0.0],
                     ..Default::default()
                 },
                 &sy,
@@ -2151,10 +2151,10 @@ impl Compositor {
                         Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0)),
                         &self.pipeline_add,
                     )?;
-                    let w = 1.0 / plan.taps as f32;
-                    e.set_blend_color(w, w, w, w);
                     for k in 0..plan.taps {
                         let f = k as f32 / (plan.taps - 1) as f32;
+                        let w = crate::frame_geometry::cursor_tap_weight(k, plan.taps);
+                        e.set_blend_color(w, w, w, w);
                         self.draw_cur_themed(
                             e,
                             &sprites,
@@ -2261,7 +2261,7 @@ impl Compositor {
                     fx: [w_valid[0], w_valid[1], effect_code, blur_intensity],
                     src_prev: [u0, cv0, u1, cv1],
                     dst_prev: g.w_dst_prev,
-                    mb: [g.mb_taps, 1.0, 1.0, 0.0],
+                    mb: [g.mb_taps, g.mb_amount, 1.0, 0.0],
                     ..Default::default()
                 },
                 wy,
