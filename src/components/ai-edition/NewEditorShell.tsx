@@ -97,8 +97,11 @@ interface SeekTarget {
  *
  * Gated HERE as well as on the gesture in the transcript pane: this is where every renderer
  * path reaches the document, so an entry point added later is refused by default rather than
- * by whoever remembers. `import.meta.env.DEV` is folded at build time, so the branch is not
- * in the release bundle at all.
+ * by whoever remembers.
+ *
+ * A plain runtime refusal, deliberately. The bundler does fold `import.meta.env.DEV` and will
+ * usually drop the body, but that is an optimisation and not the protection — the guard has
+ * to hold on its own, whatever the minifier decides.
  */
 const INSERTIONS_ENABLED = import.meta.env.DEV;
 
