@@ -35,6 +35,7 @@ import {
 import { setDocumentWordText } from "../../src/lib/ai-edition/document/transcript";
 import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import { hasAnyClipWithCamera } from "../../src/lib/ai-edition/timeline/camera";
+import { isGeneratedAssetId } from "../../src/lib/ai-edition/timeline/clip-parts";
 import {
 	buildCursorTrack,
 	type CursorTrackSample,
@@ -1340,6 +1341,17 @@ export function executeAgentTool(
 			}
 			if (before.text === text) {
 				return failure(`Word ${wordId} already reads "${text}" — nothing to change.`);
+			}
+			// This tool exists to fix a name the transcriber misheard. An INSERTED word was
+			// never heard: retyping it resizes the clip it plays on and asks for generated
+			// media of a new length, which is the gesture the editor gates on `insertionsEnabled`
+			// — and that gate lives in the renderer, where the chat does not run. Refused here
+			// unconditionally rather than mirrored, because the agent has no business authoring
+			// generated media at all.
+			if (isGeneratedAssetId(assetId)) {
+				return failure(
+					`Word ${wordId} was added to the transcript, not heard — the chat cannot rewrite it.`,
+				);
 			}
 			let next: AxcutDocument;
 			try {

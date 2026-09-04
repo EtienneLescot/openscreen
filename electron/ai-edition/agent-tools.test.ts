@@ -2301,6 +2301,41 @@ describe("setWordText", () => {
 		expect(next.transcripts[0].segments[0].text).toBe("I use Kubernetes");
 	});
 
+	// The editor gates word INSERTION on a dev-only flag, and that gate lives in the renderer.
+	// The chat runs in the main process, so an ungated path here would let a release rewrite
+	// generated media through the agent — the one door the flag cannot see.
+	it("refuses a word that was added rather than heard", () => {
+		const base = documentWithWords();
+		const withInsertion: AxcutDocument = {
+			...base,
+			transcripts: [
+				...base.transcripts,
+				{
+					assetId: "ext:synth_1",
+					language: "en",
+					segments: [],
+					words: [
+						{
+							id: "synth_1",
+							segmentId: "seg_1",
+							startSec: 0,
+							endSec: 0.15,
+							text: "added",
+							source: "synth",
+						},
+					],
+				},
+			],
+		};
+		const result = run(withInsertion, "setWordText", {
+			assetId: "ext:synth_1",
+			wordId: "synth_1",
+			text: "much longer",
+		});
+		expect(result.ok).toBe(false);
+		expect(result.document).toBeUndefined();
+	});
+
 	// The document carries the transcript twice; a write that reaches only one leaves the
 	// legacy mirror serving the old text forever.
 	it("writes the legacy mirror too", () => {
