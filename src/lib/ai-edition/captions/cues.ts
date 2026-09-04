@@ -117,7 +117,53 @@ export function captionLinesForAsset(
 			: translatedWordStream(transcript, translations, settings.language);
 
 	if (stream.length === 0) return [];
-	return polish(groupTimedCaptionWordsIntoLines(stream, minWords, maxWords));
+	// Grouped per RUN, never across one. A run is a maximal stretch of words that are all
+	// recorded or all added: the two are spoken over different media — the recording, and the
+	// insertion that added word bought — so a line holding both would have to be in two places
+	// at once, and resolved as one it lands on the recording, an insertion too early.
+	return polish(
+		captionRuns(stream, addedWordSpans(transcript)).flatMap((run) =>
+			groupTimedCaptionWordsIntoLines(run, minWords, maxWords),
+		),
+	);
+}
+
+/** Where the transcript's ADDED words sit, in source time. */
+function addedWordSpans(transcript: AxcutTranscript): Array<{ startSec: number; endSec: number }> {
+	return transcript.words
+		.filter((word) => word.source === "synth" && word.text.trim().length > 0)
+		.map((word) => ({ startSec: word.startSec, endSec: word.endSec }))
+		.sort((a, b) => a.startSec - b.startSec);
+}
+
+/**
+ * The stream cut into maximal all-recorded / all-added runs.
+ *
+ * Membership is decided by OVERLAP with an added word's source span rather than by identity,
+ * because a translated stream is rebuilt as pseudo-words and no longer carries the original
+ * ids — the spans are the one thing both streams keep.
+ */
+function captionRuns(
+	stream: CaptionSegment[],
+	added: Array<{ startSec: number; endSec: number }>,
+): CaptionSegment[][] {
+	if (added.length === 0) return [stream];
+	const isAdded = (word: CaptionSegment) =>
+		added.some((span) => word.startSec < span.endSec && word.endSec > span.startSec);
+	const runs: CaptionSegment[][] = [];
+	let current: CaptionSegment[] = [];
+	let currentIsAdded: boolean | null = null;
+	for (const word of stream) {
+		const flag = isAdded(word);
+		if (currentIsAdded !== null && flag !== currentIsAdded) {
+			runs.push(current);
+			current = [];
+		}
+		currentIsAdded = flag;
+		current.push(word);
+	}
+	if (current.length > 0) runs.push(current);
+	return runs;
 }
 
 function originalWordStream(transcript: AxcutTranscript): CaptionSegment[] {
