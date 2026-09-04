@@ -151,6 +151,39 @@ describe("typing between two words", () => {
 		}
 	});
 
+	it("will not let a release retype an inserted word either", () => {
+		// The other half of the same gate, and the one that was missing: correcting a
+		// transcribed word ships, and the very same gesture on an INSERTED word asks for
+		// generated media of a new length. A release must not offer it.
+		const withInserted: AxcutWord[] = [
+			WORDS[0],
+			{ id: "synth_1", segmentId: "s", startSec: 1, endSec: 1, text: "ajouté", source: "synth" },
+			...WORDS.slice(1),
+		];
+		vi.stubEnv("DEV", false);
+		try {
+			const view = renderPane(withInserted);
+			const word = view.editor.querySelector<HTMLElement>('[data-word-id$=":synth_1"]');
+			expect(word).not.toBeNull();
+			fireEvent.doubleClick(word as HTMLElement);
+			expect(view.editor.querySelector("input,textarea")).toBeNull();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("lets a dev build retype it, which is the whole point of the flag", () => {
+		const withInserted: AxcutWord[] = [
+			WORDS[0],
+			{ id: "synth_1", segmentId: "s", startSec: 1, endSec: 1, text: "ajouté", source: "synth" },
+			...WORDS.slice(1),
+		];
+		const view = renderPane(withInserted);
+		const word = view.editor.querySelector<HTMLElement>('[data-word-id$=":synth_1"]');
+		fireEvent.doubleClick(word as HTMLElement);
+		expect(view.editor.querySelector("input,textarea")).not.toBeNull();
+	});
+
 	it("never writes the typed text into the block itself", () => {
 		// The whole reason inserts were blocked: a run of text with no word id behind it
 		// desynchronises the DOM from `words`.

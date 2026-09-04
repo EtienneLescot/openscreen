@@ -106,6 +106,7 @@ import {
 } from "@/utils/aspectRatioUtils";
 import { useCanSegmentCamera } from "../../native/hooks/useSegmentationSupport";
 import { CaptionsPane } from "./CaptionsPane";
+import { insertionsEnabled } from "./insertionsEnabled";
 import styles from "./NewEditorShell.module.css";
 import { useTranscriptionLabel } from "./TranscriptionStatus";
 import { transcriptionBusyLabel } from "./transcriptionBusyLabel";
@@ -931,10 +932,9 @@ export function TranscriptPane({
 
 	// The insert gesture is dev-only until TTS (see openInsertion), so the copy follows
 	// the same gate: release builds must not advertise a dead gesture.
-	const helpText =
-		ts("transcript.help") + (import.meta.env.DEV ? ` ${ts("transcript.helpInsert")}` : "");
+	const helpText = ts("transcript.help");
 	const editingHint = ts(
-		import.meta.env.DEV ? "transcript.editingHintDev" : "transcript.editingHint",
+		insertionsEnabled() ? "transcript.editingHintDev" : "transcript.editingHint",
 	);
 
 	if (placements.length === 0 || !hasAnyTranscript) {
@@ -1254,11 +1254,8 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 
 	const openInsertion = useCallback(
 		(seed: string) => {
-			// ponytail: word insertion ships dev-only until a voice can be synthesized for the
-			// word. The media it creates is a test pattern over noise — real media, in the
-			// right place, for the right length, but nobody says the sentence. Drop this gate
-			// when TTS lands.
-			if (!import.meta.env.DEV) return;
+			// The gesture, hidden. The shell refuses again where it would reach the document.
+			if (!insertionsEnabled()) return;
 			if (busy || !seed.trim()) return;
 			const editor = editorRef.current;
 			const selection = globalThis.getSelection();
@@ -1595,8 +1592,12 @@ const TranscriptWord = memo(function TranscriptWord({
 
 	const startEditing = useCallback(() => {
 		if (!editable) return;
+		// Correcting a transcribed word is a shipped feature; retyping an INSERTED one asks
+		// for generated media of a new length, which is the same thing the insert gesture is
+		// gated on. Not offered rather than silently refused — the shell refuses too.
+		if (!insertionsEnabled() && isInsertedWord(cw.word)) return;
 		setDraft(cw.word.text);
-	}, [editable, cw.word.text]);
+	}, [editable, cw.word]);
 
 	const commitDraft = useCallback(() => {
 		const next = (draft ?? "").trim();
