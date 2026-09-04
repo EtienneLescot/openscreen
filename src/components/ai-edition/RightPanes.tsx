@@ -3169,7 +3169,15 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 				className={styles.secondaryBtn}
 				onClick={() => {
 					setLiveGain(null);
-					void tl.setAudioTrackGain(track.id, 0);
+					setLiveFadeIn(null);
+					setLiveFadeOut(null);
+					void tl.updateAudioTrack(track.id, {
+						gainDb: 0,
+						fadeInMs: 0,
+						fadeOutMs: 0,
+						muted: false,
+						loop: false,
+					});
 				}}
 			>
 				{ts("audio.reset")}
