@@ -23,7 +23,12 @@ import {
 	hasCompleteClipAnchor,
 } from "../timeline/timelineMap";
 import { dropTrimPillsByIds, trimAppliesToClip } from "../timeline/trim-mapping";
-import { reanchorAudioTracks, removeAudioTrack, separateAudioLanes } from "./audioTracks";
+import {
+	dropUnusedGeneratedMedia,
+	reanchorAudioTracks,
+	removeAudioTrack,
+	separateAudioLanes,
+} from "./audioTracks";
 import { createId } from "./ids";
 
 /** The region families a delete can target by id. Shared with the store so "which kinds
@@ -1178,13 +1183,14 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 	// a transient wipe deleting everything), which is why the empty case is handled
 	// here rather than left to it.
 	if (arr.length === 0) {
-		return mapAllRegionCollections(
+		const emptied = mapAllRegionCollections(
 			{ ...next, timeline: { ...next.timeline, clips: [] } },
 			(regions) =>
 				regions.filter((region) => !(hasCompleteClipAnchor(region) && region.clipId === clipId)),
 		);
+		return dropUnusedGeneratedMedia(emptied);
 	}
-	return withClipsChanged(next, arr);
+	return dropUnusedGeneratedMedia(withClipsChanged(next, arr));
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {

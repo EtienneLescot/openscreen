@@ -18,6 +18,7 @@
 // outer edges only.
 
 import type { AxcutAudioTrack, AxcutClip, AxcutDocument } from "../schema";
+import { isGeneratedAssetId } from "../timeline/clip-parts";
 import { anchorRegionsWithDerivedMs, clampSpanAgainstNeighbours } from "../timeline/timelineMap";
 
 /** Every fragment of one user-visible track shares this key. */
@@ -170,7 +171,40 @@ export function removeAudioTrack(doc: AxcutDocument, trackId: string): AxcutDocu
 		audioTracks.some((t) => t.assetId === assetId) ||
 		doc.timeline.clips.some((c) => c.assetId === assetId);
 	const assets = stillReferenced ? doc.assets : doc.assets.filter((a) => a.id !== assetId);
-	return { ...doc, audioTracks, assets };
+	return dropUnusedGeneratedMedia({ ...doc, audioTracks, assets });
+}
+
+/**
+ * Drop the generated media nothing plays any more.
+ *
+ * The same rule as the asset drop just above, for the media an inserted word owns. That
+ * media is generated FROM the word: exactly one clip or one track plays it, nothing else
+ * can want it, and the file is remade from the text on the next save. So when the last
+ * thing playing it goes, it goes.
+ *
+ * It has to live here rather than in the insertion code because the delete the user
+ * actually performs is usually not the transcript's: the trash icon on the clip calls
+ * `removeClip` and the assistant calls the tool of the same name, neither of which has
+ * ever heard of an insertion. Leaving the asset behind left the deleted word in the
+ * transcript pane, playing nowhere.
+ *
+ * Scoped to generated ids on purpose. A recording whose last clip is deleted must stay in
+ * the document — "Restore full timeline" has to have something to restore.
+ */
+export function dropUnusedGeneratedMedia(doc: AxcutDocument): AxcutDocument {
+	const played = new Set([
+		...doc.timeline.clips.map((c) => c.assetId),
+		...doc.audioTracks.map((t) => t.assetId),
+	]);
+	const dead = (id: string) => isGeneratedAssetId(id) && !played.has(id);
+	if (!doc.assets.some((a) => dead(a.id)) && !doc.transcripts.some((t) => dead(t.assetId))) {
+		return doc;
+	}
+	return {
+		...doc,
+		assets: doc.assets.filter((a) => !dead(a.id)),
+		transcripts: doc.transcripts.filter((t) => !dead(t.assetId)),
+	};
 }
 
 /** Patch the shared payload of every fragment of one track. Payload edits (gain,

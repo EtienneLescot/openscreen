@@ -179,6 +179,22 @@ describe("removeGeneratedClips", () => {
 	});
 });
 
+describe("deleting the amber clip from the TIMELINE, not from the transcript", () => {
+	// The trash icon on the clip calls `removeClip`, and so does the agent's tool. Neither
+	// goes through `removeGeneratedClips`, so if the media were only dropped there, the
+	// deleted word would still be in the transcript pane and its file still on disk.
+	it("takes the generated media with it, like the transcript path does", () => {
+		const back = removeClip(withInsertion(), "ext:synth_1");
+		expect(back.assets.map((a) => a.id)).toEqual(["a1"]);
+		expect(back.transcripts.map((t) => t.assetId)).toEqual(["a1"]);
+	});
+
+	it("leaves the recording's own media alone when an ordinary clip goes", () => {
+		const back = removeClip(withInsertion(), "ext:synth_1");
+		expect(back.timeline.clips.map((c) => c.assetId)).toEqual(["a1"]);
+	});
+});
+
 describe("the join is blind to what made the clips contiguous", () => {
 	it("also heals two halves when an ORDINARY clip between them goes", () => {
 		// The accepted cost of the rule, on the record. Two clips of one recording whose media
