@@ -1,0 +1,202 @@
+name: Build ONNX Runtime (macOS 13 floor)
+
+# Builds ONNX Runtime for macOS arm64 with the deployment target pinned to the
+# floor this app declares, and publishes it as an artifact for a maintainer to
+# attach to a release.
+#
+# WHY THIS EXISTS. Microsoft's own `onnxruntime-osx-arm64-*.tgz` is built for
+# macOS 14. `electron-builder.json5` declares `minimumSystemVersion: "13.0"`,
+# and `scripts/before-pack.cjs` refuses to package any binary that demands more
+# than the floor — correctly, because the deployment target decides which
+# symbols the linker resolves against the OS rather than emitting locally, so a
+# too-high floor strands users on the older OS with `Symbol not found` at dyld
+# time (#515). The result is that `npm run build:mac` cannot package at all.
+#
+# Every published release from 1.24 onward is `minos 14.0`, and every release
+# before it is at least 13.3, so no prebuilt artifact has ever satisfied a 13.0
+# floor. Building it is the only way to keep both macOS 13 support and webcam
+# segmentation.
+#
+# WHAT IS NOT BUILT. The CoreML execution provider. `segmentation.rs` builds its
+# session with no explicit provider, i.e. the CPU EP, which
+# technical-documentation/engineering/webcam-segmentation.md records as a
+# measured decision ("Inference p50, CPU EP: 3.575 ms — the CPU is faster").
+# Dropping CoreML is what takes the library from 36.7 MB to ~22 MB.
+#
+# HOW IT IS PUBLISHED. This workflow does not create releases. It builds,
+# verifies, and prints the exact `PINNED` entry for
+# `scripts/fetch-onnxruntime.mjs` in the job summary; attaching the archive to a
+# release and pasting that entry stays a deliberate human step, so the
+# supply-chain posture the script documents — immutable URL, SHA-256 verified
+# before the archive is opened — is preserved rather than replaced by "whatever
+# CI last uploaded".
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-onnxruntime-macos.yml"
+      - "scripts/fetch-onnxruntime.mjs"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: macOS arm64, deployment target 13.0
+    # arm64 runner: the only macOS target upstream ships, and the only one the
+    # app packages. There is no Intel build to match.
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Read the pinned version from fetch-onnxruntime.mjs
+        id: pin
+        # Single source of truth. `fetch-onnxruntime.test.mjs` already cross-checks
+        # that VERSION satisfies the `api-NN` feature `crates/Cargo.toml` gives
+        # `ort`; reading it here rather than repeating it means a bump cannot leave
+        # this workflow building a version nothing consumes.
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^const VERSION = "\(.*\)";$/\1/p' scripts/fetch-onnxruntime.mjs)"
+          [ -n "$VERSION" ] || { echo "::error::VERSION not found in scripts/fetch-onnxruntime.mjs"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building ONNX Runtime v$VERSION"
+
+      - name: Read the deployment floor from electron-builder.json5
+        id: floor
+        # Also single-sourced: if somebody raises `mac.minimumSystemVersion`, this
+        # build follows rather than silently producing a library for the old floor.
+        run: |
+          set -euo pipefail
+          FLOOR="$(grep -o '"minimumSystemVersion": *"[0-9.]*"' electron-builder.json5 | grep -o '[0-9][0-9.]*')"
+          [ -n "$FLOOR" ] || { echo "::error::minimumSystemVersion not found"; exit 1; }
+          echo "floor=$FLOOR" >> "$GITHUB_OUTPUT"
+          echo "Deployment target: $FLOOR"
+
+      - name: Checkout ONNX Runtime
+        uses: actions/checkout@v7
+        with:
+          repository: microsoft/onnxruntime
+          ref: v${{ steps.pin.outputs.version }}
+          path: onnxruntime-src
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Cache the CMake build tree
+        uses: actions/cache@v6
+        with:
+          path: onnxruntime-build
+          # Keyed on the version, the floor and the runner image: CMake bakes
+          # absolute SDK paths into the tree, so a toolchain roll must bust it.
+          key: ort-${{ steps.pin.outputs.version }}-${{ steps.floor.outputs.floor }}-${{ env.ImageOS }}-${{ env.ImageVersion }}
+
+      - name: Configure
+        # Driven straight at CMake rather than through upstream's `build.sh`.
+        # `build.sh` -> `build_args.py` uses `match`, so it needs Python 3.10+,
+        # and `cmake/CMakeLists.txt` asks for `find_package(Python 3.10)` — but
+        # that requirement is only real for the Python bindings, which are not
+        # built here. The one thing Python IS needed for is generating the symbol
+        # export list (`onnxruntime.lds`); pointing `Python_EXECUTABLE` at
+        # whatever the runner has is enough, and `gen_def.py` parses on 3.9.
+        run: |
+          set -euo pipefail
+          cmake -S onnxruntime-src/cmake -B onnxruntime-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ steps.floor.outputs.floor }} \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -Donnxruntime_BUILD_SHARED_LIB=ON \
+            -Donnxruntime_BUILD_UNIT_TESTS=OFF \
+            -DPython_EXECUTABLE="$(command -v python3)"
+
+      - name: Build
+        run: cmake --build onnxruntime-build --config Release --parallel
+
+      - name: Verify the deployment target
+        # The entire reason this workflow exists. A library that comes out at 14.0
+        # anyway is worse than no library, because it would sail through packaging
+        # and strand macOS 13 users at dyld time.
+        run: |
+          set -euo pipefail
+          V="${{ steps.pin.outputs.version }}"
+          DYLIB="onnxruntime-build/libonnxruntime.${V}.dylib"
+          [ -f "$DYLIB" ] || { echo "::error::$DYLIB was not produced"; exit 1; }
+          MINOS="$(otool -l "$DYLIB" | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print $2; exit}')"
+          echo "minos=$MINOS  floor=${{ steps.floor.outputs.floor }}"
+          [ "$MINOS" = "${{ steps.floor.outputs.floor }}" ] || {
+            echo "::error::built for macOS $MINOS, expected ${{ steps.floor.outputs.floor }}"; exit 1; }
+
+      - name: Verify the ABI surface
+        # `ort` is wired `load-dynamic`, so it dlopens this file and calls
+        # `OrtGetApiBase`. The CPU provider is the one `segmentation.rs` uses.
+        # CoreML is deliberately absent and is NOT checked for.
+        run: |
+          set -euo pipefail
+          V="${{ steps.pin.outputs.version }}"
+          DYLIB="onnxruntime-build/libonnxruntime.${V}.dylib"
+          for sym in _OrtGetApiBase _OrtSessionOptionsAppendExecutionProvider_CPU; do
+            nm -gU "$DYLIB" | grep -q " ${sym}$" || { echo "::error::missing export ${sym}"; exit 1; }
+          done
+          lipo -info "$DYLIB"
+          echo "ABI surface OK"
+
+      - name: Package in the upstream layout
+        # Byte-for-byte the same shape as `onnxruntime-osx-arm64-<v>.tgz`, so
+        # `fetch-onnxruntime.mjs` needs no extraction change — only a URL and a
+        # digest. `member` there is the VERSIONED file; the two symlinks beside it
+        # are kept so the archive stays a drop-in for anything that expects them.
+        run: |
+          set -euo pipefail
+          V="${{ steps.pin.outputs.version }}"
+          DIR="onnxruntime-osx-arm64-${V}"
+          mkdir -p "stage/${DIR}/lib" "stage/${DIR}/include"
+          cp "onnxruntime-build/libonnxruntime.${V}.dylib" "stage/${DIR}/lib/"
+          ln -s "libonnxruntime.${V}.dylib" "stage/${DIR}/lib/libonnxruntime.dylib"
+          ln -s "libonnxruntime.${V}.dylib" "stage/${DIR}/lib/libonnxruntime.1.dylib"
+          cp onnxruntime-src/include/onnxruntime/core/session/*.h "stage/${DIR}/include/" || true
+          tar -czf "${DIR}.tgz" -C stage "${DIR}"
+          shasum -a 256 "${DIR}.tgz"
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: onnxruntime-osx-arm64
+          path: onnxruntime-osx-arm64-*.tgz
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Workflow summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.pin.outputs.version }}"
+          ARCHIVE="onnxruntime-osx-arm64-${V}.tgz"
+          {
+            echo "## ONNX Runtime ${V}, macOS arm64, deployment target ${{ steps.floor.outputs.floor }}"
+            echo ""
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$ARCHIVE" ]; then
+            SHA="$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)"
+            {
+              echo "- Archive: \`${ARCHIVE}\` ($(du -h "$ARCHIVE" | cut -f1))"
+              echo "- SHA-256: \`${SHA}\`"
+              echo ""
+              echo "To adopt it: attach the archive to a release, then point the"
+              echo "\`darwin-arm64\` entry of \`PINNED\` in \`scripts/fetch-onnxruntime.mjs\`"
+              echo "at that release with this digest:"
+              echo ""
+              echo '```js'
+              echo '"darwin-arm64": {'
+              echo '  slug: "osx-arm64",'
+              echo '  ext: "tgz",'
+              echo "  sha256: \"${SHA}\","
+              echo "  member: \`libonnxruntime.\${VERSION}.dylib\`,"
+              echo '  out: "libonnxruntime.dylib",'
+              echo '  baseUrl: "<the release download URL>",'
+              echo '},'
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
