@@ -699,3 +699,81 @@ describe("captions and a pause", () => {
 		expect(deriveCaptionCues(doc(), ON, {})).toEqual(deriveCaptionCues(doc(), ON, {}));
 	});
 });
+
+// ─── An added word is spoken over the media it inserted ─────────────────────
+// Lines are grouped by word count and by silences, in SOURCE time. An added word barely
+// takes up source time — the seconds it is spoken in are the INSERTION that follows it —
+// so it was swallowed into the line of the words before it and inherited their start. On
+// screen the added words appeared while the recorded picture was still playing, a whole
+// insertion early (issue #560).
+
+describe("a caption line never mixes recorded words with added ones", () => {
+	function docWithAddedWord(): AxcutDocument {
+		const t = transcript();
+		// "really" typed in after "friend", which ends at source 2. It fits in 0.2s of the
+		// silence that is already there and buys 1.8s of inserted media for the rest.
+		t.words = [
+			...t.words.slice(0, 3),
+			{
+				id: "synth_1",
+				segmentId: "seg_1",
+				startSec: 2,
+				endSec: 2.2,
+				text: "really",
+				source: "synth",
+				// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
+			} as any,
+			...t.words.slice(3),
+		];
+		const base = doc();
+		return {
+			...base,
+			transcripts: [t],
+			timeline: {
+				...base.timeline,
+				clips: [{ ...base.timeline.clips[0], timelineEndSec: 11.8 }],
+				// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
+				insertRanges: [
+					{
+						id: "i1",
+						assetId: "asset-1",
+						atSec: 2.2,
+						durationSec: 1.8,
+						wordId: "synth_1",
+						reason: "",
+						origin: "user",
+					},
+					// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
+				] as any,
+			},
+		};
+	}
+
+	const settings: CaptionSettings = { ...DEFAULT_CAPTION_SETTINGS, enabled: true };
+
+	it("gives the added word its own cue, starting where the recorded words stop", () => {
+		const cues = deriveCaptionCues(docWithAddedWord(), settings, {});
+		const added = cues.filter((c) => c.text.includes("really"));
+		expect(added).toHaveLength(1);
+		// It must not carry the recorded words with it — that is the whole defect.
+		expect(added[0].text.toLowerCase()).not.toContain("hello");
+		// And it opens at the recorded words' end, not at their start.
+		expect(added[0].startMs).toBeGreaterThanOrEqual(2000);
+	});
+
+	it("leaves the recorded line ending before the added one begins", () => {
+		const cues = deriveCaptionCues(docWithAddedWord(), settings, {});
+		const recorded = cues.find((c) => c.text.toLowerCase().includes("hello"));
+		const added = cues.find((c) => c.text.includes("really"));
+		expect(recorded).toBeDefined();
+		expect(added).toBeDefined();
+		expect(recorded?.text).not.toContain("really");
+		expect(added?.startMs ?? 0).toBeGreaterThanOrEqual((recorded?.startMs ?? 0) + 1);
+	});
+
+	it("changes nothing when the transcript has no added words", () => {
+		const before = deriveCaptionCues(doc(), settings, {});
+		expect(before.some((c) => c.text.toLowerCase().includes("hello"))).toBe(true);
+		expect(before.every((c) => !c.text.includes("really"))).toBe(true);
+	});
+});
