@@ -40,7 +40,6 @@ import {
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
-import { withExtensions } from "@/lib/ai-edition/timeline/clip-parts";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { takeProgramme } from "@/lib/ai-edition/timeline/take-programme";
@@ -521,10 +520,7 @@ function clipAssetIsResolvable(
  * Returns `PlaybackSegment[]`, not `AxcutClip[]`: a held segment carries `heldSec`, and
  * widening it away here is what kept the pause from ever reaching the compositor. Every
  */
-export function resolveVisibleClips(rawDocument: AxcutDocument): PlaybackSegment[] {
-	// An extension is a clip on its own asset from here down. Idempotent, so a caller that
-	// already derived the document pays nothing.
-	const document = withExtensions(rawDocument);
+export function resolveVisibleClips(document: AxcutDocument): PlaybackSegment[] {
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
 	return resolvePlaybackSegments(document.timeline.clips, document.timeline.trimRanges)
 		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
@@ -533,12 +529,9 @@ export function resolveVisibleClips(rawDocument: AxcutDocument): PlaybackSegment
 
 /** Serialize a document into a {@link SceneDescription}. Pure — no per-frame math. */
 export function buildSceneDescription(
-	rawDocument: AxcutDocument,
+	document: AxcutDocument,
 	webcamSourceSize: { width: number; height: number } | null = null,
 ): SceneDescription {
-	// Once, at the top: every list below — the assets, the clips, the raw layout the regions
-	// are projected through — has to agree about what the film contains.
-	const document = withExtensions(rawDocument);
 	const settings = getEditorSettings(document);
 
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
@@ -792,9 +785,7 @@ export function buildSceneDescription(
 	const captionAspect = outputDims.height > 0 ? outputDims.width / outputDims.height : 16 / 9;
 	const captionSettings = getCaptionSettings(document, captionAspect);
 	const captionRegions = captionCuesToTextRegions(
-		// `rawDocument`: the caption path resolves the insertion itself, through the clip's
-		// parts, and handing it the derived clips would ask the same question twice.
-		deriveCaptionCues(rawDocument, captionSettings, getCaptionTranslations(document)),
+		deriveCaptionCues(document, captionSettings, getCaptionTranslations(document)),
 		captionSettings,
 		captionAspect,
 	);

@@ -32,7 +32,6 @@ import {
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
-import { withExtensions } from "@/lib/ai-edition/timeline/clip-parts";
 import { newRegionDurationSec } from "@/lib/ai-edition/timeline/newRegionDuration";
 import { firstTimelineBusyView } from "@/lib/ai-edition/transcription/status";
 import {
@@ -231,10 +230,6 @@ export function NewEditorShell() {
 		document?.assets.find((a) => a.id === document.project.primaryAssetId)?.originalPath ?? null;
 	void primaryAssetPath;
 	const clips: AxcutClip[] = document?.timeline.clips ?? [];
-	// The document as the PLAYER sees it: an extension is a clip on its own asset. The ruler
-	// deliberately keeps `clips` above — a clip does not become three on screen because a
-	// word was typed into it.
-	const playedDocument = useMemo(() => (document ? withExtensions(document) : null), [document]);
 	const visibleClips = useMemo(() => (document ? resolveVisibleClips(document) : []), [document]);
 	const hasProject = Boolean(document);
 	const hasAsset = projectId !== null && (document?.assets.length ?? 0) > 0;
@@ -359,12 +354,12 @@ export function NewEditorShell() {
 	}, [promptUnsaved, saveDocument]);
 
 	const videoSources = useMemo(() => {
-		if (!playedDocument) return [];
-		// Every asset, extensions included — they are assets by the time they get here, each
-		// with a real path. A file the save has not written yet simply fails to load, and the
-		// player reports it the way it reports any unreadable source: the edit stands, the
-		// picture catches up on the next save.
-		return playedDocument.assets.map((asset) => ({
+		if (!document) return [];
+		// Every asset, insertions included — an insertion is a clip on an asset with a real
+		// path. A file the save has not written yet simply fails to load, and the player
+		// reports it the way it reports any unreadable source: the edit stands, the picture
+		// catches up on the next save.
+		return document.assets.map((asset) => ({
 			id: asset.id,
 			filePath: /^(https?|blob|data):/.test(asset.originalPath) ? undefined : asset.originalPath,
 			// Real Electron assets are filesystem paths and go through toFileUrl.
@@ -376,7 +371,7 @@ export function NewEditorShell() {
 				: toFileUrl(asset.originalPath),
 			label: asset.label,
 		}));
-	}, [playedDocument]);
+	}, [document]);
 
 	const handleLoadedMetadata = useCallback(
 		(durationSec: number, assetId: string) => {
@@ -1517,7 +1512,7 @@ export function NewEditorShell() {
 									// itself keeps playing — that is what the user is narrating to.
 									audioTracks={voiceoverRecording ? NO_AUDIO_TRACKS : tl.audioTracks}
 									audioSources={videoSources}
-									clips={playedDocument?.timeline.clips ?? clips}
+									clips={clips}
 									zoomRegions={tl.zoomRegions}
 									speedRegions={tl.speedRegions}
 									cameraFullscreenRegions={tl.cameraFullscreenRegions}

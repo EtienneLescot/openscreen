@@ -72,7 +72,6 @@ import {
 	isSilenceWord,
 	placementRawExtent,
 	placementRawSec,
-	recordingPlacements,
 	type TranscriptLane,
 	type TrimRun,
 	voiceoverPlacements,
@@ -897,10 +896,7 @@ export function TranscriptPane({
 		},
 		[setCaptionSettings],
 	);
-	// The clips WITH their parts, so a word after an insertion resolves to the moment it is
-	// actually spoken rather than to its distance from the clip's start.
-	const recording = useMemo(() => recordingPlacements(clips, transcripts), [clips, transcripts]);
-	const placements = activeLane === "voiceover" ? voiceover : recording;
+	const placements = activeLane === "voiceover" ? voiceover : clips;
 
 	const sections = useMemo(
 		() => buildAggregatedSections(placements, transcripts, assets, removed),

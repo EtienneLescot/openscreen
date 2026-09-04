@@ -19,12 +19,7 @@
 import { spawn } from "node:child_process";
 import { access, mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { AxcutWord } from "../../src/lib/ai-edition/schema";
-import {
-	extensionClipPath,
-	extensionDurationSec,
-	isAddedWord,
-} from "../../src/lib/ai-edition/timeline/clip-parts";
+import { isGeneratedAssetId } from "../../src/lib/ai-edition/document/insertion";
 import { resolveFfmpeg } from "./audioPeaks";
 
 export interface ExtensionClipSpec {
@@ -94,42 +89,39 @@ export function extensionClipArgs(spec: ExtensionClipSpec, outPath: string): str
 }
 
 /**
- * Every extension the document's words call for, generated if it is not already there.
+ * Every insertion's media, generated if it is not already there.
  *
- * Called on SAVE, which is the only moment the main process — the one that can spawn ffmpeg
- * — sees the document. Idempotent by name, so a save that adds nothing costs one `stat` per
- * added word. A failure is logged and swallowed: the edit is not lost because a derived file
- * could not be written, and the segment renders black until the next save regenerates it.
+ * Read off the ASSETS, not the words: an insertion is a clip on an asset that already knows
+ * its own path, its own length and its own geometry. There is nothing to derive here and
+ * nothing to agree with the renderer about beyond the path it stored.
+ *
+ * Called on SAVE, the only moment the main process — the one that can spawn ffmpeg — sees
+ * the document. Idempotent by name, so a save that adds nothing costs one `stat` per
+ * insertion. A failure is logged and swallowed: an edit is not lost because a derived file
+ * could not be written, and the clip renders black until the next save regenerates it.
  */
 export async function ensureDocumentExtensions(document: {
 	assets: ReadonlyArray<{
 		id: string;
 		originalPath?: string;
+		durationSec?: number;
 		video?: { width: number; height: number; fps: number };
 	}>;
-	transcripts: ReadonlyArray<{ assetId: string; words: ReadonlyArray<AxcutWord> }>;
 }): Promise<void> {
-	for (const transcript of document.transcripts) {
-		const asset = document.assets.find((a) => a.id === transcript.assetId);
-		if (!asset?.originalPath) continue;
-		for (const word of transcript.words) {
-			if (!isAddedWord(word)) continue;
-			const durationSec = extensionDurationSec(word.text);
-			if (durationSec <= 0) continue;
-			const outPath = extensionClipPath(asset.originalPath, word.id, durationSec);
-			try {
-				await ensureExtensionClip(
-					{
-						durationSec,
-						fps: asset.video?.fps ?? 0,
-						width: asset.video?.width ?? 0,
-						height: asset.video?.height ?? 0,
-					},
-					outPath,
-				);
-			} catch (error) {
-				console.error(`[extension] ${word.id}: ${(error as Error).message}`);
-			}
+	for (const asset of document.assets) {
+		if (!isGeneratedAssetId(asset.id) || !asset.originalPath || !asset.durationSec) continue;
+		try {
+			await ensureExtensionClip(
+				{
+					durationSec: asset.durationSec,
+					fps: asset.video?.fps ?? 0,
+					width: asset.video?.width ?? 0,
+					height: asset.video?.height ?? 0,
+				},
+				asset.originalPath,
+			);
+		} catch (error) {
+			console.error(`[insertion] ${asset.id}: ${(error as Error).message}`);
 		}
 	}
 }

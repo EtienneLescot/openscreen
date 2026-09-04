@@ -28,7 +28,6 @@ import {
 	placementRawSec,
 	type TranscriptPlacement,
 } from "../timeline/aggregated-transcript";
-import { extensionSpanAtSource, isAddedWord } from "../timeline/clip-parts";
 import { removedRawSpans } from "../timeline/programme-time";
 import {
 	type CaptionAnchorV,
@@ -51,42 +50,10 @@ export interface CaptionCue {
  *  the subtitle. Well clear of the annotation z-range, which counts up from 1. */
 export const CAPTION_Z_INDEX_BASE = 100_000;
 
-/** A caption word that carries whether it was ADDED, which decides where a line breaks. */
-type StreamWord = CaptionSegment & { added?: true };
-
-function toCaptionSegments(transcript: AxcutTranscript): StreamWord[] {
+function toCaptionSegments(transcript: AxcutTranscript): CaptionSegment[] {
 	return transcript.words
 		.filter((word) => word.text.trim().length > 0)
-		.map((word) => ({
-			startSec: word.startSec,
-			endSec: word.endSec,
-			text: word.text,
-			...(isAddedWord(word) ? { added: true as const } : {}),
-		}));
-}
-
-/**
- * The stream cut into runs, each grouped into lines on its own, with every added word a run
- * of one.
- *
- * An added word is spoken over its OWN media for its own stretch. Grouped with the recorded
- * words beside it, its line inherits their span — which is what glued the inserted subtitle
- * to the line before it and left it on screen at the wrong moment.
- */
-function runsAroundAddedWords(stream: StreamWord[]): StreamWord[][] {
-	const runs: StreamWord[][] = [];
-	let run: StreamWord[] = [];
-	for (const word of stream) {
-		if (word.added) {
-			if (run.length > 0) runs.push(run);
-			runs.push([word]);
-			run = [];
-			continue;
-		}
-		run.push(word);
-	}
-	if (run.length > 0) runs.push(run);
-	return runs;
+		.map((word) => ({ startSec: word.startSec, endSec: word.endSec, text: word.text }));
 }
 
 function segmentWordsAsCaptionSegments(
@@ -152,17 +119,10 @@ export function captionLinesForAsset(
 			: translatedWordStream(transcript, translations, settings.language);
 
 	if (stream.length === 0) return [];
-	return runsAroundAddedWords(stream).flatMap((run) =>
-		// An added word is already a line, and must stay the POINT in source time that it is:
-		// the polish pass gives a line a minimum span, and a span is exactly what this has
-		// none of. Its real length comes from the extension it is spoken over, downstream.
-		run.length === 1 && run[0].added
-			? [{ startSec: run[0].startSec, endSec: run[0].endSec, text: run[0].text }]
-			: polish(groupTimedCaptionWordsIntoLines(run, minWords, maxWords)),
-	);
+	return polish(groupTimedCaptionWordsIntoLines(stream, minWords, maxWords));
 }
 
-function originalWordStream(transcript: AxcutTranscript): StreamWord[] {
+function originalWordStream(transcript: AxcutTranscript): CaptionSegment[] {
 	const words = toCaptionSegments(transcript);
 	if (words.length > 0) return words;
 	// A transcript with segments but no words (hand-authored / imported) still
@@ -214,14 +174,7 @@ export function sourceSpanToTimelineSpans(
 		const clipSourceEnd = clip.sourceEndSec ?? Number.POSITIVE_INFINITY;
 		const s = Math.max(startSec, clip.sourceStartSec);
 		const e = Math.min(endSec, clipSourceEnd);
-		if (e <= s) {
-			// An added word occupies no source time at all — its line is a POINT here. Its
-			// moment is the extension inserted there, which is the one thing that knows how
-			// long it lasts.
-			const span = clip.parts ? extensionSpanAtSource(clip.parts, s) : null;
-			if (span) out.push(span);
-			continue;
-		}
+		if (e <= s) continue;
 		// Through `placementRawSec`, never the subtraction it used to write here: a clip
 		// carrying an added word plays its media in pieces, and the seconds after the
 		// insertion sit further along the ruler than their distance from the clip's start.
@@ -253,7 +206,6 @@ export function deriveCaptionCues(
 		// document written before it — or hand-built, never through the schema — has none.
 		document.audioTracks ?? [],
 		removedRawSpans(document.timeline.clips, document.timeline.trimRanges),
-		document.transcripts,
 	);
 	if (placements.length === 0) return [];
 

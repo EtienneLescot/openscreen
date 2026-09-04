@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type AxcutDocument, type AxcutTranscript, createEmptyDocument } from "../schema";
-import {
-	carryOverWordEdits,
-	insertDocumentWord,
-	removeDocumentWords,
-	setDocumentWordText,
-	setWordText,
-	withTranscript,
-} from "./transcript";
+import { carryOverWordEdits, setDocumentWordText, setWordText, withTranscript } from "./transcript";
 
 function fixture(language = "en"): AxcutTranscript {
 	return {
@@ -492,11 +485,11 @@ describe("carryOverWordEdits", () => {
 });
 
 // ─── The clip grows with the word ───────────────────────────────────────────
-// `timelineEndSec` is stored and the ruler reads it, so a clip left short draws a film that
-// ends before the programme does — the desync the previous attempt spent its life chasing.
-// Recomputed from the parts, at the one funnel every transcript write goes through.
+// An insertion is a clip, so its arithmetic lives in `insertion.test.ts`. What is left here
+// is the promise the plain transcript writes still make: they touch the words and nothing
+// else on the timeline.
 
-describe("adding a word sizes the clip it lands in", () => {
+describe("correcting a word leaves the timeline alone", () => {
 	function docWithClip(): AxcutDocument {
 		return {
 			assets: [{ id: "a1", kind: "video" }],
@@ -539,25 +532,6 @@ describe("adding a word sizes the clip it lands in", () => {
 			},
 		} as unknown as AxcutDocument;
 	}
-
-	it("lengthens the clip by exactly the media the word needs", () => {
-		const after = insertDocumentWord(docWithClip(), "a1", "w2", "after", "really");
-		const [clip] = after.timeline.clips;
-		// "really" is 6 chars at 15/s.
-		expect(clip.timelineEndSec - clip.timelineStartSec).toBeCloseTo(10 + 6 / 15, 6);
-		// And takes not one frame of the recording with it.
-		expect(clip.sourceStartSec).toBe(0);
-		expect(clip.sourceEndSec).toBe(10);
-	});
-
-	it("gives the length back when the word goes", () => {
-		const before = docWithClip();
-		const added = insertDocumentWord(before, "a1", "w2", "after", "really");
-		const gone = removeDocumentWords(added, "a1", [
-			added.transcripts[0].words.find((w) => w.source === "synth")?.id ?? "",
-		]);
-		expect(gone.timeline.clips).toEqual(before.timeline.clips);
-	});
 
 	it("leaves a document with no added words untouched", () => {
 		const before = docWithClip();

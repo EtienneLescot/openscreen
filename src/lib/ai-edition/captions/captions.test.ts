@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { insertGeneratedClip } from "../document/insertion";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { captionCuesToTextRegions, deriveCaptionCues } from "./cues";
 import type { CaptionSettings } from "./settings";
@@ -63,7 +64,16 @@ function doc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 			updatedAt: "2026-01-01T00:00:00.000Z",
 			primaryAssetId: "asset-1",
 		},
-		assets: [],
+		assets: [
+			{
+				id: "asset-1",
+				kind: "video",
+				label: "take",
+				originalPath: "C:/rec/take.mp4",
+				video: { width: 1920, height: 1080, fps: 30 },
+				cameraTrack: null,
+			},
+		],
 		transcript: null,
 		transcripts: [transcript()],
 		timeline: {
@@ -651,51 +661,28 @@ describe("translated caption layout", () => {
 	});
 });
 
-// The whole point of the insertion layer, seen from the far end: a word typed into the
-// middle of a take lengthens the film, and every caption after it has to move with the
-// audio it belongs to. This is the check that failed on screen before it failed here.
+// An insertion is a clip on its own media, so the cues it produces come out of the ordinary
+// per-asset path: the recording's own lines shift along the ruler, and the inserted text
+// gets a line of its own over the clip that plays it. Both used to be wrong at once.
 describe("captions over an inserted word", () => {
-	const withInsertion = () => {
-		const t = transcript();
-		return doc({
-			transcripts: [
-				{
-					...t,
-					words: [
-						...t.words.slice(0, 3),
-						{
-							id: "synth_1",
-							segmentId: "seg_1",
-							startSec: 2,
-							endSec: 2,
-							text: "wait",
-							source: "synth",
-						},
-						...t.words.slice(3),
-					],
-				},
-			],
-		});
-	};
+	const inserted = () => insertGeneratedClip(doc(), "asset-1", "w3", "after", "wait");
+	// "wait" is 4 chars at 15/s.
+	const GEN_MS = (4 / 15) * 1000;
 
-	it("moves every cue after the insertion by exactly the extension's length", () => {
-		const cues = deriveCaptionCues(withInsertion(), ON, {});
-		// "wait" is 4 chars at 15/s.
-		expect(cues[cues.length - 1].endMs).toBeCloseTo(6000 + (4 / 15) * 1000, 0);
+	it("moves every cue after the insertion by exactly the clip's length", () => {
+		const cues = deriveCaptionCues(inserted(), ON, {});
+		expect(cues[cues.length - 1].endMs).toBeCloseTo(6000 + GEN_MS, 0);
 	});
 
-	it("gives the inserted word a line of its own, over the media it inserted", () => {
-		// Grouped with the recorded words beside it, it inherited their span — which is what
-		// left the inserted subtitle glued to the line before it.
-		const wait = deriveCaptionCues(withInsertion(), ON, {}).find((c) => c.text === "wait");
-		expect(wait).toBeDefined();
+	it("gives the inserted word a line of its own, over the clip that plays it", () => {
+		const wait = deriveCaptionCues(inserted(), ON, {}).find((c) => c.text === "wait");
 		expect(wait?.startMs).toBe(2000);
-		expect(wait?.endMs).toBeCloseTo(2000 + (4 / 15) * 1000, 0);
+		expect(wait?.endMs).toBeCloseTo(2000 + GEN_MS, 0);
 	});
 
 	it("leaves the cues before it exactly where they were", () => {
-		const before = deriveCaptionCues(doc(), ON, {});
-		const after = deriveCaptionCues(withInsertion(), ON, {});
-		expect(after[0].startMs).toBe(before[0].startMs);
+		expect(deriveCaptionCues(inserted(), ON, {})[0].startMs).toBe(
+			deriveCaptionCues(doc(), ON, {})[0].startMs,
+		);
 	});
 });

@@ -14,7 +14,6 @@ import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "
  */
 export type PlaybackSegment = AxcutClip;
 
-import { clipParts, partsLengthSec } from "../timeline/clip-parts";
 import { type Interval, subtractInterval } from "../timeline/intervals";
 import { keptRawSpans } from "../timeline/programme-time";
 import {
@@ -129,34 +128,6 @@ function collectWordRefs(
 // after any structural change (insert / move / remove / trim) so the timeline
 // never has gaps or overlaps between clips. Shared by useTimeline (UI) and
 // the agent tool executor (main process) so both enforce the same invariant.
-/**
- * Clip lengths, recomputed from the parts they now have.
- *
- * `timelineEndSec` is STORED, so something has to keep it true once a word can add media
- * inside a clip — and the ruler reads it, so a clip left short draws a film that ends before
- * the programme does. This is that something, and it is a recompute, not a reconciliation:
- * the parts are derived from the words, so there is no second stored fact to drift from.
- *
- * Idempotent, and a no-op for a document with no added words.
- */
-export function withClipsSizedToParts(document: AxcutDocument): AxcutDocument {
-	const wordsByAsset = new Map(document.transcripts.map((t) => [t.assetId, t.words]));
-	const clips = document.timeline.clips.map((clip) => {
-		const parts = clipParts(clip, wordsByAsset.get(clip.assetId) ?? []);
-		// No parts means the duration has not been probed yet; the prober owns the length.
-		if (parts.length === 0) return clip;
-		return { ...clip, timelineEndSec: clip.timelineStartSec + partsLengthSec(parts) };
-	});
-	const resequenced = resequenceClips(clips);
-	const unchanged = resequenced.every(
-		(clip, i) =>
-			Math.abs(clip.timelineStartSec - document.timeline.clips[i].timelineStartSec) < 1e-9 &&
-			Math.abs(clip.timelineEndSec - document.timeline.clips[i].timelineEndSec) < 1e-9,
-	);
-	return unchanged
-		? document
-		: { ...document, timeline: { ...document.timeline, clips: resequenced } };
-}
 
 export function resequenceClips(clips: AxcutClip[]): AxcutClip[] {
 	let cursor = 0;
@@ -1084,13 +1055,18 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 	const oldClips = document.timeline.clips;
 	const arr = oldClips.filter((c) => c.id !== clipId);
 	if (arr.length === oldClips.length) return document;
-	const newClips = resequenceClips(arr);
+	const { clips: joined, reanchor } = joinContiguous(arr);
+	const newClips = resequenceClips(joined);
 	const next: AxcutDocument = {
 		...document,
 		timeline: {
 			...document.timeline,
 			clips: newClips,
-			trimRanges: document.timeline.trimRanges.filter((t) => t.clipId !== clipId),
+			trimRanges: document.timeline.trimRanges
+				.filter((t) => t.clipId !== clipId)
+				.map((t) =>
+					t.clipId && reanchor.has(t.clipId) ? { ...t, clipId: reanchor.get(t.clipId) } : t,
+				),
 		},
 	};
 	// The asymmetry with the trim filter three lines up is deliberate, and the obvious
@@ -1123,7 +1099,66 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 			regions.filter((region) => !(hasCompleteClipAnchor(region) && region.clipId === clipId)),
 		);
 	}
-	return rederiveRegionMs(next, newClips);
+	const reanchored =
+		reanchor.size === 0
+			? next
+			: mapAllRegionCollections(next, (regions) =>
+					regions.map((region) =>
+						hasCompleteClipAnchor(region) && reanchor.has(region.clipId)
+							? { ...region, clipId: reanchor.get(region.clipId) as string }
+							: region,
+					),
+				);
+	return rederiveRegionMs(reanchored, newClips);
+}
+
+/**
+ * Two clips that are one continuous piece of media are one clip.
+ *
+ * The inverse of the cut an insertion makes: take the generated clip away and the halves it
+ * separated go back to being what they were. Asked only when a clip is REMOVED, which is
+ * the only moment adjacency can appear — a pass over the whole timeline would join clips
+ * the user meant to keep apart.
+ *
+ * Deliberately blind to WHY the two halves are contiguous: no marker, no parent id, nothing
+ * to keep in sync. Same media, source ranges that meet, same crop — then they play as one
+ * clip already, and drawing them as two is the only difference.
+ *
+ * ponytail: today nothing else can produce two contiguous clips of one media, so this can
+ * only ever undo an insertion. Give the cut a marker the day a razor tool lands and a split
+ * with no gap becomes something the user asked for.
+ */
+function joinContiguous(clips: AxcutClip[]): {
+	clips: AxcutClip[];
+	/** Ids that went away, and the clip that now carries their content. */
+	reanchor: Map<string, string>;
+} {
+	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
+	const out: AxcutClip[] = [];
+	const reanchor = new Map<string, string>();
+	for (const clip of ordered) {
+		const previous = out[out.length - 1];
+		if (previous && joinable(previous, clip)) {
+			out[out.length - 1] = {
+				...previous,
+				sourceEndSec: clip.sourceEndSec,
+				timelineEndSec: previous.timelineEndSec + (clip.timelineEndSec - clip.timelineStartSec),
+			};
+			reanchor.set(clip.id, previous.id);
+			continue;
+		}
+		out.push(clip);
+	}
+	return { clips: out, reanchor };
+}
+
+function joinable(left: AxcutClip, right: AxcutClip): boolean {
+	return (
+		left.assetId === right.assetId &&
+		left.sourceEndSec !== undefined &&
+		Math.abs(left.sourceEndSec - right.sourceStartSec) < 1e-6 &&
+		JSON.stringify(left.cropRegion ?? null) === JSON.stringify(right.cropRegion ?? null)
+	);
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {

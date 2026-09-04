@@ -40,8 +40,9 @@ import {
 	slipAudioOffsetMs,
 } from "@/lib/ai-edition/document/audioTracks";
 import { createId } from "@/lib/ai-edition/document/ids";
+import { isGeneratedAssetId } from "@/lib/ai-edition/document/insertion";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
-import type { AxcutAudioTrack, AxcutClip, AxcutWord } from "@/lib/ai-edition/schema";
+import type { AxcutAudioTrack, AxcutClip } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionStore";
@@ -49,7 +50,6 @@ import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
-import { clipParts } from "@/lib/ai-edition/timeline/clip-parts";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
 	newRegionDurationSec,
@@ -707,39 +707,6 @@ export function V4Timeline({
 		label: `${(p.member.customScale ?? ZOOM_DEPTH_SCALES[p.member.depth]).toFixed(2)}×`,
 		sourceIds: p.ids,
 	}));
-	// Where the user has ADDED words. Derived from the transcript on every render and
-	// stored nowhere: the word carries `source: "synth"` and its own source time, so a mark
-	// built from it cannot drift from the amber word the transcript pane shows. Grouped by
-	// clip because each mark is positioned inside its clip's own box — it then travels with
-	// the clip through a reorder for free, with no ruler arithmetic of its own.
-	const insertedWordsByClip = useMemo(() => {
-		type Mark = { word: AxcutWord; atPct: number; widthPct: number; atSec: number };
-		const byAsset = new Map(tl.transcripts.map((t) => [t.assetId, t.words]));
-		const out = new Map<string, Mark[]>();
-		for (const clip of clips) {
-			const words = byAsset.get(clip.assetId);
-			// The clip's TIMELINE span, which is what the box on screen measures. Using the
-			// source span put the mark at the wrong percentage AND gave it no width, because
-			// the two spans stop being equal the moment a word is added.
-			const span = clip.timelineEndSec - clip.timelineStartSec;
-			if (!words || span <= 0) continue;
-			const byId = new Map(words.map((w) => [w.id, w]));
-			const marks = clipParts(clip, words).flatMap((part): Mark[] => {
-				const word = part.kind === "extension" ? byId.get(part.wordId) : undefined;
-				if (!word) return [];
-				return [
-					{
-						word,
-						atPct: ((part.timelineStartSec - clip.timelineStartSec) / span) * 100,
-						widthPct: ((part.timelineEndSec - part.timelineStartSec) / span) * 100,
-						atSec: part.timelineStartSec,
-					},
-				];
-			});
-			if (marks.length > 0) out.set(clip.id, marks);
-		}
-		return out;
-	}, [tl.transcripts, clips]);
 
 	// trims: content-free (no per-instance text/settings), so touching rows —
 	// inevitable once a trim is ventilated across a clip boundary — are
@@ -2216,7 +2183,11 @@ export function V4Timeline({
 									<div
 										key={c.id}
 										data-clip-id={c.id}
-										className={`${styles.tlClip}${selected ? ` ${styles.tlClipSel}` : ""}${
+										className={`${styles.tlClip}${
+											// Amber, because nobody shot it. Same token the mark it replaces
+											// used, so an insertion still reads as one at a glance.
+											isGeneratedAssetId(c.assetId) ? ` ${styles.tlClipGenerated}` : ""
+										}${selected ? ` ${styles.tlClipSel}` : ""}${
 											dragging ? ` ${styles.tlClipDragging}` : ""
 										}`}
 										style={{
@@ -2268,35 +2239,6 @@ export function V4Timeline({
 												{tl.assets.find((a) => a.id === c.assetId)?.label ?? c.assetId}
 											</span>
 										</div>
-										{(insertedWordsByClip.get(c.id) ?? []).map(
-											({ word, atPct, widthPct, atSec }) => {
-												const left = atPct;
-												const width = widthPct;
-												return (
-													<button
-														key={word.id}
-														type="button"
-														data-no-clip-drag
-														data-inserted-word={word.id}
-														className={styles.tlClipInsert}
-														style={
-															width > 0
-																? { left: `${left}%`, width: `${width}%`, marginLeft: 0 }
-																: { left: `${left}%` }
-														}
-														title={t("toolbar.addedWord", { word: word.text })}
-														aria-label={t("toolbar.addedWord", { word: word.text })}
-														onPointerDown={(e) => e.stopPropagation()}
-														onClick={(e) => {
-															// Jump to the moment the added text sits on. The clip box
-															// underneath would otherwise take this as a selection.
-															e.stopPropagation();
-															setCurrentTime(atSec);
-														}}
-													/>
-												);
-											},
-										)}
 										{selected ? (
 											<button
 												type="button"

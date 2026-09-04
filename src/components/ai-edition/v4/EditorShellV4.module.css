@@ -1680,6 +1680,13 @@
 .tlClipSel {
 	border-color: var(--accent);
 }
+/* A generated clip: the media behind an inserted word, which nobody shot. Amber on the box
+   itself rather than a badge inside it, so it stays legible at the zoom levels where a clip
+   is a few pixels wide and there is no room to draw anything in it. */
+.tlClipGenerated {
+	border-color: var(--warn);
+	background: color-mix(in srgb, var(--warn) 18%, var(--surface-1));
+}
 /* The clip being carried during a reorder drag — follows the pointer 1:1
    (no transition lag) while its siblings slide out of the way with the
    base .tlClip transform transition above. */
@@ -1775,44 +1782,6 @@
    over the waveform, at the moment the word sits on, wide enough to hit and no wider
    — the clip underneath still has to be draggable everywhere else. Amber is the
    colour the transcript pane gives the same word, so the two read as one thing. */
-.tlClipInsert {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	z-index: 2;
-	/* A pause of zero still needs somewhere to be clicked; a real one is sized inline. */
-	min-width: 9px;
-	margin-left: -4px;
-	padding: 0;
-	border: 0;
-	background: transparent;
-	cursor: pointer;
-}
-/* The mark fills its button rather than sitting at a fixed 3px inside it. The button has
-   carried the pause's real width in its inline style for a while; `width: 3px` here meant a
-   word that bought two seconds and one that bought nothing drew the same tick, and the wide
-   case was a multi-second invisible column that swallowed clip drags (issue #560).
-   `min-width` is the floor that keeps a word which borrowed existing silence — a pause of
-   zero, so a zero-width button — visible and clickable. */
-.tlClipInsert::before {
-	content: "";
-	position: absolute;
-	left: 0;
-	right: 0;
-	top: 4px;
-	bottom: 4px;
-	min-width: 3px;
-	border-radius: 2px;
-	background: var(--warn);
-	box-shadow: 0 0 0 1px color-mix(in srgb, #080a0d 45%, transparent);
-	transition: box-shadow var(--motion-fast) var(--ease);
-}
-.tlClipInsert:hover::before,
-.tlClipInsert:focus-visible::before {
-	box-shadow:
-		0 0 0 1px color-mix(in srgb, #080a0d 45%, transparent),
-		0 0 0 4px var(--warn-soft);
-}
 .tlDropHint {
 	position: absolute;
 	inset: 0;
