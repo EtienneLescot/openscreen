@@ -570,6 +570,32 @@ Unit tests never look at a pixel. The `native*` arms write real files: export th
 
 ## Rejected routes
 
+### Shrinking the macOS `app.asar` to cure the export's cold start
+
+**What it was.** A headless `openscreen export` was measured repeatedly spending 4.2 s between the CLI's `started` event and its first composed frame, then not doing it any more on the same binary. The standing hypothesis was memory pressure on an 8 GiB machine faulting ~1.8 MB of module chunks out of a 274 MB `app.asar`, and the proposed lever was a smaller archive. **What the measurement said.** The cost is real and now reproducible on demand — but the archive is not it, and residency is not the lever. Shipped 1.10.0 bundle, M1 Mac mini, 4 s fixture, conditions interleaved inside one session; the two unpressured blocks closed at 442 ms and 441 ms, so the comparisons sit on a stable floor.
+
+| condition | spawn→`started` | `started`→first frame |
+|---|---:|---:|
+| validated binary, machine free (baseline) | 432 ms | 452 ms |
+| + 1.5 GB pinned and continuously touched | 490 ms | 625 / 555 ms |
+| + 3 GB pinned | 474 ms | 652 / 632 ms |
+| page cache flushed (8 GB read), same binary | 575 ms | 493 ms |
+| **first run of a newly written copy** | **2120 ms** | **780 ms** |
+| same, whole bundle read into cache first | 2130 ms | 771 ms |
+| **newly written copy + 3 GB pinned** | **3988 ms** | **1115 ms** |
+
+Five things fall out, each with its own control:
+
+- **Reading every byte of the bundle first changes nothing** — 2130 ms against 2120 ms. That is the best case a smaller archive could ever approach, so a smaller archive cannot help. A cold read of the entire 261 MB archive costs 110 ms; the machine does 2.4 GB/s and the file is not the problem.
+- **Cold pages are worth ~35 ms** of the `started`→first-frame interval (493 vs 457). The flush is not imaginary: page faults requiring I/O go 656 → 2730, and 12 708 in the most effective trial.
+- **Memory pressure is real but saturates at about +200 ms.** Doubling the pin from 1.5 GB to 3 GB moves the cost from +150 ms to +213 ms, not from +150 ms to +300 ms.
+- **It is not Gatekeeper and not signature verification.** Pre-running `spctl -a -t exec` (372 ms) and `codesign --verify --deep` (209 ms) on a fresh copy leaves the first launch exactly where it was: 2137 ms against 2127 ms without.
+- **It is bound to the file's identity.** Rewriting the same bytes to the same path with the same mtime — a new inode and nothing else — brings the whole cost back: 2380 ms against 441 ms. So it is neither a path-keyed nor a `userData`-keyed cache the app could pre-warm; it is charged by the kernel against the binary itself.
+
+The expensive launch is therefore **the first execution of a newly installed binary**, compounding with memory pressure to the ~4 s that was reported (7578 ms total against 3447 ms). It is paid once per install or update, which is also why it disappeared "on the same binary, hours later" — and why it never shows up in a benchmark, which launches the same binary dozens of times.
+
+**One-line reason not to re-propose:** making the entire archive resident buys nothing, so making it smaller cannot; what remains is charged against the binary's identity, not its size.
+
 ### Capping the macOS decoder's thread count
 
 **What it was.** After the export moved to the software H.264 decoder it runs with `thread_count = 0`, which in libavcodec means *automatic* — the decoder picks, from the CPU count and its own threading model, and the number it actually chose was never read back here. The export's CPU-seconds went 8.4 → 29.8. Since the walk is bound by the encoder and the decoder has seconds of slack, capping its threads looked like free CPU. **What the measurement said.** It is not free and it does not return CPU. Public bundle, S4, three cycles with a floor inside each, closing drift 0.9979, output identical across variants:
@@ -685,7 +711,7 @@ the bench runs on the reference machine.
 
 ## Known gaps
 
-- **macOS export startup can cost 4 s, and nobody has reproduced it on demand.** Measured repeatedly at 4208–4502 ms between the CLI's `started` event and the first composed frame — 18 % of a 60 s export, 71 % of a 5 s one — then gone, on the same shipped binary, hours later (481 ms). It is not the compositor (init is 2.4 ms, runtime MSL compilation included), not the `<video>` metadata probes (13 ms and 6 ms), not the CLI prologue (24 ms total), and not the renderer entry point (measured at −0.1 %). It correlates with memory pressure on an 8 GiB machine — `387M unused / 2613M compressor` while it reproduced, `564M unused / 1837M compressor` after — which would fit faulting ~1.8 MB of module chunks out of a 274 MB `app.asar` while the compressor thrashes: seconds of wall clock, no CPU in either process, cost independent of the media. Untested. Recreating the pressure deliberately and watching it return is what would settle it, and then whether asar size is the lever.
+- **The macOS export's 4 s cold start is priced, but the kernel mechanism behind it is unnamed.** The cost reproduces on demand and its levers are settled ([Rejected routes](#shrinking-the-macos-appasar-to-cure-the-exports-cold-start)): it is the first execution of a newly installed binary, amplified by memory pressure. Which per-inode cache that first execution populates — page-granular code-signature validation, a dyld launch closure, or both — was not established, because `DYLD_PRINT_STATISTICS` is stripped from a binary signed with the hardened runtime. Three things stay untested. Whether the cost scales with **bundle size** at all: residency was refuted, size was not, and content cannot be removed without invalidating the signature that is part of what is being measured. Whether a **real download** is worse: a quarantined bundle takes a heavier Gatekeeper path than the `ditto` copies used here, so a user's first launch after downloading may cost more than any number above. And the **original report's split**, which put 4.2 s between `started` and the first frame with the renderer's `domInteractive` at 3887 ms, where this reproduction puts the bulk before `started` — same magnitude, different place, so it may be a second phenomenon wearing the same total.
 - **10-bit and HEVC decode on macOS are unmeasured.** The export's decode predicate is `codec_id == H264 && format == YUV420P`, so both keep VideoToolbox untested. HEVC is the case most likely to invert the result, since its software decoder is materially more expensive. 10-bit needs work beyond the predicate first: `mac_frames::CpuFrames` converts to 8-bit NV12, so routing 10-bit through the software path would silently truncate — the predicate is currently what prevents that.
 - **The macOS preview's decode backend has never been measured.** `DecodeIntent` splits preview from export precisely so the preview could keep the old arbitration; the export won on throughput, but the preview scrubs, where seek latency after `avcodec_flush_buffers` may matter more, and it shares the machine with the editor UI. Changing it without measuring it would be the same mistake the export change corrects.
 - **The energy cost of software decode on macOS is unmeasured, and the CPU figure is not a proxy for it.** The export burns 3.5× the **CPU-seconds** it used to (8.4 → 29.8 s), and that is the only thing measured. It does not follow that energy moved by the same factor: on an M-series the P and E cores draw very differently, clock is not fixed, and a shorter run at higher occupancy can spend less total energy than a longer one — racing to idle. Nor is the jump waste: VideoToolbox does the same decoding in a fixed-function block that CPU accounting never sees, so the work did not grow, it moved somewhere visible and got 12× faster on the way. Capping the decoder's threads does **not** recover it (see Rejected routes); what it would buy is lower peak core occupancy — how unusable the machine feels during an export — which is a different question and also unmeasured. `powermetrics` would answer the energy half and needs sudo.
