@@ -114,12 +114,32 @@ const PINNED = {
 		member: "onnxruntime.dll",
 		out: "onnxruntime.dll",
 	},
+	// The one target that does NOT come from upstream, and it is not a preference.
+	// Microsoft's `onnxruntime-osx-arm64-1.27.1.tgz` is built for macOS 14, this app
+	// declares a 13.0 floor, and `before-pack.cjs` refuses a payload demanding more —
+	// correctly, since the deployment target decides which symbols the linker resolves
+	// against the OS rather than emitting locally (#515). So `npm run build:mac` could
+	// not package at all. No published release fixes that: every one from 1.24 on is
+	// `minos 14.0`, and every one before it is at least 13.3.
+	//
+	// This one is built by `.github/workflows/build-onnxruntime-macos.yml` from the
+	// commit above, with the deployment target pinned, and published under a
+	// `v0.0.0-*` tag — the marker this repo already uses for a binary that needs a
+	// permanent URL but is not a product version. Its provenance is attested:
+	//
+	//     gh attestation verify onnxruntime-osx-arm64-1.27.1.tgz --repo getopenscreen/openscreen
+	//
+	// Everything else about it is unchanged: immutable URL, SHA-256 verified before
+	// the archive is opened. What moved is who built the bytes, not how far they are
+	// trusted.
 	"darwin-arm64": {
 		slug: "osx-arm64",
 		ext: "tgz",
-		sha256: "e42b77a7281cc6e55141bf44fcfbac2c782b823a491bbb6ac33c781dd991f8a6",
+		sha256: "b8b7e62786eea42fc867bdbc2d3f573655a4b0e602c6938c4cea151a9ef71623",
 		member: `libonnxruntime.${VERSION}.dylib`,
 		out: "libonnxruntime.dylib",
+		baseUrl:
+			"https://github.com/getopenscreen/openscreen/releases/download/v0.0.0-onnxruntime-1.27.1",
 	},
 	// Linux is wired into `build:linux` since its back-end gained the capture half
 	// (`capture_webcam_rgb` + `set_webcam_mask` in `compositor_linux.rs`). Until
