@@ -221,19 +221,48 @@ fn quad_inverse_bilinear(P: vec2<f32>, c00: vec2<f32>, c10: vec2<f32>, c11: vec2
     return r1;
 }
 
-// Fond floute du mode "blur" webcam. Miroir de `blur_webcam_bg` cote HLSL et MSL : memes
-// 25 taps, memes poids, meme rayon — les trois back-ends doivent rendre le meme pixel.
-fn blur_webcam_bg(uv: vec2<f32>, intensity: f32, qpx: vec2<f32>) -> vec3<f32> {
-    let step = (max(intensity, 0.0) * 12.0 + 2.0) / max(qpx, vec2<f32>(1.0));
+// Fond flouté pour le mode "blur" de la webcam.
+// Disque de Vogel (spirale à angle d'or) à 21 échantillons avec pondération gaussienne et
+// rotation par pixel via Interleaved Gradient Noise (IGN) pour un bokeh photographique doux, isotrope et rapide.
+const VOGEL_TAPS = array<vec3<f32>, 21>(
+    vec3<f32>( 0.154303,  0.000000, 0.942213),
+    vec3<f32>(-0.197070,  0.180532, 0.836464),
+    vec3<f32>( 0.030165, -0.343712, 0.742584),
+    vec3<f32>( 0.248394,  0.323986, 0.659241),
+    vec3<f32>(-0.455834, -0.080631, 0.585251),
+    vec3<f32>( 0.431806, -0.274679, 0.519566),
+    vec3<f32>(-0.144431,  0.537274, 0.461253),
+    vec3<f32>(-0.275445, -0.530352, 0.409484),
+    vec3<f32>( 0.597605,  0.218244, 0.363526),
+    vec3<f32>(-0.621708,  0.256632, 0.322726),
+    vec3<f32>( 0.299704, -0.640451, 0.286505),
+    vec3<f32>( 0.221474,  0.706094, 0.254349),
+    vec3<f32>(-0.667525, -0.386844, 0.225802),
+    vec3<f32>( 0.783083, -0.172159, 0.200460),
+    vec3<f32>(-0.477903,  0.679768, 0.177961),
+    vec3<f32>(-0.110407, -0.852001, 0.157988),
+    vec3<f32>( 0.677789,  0.571241, 0.140256),
+    vec3<f32>(-0.912091,  0.037718, 0.124514),
+    vec3<f32>( 0.665301, -0.662063, 0.110540),
+    vec3<f32>(-0.044511,  0.962596, 0.098133),
+    vec3<f32>(-0.633036, -0.758588, 0.087119)
+);
+
+fn blur_webcam_bg(uv: vec2<f32>, intensity: f32, qpx: vec2<f32>, local_px: vec2<f32>) -> vec3<f32> {
+    let max_r_px = max(intensity, 0.0) * 22.0 + 1.5;
+    let step = max_r_px / max(qpx, vec2<f32>(1.0));
+    let noise = fract(52.9829189 * fract(0.06711056 * local_px.x + 0.00583715 * local_px.y));
+    let angle = noise * 6.2831853;
+    let s = sin(angle);
+    let c = cos(angle);
     var sum = vec3<f32>(0.0);
     var total = 0.0;
-    for (var dy: i32 = -2; dy <= 2; dy = dy + 1) {
-        for (var dx: i32 = -2; dx <= 2; dx = dx + 1) {
-            let d = vec2<f32>(f32(dx), f32(dy));
-            let w = 1.0 / (1.0 + length(d));
-            sum = sum + sample_yuv(clamp(uv + d * step, vec2<f32>(0.0), vec2<f32>(1.0))) * w;
-            total = total + w;
-        }
+    for (var k: i32 = 0; k < 21; k = k + 1) {
+        let p = VOGEL_TAPS[k].xy;
+        let w = VOGEL_TAPS[k].z;
+        let rot_p = vec2<f32>(p.x * c - p.y * s, p.x * s + p.y * c);
+        sum = sum + sample_yuv(clamp(uv + rot_p * step, vec2<f32>(0.0), vec2<f32>(1.0))) * w;
+        total = total + w;
     }
     return sum / max(total, 1e-4);
 }
@@ -252,16 +281,18 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         // floute le long de ce segment, ce qui capture la translation ET le zoom
         // du calque sans avoir à transporter un champ de vitesse.
         let taps = i32(layer.mb.x);
+        let mb_scale = clamp(layer.mb.y, 0.0, 1.0);
         // `taps` d'abord : un draw qui a oublié `dst_prev` le laisse à zéro, et
         // la division par `dst_prev.zw` produirait des UV infinis. Dégrader vers
         // le chemin net est le seul échec acceptable pour un effet cosmétique.
-        if taps <= 1 || layer.dst_prev.z <= 0.0 || layer.dst_prev.w <= 0.0 {
+        if taps <= 1 || mb_scale <= 0.001 || layer.dst_prev.z <= 0.0 || layer.dst_prev.w <= 0.0 {
             rgb = sample_yuv(i.uv);
         } else {
             let localp = (i.pout - layer.dst_prev.xy) / layer.dst_prev.zw;
             let uv_prev = layer.src_prev.xy + localp * (layer.src_prev.zw - layer.src_prev.xy);
             let duv = i.uv - uv_prev;
-            if dot(duv, duv) < 1e-9 {
+            let duv_blur = duv * mb_scale;
+            if dot(duv_blur, duv_blur) < 1e-9 {
                 rgb = sample_yuv(i.uv);
             } else {
                 // Borne 16 en dur, identique au HLSL et au MSL : `taps` vient d'un
@@ -272,7 +303,7 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
                 let step = 1.0 / f32(taps - 1);
                 for (var k: i32 = 0; k < 16; k = k + 1) {
                     if k >= taps { break; }
-                    acc = acc + sample_yuv(uv_prev + duv * (f32(k) * step));
+                    acc = acc + sample_yuv(i.uv - duv_blur * (1.0 - f32(k) * step));
                 }
                 rgb = acc / f32(taps);
             }
@@ -288,7 +319,7 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
             if effect > 2.5 {
                 rgb = mix(layer.color.rgb, rgb, person);
             } else if effect > 1.5 {
-                rgb = mix(blur_webcam_bg(i.uv, layer.fx.w, layer.quad_px), rgb, person);
+                rgb = mix(blur_webcam_bg(i.uv, layer.fx.w, layer.quad_px, i.local), rgb, person);
             } else {
                 alpha_mask = person;
             }

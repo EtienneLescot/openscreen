@@ -1976,7 +1976,7 @@ impl Compositor {
                 color: [1.0, 1.0, 1.0, 1.0],
                 src_prev: g.cut,
                 dst_prev: g.s_dst_prev,
-                mb: [g.mb_taps, 1.0, 1.0, 0.0],
+                mb: [g.mb_taps, g.mb_amount, 1.0, 0.0],
                 ..Default::default()
             },
             Some(quad) => self.tilted_screen_cb(quad, s_px, quad_center_px, g.cut, g.s_radius),
@@ -2146,7 +2146,7 @@ impl Compositor {
                 fx: [w_valid[0], w_valid[1], effect_code, blur_intensity],
                 src_prev: [u0, cv0, u1, cv1],
                 dst_prev: g.w_dst_prev,
-                mb: [g.mb_taps, 1.0, 1.0, 0.0],
+                mb: [g.mb_taps, g.mb_amount, 1.0, 0.0],
                 ..Default::default()
             };
             // Le masque est lie par `make_bind` sur tous les draws, pas seulement
@@ -2856,9 +2856,9 @@ impl Compositor {
                     occlusion_query_set: None,
                 });
                 rpass.set_pipeline(&self.pipeline_add);
-                let w = 1.0 / c.binds.len() as f64;
-                rpass.set_blend_constant(wgpu::Color { r: w, g: w, b: w, a: w });
-                for bind in &c.binds {
+                for (k, bind) in c.binds.iter().enumerate() {
+                    let w = crate::frame_geometry::cursor_tap_weight(k as u32, c.binds.len() as u32) as f64;
+                    rpass.set_blend_constant(wgpu::Color { r: w, g: w, b: w, a: w });
                     rpass.set_bind_group(0, bind, &[]);
                     rpass.draw(0..4, 0..1);
                 }

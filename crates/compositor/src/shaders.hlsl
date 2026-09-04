@@ -174,22 +174,51 @@ float3 quad_inverse_bilinear(float2 P, float2 c00, float2 c10, float2 c11, float
     return (r0.z > 0.5) ? r0 : r1;
 }
 
-// Fond floute pour le mode "blur" de la webcam. Rayon en UV pour rester isotrope quel que soit
-// le rect source. 25 taps ponderes par la distance : assez doux pour un fond, assez court pour
-// tenir dans le budget d'une frame webcam (qui n'occupe qu'une fraction de la sortie).
-float3 blur_webcam_bg(float2 uv, float intensity, float2 qpx)
+// Fond flouté pour le mode "blur" de la webcam.
+// Disque de Vogel (spirale à angle d'or) à 21 échantillons avec pondération gaussienne et
+// rotation par pixel via Interleaved Gradient Noise (IGN) pour un bokeh photographique doux, isotrope et rapide.
+static const float3 VOGEL_TAPS[21] = {
+    float3( 0.154303,  0.000000, 0.942213),
+    float3(-0.197070,  0.180532, 0.836464),
+    float3( 0.030165, -0.343712, 0.742584),
+    float3( 0.248394,  0.323986, 0.659241),
+    float3(-0.455834, -0.080631, 0.585251),
+    float3( 0.431806, -0.274679, 0.519566),
+    float3(-0.144431,  0.537274, 0.461253),
+    float3(-0.275445, -0.530352, 0.409484),
+    float3( 0.597605,  0.218244, 0.363526),
+    float3(-0.621708,  0.256632, 0.322726),
+    float3( 0.299704, -0.640451, 0.286505),
+    float3( 0.221474,  0.706094, 0.254349),
+    float3(-0.667525, -0.386844, 0.225802),
+    float3( 0.783083, -0.172159, 0.200460),
+    float3(-0.477903,  0.679768, 0.177961),
+    float3(-0.110407, -0.852001, 0.157988),
+    float3( 0.677789,  0.571241, 0.140256),
+    float3(-0.912091,  0.037718, 0.124514),
+    float3( 0.665301, -0.662063, 0.110540),
+    float3(-0.044511,  0.962596, 0.098133),
+    float3(-0.633036, -0.758588, 0.087119)
+};
+
+float3 blur_webcam_bg(float2 uv, float intensity, float2 qpx, float2 local_px)
 {
-    float2 step = (max(intensity, 0.0) * 12.0 + 2.0) / max(qpx, 1.0);
+    float max_r_px = max(intensity, 0.0) * 22.0 + 1.5;
+    float2 step = max_r_px / max(qpx, 1.0);
+    // Interleaved Gradient Noise pour rotation aléatoire par pixel
+    float noise = frac(52.9829189 * frac(0.06711056 * local_px.x + 0.00583715 * local_px.y));
+    float angle = noise * 6.2831853;
+    float s, c;
+    sincos(angle, s, c);
     float3 sum = 0.0;
     float total = 0.0;
-    [unroll] for (int dy = -2; dy <= 2; dy++)
+    [unroll] for (int k = 0; k < 21; k++)
     {
-        [unroll] for (int dx = -2; dx <= 2; dx++)
-        {
-            float w = 1.0 / (1.0 + length(float2(dx, dy)));
-            sum += sample_yuv(saturate(uv + float2(dx, dy) * step)) * w;
-            total += w;
-        }
+        float2 p = VOGEL_TAPS[k].xy;
+        float w = VOGEL_TAPS[k].z;
+        float2 rot_p = float2(p.x * c - p.y * s, p.x * s + p.y * c);
+        sum += sample_yuv(saturate(uv + rot_p * step)) * w;
+        total += w;
     }
     return sum / max(total, 1e-4);
 }
@@ -468,8 +497,10 @@ float4 ps_main(VSOut i) : SV_Target
         float2 localp = (i.pout - dst_prev.xy) / dst_prev.zw;
         float2 uv_prev = src_prev.xy + localp * (src_prev.zw - src_prev.xy);
         float2 duv = uv_now - uv_prev;
+        float mb_scale = saturate(mb.y);
+        float2 duv_blur = duv * mb_scale;
         int taps = (int) mb.x;
-        if (taps <= 1 || dot(duv, duv) < 1e-9)
+        if (taps <= 1 || mb_scale <= 0.001 || dot(duv_blur, duv_blur) < 1e-9)
         {
             rgb = sample_yuv(uv_now);
         }
@@ -480,7 +511,7 @@ float4 ps_main(VSOut i) : SV_Target
             {
                 if (k >= taps) break;
                 float t = (float) k / (float) (taps - 1);
-                acc += sample_yuv(uv_prev + duv * t);
+                acc += sample_yuv(uv_now - duv_blur * (1.0 - t));
             }
             rgb = acc / (float) taps;
         }
@@ -505,7 +536,7 @@ float4 ps_main(VSOut i) : SV_Target
             }
             else if (effect > 1.5)
             {
-                rgb = lerp(blur_webcam_bg(uv_now, fx.w, quad_px), rgb, person);
+                rgb = lerp(blur_webcam_bg(uv_now, fx.w, quad_px, i.local), rgb, person);
             }
             else
             {

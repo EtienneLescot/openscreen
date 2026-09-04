@@ -379,7 +379,7 @@ pub(crate) fn cursor_sprite_dst(center: [f32; 2], w: f32, h: f32, hotspot: [f32;
 /// donc pas seulement sa position qu'il faut projeter mais son sprite entier : autrement il se
 /// lit comme un autocollant plat posé sur une scène en perspective.
 #[derive(Clone, Copy)]
-pub(crate) enum CursorPlacement {
+pub enum CursorPlacement {
     /// Écran droit : centre en coordonnées sortie 0..1.
     Upright { center: [f32; 2] },
     /// Écran incliné : position 0..1 DANS le plan, plus de quoi projeter les coins du sprite.
@@ -732,6 +732,7 @@ pub struct FrameGeometryInput<'a> {
 pub struct FrameGeometry {
     pub scene_preset: Option<String>,
     pub mb_taps: f32,
+    pub mb_amount: f32,
     pub source_t: f32,
     pub zoom_rotation: [f32; 3],
     pub padding_scale: f32,
@@ -862,6 +863,9 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         let mb_taps = scene
             .map(|s| 1.0 + s.effects.motion_blur.clamp(0.0, 1.0) * 15.0)
             .unwrap_or(cfg.mblur_n as f32);
+        let mb_amount = scene
+            .map(|s| s.effects.motion_blur.clamp(0.0, 1.0))
+            .unwrap_or(if cfg.mblur_n > 1 { 1.0 } else { 0.0 });
 
         // Zoom regions + Full Camera : filtrées en amont pour le clip actif et échantillonnées
         // dans le même référentiel source que le PTS du décodeur écran.
@@ -1165,6 +1169,7 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
     FrameGeometry {
         scene_preset,
         mb_taps,
+        mb_amount,
         source_t,
         zoom_rotation,
         padding_scale,
@@ -1280,16 +1285,32 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
 
     let blur01 = lp.cursor_motion_blur.clamp(0.0, 1.0);
     let has_scene = input.scene.is_some();
-    let trail_frames = if has_scene { 1.0 + blur01 * 7.0 } else { 1.0 };
-    let taps = if has_scene {
-        (1.0 + blur01 * 10.0).round() as u32
+    let (taps, prev_placement) = if !has_scene {
+        let taps = input.cfg.mblur_n;
+        let prev = if taps <= 1 {
+            placement
+        } else {
+            place(input.track.at(input.t - 1.0 / FPS), g.s_dst_prev).unwrap_or(placement)
+        };
+        (taps, prev)
+    } else if blur01 <= 0.001 {
+        (1, placement)
     } else {
-        input.cfg.mblur_n
-    };
-    let prev_placement = if taps <= 1 {
-        placement
-    } else {
-        place(input.track.at(input.t - trail_frames / FPS), g.s_dst_prev).unwrap_or(placement)
+        // Intervalle d'obturateur court, centré sur la frame en cours (max 1.25 frame à 100% de blur)
+        let trail_dt = blur01 * (1.25 / FPS);
+        let prev = place(input.track.at(input.t - trail_dt), g.s_dst_prev).unwrap_or(placement);
+        let c_now = placement.upright_center();
+        let c_prev = prev.upright_center();
+        let dist_px = ((c_now[0] - c_prev[0]) * rw).hypot((c_now[1] - c_prev[1]) * rh);
+        if dist_px < 1.0 {
+            // Quasi immobile : pas de copies superflues
+            (1, placement)
+        } else {
+            // Densité d'échantillonnage adaptée à la distance pour éliminer les fantômes discrets
+            let needed = (dist_px / 2.5).ceil() as u32;
+            let taps = needed.clamp(2, 16);
+            (taps, prev)
+        }
     };
 
     Some(CursorPlan {
@@ -1300,6 +1321,21 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
         clip,
         cursor_type: input.track.type_at(input.t).map(str::to_string),
     })
+}
+
+/// Poids d'un échantillon du flou de mouvement de curseur (0 = queue/passé, taps-1 = tête/courant).
+///
+/// Poids croissant de 0.25 (queue) à 1.0 (tête), normalisé pour que la somme valle 1.0.
+/// La somme des (0.25 + 0.75 * k / (taps - 1)) pour k de 0 à taps-1 vaut taps * (0.25 + 1.0) / 2 = taps * 0.625.
+#[inline]
+pub fn cursor_tap_weight(k: u32, taps: u32) -> f32 {
+    if taps <= 1 {
+        return 1.0;
+    }
+    let t = k as f32 / (taps - 1) as f32;
+    let ramp = 0.25 + 0.75 * t;
+    let sum = taps as f32 * 0.625;
+    ramp / sum
 }
 
 /// Les clés à évincer d'un cache de textures pour repasser sous `budget`, la moins récemment
@@ -1983,4 +2019,110 @@ mod tests {
         let uv = webcam_source_rect([100.0, 100.0], [100.0, 100.0], Some(crop), 0.50 / 0.60);
         assert_rect(uv, [0.25, 0.20, 0.75, 0.80]);
     }
+
+    #[test]
+    fn cursor_tap_weight_sums_to_one_and_is_monotonically_increasing() {
+        assert_eq!(cursor_tap_weight(0, 1), 1.0);
+
+        for taps in [2, 4, 8, 11, 16] {
+            let mut sum = 0.0;
+            let mut prev_w = 0.0;
+            for k in 0..taps {
+                let w = cursor_tap_weight(k, taps);
+                assert!(w > 0.0, "poids positif");
+                if k > 0 {
+                    assert!(w > prev_w, "tête plus marquée que la queue : {w} > {prev_w}");
+                }
+                prev_w = w;
+                sum += w;
+            }
+            assert!((sum - 1.0).abs() < 1e-5, "somme des poids = 1.0 pour taps={taps}, got {sum}");
+        }
+    }
+
+    #[test]
+    fn plan_cursor_motion_blur_adaptive_and_stationary() {
+        let cfg = crate::config::all().pop().expect("cfg");
+        let track_immobile = crate::cursor::CursorTrack::new(
+            vec![(0.0, 0.5, 0.5), (2.0, 0.5, 0.5)],
+            vec![],
+            vec![],
+        );
+        let track_moving = crate::cursor::CursorTrack::new(
+            vec![(0.0, 0.1, 0.1), (1.0, 0.9, 0.9)],
+            vec![],
+            vec![],
+        );
+        let scene = zoomed_golden_scene();
+        let fg = FrameGeometry {
+            scene_preset: None,
+            mb_taps: 1.0,
+            mb_amount: 0.0,
+            source_t: 0.0,
+            zoom_rotation: [0.0, 0.0, 0.0],
+            padding_scale: 1.0,
+            cut: [0.0, 0.0, 1.0, 1.0],
+            s_dst: [0.0, 0.0, 1.0, 1.0],
+            s_dst_prev: [0.0, 0.0, 1.0, 1.0],
+            s_ann: [0.0, 0.0, 1.0, 1.0],
+            s_radius: 0.0,
+            frame_min_px: 1080.0,
+            w_dst: [0.0, 0.0, 0.0, 0.0],
+            w_dst_prev: [0.0, 0.0, 0.0, 0.0],
+            w_px: [0.0, 0.0],
+            w_radius: 0.0,
+            shape_fade: 0.0,
+        };
+
+        // 1. Curseur immobile avec blur actif -> taps = 1
+        let live_with_blur = LiveParams {
+            cursor_motion_blur: 0.8,
+            ..LiveParams::default()
+        };
+        let input_immobile = CursorPlanInput {
+            render_px: [1920.0, 1080.0],
+            u_max: 1.0,
+            v_max: 1.0,
+            cfg: &cfg,
+            live: live_with_blur,
+            scene: Some(&scene),
+            track: &track_immobile,
+            t: 0.5,
+        };
+        let plan = plan_cursor(&fg, &input_immobile).expect("plan cursor");
+        assert_eq!(plan.taps, 1, "curseur immobile doit rester à 1 tap");
+
+        // 2. Curseur avec blur = 0 -> taps = 1
+        let live_no_blur = LiveParams {
+            cursor_motion_blur: 0.0,
+            ..LiveParams::default()
+        };
+        let input_no_blur = CursorPlanInput {
+            render_px: [1920.0, 1080.0],
+            u_max: 1.0,
+            v_max: 1.0,
+            cfg: &cfg,
+            live: live_no_blur,
+            scene: Some(&scene),
+            track: &track_moving,
+            t: 0.5,
+        };
+        let plan = plan_cursor(&fg, &input_no_blur).expect("plan cursor");
+        assert_eq!(plan.taps, 1, "blur=0 doit donner taps = 1");
+
+        // 3. Curseur en mouvement rapide avec blur -> taps adaptatifs entre 2 et 16
+        let input_moving = CursorPlanInput {
+            render_px: [1920.0, 1080.0],
+            u_max: 1.0,
+            v_max: 1.0,
+            cfg: &cfg,
+            live: live_with_blur,
+            scene: Some(&scene),
+            track: &track_moving,
+            t: 0.5,
+        };
+        let plan = plan_cursor(&fg, &input_moving).expect("plan cursor");
+        assert!(plan.taps >= 2 && plan.taps <= 16, "taps adaptatifs dans [2, 16], got {}", plan.taps);
+    }
 }
+
