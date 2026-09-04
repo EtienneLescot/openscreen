@@ -713,6 +713,9 @@ describe("a caption line never mixes recorded words with added ones", () => {
 		// "really" typed in after "friend", which ends at source 2. An added word takes up NO
 		// source time — the seconds it is spoken in are the insertion it buys, which is how
 		// the real documents store it — so its span is degenerate at the moment it follows.
+		// The next recorded word begins at the added word's own second — the shape every
+		// real document has, because an added word is anchored at the END of the word it
+		// follows and the transcript's next word starts there.
 		t.words = [
 			...t.words.slice(0, 3),
 			{
@@ -724,7 +727,8 @@ describe("a caption line never mixes recorded words with added ones", () => {
 				source: "synth",
 				// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 			} as any,
-			...t.words.slice(3),
+			// Begins at the added word's own second — that adjacency is the whole defect.
+			...t.words.slice(3).map((w) => ({ ...w, startSec: w.startSec - 2, endSec: w.endSec - 2 })),
 		];
 		const base = doc();
 		return {
@@ -777,8 +781,8 @@ describe("a caption line never mixes recorded words with added ones", () => {
 		// pushed along by exactly its length.
 		expect(recorded?.endMs).toBe(2000);
 		expect(added?.startMs).toBe(2000);
-		expect(added?.endMs).toBeGreaterThan(3900);
-		expect(after?.startMs).toBe(6000);
+		expect(added?.endMs).toBe(4000);
+		expect(after?.startMs).toBe(4000);
 	});
 
 	it("leaves the recorded line ending before the added one begins", () => {
@@ -789,6 +793,19 @@ describe("a caption line never mixes recorded words with added ones", () => {
 		expect(added).toBeDefined();
 		expect(recorded?.text).not.toContain("really");
 		expect(added?.startMs ?? 0).toBeGreaterThanOrEqual((recorded?.startMs ?? 0) + 1);
+	});
+
+	it("never prints two cues at once", () => {
+		// The symptom this whole rule exists for: the recorded line that follows an added
+		// word begins at the added word's own source second, so mapped before the insertion
+		// it landed inside it and the two were drawn on top of each other.
+		const cues = [...deriveCaptionCues(docWithAddedWord(), settings, {})].sort(
+			(a, b) => a.startMs - b.startMs,
+		);
+		expect(cues.length).toBeGreaterThan(1);
+		for (const [i, cue] of cues.slice(0, -1).entries()) {
+			expect(cue.endMs).toBeLessThanOrEqual(cues[i + 1].startMs);
+		}
 	});
 
 	it("changes nothing when the transcript has no added words", () => {
