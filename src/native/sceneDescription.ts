@@ -522,7 +522,11 @@ function clipAssetIsResolvable(
  */
 export function resolveVisibleClips(document: AxcutDocument): PlaybackSegment[] {
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
-	return resolvePlaybackSegments(document.timeline.clips, document.timeline.trimRanges)
+	return resolvePlaybackSegments(
+		document.timeline.clips,
+		document.timeline.trimRanges,
+		document.transcripts,
+	)
 		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
 		.filter((clip) => clipAssetIsResolvable(clip, assetById));
 }

@@ -36,6 +36,7 @@ import type {
 	AxcutAnnotationRegion,
 	AxcutAudioTrack,
 	AxcutClip,
+	AxcutTranscript,
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
@@ -75,6 +76,8 @@ interface PreviewCanvasProps {
 	speedRegions?: SpeedRegion[];
 	cameraFullscreenRegions?: CameraFullscreenRegion[];
 	trimRanges?: AxcutTrimRange[];
+	/** Relayed to `VirtualPreview` so a clip carrying added words plays their extensions. */
+	transcripts?: AxcutTranscript[];
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;

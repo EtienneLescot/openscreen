@@ -1513,6 +1513,7 @@ export function NewEditorShell() {
 									speedRegions={tl.speedRegions}
 									cameraFullscreenRegions={tl.cameraFullscreenRegions}
 									trimRanges={tl.trimRanges}
+									transcripts={document?.transcripts ?? []}
 									selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
 									onZoomFocusChange={tl.updateZoomFocusLive}
 									onZoomFocusCommit={() => void tl.commitZoomFocus()}

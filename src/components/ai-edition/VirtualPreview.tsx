@@ -16,6 +16,7 @@ import {
 import type {
 	AxcutAudioTrack,
 	AxcutClip,
+	AxcutTranscript,
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
@@ -212,6 +213,8 @@ interface VirtualPreviewProps {
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
 	trimRanges?: AxcutTrimRange[];
+	/** So a clip carrying added words plays their extensions — see `clipParts`. */
+	transcripts?: AxcutTranscript[];
 	seekTarget?: { timeSec: number; isSource?: boolean; requestId: number } | null;
 	onTimeChange?: (timeSec: number) => void;
 	onLoadedMetadata?: (
@@ -258,6 +261,7 @@ export function VirtualPreview({
 	zoomRegions = [],
 	speedRegions = [],
 	trimRanges = [],
+	transcripts = [],
 	seekTarget,
 	onTimeChange,
 	onLoadedMetadata,
@@ -589,8 +593,8 @@ export function VirtualPreview({
 	// source time to a RAW virtual time that jumps discontinuously by exactly the trim's
 	// width the moment the video itself jumps — matching the marker's own pixel span.
 	const playbackClips = useMemo(
-		() => resolvePlaybackSegments(clips, trimRanges),
-		[clips, trimRanges],
+		() => resolvePlaybackSegments(clips, trimRanges, transcripts),
+		[clips, trimRanges, transcripts],
 	);
 	const playbackClipsRef = useRef(playbackClips);
 	playbackClipsRef.current = playbackClips;

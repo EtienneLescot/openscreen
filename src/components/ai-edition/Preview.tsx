@@ -5,6 +5,7 @@ import type {
 	AxcutAnnotationRegion,
 	AxcutAudioTrack,
 	AxcutClip,
+	AxcutTranscript,
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
@@ -33,6 +34,7 @@ interface PreviewProps {
 	speedRegions?: SpeedRegion[];
 	cameraFullscreenRegions?: CameraFullscreenRegion[];
 	trimRanges?: AxcutTrimRange[];
+	transcripts?: AxcutTranscript[];
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;
@@ -66,6 +68,7 @@ export function Preview({
 	speedRegions,
 	cameraFullscreenRegions,
 	trimRanges,
+	transcripts,
 	selectedZoomRegionId,
 	onZoomFocusChange,
 	onZoomFocusCommit,
@@ -194,6 +197,7 @@ export function Preview({
 						speedRegions={speedRegions}
 						cameraFullscreenRegions={cameraFullscreenRegions}
 						trimRanges={trimRanges}
+						transcripts={transcripts}
 						selectedZoomRegionId={selectedZoomRegionId}
 						onZoomFocusChange={onZoomFocusChange}
 						onZoomFocusCommit={onZoomFocusCommit}
