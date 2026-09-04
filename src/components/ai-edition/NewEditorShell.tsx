@@ -32,6 +32,7 @@ import {
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { isGeneratedAssetId } from "@/lib/ai-edition/timeline/clip-parts";
 import { newRegionDurationSec } from "@/lib/ai-edition/timeline/newRegionDuration";
 import { firstTimelineBusyView } from "@/lib/ai-edition/transcription/status";
 import {
@@ -87,6 +88,20 @@ interface SeekTarget {
  */
 // Stable empty list: a fresh `[]` each render would churn the preview's audio
 // element set on every playhead tick.
+/**
+ * Word insertion is DEV-ONLY until there is TTS and frame generation.
+ *
+ * What it creates today is a test pattern over noise — real media, in the right place, for
+ * the right length, but nobody says the sentence. Shipping that to a release would put a
+ * mire in someone's film.
+ *
+ * Gated HERE as well as on the gesture in the transcript pane: this is where every renderer
+ * path reaches the document, so an entry point added later is refused by default rather than
+ * by whoever remembers. `import.meta.env.DEV` is folded at build time, so the branch is not
+ * in the release bundle at all.
+ */
+const INSERTIONS_ENABLED = import.meta.env.DEV;
+
 const NO_AUDIO_TRACKS: AxcutAudioTrack[] = [];
 
 function NativePlaybackSync({
@@ -688,6 +703,10 @@ export function NewEditorShell() {
 				// holds the document this edit has to be applied to.
 				const doc = useProjectStore.getState().document;
 				if (!doc) return;
+				// Correcting a transcribed word is a shipped feature; retyping an INSERTED one
+				// resizes generated media and asks the save for a new file of it, which is the
+				// same thing the gate above refuses. A release build must not do either.
+				if (!INSERTIONS_ENABLED && isGeneratedAssetId(assetId)) return;
 				try {
 					await saveDocument(setDocumentWordText(doc, assetId, wordId, text), { history: true });
 				} catch (err) {
@@ -707,6 +726,7 @@ export function NewEditorShell() {
 	// captions and stops there.
 	const handleInsertWord = useCallback(
 		(assetId: string, anchorWordId: string, side: InsertSide, text: string) => {
+			if (!INSERTIONS_ENABLED) return;
 			void enqueueTimelineWrite(async () => {
 				const doc = useProjectStore.getState().document;
 				if (!doc) return;
