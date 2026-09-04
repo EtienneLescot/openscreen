@@ -34,6 +34,11 @@ name: Build ONNX Runtime (macOS 13 floor)
 on:
   workflow_dispatch:
   push:
+    # BRANCHES ONLY. Without this, pushing a tag matches too — and publishing the
+    # artifact under `v0.0.0-onnxruntime-1.27.1` started a fresh 22-minute build of
+    # the very thing that had just been attached to the release.
+    branches:
+      - main
     paths:
       - ".github/workflows/build-onnxruntime-macos.yml"
       - "scripts/fetch-onnxruntime.mjs"
