@@ -6,7 +6,7 @@ This checklist covers the real desktop capture-to-export path: the parts that un
 
 Sections marked **v1.8.0** cover what that release changed: chat-driven editing through the agent tool set, clip-anchored modifiers, local transcription, the macOS Metal compositor, and the new effect controls.
 
-Sections marked **post-1.10.0** cover what has landed on `main` since the v1.10.0 tag: the AI camera background, the caption anchor model, pixel-resolution crop, editor window bounds, update settings, and the Windows recording encoder and AAC changes. Run the whole file for a release candidate; the marked sections are the ones with no prior release to fall back on.
+Sections marked **post-1.10.0** cover what has landed on `main` since the v1.10.0 tag: the AI camera background, the caption anchor model, pixel-resolution crop, editor window bounds, update settings, the Windows recording encoder and AAC changes, **imported audio and voice-over recording**, and **transcript word editing with word insertion**. Run the whole file for a release candidate; the marked sections are the ones with no prior release to fall back on.
 
 ## How to run this
 
@@ -196,6 +196,41 @@ Zoom, speed, annotation, and full-camera regions are stored against a clip in th
 - [ ] Zoom and pan the timeline and confirm each pill's span still matches the time at which its effect fires in the preview.
 - [ ] Export a short range that covers a reordered clip and a trim, and confirm the exported frames agree with the preview about where each modifier fires.
 
+## Imported audio and voice-over — post-1.10.0
+
+Audio is a **clip-anchored** region on its own lanes, not a free-floating pill: a track travels
+with the clip it was placed over through reorder, trim and delete. One user-visible track can be
+stored as several fragments (one per clip it covers) that share a `trackId`; the lane draws them
+as one pill, and each fragment's `offsetMs` is advanced so a bed spanning a cut does not restart
+at the boundary. Most defects in this area are that seam, so prefer a project with **at least two
+clips** and place a track across the junction.
+
+Two things here cannot be judged from the preview alone and need an exported file: the mix and
+the fades. Export and probe.
+
+- [ ] Import an audio file and confirm it appears as a pill on an audio lane with a waveform, and that a clip lane above is unchanged.
+- [ ] Confirm the pill's label names the imported file rather than the project or the primary asset.
+- [ ] Play the project and confirm the imported audio is heard **over** the recording rather than replacing it.
+- [ ] Open the track's inspector and confirm gain, fade-in, fade-out, loop and mute controls are present.
+- [ ] Change the gain and confirm the change is audible in the preview; export and confirm the same level in the file.
+- [ ] Mute the track, confirm silence in the preview, and confirm the exported file has that track absent rather than merely quiet.
+- [ ] Set a fade-in and a fade-out, then **export and inspect the waveform of the result** — the ramps must be at the track's own edges. A fade timed to the end of the programme instead of the end of the track is the specific defect here.
+- [ ] Place a track that runs **past the end of the programme** and export: confirm it is cut off at the last frame and that its fade-out is not pulled forward to the truncation point.
+- [ ] Enable loop on a track shorter than its span and confirm it repeats to fill the span, in the preview and in the export.
+- [ ] Drag a track across a clip boundary and confirm it plays continuously across the junction, with no restart or click at the seam.
+- [ ] Reorder the clips underneath a track and confirm the track follows the clip it was placed over rather than staying at its ruler position.
+- [ ] Trim away a stretch the track sits over and confirm the track is silent through the cut while its own clock keeps running — the words after the cut must land on the picture they belong to.
+- [ ] Put a speed region under a track and confirm the track is **not** time-stretched with the picture, and that it still starts where it did.
+- [ ] Delete the clip a track is anchored to and confirm the track goes with it rather than being left pointing at nothing.
+- [ ] Drag a pill's edge and confirm the **ghost** of the rest of the file is drawn around it, and that the edge stops at the file's bounds instead of running past them.
+- [ ] While dragging an edge, confirm the readout shows `in → out / length` and that the numbers move with the drag.
+- [ ] Hold `Alt` and drag a pill's body: confirm the media slides **inside** a span that does not move, and that the rate follows the file rather than the timeline — a four-minute bed must be traversable without dragging four minutes of ruler.
+- [ ] Focus an audio pill and press `Space`: confirm it selects the pill **without** also toggling playback.
+- [ ] Record a voice-over against the timeline and confirm the timeline's own audio is silenced for the take, then audible again afterwards.
+- [ ] Confirm the recorded take lands on the voiceover lane at the playhead and plays back.
+- [ ] **Restart the app, reopen the project, and confirm the imported audio still loads.** Approval to read a file outside the recordings directory is granted by the picker for the session and by the project on load; if that second grant regressed, the waveform is empty and the track is silent only after a restart, which is why this check has to follow one.
+- [ ] Ask the assistant to add a music bed and confirm it places one on the correct lane; ask it to remove it and confirm the pill and its asset both go.
+
 ## Transcript and captions
 
 - [ ] With no transcript, confirm the pane offers a transcribe action instead of showing an empty editor.
@@ -243,6 +278,38 @@ Captions are placed by an **anchor and a margin**, not by an invisible band: `an
 - [ ] Confirm the plate's margin is reserved on the *anchored* side — a right-anchored caption keeps its margin on the right as the text grows.
 - [ ] Open a project saved before this change and confirm its captions land where they did, with `insetX` migrated rather than reset.
 - [ ] Play across a zoom with captions on and confirm the captions do not scale or drift with the zoom, in the preview and in the export.
+
+### Transcript word editing and insertion — post-1.10.0
+
+Three gestures on the word stream: **double-click** corrects a word, **Backspace** cuts it from
+the film, and **typing between two words** adds one. The third is DEV-ONLY and must be absent
+from a packaged build — see the gate check at the end of this section, and run it against a
+packaged build, not a dev one.
+
+An added word is **a clip**, not a pause: the clip it lands in is cut in two and a generated clip
+goes between the halves, on its own asset with its own file. Until there is TTS that file is a
+**test pattern over noise** — deliberately unmistakable, because a held frame is indistinguishable
+from a decoder stuck at the end of a clip. So "the picture froze" is not a pass here: the mire
+must be visible, and at the insertion point rather than at the end of the clip.
+
+- [ ] Double-click a transcribed word, type a correction, commit it, and confirm the word changes in the pane and in the captions.
+- [ ] Confirm the correction survives re-transcribing the same asset, with the same timings.
+- [ ] Place the caret between two words, type, and confirm an **amber clip** appears on the timeline at that moment — not at the end of the clip.
+- [ ] Play across it and confirm the mire is on screen for the inserted stretch and the noise is audible, then the recording resumes exactly where it stopped.
+- [ ] Confirm the words **after** the insertion still line up with the picture: scrub to a later word and confirm the playhead lands on it, and that its caption appears at that moment and not earlier.
+- [ ] Confirm the inserted text gets a caption line **of its own**, over its own media, rather than being glued to the line before it.
+- [ ] Double-click the inserted word and make the text **longer**: confirm the amber clip grows and the film grows with it.
+- [ ] Make the text **shorter** and confirm the clip shrinks back — both directions, not only the one that is easy to see.
+- [ ] Delete the inserted word from the transcript and confirm the clip is one clip again, at its original length, with the recording continuous across the join.
+- [ ] Insert again, then **drag the amber clip elsewhere on the timeline** and confirm the two halves rejoin behind it, exactly as deleting it does.
+- [ ] Zoom out until the amber clip is a few pixels wide, select it, and confirm its edit and delete controls appear beside the clip rather than being clipped away inside it.
+- [ ] Confirm the amber clip behaves as an ordinary clip: it can be selected, moved, cropped and deleted from the timeline, and deleting it there removes the word from the transcript too.
+- [ ] Export a project containing an insertion and confirm the mire and its noise are in the exported file at the right moment and for the right duration.
+- [ ] On the **voice-over** lane, insert a word into a take: confirm the take splits, the generated audio plays between the halves, and the take's later content moves later by that much.
+- [ ] Confirm that insertion did **not** lengthen the film — the clips decide the length, and a take pushed past the last frame is clamped at export.
+- [ ] Insert a word into the **film** while a take is laid over it, and confirm the take's own span is unchanged: it keeps talking against a picture that has slid.
+- [ ] Ask the assistant to correct a misheard name and confirm it does; ask it to rewrite an **inserted** word and confirm it refuses with a reason rather than resizing generated media.
+- [ ] **Against a packaged build**: confirm typing between two words does nothing, that double-clicking an amber word does not open an editor, and that the transcript hint does not advertise adding words. Correcting an ordinary word must still work — that one ships.
 
 ## AI chat and providers — requires a configured provider
 
