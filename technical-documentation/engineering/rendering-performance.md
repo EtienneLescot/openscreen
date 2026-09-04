@@ -4,6 +4,8 @@ This is the measurement record for preview fluidity and export speed, and the ev
 
 The reference machine for every number in this document is an AMD Ryzen 5 7520U laptop with the integrated Radeon GPU, running Windows 11 — deliberately the weak case, and the only fully-measured machine. A discrete-GPU and Intel QSV run is owed (see [Known gaps](#known-gaps)).
 
+**One exception, and it does not mix with the rest:** [the macOS export path](#the-macos-export-path--20260903-04) was measured on a Mac mini M1, on a different pipeline (Metal, VideoToolbox both ends) and a different harness. Its numbers are ratios against an ffmpeg floor taken on that machine, and none of them is comparable to a figure above. What transfers between the two records is the [measurement hazards](#measurement-hazards), which is why they share that section.
+
 ## Where it landed
 
 **The shipped path is the D3D11 compositor in [`crates/compositor/`](../../crates/compositor/), at ~126 fps for 1080p60 with every effect on.** One `ID3D11Device`, no CPU readback between any stage:
@@ -170,6 +172,53 @@ The encoder is not the bottleneck either way — the two CPU rows differ by 5 %,
 gap to hardware is 18×. That gap is the blur and motion-blur shaders (see the table above),
 not the codec.
 
+## The macOS export path — 2026-09-03/04
+
+Everything above is the Windows reference machine. This section is a **different machine and a different pipeline**: a Mac mini M1 (8 cores, 8 GiB, macOS 26.5), Metal compositor, VideoToolbox on both ends. Nothing here transfers to the Windows numbers, and the reverse held too — of the three levers that mattered on Windows and Linux, **none applied here**.
+
+The measured window is the whole `openscreen export` process, as [`screen-recorder-benchmark`](https://github.com/EtienneLescot/screen-recorder-benchmark) defines it: from the CLI's first event to the last byte. Every figure is a median of three scoring runs after a discarded warm-up, each divided by an ffmpeg floor measured **inside the same cycle**, with variant order rotated between cycles.
+
+### Where the time goes
+
+`OPENSCREEN_EXPORT_PROFILE=1` prints a per-stage breakdown to stderr; the probes cover ~99 % of the walk's own wall clock and the report prints what they do not cover, so a missing stage is visible rather than folded into a neighbour. On a 1920×1080@60 60 s S4 export (wallpaper, padding, radius, shadow, three zooms, motion blur, rendered cursor, webcam PiP):
+
+| stage | before the decode change | after |
+|---|---:|---:|
+| `decode.screen` | 13.130 s (46.9 %) | 1.024 s |
+| `gpu.wait` | 7.434 s (26.6 %) | 7.512 s |
+| `decode.webcam` | 4.204 s (15.0 %) | 0.291 s |
+| `compose.submit` | 1.110 s | 0.608 s |
+| `enc.send_frame` | **0.283 s (1.0 %)** | **7.717 s (41.3 %)** |
+| `nv12.passes` | 0.233 s | 0.127 s |
+| `mux.drain` | 0.090 s | 0.053 s |
+
+**Read `compose.submit` as the cost of building the frame, not of drawing it.** Metal is asynchronous: `compose_frame` only submits, and the wait for all of the frame's GPU work lands in `gpu.wait`. Same trap as [asynchronous GPU APIs](#asynchronous-gpu-apis) above.
+
+### VideoToolbox decode is the slow path, at every resolution
+
+`Decoder::open` already preferred the software decoder for Baseline. The claim beside that choice — that above Baseline the arbitration inverts and VideoToolbox regains the advantage — was asserted, not measured, and is wrong:
+
+| source | software | VideoToolbox | ratio |
+|---|---:|---:|---:|
+| 1080p H.264 High 8-bit | 2586 fps | 212 fps | **12.2×** |
+| 4K H.264 High 8-bit | 849 fps | 71 fps | **11.9×** |
+
+The ratio barely moves with resolution, because VideoToolbox's cost is a **fixed per-frame latency** plus a `CVPixelBuffer` allocation. 4K is where hardware decode hurts *most* — 71 fps is below real time for a 4K60 timeline. End to end the export went **1.819× → 1.296×** the floor, byte-identical output. The export walk now routes 8-bit H.264 to the software decoder through `DecodeIntent::Export`; the preview keeps the old arbitration because it was never measured.
+
+**It is not free.** The software decoder runs with `thread_count = 0`, so it takes every core: the export burns **8.4 → 29.8 CPU-seconds**, memory unchanged. That is the right trade for a batch export somebody is waiting on and possibly the wrong one on battery, which was not measured.
+
+### After that, the export is bound by the encoder
+
+Feeding `h264_videotoolbox` from system memory on the same machine and content, 3600 frames of 1080p60 at 8 Mbps: **decode alone 1 864 ms, encode alone 15 763 ms (228 fps)**. The composited walk runs at 191 fps. So roughly 19 % of headroom remains in the walk, and **the walk can never go below ~15.8 s on this hardware** whatever else is done to it. Both routes tried into that headroom failed — see [Rejected routes](#rejected-routes).
+
+### The single reused `CVPixelBuffer`, and what makes it safe
+
+`mac_frames::CpuFrames` keeps **one** `CVPixelBufferRef` and rewrites it for every decoded frame; `ensure_pixel_buffer` only reallocates when the dimensions change. The compositor wraps that buffer as Metal textures and reads it.
+
+This is correct, for a reason written down nowhere near it: `Compositor::rgb_to_nv12` ends with `self.sync()`, a full `waitUntilCompleted` on every frame. By the time the decoder overwrites the buffer for frame N+1, the GPU has finished reading it for frame N.
+
+**So the synchronisation that costs 40 % of the walk's wall clock is also the only thing preventing a data race.** Anyone removing the per-frame wait to let the GPU run a frame behind must give `CpuFrames` a ring first — this is the decoder's buffer being overwritten under the GPU, and it will show as intermittent tearing or a frame from the wrong time, not as a crash. It is the macOS twin of `18eb7fdf` ("do not reuse memory the encoder is still reading") on Linux. Since the decode change above, the software path is the common one rather than the rare one.
+
 ## How we got here — the WebCodecs trail
 
 > **This section is history.** It records the measurements that killed the browser-based export pipeline and motivated the native one. The code it describes is **gone**: `src/lib/exporter/videoExporter.ts`, `src/bench/runBench.ts` and the `npm run bench:export` script were deleted with the web MP4 pipeline. It is kept because it is the evidence for [why the compositor, not the encoder, was the wall](#the-wall-is-the-compositor) — which is the entire reason `crates/compositor/` exists — and because the [measurement hazards](#measurement-hazards) it uncovered still apply to any new benchmark here.
@@ -326,6 +375,30 @@ The three changes that produced the 84 %:
 The trail ends here: the D3D11 fast path that replaced all of it is measured in [Where it landed](#where-it-landed), above.
 
 ## Measurement hazards
+
+### A baseline you built yourself is not a control
+
+The most expensive mistake in this record's macOS chapter, and it passed every gate the harness has. An entry-point change measured **−17.2 %** against what was called "before" — three cycles, closing drift 0.9990, byte-identical output, MAD of 6 ms. Every check green. The "before" was **a variant of the same branch**, rebuilt from an incremental `dist/`. Measured again against `origin/main` built clean, the same change was worth **−0.1 %**, and the 3.9 s it claimed to remove turned out to be absent from the *shipped, unmodified* application too — 4208 ms in the morning, 481 ms in the evening, same binary, most likely memory pressure on an 8 GiB machine.
+
+Two rules follow, and the second is the one that would have caught it:
+
+- **The control comes from the base branch**, built clean (`rm -rf dist dist-electron`), never from a variant of the branch under test. Drift and output equality cannot detect this, because both legs are equally wrong.
+- **Verify the two artefacts actually differ before measuring.** One attempt at this comparison packaged the *same* main-process bundle twice — identical content-hashed filename in both `.asar` — and dutifully reported "no difference" for twenty minutes of machine time. One `md5` would have caught it.
+
+### An assertion that cannot fail is worse than none
+
+The macOS export's output-equality check silently compared **nothing** for two whole experiments. `DYLD_LIBRARY_PATH` does not survive an exec of SIP-protected `/bin/sh`, so the vendored ffmpeg never loaded, `2>/dev/null` swallowed the loader error, and `md5` returned `d41d8cd98f00b204…` — the hash of the empty string, identical on every arm, so every comparison "passed". The check now refuses that specific hash and is exercised against a control file known to differ.
+
+The same shape bit the renderer instrumentation twice over: `vite.config.ts` compiles with `drop_console: true`, so `console.*` probes are stripped from production bundles, and renderer console output does not reach stderr at all without `ELECTRON_ENABLE_LOGGING=1`. Two independent silences, each making the other look like the cause.
+
+### Hardware encoders are not byte-reproducible
+
+`h264_videotoolbox` gives a different file on every run of the same input, so "the output did not change" cannot be checked with an `md5` of the file. Isolated, the difference is **one byte, at offset 51, inside an SEI NAL**: strip SEI and 49 MB of bitstream are identical, and the decoded frames are identical across runs. The container hash moves too, on `creation_time`. What is stable, and what this project uses:
+
+```
+md5 of the SEI-stripped bitstream:  ffmpeg -i X -map 0:v:0 -c copy -bsf:v filter_units=remove_types=6 -f h264 -
+md5 of the decoded pixels:          ffmpeg -i X -map 0:v:0 -f rawvideo -pix_fmt yuv420p -
+```
 
 ### Asynchronous GPU APIs
 
@@ -486,6 +559,14 @@ Unit tests never look at a pixel. The `native*` arms write real files: export th
 
 ## Rejected routes
 
+### A dedicated encode thread on macOS
+
+**What it was.** After the decode change above, the macOS export profile was two waits and almost nothing else: `enc.send_frame` 7.658 s (40.6 %, the CPU waiting on VideoToolbox) and `gpu.wait` 7.501 s (39.8 %, the CPU waiting on Metal). Two different engines, one serial loop. Put the encoder on its own thread — bounded queue, backpressure, error propagation, `av_frame_free` on the consumer side — and the two waits overlap. It is also the move that was worth −30 % on the Linux path. **What the measurement said.** **+0.2 %.** Three cycles, an ffmpeg floor inside each, closing drift 1.0003, machine 84–85 % idle: serial 23 039 ms / 1.308× floor, threaded 22 995 ms / 1.305×. Output byte-identical either way. A probe on the producer's blocking says exactly why: blocking on a full queue measured **7.631 s** where blocking inside `avcodec_send_frame` had measured **7.658 s** — 0.4 % apart. The thread **moved** the wait, it did not remove it. The export is bound by VideoToolbox's encode throughput, not by CPU serialisation: the main thread's own work is 9.64 s across 3600 frames (2.68 ms/frame, enough to feed 373 fps) against an encoder that absorbs about 191. **One-line reason not to re-propose:** the encoder is the constraint and no scheduling changes that; it could pay on an M-series Pro/Max/Ultra with more encode blocks, but that is a hypothesis and shipping unmeasured concurrency on it is the mistake this record exists to prevent.
+
+### `h264_videotoolbox` speed knobs
+
+**What it was.** `VideoEncoder::try_open` sets `bit_rate` and nothing else — no profile, no `realtime`, no `prio_speed`, no `max_ref_frames`. Since the export turns out to be encoder-bound, the obvious question is whether the encoder is simply configured slowly. **What the measurement said.** It is not. Same machine and content (the composited 1080p60 3600-frame render itself), 8 Mbps, `-f null` so muxing is out of it: default **17 659 ms / 203.9 fps**; `-prio_speed 1` 17 627 ms / 204.2 fps; `-profile:v high` 17 633 ms / 204.2 fps; `-realtime 1` **18 498 ms / 194.6 fps**; both together 18 500 ms. `prio_speed` and an explicit profile are inside the noise, and **`realtime` is 5 % slower** — it is a latency hint ("encode in real time *if not faster*"), not a throughput one, and it has no business on an export path. **One-line reason not to re-propose:** there is no free throughput in the option surface; the remaining levers (bitrate, `constant_bit_rate`, `spatial_aq`, `max_ref_frames`) all change the picture, so comparing them needs a quality methodology rather than the byte-equality check used here.
+
 ### Rust + wgpu native POC (`poc-native/`)
 
 **What it was.** `poc-native/` — Rust, wgpu (Vulkan on the reference AMD iGPU), the AMD hardware encoder via ffmpeg `h264_amf`. No browser, no WebCodecs. **What the measurement said.** The compositor is portable, proven: wgpu runs `composite.wgsl` **unchanged** — the only edits are the two the web platform forces and native lacks (`texture_external` → `texture_2d`, `textureSampleBaseClampToEdge` → `textureSampleLevel`); the native frame at t=0.5 s is pixel-identical to the web POC. Encoder ceilings measured (ffmpeg, `-benchmark`): `h264_amf` with CPU-decoded frames ~180 fps; `d3d11va` decode → `h264_amf`, frames stay on GPU **256 fps** — the hardware encoder is not the wall. The naive Vulkan pipeline measured 31 fps end-to-end (decoded via wgpu, composite in WGSL, encode `h264_amf`), but the cause was measured before it was concluded: with encode pipe 31.2 fps vs without 31.7 fps, the encoder isn't the wall; the decode pipe alone (ffmpeg → /dev/null, 180 frames) is **30 fps**, 3.9 s of system time — 8 MB/frame × 180 = 1.4 GB of *uncompressed* pixels shoved between subprocesses. The wall is the subprocess raw-RGBA pipes, an artifact of reaching ffmpeg as a child process, not the descent, not the compositor (1.9 ms), not the encoder (256 fps). The CPU path was pushed to its ceiling and loses by construction: subprocess pipes 31 fps, in-process CPU decode synchronous 25 fps, in-process CPU decode threaded (overlapped) no encode 61 fps, threaded decode + composite + `h264_amf` ~48 fps, threaded no-readback no encode 68 fps — against WebCodecs 79 fps and `d3d11va` → `h264_amf` all on GPU 256 fps. Threading the decode was the real lever (25 → 61): the subprocess version's advantage was never "pipes", it was parallel decode. The CPU path plateaus UNDER the browser, and the reason is pinned by the no-readback probe: the descent (GPU→CPU) is only ~10 % (61 → 68); the wall is **CPU↔GPU transport** — 9 MB uploaded per frame on input, 8 MB read back on output, plus CPU swscale at both ends (YUV→RGBA decode, RGBA→NV12 encode). The browser pays none of this: WebCodecs decodes into GPU-backed `VideoFrame`s that `importExternalTexture` wraps with no CPU copy. **The Vulkan route is blocked on the driver:** `VK_KHR_video_maintenance1` is required and the AMD iGPU's driver (24.10.38) predates it. `crates/compositor/` delivers the same GPU-resident principle on the shipped driver and is the retained native fast path (see [D3D11](#the-d3d11-native-fast-path-cratescompositor--2026-07-18) above). **One-line reason not to re-propose:** portability is proven but the GPU-resident native ceiling requires a path the AMD driver doesn't expose; the same goal is reached on D3D11.
@@ -581,6 +662,10 @@ the bench runs on the reference machine.
 
 ## Known gaps
 
+- **macOS export startup can cost 4 s, and nobody has reproduced it on demand.** Measured repeatedly at 4208–4502 ms between the CLI's `started` event and the first composed frame — 18 % of a 60 s export, 71 % of a 5 s one — then gone, on the same shipped binary, hours later (481 ms). It is not the compositor (init is 2.4 ms, runtime MSL compilation included), not the `<video>` metadata probes (13 ms and 6 ms), not the CLI prologue (24 ms total), and not the renderer entry point (measured at −0.1 %). It correlates with memory pressure on an 8 GiB machine — `387M unused / 2613M compressor` while it reproduced, `564M unused / 1837M compressor` after — which would fit faulting ~1.8 MB of module chunks out of a 274 MB `app.asar` while the compressor thrashes: seconds of wall clock, no CPU in either process, cost independent of the media. Untested. Recreating the pressure deliberately and watching it return is what would settle it, and then whether asar size is the lever.
+- **10-bit and HEVC decode on macOS are unmeasured.** The export's decode predicate is `codec_id == H264 && format == YUV420P`, so both keep VideoToolbox untested. HEVC is the case most likely to invert the result, since its software decoder is materially more expensive. 10-bit needs work beyond the predicate first: `mac_frames::CpuFrames` converts to 8-bit NV12, so routing 10-bit through the software path would silently truncate — the predicate is currently what prevents that.
+- **The macOS preview's decode backend has never been measured.** `DecodeIntent` splits preview from export precisely so the preview could keep the old arbitration; the export won on throughput, but the preview scrubs, where seek latency after `avcodec_flush_buffers` may matter more, and it shares the machine with the editor UI. Changing it without measuring it would be the same mistake the export change corrects.
+- **The energy cost of software decode on macOS is unmeasured.** The export burns 3.5× the CPU-seconds it used to (8.4 → 29.8 s). That is roughly 3.5× the energy for that stage, minus whatever the shorter run saves elsewhere, and nobody has taken the figure — `powermetrics` needs sudo. Capping `thread_count` below the core count is the obvious lever, and untried: the walk is encoder-bound, so the decoder only has to be fast enough to stop being the constraint.
 - **The C0→C8 table rests on one run, on one machine.** [Recorded above](#one-admissible-run--2026-07-27) and admissible on its own gate, but a single sweep: the C5–C7 plateau is the part most likely to move under a second run, since the layers it prices are individually smaller than the machine's own noise. A repeat on a cool machine — and on the discrete-GPU box that is [owed anyway](#known-gaps) — would settle whether those three are genuinely free or merely under the floor.
 - **The fixture media is not versioned, and its cursor track has no provenance entry.** `crates/fixture/fixture.json` documents the exact `-c copy` cuts for `screen.mp4` and `webcam.mp4` (which is what made the run above reproducible), but says nothing about `screen.cursor.json`, which C7 needs. It happens to be the raw, uncut `.cursor.json` beside the origin recording — the loader windows it itself at `offset 100_000 ms, 6 s` ([`bench.rs:70`](../../crates/poc-d3d/src/bench.rs)), matching the manifest's `cut_offset_s: 100`. That is recoverable by reading the code, not by reading the manifest; the manifest should carry it.
 - **One bench fixture is still corrupt, from a bug since fixed.** Two concurrent saves used to be able to interleave and truncate a project file, which destroyed at least two real ones (a valid JSON prefix followed by the tail of a longer version). `proj_de6ffaaa` (`os_parity`) is still in that state — 4006 bytes, 3485 of them valid JSON — with a byte-exact backup beside it (`*.corrupt-backup-20260716`); recovery is mechanical (truncate to the 3485-byte prefix). The bug itself is gone: `DocumentService` now serialises saves through a per-project write queue and writes atomically (unique temp file → `fsync` → rename), which is why Gate G0 was run on `proj_5b3ac6bc` instead. The reference project for M1–M4 is `proj_a7468696`.
