@@ -16,6 +16,7 @@
 
 import { collapseTracksToPills } from "../document/audioTracks";
 import type { AxcutAsset, AxcutAudioTrack, AxcutClip, AxcutTranscript, AxcutWord } from "../schema";
+import { type ClipPart, clipParts, extensionAt, partsRawSec, partsSourceSec } from "./clip-parts";
 import { type RawSpan, type RemovedRawSpan, removalAt } from "./programme-time";
 import { takeProgramme } from "./take-programme";
 
@@ -43,6 +44,11 @@ export interface TranscriptPlacement {
 	/** Where the window lands on the RAW ruler. Source time is per asset, so this is
 	 *  the only thing that turns a word back into a moment the playhead can seek to. */
 	timelineStartSec: number;
+	/** The placement's parts, when it has any: a clip carrying added words plays its own
+	 *  media in pieces with generated media between them, so a source second no longer sits
+	 *  a fixed distance from the head. Absent, the placement is one uninterrupted stretch
+	 *  and every reader below behaves exactly as it did before extensions existed. */
+	parts?: readonly ClipPart[];
 }
 
 /** Which lane's speech the transcript tab is reading. */
@@ -56,7 +62,9 @@ export type TranscriptLane = "recording" | "voiceover";
  * and not in source time (issue #560).
  */
 export function placementRawSec(placement: TranscriptPlacement, sourceSec: number): number {
-	return placement.timelineStartSec + (sourceSec - placement.sourceStartSec);
+	return placement.parts
+		? partsRawSec(placement.parts, sourceSec)
+		: placement.timelineStartSec + (sourceSec - placement.sourceStartSec);
 }
 
 /** The placement's own stretch of raw ruler, or null when it runs open-ended. */
@@ -345,14 +353,36 @@ export function voiceoverPlacements(
 		);
 }
 
+/**
+ * The recording lane's placements: the clips, each carrying its own parts.
+ *
+ * One placement per clip, not one per part. The pane draws a header per placement, and a
+ * clip does not become three clips because the user typed a word into it — the split
+ * belongs to the mapping, which is where `parts` puts it.
+ */
+export function recordingPlacements(
+	clips: AxcutClip[],
+	transcripts: readonly AxcutTranscript[],
+): TranscriptPlacement[] {
+	const wordsByAsset = new Map(transcripts.map((t) => [t.assetId, t.words]));
+	return clips.map((clip) => ({
+		...clip,
+		parts: clipParts(clip, wordsByAsset.get(clip.assetId) ?? []),
+	}));
+}
+
 /** The placements a lane contributes, in timeline order. */
 export function lanePlacements(
 	lane: TranscriptLane,
 	clips: AxcutClip[],
 	audioTracks: AxcutAudioTrack[],
 	removed: readonly RemovedRawSpan[] = [],
+	/** Needed only by the recording lane, to know where its clips are interrupted. */
+	transcripts: readonly AxcutTranscript[] = [],
 ): TranscriptPlacement[] {
-	return lane === "voiceover" ? voiceoverPlacements(audioTracks, removed) : clips;
+	return lane === "voiceover"
+		? voiceoverPlacements(audioTracks, removed)
+		: recordingPlacements(clips, transcripts);
 }
 
 /**
@@ -398,8 +428,17 @@ export function findCueWordId(sections: ClipSection[], rawSec: number | null): s
 	}
 	if (!match) return null;
 
+	// An added word is spoken over its extension, which occupies ruler time and no source
+	// time at all. Asked first, and by id: through source time it is indistinguishable from
+	// the recorded word that resumes at the same second — which is why the pane used to skip
+	// straight past every inserted word to the one after it.
+	const spoken = match.clip.parts ? extensionAt(match.clip.parts, rawSec) : null;
+	if (spoken) return clipWordId(match.clip.id, spoken);
+
 	// Back to the placement's own source clock, which is what the words are stamped in.
-	const t = match.clip.sourceStartSec + (rawSec - match.clip.timelineStartSec);
+	const t = match.clip.parts
+		? partsSourceSec(match.clip.parts, rawSec)
+		: match.clip.sourceStartSec + (rawSec - match.clip.timelineStartSec);
 	let previous: string | null = null;
 	for (const cw of match.words) {
 		if (isSilenceWord(cw.word)) continue;

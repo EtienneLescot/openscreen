@@ -23,7 +23,11 @@ import {
 } from "@/lib/captioning/annotationsFromCaptions";
 import type { CaptionSegment } from "@/lib/captioning/transcribe";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
-import { lanePlacements, type TranscriptPlacement } from "../timeline/aggregated-transcript";
+import {
+	lanePlacements,
+	placementRawSec,
+	type TranscriptPlacement,
+} from "../timeline/aggregated-transcript";
 import { removedRawSpans } from "../timeline/programme-time";
 import {
 	type CaptionAnchorV,
@@ -171,10 +175,11 @@ export function sourceSpanToTimelineSpans(
 		const s = Math.max(startSec, clip.sourceStartSec);
 		const e = Math.min(endSec, clipSourceEnd);
 		if (e <= s) continue;
-		out.push({
-			startSec: clip.timelineStartSec + (s - clip.sourceStartSec),
-			endSec: clip.timelineStartSec + (e - clip.sourceStartSec),
-		});
+		// Through `placementRawSec`, never the subtraction it used to write here: a clip
+		// carrying an added word plays its media in pieces, and the seconds after the
+		// insertion sit further along the ruler than their distance from the clip's start.
+		// Writing the short version here is what put every caption after an insertion early.
+		out.push({ startSec: placementRawSec(clip, s), endSec: placementRawSec(clip, e) });
 	}
 	// Onto the ruler the viewer actually sees. Expanding BOTH ends does the whole job:
 	return out;
@@ -201,6 +206,7 @@ export function deriveCaptionCues(
 		// document written before it — or hand-built, never through the schema — has none.
 		document.audioTracks ?? [],
 		removedRawSpans(document.timeline.clips, document.timeline.trimRanges),
+		document.transcripts,
 	);
 	if (placements.length === 0) return [];
 

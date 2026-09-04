@@ -650,3 +650,43 @@ describe("translated caption layout", () => {
 		);
 	});
 });
+
+// The whole point of the insertion layer, seen from the far end: a word typed into the
+// middle of a take lengthens the film, and every caption after it has to move with the
+// audio it belongs to. This is the check that failed on screen before it failed here.
+describe("captions over an inserted word", () => {
+	const withInsertion = () => {
+		const t = transcript();
+		return doc({
+			transcripts: [
+				{
+					...t,
+					words: [
+						...t.words.slice(0, 3),
+						{
+							id: "synth_1",
+							segmentId: "seg_1",
+							startSec: 2,
+							endSec: 2,
+							text: "wait",
+							source: "synth",
+						},
+						...t.words.slice(3),
+					],
+				},
+			],
+		});
+	};
+
+	it("moves every cue after the insertion by exactly the extension's length", () => {
+		const cues = deriveCaptionCues(withInsertion(), ON, {});
+		// "wait" is 4 chars at 15/s.
+		expect(cues[cues.length - 1].endMs).toBeCloseTo(6000 + (4 / 15) * 1000, 0);
+	});
+
+	it("leaves the cues before it exactly where they were", () => {
+		const before = deriveCaptionCues(doc(), ON, {});
+		const after = deriveCaptionCues(withInsertion(), ON, {});
+		expect(after[0].startMs).toBe(before[0].startMs);
+	});
+});

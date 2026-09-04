@@ -7,8 +7,11 @@ import {
 	clipParts,
 	clipsWithExtensions,
 	extensionAssetId,
+	extensionAt,
 	extensionDurationSec,
 	partsLengthSec,
+	partsRawSec,
+	partsSourceSec,
 } from "./clip-parts";
 
 const CLIP: AxcutClip = {
@@ -140,5 +143,62 @@ describe("clipsWithExtensions", () => {
 
 	it("gives the extension an id no real asset can collide with", () => {
 		expect(extensionAssetId("synth_1")).toBe("ext:synth_1");
+	});
+});
+
+// ─── The one conversion ─────────────────────────────────────────────────────
+// Every reader used to write `timelineStartSec + (sec - sourceStartSec)` for itself. That
+// subtraction is right until a clip carries an extension and wrong for every second after
+// it, which is one bug per reader — so it lives here now, once.
+
+describe("partsRawSec", () => {
+	const parts = clipParts(CLIP, [added("s1", 4, "really")]);
+	const ext = extensionDurationSec("really");
+
+	it("leaves the seconds before the insertion where they were", () => {
+		expect(partsRawSec(parts, 2)).toBeCloseTo(2, 6);
+	});
+
+	it("pushes the seconds after it along by exactly what was inserted", () => {
+		expect(partsRawSec(parts, 6)).toBeCloseTo(6 + ext, 6);
+		expect(partsRawSec(parts, 10)).toBeCloseTo(10 + ext, 6);
+	});
+
+	it("puts the split second AFTER the extension, where its media actually plays", () => {
+		expect(partsRawSec(parts, 4)).toBeCloseTo(4 + ext, 6);
+	});
+
+	it("is the plain subtraction when nothing was added", () => {
+		const plain = clipParts({ ...CLIP, timelineStartSec: 12, timelineEndSec: 22 }, []);
+		expect(partsRawSec(plain, 6)).toBeCloseTo(18, 6);
+	});
+});
+
+describe("partsSourceSec", () => {
+	const parts = clipParts(CLIP, [added("s1", 4, "really")]);
+	const ext = extensionDurationSec("really");
+
+	it("undoes partsRawSec for a second the recording actually plays", () => {
+		for (const sec of [0, 2, 4, 6, 10]) {
+			expect(partsSourceSec(parts, partsRawSec(parts, sec))).toBeCloseTo(sec, 6);
+		}
+	});
+
+	it("parks at the split while the extension plays — no recording runs there", () => {
+		expect(partsSourceSec(parts, 4 + ext / 2)).toBeCloseTo(4, 6);
+	});
+});
+
+describe("extensionAt", () => {
+	const parts = clipParts(CLIP, [added("s1", 4, "really")]);
+	const ext = extensionDurationSec("really");
+
+	it("names the word being spoken over its own media", () => {
+		expect(extensionAt(parts, 4 + ext / 2)).toBe("s1");
+	});
+
+	it("is nothing on either side of it, so the recorded words keep the highlight", () => {
+		expect(extensionAt(parts, 3.9)).toBeNull();
+		expect(extensionAt(parts, 4 + ext + 0.01)).toBeNull();
 	});
 });

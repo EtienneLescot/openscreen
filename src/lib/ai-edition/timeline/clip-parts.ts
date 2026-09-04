@@ -181,3 +181,62 @@ export function partsLengthSec(parts: readonly ClipPart[]): number {
 	if (parts.length === 0) return 0;
 	return parts[parts.length - 1].timelineEndSec - parts[0].timelineStartSec;
 }
+
+/** The parts that carry source time. An extension has none, which is the whole point. */
+function recordings(parts: readonly ClipPart[]): Array<Extract<ClipPart, { kind: "recording" }>> {
+	return parts.filter((p): p is Extract<ClipPart, { kind: "recording" }> => p.kind === "recording");
+}
+
+/**
+ * A source second of the clip's media, as a second on the ruler. THE conversion.
+ *
+ * Every reader that writes `timelineStartSec + (sec - sourceStartSec)` is wrong the moment
+ * the clip carries an extension: the seconds after one are pushed along by it, and the
+ * reader lands everything early by the total inserted before it. That is one bug with one
+ * home, not one per reader.
+ *
+ * A second sitting exactly where an insertion split maps to the moment AFTER the extension,
+ * because that is where the recorded media of that second actually plays. The added word
+ * itself never asks this question — it has no source second at all, and `extensionAt`
+ * names its moment directly.
+ */
+export function partsRawSec(parts: readonly ClipPart[], sourceSec: number): number {
+	const played = recordings(parts);
+	if (played.length === 0) return parts[0]?.timelineStartSec ?? sourceSec;
+	let part = played[0];
+	for (const candidate of played) {
+		if (candidate.sourceStartSec <= sourceSec) part = candidate;
+	}
+	return part.timelineStartSec + (sourceSec - part.sourceStartSec);
+}
+
+/**
+ * The inverse: a second on the ruler, as a second of the clip's media.
+ *
+ * Inside an extension the source clock is PARKED at the second the insertion split. That is
+ * the honest answer — none of the recording plays there, and the split is the last second
+ * that did.
+ */
+export function partsSourceSec(parts: readonly ClipPart[], rawSec: number): number {
+	const played = recordings(parts);
+	if (played.length === 0) return rawSec;
+	let part = played[0];
+	for (const candidate of played) {
+		if (candidate.timelineStartSec <= rawSec) part = candidate;
+	}
+	return Math.min(part.sourceEndSec, part.sourceStartSec + (rawSec - part.timelineStartSec));
+}
+
+/**
+ * The added word being spoken at this moment on the ruler, if any.
+ *
+ * Asked of the parts directly rather than resolved through source time, where an extension
+ * and the media that follows it share one second and nothing could tell them apart.
+ */
+export function extensionAt(parts: readonly ClipPart[], rawSec: number): string | null {
+	for (const part of parts) {
+		if (part.kind !== "extension") continue;
+		if (rawSec >= part.timelineStartSec && rawSec < part.timelineEndSec) return part.wordId;
+	}
+	return null;
+}
