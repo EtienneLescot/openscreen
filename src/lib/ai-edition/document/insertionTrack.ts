@@ -27,7 +27,12 @@ const EPS = 1e-6;
 import { extensionAssetId, extensionDurationSec } from "../timeline/clip-parts";
 import { removedRawSpans } from "../timeline/programme-time";
 import { takeProgramme } from "../timeline/take-programme";
-import { collapseTracksToPills, reanchorAudioTracks, trackGroupId } from "./audioTracks";
+import {
+	collapseTracksToPills,
+	dropUnusedGeneratedMedia,
+	reanchorAudioTracks,
+	trackGroupId,
+} from "./audioTracks";
 import { createId } from "./ids";
 import {
 	generatedAsset,
@@ -170,12 +175,10 @@ export function removeGeneratedTracks(
 		const pills = collapseTracksToPills(next.audioTracks)
 			.filter((pill) => pill.assetId !== id)
 			.map((pill) => shiftIfAfter(pill, generated.endMs, -spanMs));
-		return {
+		return dropUnusedGeneratedMedia({
 			...next,
-			assets: next.assets.filter((a) => a.id !== id),
-			transcripts: next.transcripts.filter((t) => t.assetId !== id),
 			audioTracks: reanchorAudioTracks(pills, next.timeline.clips, () => createId("take")),
-		};
+		});
 	}, document);
 }
 

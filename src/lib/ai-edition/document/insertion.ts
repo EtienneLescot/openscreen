@@ -233,23 +233,16 @@ export function insertGeneratedClip(
  * Delete inserted words.
  *
  * `removeClip` does the whole of it: the gap closes, the halves rejoin when they are still
- * one continuous piece of media, and the rows anchored to the half that goes away follow.
- * What is left here is the media the clip was the only user of.
+ * one continuous piece of media, the rows anchored to the half that goes away follow, and
+ * the generated media nothing plays any more goes with them. Nothing is left to do here —
+ * the trash icon on the clip calls the same mutator, so both deletes had to end the same
+ * way whichever this function did.
  */
 export function removeGeneratedClips(
 	document: AxcutDocument,
 	wordIds: readonly string[],
 ): AxcutDocument {
-	return wordIds.reduce((next, wordId) => {
-		const id = extensionAssetId(wordId);
-		if (!next.timeline.clips.some((c) => c.id === id)) return next;
-		const after = removeClip(next, id);
-		return {
-			...after,
-			assets: after.assets.filter((a) => a.id !== id),
-			transcripts: after.transcripts.filter((t) => t.assetId !== id),
-		};
-	}, document);
+	return wordIds.reduce((next, wordId) => removeClip(next, extensionAssetId(wordId)), document);
 }
 
 /**

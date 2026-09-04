@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AxcutDocument } from "../schema";
-import { collapseTracksToPills } from "./audioTracks";
+import { collapseTracksToPills, removeAudioTrack } from "./audioTracks";
 import { insertGeneratedClip } from "./insertion";
 import {
 	insertGeneratedTrack,
@@ -139,6 +139,14 @@ describe("removeGeneratedTracks", () => {
 
 	it("takes the media it was the only user of with it", () => {
 		const back = removeGeneratedTracks(inserted(), ["synth_1"]);
+		expect(back.assets.some((a) => a.id === "ext:synth_1")).toBe(false);
+		expect(back.transcripts.some((t) => t.assetId === "ext:synth_1")).toBe(false);
+	});
+
+	it("does the same when the pill is deleted from the LANE instead", () => {
+		// The trash on the pill calls `removeAudioTrack`, which has never heard of an
+		// insertion. It has to end where the transcript path ends anyway.
+		const back = removeAudioTrack(inserted(), "ext:synth_1");
 		expect(back.assets.some((a) => a.id === "ext:synth_1")).toBe(false);
 		expect(back.transcripts.some((t) => t.assetId === "ext:synth_1")).toBe(false);
 	});
