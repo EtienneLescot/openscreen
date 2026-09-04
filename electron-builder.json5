@@ -10,6 +10,17 @@
     "**/*.node"
   ],
   "productName": "Openscreen",
+  // There is deliberately no `electronVersion` here. electron-builder needs an EXACT
+  // version because it downloads the binaries for one release, and it takes that from
+  // package.json's `electron` devDependency, which is pinned without a caret for this
+  // reason. Setting it here as well would make the version two facts that have to agree,
+  // and nothing would notice when they stopped.
+  //
+  // The error that leads people here is "Electron version ... is a range, not a fixed
+  // version", raised when the project has no `node_modules/electron` of its own — a git
+  // worktree, typically, where module resolution finds the parent checkout's copy but
+  // electron-builder looks only at the project's. The fix is `npm ci` in the worktree, not
+  // a second declaration of the version.
   // Declared rather than left to default BECAUSE the default is package.json's `author` — one
   // name, where LICENSE has two holders. Feeds Info.plist's NSHumanReadableCopyright and the
   // Windows LegalCopyright, so leaving it implicit put an attribution on the binary that the
