@@ -56,6 +56,7 @@ describe("resolveActiveCameraTrack", () => {
 			[assetWithCamera, assetWithoutCamera],
 			[clipWithCamera, clipWithoutCamera],
 			2,
+			[],
 		);
 		expect(track?.sourcePath).toBe("/cam-1.mp4");
 	});
@@ -65,17 +66,18 @@ describe("resolveActiveCameraTrack", () => {
 			[assetWithCamera, assetWithoutCamera],
 			[clipWithCamera, clipWithoutCamera],
 			7,
+			[],
 		);
 		expect(track).toBeNull();
 	});
 
 	it("returns null when there are no clips", () => {
-		expect(resolveActiveCameraTrack([assetWithCamera], [], 0)).toBeNull();
+		expect(resolveActiveCameraTrack([assetWithCamera], [], 0, [])).toBeNull();
 	});
 
 	it("returns null when the active clip references an unknown asset", () => {
 		const orphanClip: AxcutClip = { ...clipWithCamera, assetId: "missing" };
-		expect(resolveActiveCameraTrack([assetWithCamera], [orphanClip], 2)).toBeNull();
+		expect(resolveActiveCameraTrack([assetWithCamera], [orphanClip], 2, [])).toBeNull();
 	});
 });
 

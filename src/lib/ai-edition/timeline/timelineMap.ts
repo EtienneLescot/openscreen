@@ -402,7 +402,10 @@ export function anchorRegionsWithDerivedMs<
 export function segmentRawSpanSec(
 	segment: PlaybackSegment,
 	rawClips: AxcutClip[],
-	insertRanges: readonly AxcutInsertRange[] = [],
+	/** REQUIRED, not defaulted. A clip carrying insertions is longer than its source window,
+	 *  so a caller that omits these gets an answer that is plausible and wrong by exactly the
+	 *  inserted time, with nothing to catch it (issue #560). */
+	insertRanges: readonly AxcutInsertRange[],
 ): { startSec: number; endSec: number } {
 	const startSec = getRawVirtualStartTime(segment, rawClips, insertRanges);
 	// A held segment's source window is the single frame it shows, so its source length
@@ -571,8 +574,10 @@ export function projectRegionsToSource<
 	/** The insertions the clips carry. A segment after one starts that much further along
 	 *  the timeline, and an UNANCHORED region — a caption cue, which is built fresh each
 	 *  time and has no clip anchor — is placed by intersecting with exactly that extent.
-	 *  Without them the caption landed on the wrong stretch of source (issue #560). */
-	insertRanges: readonly AxcutInsertRange[] = [],
+	 *  Without them the caption landed on the wrong stretch of source (issue #560).
+	 *
+	 *  REQUIRED for the same reason as its neighbours: omitting it is silently wrong. */
+	insertRanges: readonly AxcutInsertRange[],
 ): (T & { clipIndex?: number; underTrim?: boolean })[] {
 	// RAW extents + owning raw clip per visible segment. Both are only consulted by the
 	// path that needs them (raw fallback / anchor match), but resolving them once keeps
@@ -688,7 +693,10 @@ export function resolveNativePosition(
 	rawSec: number,
 	visibleSegments: PlaybackSegment[],
 	rawClips: AxcutClip[],
-	insertRanges: readonly AxcutInsertRange[] = [],
+	/** REQUIRED, not defaulted. A clip carrying insertions is longer than its source window,
+	 *  so a caller that omits these gets an answer that is plausible and wrong by exactly the
+	 *  inserted time, with nothing to catch it (issue #560). */
+	insertRanges: readonly AxcutInsertRange[],
 ): NativePosition | null {
 	if (!Number.isFinite(rawSec) || visibleSegments.length === 0) return null;
 	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips, insertRanges));
@@ -698,7 +706,7 @@ export function resolveNativePosition(
 		const isLast = i === spans.length - 1;
 		return rawSec >= s.startSec && (rawSec < s.endSec || (isLast && rawSec <= s.endSec));
 	});
-	if (index < 0) return positionUnderCut(rawSec, visibleSegments, rawClips);
+	if (index < 0) return positionUnderCut(rawSec, visibleSegments, rawClips, insertRanges);
 
 	const seg = visibleSegments[index];
 	// Inside a pause the source clock does not advance: the whole point of the segment
@@ -733,6 +741,7 @@ function positionUnderCut(
 	rawSec: number,
 	visibleSegments: AxcutClip[],
 	rawClips: AxcutClip[],
+	insertRanges: readonly AxcutInsertRange[],
 ): NativePosition {
 	const rawClip = rawClipAt(rawSec, rawClips);
 	if (rawClip) {
@@ -757,7 +766,7 @@ function positionUnderCut(
 		}
 	}
 
-	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
+	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips, insertRanges));
 	const next = spans.findIndex((s) => s.startSec >= rawSec);
 	const index = next >= 0 ? next : visibleSegments.length - 1;
 	const seg = visibleSegments[index];

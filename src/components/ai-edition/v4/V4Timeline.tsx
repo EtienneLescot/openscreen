@@ -1095,7 +1095,7 @@ export function V4Timeline({
 	// so a notch cannot appear where the voice does not actually stop.
 	const takePieces = useMemo(() => {
 		const clipAssetIds = new Set(clips.map((c) => c.assetId));
-		const removed = removedRawSpans(clips, tl.trimRanges);
+		const removed = removedRawSpans(clips, tl.trimRanges, tl.insertRanges ?? []);
 		const out = new Map<string, TakePiece[]>();
 		for (const pill of audioPills) {
 			if (pill.kind !== "voiceover" || pill.loop) continue;

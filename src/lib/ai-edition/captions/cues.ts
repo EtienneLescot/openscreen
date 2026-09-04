@@ -251,7 +251,11 @@ export function deriveCaptionCues(
 		// `?? []` for the same reason `insertRanges` has one: the key is additive, so a
 		// document written before it — or hand-built, never through the schema — has none.
 		document.audioTracks ?? [],
-		removedRawSpans(document.timeline.clips, document.timeline.trimRanges),
+		removedRawSpans(
+			document.timeline.clips,
+			document.timeline.trimRanges,
+			document.timeline.insertRanges ?? [],
+		),
 		(groupId) => takeInserts(document, groupId),
 	);
 	if (placements.length === 0) return [];

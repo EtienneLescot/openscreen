@@ -64,7 +64,7 @@ describe("takeProgramme", () => {
 			[trim(8, 12)],
 			[trim(2, 3), trim(6, 7, "t2")],
 		]) {
-			const removed = removedRawSpans(CLIPS, cuts);
+			const removed = removedRawSpans(CLIPS, cuts, []);
 			const played = takeProgramme(TAKE, removed, [])
 				.filter((p) => p.kind === "play")
 				.map((p) => [p.rawStartSec, p.rawEndSec]);
@@ -107,7 +107,7 @@ describe("takeProgramme", () => {
 	});
 
 	it("gives nothing to an insertion a cut swallowed", () => {
-		const removed = removedRawSpans(CLIPS, [trim(3, 6)]);
+		const removed = removedRawSpans(CLIPS, [trim(3, 6)], []);
 		const withIt = takeProgramme(TAKE, removed, [ins(4, 1)]);
 		const without = takeProgramme(TAKE, removed, []);
 		// The moment it holds is not in the film any more, so it buys no time.
@@ -116,7 +116,7 @@ describe("takeProgramme", () => {
 	});
 
 	it("keeps an insertion on a cut's far edge, which is what follows the cut", () => {
-		const removed = removedRawSpans(CLIPS, [trim(3, 6)]);
+		const removed = removedRawSpans(CLIPS, [trim(3, 6)], []);
 		const pieces = takeProgramme(TAKE, removed, [ins(6, 1)]);
 		expect(pieces.map((p) => p.kind)).toEqual(["play", "removed", "hold", "play"]);
 	});
@@ -159,7 +159,7 @@ describe("rawSpanForOutDuration", () => {
 });
 
 describe("takePlaybackAt", () => {
-	const pieces = takeProgramme(TAKE, removedRawSpans(CLIPS, [trim(7, 8)]), [ins(4, 1)]);
+	const pieces = takeProgramme(TAKE, removedRawSpans(CLIPS, [trim(7, 8)], []), [ins(4, 1)]);
 
 	it("plays the file where the file plays", () => {
 		expect(takePlaybackAt(pieces, 2)).toMatchObject({ targetTimeSec: 2, shouldPlay: true });
@@ -189,7 +189,7 @@ describe("takePlaybackAt", () => {
 // play are the entries the export emits, piece for piece.
 
 describe("preview and export agree over a take with a cut and a pause", () => {
-	const removed = removedRawSpans(CLIPS, [trim(7, 8)]);
+	const removed = removedRawSpans(CLIPS, [trim(7, 8)], []);
 	const pieces = takeProgramme(TAKE, removed, [ins(4, 1)]);
 
 	it("plays exactly the play pieces, and nothing between them", () => {
@@ -263,7 +263,7 @@ describe("the pieces a pill draws", () => {
 	});
 
 	it("covers the pill end to end, with no overlap and no hole", () => {
-		const pieces = takeProgramme(TAKE, removedRawSpans(CLIPS, [trim(7, 8)]), [ins(4, 1)]);
+		const pieces = takeProgramme(TAKE, removedRawSpans(CLIPS, [trim(7, 8)], []), [ins(4, 1)]);
 		let cursor = TAKE.startMs / 1000;
 		for (const piece of pieces) {
 			expect(piece.rawStartSec).toBeCloseTo(cursor, 6);

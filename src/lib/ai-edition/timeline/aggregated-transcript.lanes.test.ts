@@ -215,7 +215,7 @@ describe("one programme, two lanes", () => {
 	const VO = track({ id: "vo_1", startMs: 0, endMs: 12000, offsetMs: 0, durationSec: 12 });
 
 	function lanes(trims: (typeof TRIM)[]) {
-		const removed = removedRawSpans(CLIPS_2, trims);
+		const removed = removedRawSpans(CLIPS_2, trims, []);
 		const transcripts = [secondsTranscript("asset_rec", 12), secondsTranscript("asset_vo", 12)];
 		const build = (lane: "recording" | "voiceover") =>
 			buildAggregatedSections(
@@ -256,7 +256,7 @@ describe("one programme, two lanes", () => {
 
 	it("removes a word over an inter-clip gap, with nothing to restore", () => {
 		const gapped = [CLIPS_2[0], { ...CLIPS_2[1], timelineStartSec: 8, timelineEndSec: 14 }];
-		const removed = removedRawSpans(gapped, []);
+		const removed = removedRawSpans(gapped, [], []);
 		const sections = buildAggregatedSections(
 			voiceoverPlacements([track({ id: "vo_1", startMs: 0, endMs: 14000, durationSec: 14 })]),
 			// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
@@ -280,7 +280,7 @@ describe("one programme, two lanes", () => {
 			// biome-ignore lint/suspicious/noExplicitAny: fixture, not a schema exercise
 			[secondsTranscript("asset_vo", 20)] as any,
 			[],
-			removedRawSpans(CLIPS_2, []),
+			removedRawSpans(CLIPS_2, [], []),
 		);
 		const w15 = sections.flatMap((s) => s.words).find((w) => w.word.id === "w15");
 		expect(w15?.kept).toBe(true);

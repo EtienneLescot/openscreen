@@ -575,7 +575,7 @@ export function buildSceneDescription(
 	// Placed once: the projection below counts them, so a track after a pause lands where
 	// the ruler says rather than D seconds early.
 	const filmInserts = document.timeline.insertRanges ?? [];
-	const removed = removedRawSpans(projectedClips, document.timeline.trimRanges);
+	const removed = removedRawSpans(projectedClips, document.timeline.trimRanges, filmInserts);
 	// The take's pills, keyed by group. A voiceover is walked ONCE per pill and never per
 	// stored fragment: the document keeps one fragment per clip a take covers, so walking
 	// them separately would emit overlapping entries and `overlay_track_pcm` sums with `+=`

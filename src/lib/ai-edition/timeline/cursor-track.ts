@@ -16,7 +16,7 @@
 // sample, nothing is summarised, and every pointer-shape change survives the
 // reduction because a shape change is an observed event, not a verdict about it.
 
-import type { AxcutClip, AxcutTrimRange } from "../schema";
+import type { AxcutClip, AxcutInsertRange, AxcutTrimRange } from "../schema";
 import { locateSourcePosition } from "./virtual-preview";
 
 /**
@@ -158,6 +158,9 @@ export interface CursorTrackOptions {
 	durationSec: number;
 	clips: AxcutClip[];
 	trimRanges?: AxcutTrimRange[];
+	/** The insertions those clips carry: a clip carrying one is longer than its source
+	 *  window, so a capture timestamp's place on the timeline moves with them (issue #560). */
+	insertRanges?: readonly AxcutInsertRange[];
 	hz?: number;
 	maxPoints?: number;
 	/** Movement threshold in frame fractions; see DEFAULT_TRACK_EPSILON. */
@@ -169,6 +172,7 @@ export interface CursorTrackOptions {
 export function buildCursorTrack(options: CursorTrackOptions): CursorTrack {
 	const { assetId, samples, durationSec, clips } = options;
 	const trimRanges = options.trimRanges ?? [];
+	const insertRanges = options.insertRanges ?? [];
 	const maxPoints = options.maxPoints ?? DEFAULT_MAX_TRACK_POINTS;
 	const ceilingMs = Math.max(0, durationSec) * 1000 || Number.POSITIVE_INFINITY;
 
@@ -294,7 +298,7 @@ export function buildCursorTrack(options: CursorTrackOptions): CursorTrack {
 	// not told twice.
 	const shifted = keep.some((s) => {
 		const atSec = s.timeMs / 1000;
-		const position = locateSourcePosition(clips, atSec, assetId);
+		const position = locateSourcePosition(clips, atSec, assetId, 0.05, undefined, insertRanges);
 		return !position || Math.abs(position.virtualTimeSec - atSec) > 0.005;
 	});
 
@@ -303,7 +307,7 @@ export function buildCursorTrack(options: CursorTrackOptions): CursorTrack {
 		// `locateSourcePosition` is the existing source→virtual mapping, exact here
 		// because trims do NOT compact the document's virtual axis — a trim is a hole
 		// in playback, not a shortening of the ruler (see timeline/trim-mapping.ts).
-		const position = locateSourcePosition(clips, atSec, assetId);
+		const position = locateSourcePosition(clips, atSec, assetId, 0.05, undefined, insertRanges);
 		const point: CursorTrackPoint = {
 			atSec: round2(atSec),
 			cx: round3(s.cx),

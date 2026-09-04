@@ -615,12 +615,15 @@ export function VirtualPreview({
 	);
 	const takePiecesRef = useRef<Map<string, TakePiece[]>>(new Map());
 	const takeHeadsRef = useRef<Map<string, string>>(new Map());
-	const removedRef = useRef(removedRawSpans(clips, trimRanges));
-	removedRef.current = useMemo(() => removedRawSpans(clips, trimRanges), [clips, trimRanges]);
+	const removedRef = useRef(removedRawSpans(clips, trimRanges, insertRanges));
+	removedRef.current = useMemo(
+		() => removedRawSpans(clips, trimRanges, insertRanges),
+		[clips, trimRanges, insertRanges],
+	);
 	const takeWalks = useMemo(() => {
 		const pieces = new Map<string, TakePiece[]>();
 		const heads = new Map<string, string>();
-		const removed = removedRawSpans(clips, trimRanges);
+		const removed = removedRawSpans(clips, trimRanges, insertRanges);
 		for (const pill of collapseTracksToPills(audioTracks)) {
 			if (pill.kind !== "voiceover" || pill.loop) continue;
 			const groupId = trackGroupId(pill);
@@ -916,6 +919,7 @@ export function VirtualPreview({
 						activeSourceId,
 						v.currentTime,
 						activeClipIdRef.current ?? undefined,
+						insertRangesRef.current,
 					);
 					if (nextKeptSegment) {
 						// `findRawClipForSegment` is the ONE definition of the segment-id
@@ -926,7 +930,11 @@ export function VirtualPreview({
 						if (rawClip) {
 							activeClipIdRef.current = rawClip.id;
 						}
-						const rawTargetTime = getRawVirtualStartTime(nextKeptSegment, clipsRef.current);
+						const rawTargetTime = getRawVirtualStartTime(
+							nextKeptSegment,
+							clipsRef.current,
+							insertRangesRef.current,
+						);
 						seekToVirtualTimeRef.current?.(rawTargetTime, true);
 						return;
 					}
@@ -997,6 +1005,7 @@ export function VirtualPreview({
 				activeSourceId,
 				0.05,
 				activeClipIdRef.current ?? undefined,
+				insertRangesRef.current,
 			);
 			if (!position) {
 				// ponytail: fall back to timeline order so cross-asset / reordered

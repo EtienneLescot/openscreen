@@ -51,24 +51,24 @@ describe("virtual-preview pure functions", () => {
 	});
 
 	it("locateVirtualPosition maps virtual time to source time", () => {
-		const pos = locateVirtualPosition(clips, 12);
+		const pos = locateVirtualPosition(clips, 12, []);
 		expect(pos).not.toBeNull();
 		expect(pos?.clipIndex).toBe(1);
 		expect(pos?.sourceTimeSec).toBe(22);
 	});
 
 	it("locateVirtualPosition returns null for empty clips", () => {
-		expect(locateVirtualPosition([], 0)).toBeNull();
+		expect(locateVirtualPosition([], 0, [])).toBeNull();
 	});
 
 	it("locateSourcePosition maps source time back to virtual time", () => {
-		const pos = locateSourcePosition(clips, 25);
+		const pos = locateSourcePosition(clips, 25, undefined, 0.05, undefined, []);
 		expect(pos).not.toBeNull();
 		expect(pos?.virtualTimeSec).toBe(15);
 	});
 
 	it("locateSourcePosition returns null for source time in a cut", () => {
-		expect(locateSourcePosition(clips, 15)).toBeNull();
+		expect(locateSourcePosition(clips, 15, undefined, 0.05, undefined, [])).toBeNull();
 	});
 
 	it("keptWordIdSet flattens wordRefs from all clips", () => {
@@ -106,13 +106,13 @@ describe("virtual-preview pure functions", () => {
 				reason: "",
 			},
 		];
-		const pos1 = locateSourcePosition(multiClips, 5, "a1");
+		const pos1 = locateSourcePosition(multiClips, 5, "a1", 0.05, undefined, []);
 		expect(pos1?.clip.id).toBe("clip_1");
 
-		const pos2 = locateSourcePosition(multiClips, 5, "a2");
+		const pos2 = locateSourcePosition(multiClips, 5, "a2", 0.05, undefined, []);
 		expect(pos2?.clip.id).toBe("clip_2");
 
-		const posNone = locateSourcePosition(multiClips, 5, "a3");
+		const posNone = locateSourcePosition(multiClips, 5, "a3", 0.05, undefined, []);
 		expect(posNone).toBeNull();
 	});
 
@@ -148,19 +148,19 @@ describe("virtual-preview pure functions", () => {
 		// the earliest matching clip — this is the bug: playing back the
 		// second clip's segment would still report position/identity for the
 		// first.
-		const ambiguous = locateSourcePosition(duplicateClips, 5, "a1");
+		const ambiguous = locateSourcePosition(duplicateClips, 5, "a1", 0.05, undefined, []);
 		expect(ambiguous?.clip.id).toBe("clip_1");
 
 		// With the currently-active clip id passed through, it's preferred
 		// even though clip_1 also matches (assetId, sourceTime).
-		const disambiguated = locateSourcePosition(duplicateClips, 5, "a1", 0.05, "clip_2");
+		const disambiguated = locateSourcePosition(duplicateClips, 5, "a1", 0.05, "clip_2", []);
 		expect(disambiguated?.clip.id).toBe("clip_2");
 		expect(disambiguated?.virtualTimeSec).toBe(15);
 
 		// A preferred clip id that no longer applies (source time moved
 		// outside its range) falls back to the ambiguous scan rather than
 		// forcing a stale match.
-		const outOfRange = locateSourcePosition(duplicateClips, 5, "a1", 0.05, "clip_3");
+		const outOfRange = locateSourcePosition(duplicateClips, 5, "a1", 0.05, "clip_3", []);
 		expect(outOfRange?.clip.id).toBe("clip_1");
 	});
 
@@ -213,6 +213,7 @@ describe("virtual-preview pure functions", () => {
 				playingClip.assetId,
 				0.05,
 				playingClip.id,
+				[],
 			);
 			expect(pos?.clip.id).toBe(playing);
 			expect(pos?.virtualTimeSec).toBeCloseTo(playingClip.timelineStartSec + sourceTimeSec, 6);
@@ -222,8 +223,8 @@ describe("virtual-preview pure functions", () => {
 			// The scan cannot know which twin is playing — but its answer must at least not
 			// depend on which twin happens to sit last in the array, which is what
 			// `index === clips.length - 1` made it do.
-			const forward = locateSourcePosition(twins([a1, a2]), 9.96, "a1");
-			const reversed = locateSourcePosition(twins([a2, a1]), 9.96, "a1");
+			const forward = locateSourcePosition(twins([a1, a2]), 9.96, "a1", 0.05, undefined, []);
+			const reversed = locateSourcePosition(twins([a2, a1]), 9.96, "a1", 0.05, undefined, []);
 			expect(forward?.clip.id).toBe("clip_a1");
 			expect(reversed?.clip.id).toBe("clip_a2");
 			// i.e. both resolve to the FIRST clip of the asset — the documented behaviour of
@@ -246,17 +247,17 @@ describe("virtual-preview pure functions", () => {
 					timelineEndSec: 20,
 				},
 			];
-			expect(locateSourcePosition(split, 10, "a1")?.clip.id).toBe("clip_a2");
-			expect(locateSourcePosition(split, 9.9, "a1")?.clip.id).toBe("clip_a1");
+			expect(locateSourcePosition(split, 10, "a1", 0.05, undefined, [])?.clip.id).toBe("clip_a2");
+			expect(locateSourcePosition(split, 9.9, "a1", 0.05, undefined, [])?.clip.id).toBe("clip_a1");
 			// …and the very end of the timeline still resolves rather than falling off it.
-			expect(locateSourcePosition(split, 20, "a1")?.clip.id).toBe("clip_a2");
+			expect(locateSourcePosition(split, 20, "a1", 0.05, undefined, [])?.clip.id).toBe("clip_a2");
 		});
 
 		it("ignores a named clip whose asset is not the one playing", () => {
 			// A stale id during an asset swap must fall through to the scan rather than
 			// mapping the time through media that is not on screen.
 			const clips = twins([a1, c3]);
-			const pos = locateSourcePosition(clips, 5, "a1", 0.05, "clip_c3");
+			const pos = locateSourcePosition(clips, 5, "a1", 0.05, "clip_c3", []);
 			expect(pos?.clip.id).toBe("clip_a1");
 		});
 	});
@@ -367,8 +368,8 @@ describe("virtual-preview pure functions", () => {
 			timelineEndSec: 13.8,
 		};
 
-		expect(getRawVirtualStartTime(segClip1Part2, rawClips)).toBe(6);
-		expect(getRawVirtualStartTime(segClip2Part1, rawClips)).toBe(13.2);
+		expect(getRawVirtualStartTime(segClip1Part2, rawClips, [])).toBe(6);
+		expect(getRawVirtualStartTime(segClip2Part1, rawClips, [])).toBe(13.2);
 	});
 
 	it("findNextKeptSegment finds next kept segment across multi-clip trim boundary", () => {
@@ -421,11 +422,11 @@ describe("virtual-preview pure functions", () => {
 		];
 
 		// At current raw virtual time 2.5s (end of seg 0), next kept segment is seg 1 (clip_2)
-		const nextSeg = findNextKeptSegment(playbackClips, rawClips, 2.5, "a1", 2.5);
+		const nextSeg = findNextKeptSegment(playbackClips, rawClips, 2.5, "a1", 2.5, undefined, []);
 		expect(nextSeg).toBeDefined();
 		expect(nextSeg?.id).toBe("clip_2");
 		expect(nextSeg?.assetId).toBe("a2");
-		expect(getRawVirtualStartTime(nextSeg!, rawClips)).toBe(10.7);
+		expect(getRawVirtualStartTime(nextSeg!, rawClips, [])).toBe(10.7);
 	});
 
 	describe("findNextKeptSegment never goes backwards", () => {
@@ -473,9 +474,9 @@ describe("virtual-preview pure functions", () => {
 			// clip_1 starts at source 30, which IS "later in source time", and its raw start
 			// is 0: answering it sent playback back to the beginning, straight into the same
 			// cut again, forever.
-			const next = findNextKeptSegment(playbackClips, rawClips, 17, "a1", 7, "clip_2");
+			const next = findNextKeptSegment(playbackClips, rawClips, 17, "a1", 7, "clip_2", []);
 			expect(next).toBeDefined();
-			expect(getRawVirtualStartTime(next!, rawClips)).toBe(20);
+			expect(getRawVirtualStartTime(next!, rawClips, [])).toBe(20);
 			expect(next?.sourceStartSec).toBe(10);
 		});
 
@@ -483,7 +484,7 @@ describe("virtual-preview pure functions", () => {
 			// Same moment, but the raw position has not caught up (still reads 10, the start
 			// of clip_2). The ruler test alone would answer clip_2's FIRST kept segment —
 			// the stretch already played. The clip-scoped source test carries it past the cut.
-			const next = findNextKeptSegment(playbackClips, rawClips, 10, "a1", 7, "clip_2");
+			const next = findNextKeptSegment(playbackClips, rawClips, 10, "a1", 7, "clip_2", []);
 			expect(next?.sourceStartSec).toBe(10);
 		});
 	});

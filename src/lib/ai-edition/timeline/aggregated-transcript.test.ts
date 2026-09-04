@@ -83,7 +83,7 @@ describe("buildClipSection", () => {
 			clip,
 			transcript,
 			makeAsset(),
-			removedRawSpans([clip], [trim]),
+			removedRawSpans([clip], [trim], []),
 		);
 		expect(section.words.map((cw) => cw.kept)).toEqual([true, false, false, false, true]);
 		expect(section.words.map((cw) => cw.trimIds)).toEqual([
@@ -117,7 +117,12 @@ describe("buildClipSection", () => {
 			makeTrim({ id: "trim_b", startSec: 3, endSec: 4 }),
 		];
 
-		const section = buildClipSection(clip, transcript, makeAsset(), removedRawSpans([clip], trims));
+		const section = buildClipSection(
+			clip,
+			transcript,
+			makeAsset(),
+			removedRawSpans([clip], trims, []),
+		);
 		expect(section.trimRuns).toHaveLength(2);
 		expect(section.trimRuns[0]).toMatchObject({
 			trimIds: ["trim_a"],
@@ -157,7 +162,7 @@ describe("buildClipSection", () => {
 				clips,
 				[makeTranscript(words())],
 				[makeAsset()],
-				removedRawSpans(clips, [trim]),
+				removedRawSpans(clips, [trim], []),
 			);
 
 			expect(sections[0].words.map((cw) => cw.kept)).toEqual([true, true, true]);
@@ -176,7 +181,7 @@ describe("buildClipSection", () => {
 				clips,
 				[makeTranscript(words())],
 				[makeAsset()],
-				removedRawSpans(clips, [trim]),
+				removedRawSpans(clips, [trim], []),
 			);
 			expect(sections[0].trimRuns).toHaveLength(1);
 			expect(sections[1].trimRuns).toHaveLength(1);
@@ -195,7 +200,7 @@ describe("buildClipSection", () => {
 			clip,
 			transcript,
 			makeAsset(),
-			removedRawSpans([clip], [trim]),
+			removedRawSpans([clip], [trim], []),
 		);
 		// Trailing gap 2s→3s is a silence — the different-asset trim doesn't
 		// cover any of the three entries, so all stay kept.
@@ -278,7 +283,7 @@ describe("silence gaps", () => {
 			clip,
 			transcript,
 			makeAsset(),
-			removedRawSpans([clip], [trim]),
+			removedRawSpans([clip], [trim], []),
 		);
 		const silence = section.words.find((cw) => isSilenceWord(cw.word));
 		expect(silence?.kept).toBe(false);

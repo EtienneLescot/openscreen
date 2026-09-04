@@ -63,6 +63,9 @@ import { type VideoSource, VirtualPreview } from "./VirtualPreview";
 import { WebcamOverlay } from "./WebcamOverlay";
 import { ZoomFocusOverlay } from "./ZoomFocusOverlay";
 
+/** Stable identity, so the memos are not invalidated every render by a fresh `[]`. */
+const EMPTY_INSERT_RANGES: readonly AxcutInsertRange[] = [];
+
 type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
 
 interface PreviewCanvasProps {
@@ -221,17 +224,18 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	// clip the playhead is currently inside, the same lookup VirtualPreview
 	// itself uses to map playback position back to a clip. `undefined` (no
 	// crop stored) normalises to the identity region.
+	const previewInserts = props.insertRanges ?? EMPTY_INSERT_RANGES;
 	const activeClip = useMemo(
-		() => locateVirtualPosition(props.clips, props.currentTimeSec)?.clip ?? null,
-		[props.clips, props.currentTimeSec],
+		() => locateVirtualPosition(props.clips, props.currentTimeSec, previewInserts)?.clip ?? null,
+		[props.clips, props.currentTimeSec, previewInserts],
 	);
 	const cropRegion: CropRegion = activeClip?.cropRegion ?? DEFAULT_CROP_REGION;
 
 	// P4 — the layout preset is global (one panel for the whole timeline) but the camera
 	// is per clip, so the layout has to be resolved against the clip under the playhead.
 	const activeCameraTrack = useMemo(
-		() => resolveActiveCameraTrack(assets, props.clips, props.currentTimeSec),
-		[assets, props.clips, props.currentTimeSec],
+		() => resolveActiveCameraTrack(assets, props.clips, props.currentTimeSec, previewInserts),
+		[assets, props.clips, props.currentTimeSec, previewInserts],
 	);
 	const activeClipHasCamera = Boolean(activeCameraTrack?.visible && activeCameraTrack.sourcePath);
 
