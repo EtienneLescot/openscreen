@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "Запись",
 		"noTranscript": "Расшифровки пока нет",
-		"title": "Текущая расшифровка",
+		"title": "Расшифровка",
 		"restoreWord": "Вернуть «{{word}}»",
 		"revertWord": "Вернуть «{{original}}»",
 		"editingHint": "Дважды щёлкните слово, чтобы исправить его, Backspace вырезает его из фильма.",

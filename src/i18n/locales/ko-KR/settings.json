@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "녹화",
 		"noTranscript": "아직 전사가 없습니다",
-		"title": "현재 전사",
+		"title": "전사",
 		"restoreWord": "\"{{word}}\" 복원",
 		"revertWord": "\"{{original}}\"(으)로 되돌리기",
 		"editingHint": "단어를 더블 클릭해 수정하고, Backspace로 영상에서 잘라내세요.",

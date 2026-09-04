@@ -113,7 +113,7 @@
 	"transcript": {
 		"laneRecording": "Recording",
 		"noTranscript": "No transcript yet",
-		"title": "Current transcription",
+		"title": "Transcript",
 		"restoreWord": "Restore \"{{word}}\"",
 		"revertWord": "Restore \"{{original}}\"",
 		"editingHint": "Double-click a word to correct it, Backspace cuts it from the film.",
