@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { Profiler, type ProfilerOnRenderCallback } from "react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 // The regression under test is geometric, so the environment has to have a size:
 // jsdom reports 0 for every box, which would leave `pxPerSec` at 0 (the
@@ -72,6 +73,7 @@ function renderTimeline(
 	clips = [clip(0, TOTAL_SEC)],
 	annotation = { id: "ann1", startMs: 10_000, endMs: 11_000 },
 	assets: Array<Record<string, unknown>> = [NO_CAMERA_ASSET],
+	onRender?: ProfilerOnRenderCallback,
 ) {
 	const tl = {
 		clips,
@@ -94,25 +96,40 @@ function renderTimeline(
 			/* the toolbar only awaits it */
 		}),
 	};
-	render(
+	const setCurrentTime = vi.fn();
+	const timeline = (
 		<V4Timeline
 			// Only the members the lanes and the clip row read are mocked; the prop
 			// stays typed as the real API rather than widened to `any` (AGENTS.md).
 			tl={tl as unknown as ReturnType<typeof useTimeline>}
-			setCurrentTime={vi.fn()}
+			setCurrentTime={setCurrentTime}
 			playing={false}
 			onTogglePlay={vi.fn()}
 			onPrevClip={vi.fn()}
 			onNextClip={vi.fn()}
 			onEditClip={vi.fn()}
-		/>,
+		/>
+	);
+	render(
+		onRender ? (
+			<Profiler id="timeline" onRender={onRender}>
+				{timeline}
+			</Profiler>
+		) : (
+			timeline
+		),
 	);
 	return {
 		pill: screen.getByTitle("toolbar.newAnnotation"),
 		clipEls: Array.from(document.querySelectorAll<HTMLElement>("[data-clip-id]")),
 		tl,
+		setCurrentTime,
 	};
 }
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 /** Drag a handle by `dxPx`. The move/up listeners live on `window`, so the drag
  *  is driven by pointer deltas alone — the handle may re-mount under it. */
@@ -133,6 +150,51 @@ function wheelZoomOn(el: HTMLElement, notches: number) {
 function zoomIn(notches: number) {
 	wheelZoomOn(document.querySelector("[class*=tlTracks]") as HTMLElement, notches);
 }
+
+describe("V4Timeline scrubbing", () => {
+	it("publishes at most one React scrub-state update per animation frame", () => {
+		const frames = new Map<number, FrameRequestCallback>();
+		let nextFrameId = 1;
+		vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+			const frameId = nextFrameId++;
+			frames.set(frameId, callback);
+			return frameId;
+		});
+		vi.stubGlobal("cancelAnimationFrame", (frameId: number) => {
+			frames.delete(frameId);
+		});
+		const onRender = vi.fn<ProfilerOnRenderCallback>();
+		const { setCurrentTime } = renderTimeline(
+			[clip(0, TOTAL_SEC)],
+			{ id: "ann1", startMs: 10_000, endMs: 11_000 },
+			[NO_CAMERA_ASSET],
+			onRender,
+		);
+		const ruler = document.querySelector<HTMLElement>("[class*=tlRulerRow]");
+		expect(ruler).not.toBeNull();
+
+		fireEvent.pointerDown(ruler as HTMLElement, { button: 0, clientX: 90 });
+		const commitsAfterPointerDown = onRender.mock.calls.length;
+		setCurrentTime.mockClear();
+
+		fireEvent.pointerMove(window, { clientX: 180 });
+		fireEvent.pointerMove(window, { clientX: 270 });
+		fireEvent.pointerMove(window, { clientX: 360 });
+
+		expect(onRender).toHaveBeenCalledTimes(commitsAfterPointerDown);
+		expect(setCurrentTime).not.toHaveBeenCalled();
+		expect(frames.size).toBe(1);
+
+		const [[frameId, frame]] = frames;
+		frames.delete(frameId);
+		act(() => frame(0));
+
+		expect(onRender).toHaveBeenCalledTimes(commitsAfterPointerDown + 1);
+		expect(setCurrentTime).toHaveBeenCalledTimes(1);
+		expect(setCurrentTime).toHaveBeenCalledWith(720);
+		fireEvent.pointerUp(window);
+	});
+});
 
 describe("V4Timeline lane pills", () => {
 	it("draws a pill exactly as wide as its region, at any zoom", () => {
