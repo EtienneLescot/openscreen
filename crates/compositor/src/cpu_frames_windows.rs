@@ -100,6 +100,11 @@ impl CpuFrames {
         }
 
         self.upload(w, h)?;
+        // `Decoder::seek_to` and `decode_forward_to` inspect the presentation frame returned by
+        // `present`, so it must carry the decoded frame's timing just like the macOS/Linux CPU
+        // paths. Leaving the allocation defaults here makes every non-H.264 frame look untimed.
+        (*self.present).pts = (*src).pts;
+        (*self.present).best_effort_timestamp = (*src).best_effort_timestamp;
         Ok(self.present)
     }
 

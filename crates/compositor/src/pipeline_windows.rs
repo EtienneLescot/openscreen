@@ -278,10 +278,18 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
         avformat_open_input(&mut fmt, cpath.as_ptr(), ptr::null_mut(), ptr::null_mut()),
         "avformat_open_input",
     )?;
-    averr(avformat_find_stream_info(fmt, ptr::null_mut()), "find_stream_info")?;
+    let mut resources = DecoderOpenResources {
+        fmt,
+        dctx: ptr::null_mut(),
+        hwdev: ptr::null_mut(),
+    };
+    averr(
+        avformat_find_stream_info(resources.fmt, ptr::null_mut()),
+        "find_stream_info",
+    )?;
 
     let vidx = av_find_best_stream(
-        fmt,
+        resources.fmt,
         AVMediaType::AVMEDIA_TYPE_VIDEO,
         -1,
         -1,
@@ -291,7 +299,7 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
     if vidx < 0 {
         bail!("aucun flux vidéo");
     }
-    let stream = sn_fmt_stream(fmt, vidx);
+    let stream = sn_fmt_stream(resources.fmt, vidx);
     let codecpar = (*stream).codecpar;
 
     // ---- décodeur D3D11VA sur NOTRE device (H.264 only; see d3d11va_for_codec) ----
@@ -302,11 +310,19 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
         );
     }
     let (dec, dctx) = require_decoder(codecpar)?;
-    averr(avcodec_parameters_to_context(dctx, codecpar), "params_to_ctx")?;
-    allow_d3d11va_h264_baseline(dctx);
+    resources.dctx = dctx;
+    averr(
+        avcodec_parameters_to_context(resources.dctx, codecpar),
+        "params_to_ctx",
+    )?;
+    allow_d3d11va_h264_baseline(resources.dctx);
 
-    let hwdev = attach_d3d11va(dctx, gpu)?;
-    averr(avcodec_open2(dctx, dec, ptr::null_mut()), "avcodec_open2(dec)")?;
+    resources.hwdev = attach_d3d11va(resources.dctx, gpu)?;
+    averr(
+        avcodec_open2(resources.dctx, dec, ptr::null_mut()),
+        "avcodec_open2(dec)",
+    )?;
+    let (mut fmt, dctx, hwdev) = resources.into_raw();
 
     // ---- encodeur (ouvert paresseusement à la 1re frame : il lui faut ses dims + hw_frames_ctx) ----
     let mut enc: Option<VideoEncoder> = None;
@@ -1708,19 +1724,26 @@ mod tests {
         assert!(msg.contains("codec_id"), "{msg}");
     }
 
-    fn ffmpeg_exe() -> std::path::PathBuf {
-        let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let mut candidates =
-            vec![crate_dir.join("../thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared/bin/ffmpeg.exe")];
-        if let Some(dir) = std::env::var_os("FFMPEG_DIR") {
-            candidates.push(std::path::PathBuf::from(dir).join("bin").join("ffmpeg.exe"));
+    fn select_ffmpeg_exe(
+        crate_dir: &std::path::Path,
+        configured_dir: Option<std::path::PathBuf>,
+    ) -> Option<std::path::PathBuf> {
+        let mut candidates = Vec::new();
+        if let Some(dir) = configured_dir {
+            candidates.push(dir.join("bin").join("ffmpeg.exe"));
         }
         candidates
-            .into_iter()
-            .find(|p| p.is_file())
-            .unwrap_or_else(|| {
-                panic!("ffmpeg.exe not found next to FFMPEG_DIR / crates/thirdparty")
-            })
+            .push(crate_dir.join("../thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared/bin/ffmpeg.exe"));
+        candidates.into_iter().find(|p| p.is_file())
+    }
+
+    fn ffmpeg_exe() -> std::path::PathBuf {
+        let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        select_ffmpeg_exe(
+            &crate_dir,
+            std::env::var_os("FFMPEG_DIR").map(std::path::PathBuf::from),
+        )
+        .unwrap_or_else(|| panic!("ffmpeg.exe not found next to FFMPEG_DIR / crates/thirdparty"))
     }
 
     fn ffprobe_exe() -> std::path::PathBuf {
@@ -1814,6 +1837,34 @@ mod tests {
             av_buffer_unref(&mut hwdev);
             avformat_close_input(&mut fmt);
         }
+    }
+
+    #[test]
+    fn ffmpeg_dir_selects_the_configured_executable_over_the_builtin() {
+        let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let built_in =
+            crate_dir.join("../thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared/bin/ffmpeg.exe");
+        assert!(
+            built_in.is_file(),
+            "built-in control is missing: {built_in:?}"
+        );
+
+        let configured_dir = std::env::temp_dir().join(format!(
+            "openscreen-554-ffmpeg-override-{}",
+            std::process::id()
+        ));
+        let configured = configured_dir.join("bin").join("ffmpeg.exe");
+        std::fs::create_dir_all(configured.parent().expect("configured ffmpeg parent"))
+            .expect("create configured ffmpeg directory");
+        std::fs::File::create(&configured).expect("create configured ffmpeg executable");
+
+        let selected = select_ffmpeg_exe(&crate_dir, Some(configured_dir.clone()))
+            .expect("select configured ffmpeg executable");
+        assert_eq!(
+            selected, configured,
+            "an explicit FFMPEG_DIR must override the built-in test fixture executable"
+        );
+        std::fs::remove_dir_all(configured_dir).expect("remove configured ffmpeg directory");
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -2150,9 +2201,62 @@ mod tests {
             dec.cpu.is_some(),
             "AV1 on Hardware must use CpuFrames, not D3D11VA"
         );
-        let frame = unsafe { first_decoded_frame(&mut dec) };
+        let target_sec = 0.4;
+        let frame = unsafe { dec.seek_to(target_sec) }
+            .unwrap_or_else(|e| panic!("legacy AV1 nonzero seek: {e:#}"));
+        assert!(!frame.is_null(), "legacy AV1 nonzero seek reached EOF");
         assert_eq!(unsafe { (*frame).width }, 64);
         assert_eq!(unsafe { (*frame).height }, 64);
+        let pts = unsafe { (*frame).best_effort_timestamp };
+        assert_ne!(pts, i64::MIN, "legacy AV1 presentation timestamp");
+        let time_base = unsafe { dec.tb_sec() };
+        let observed_sec = pts as f64 * time_base;
+        assert!(
+            observed_sec >= target_sec - time_base * 0.5,
+            "legacy AV1 seek landed before its nonzero source target: target={target_sec:.3}s observed={observed_sec:.3}s"
+        );
+    }
+
+    #[test]
+    fn av1_software_seek_preserves_the_nonzero_target_timestamp() {
+        let gpu = Gpu::create(false).expect("Hardware GPU");
+        assert_eq!(gpu.backend, Backend::Hardware);
+        let path = encode_color_for_duration(
+            &[
+                "-c:v",
+                "libaom-av1",
+                "-cpu-used",
+                "8",
+                "-usage",
+                "realtime",
+                "-g",
+                "100",
+            ],
+            "nonzero-seek-av1.webm",
+            "1.2",
+        );
+        let mut dec = unsafe { Decoder::open(path.to_str().expect("utf8 path"), &gpu) }
+            .unwrap_or_else(|e| panic!("AV1 Decoder::open: {e:#}"));
+        assert!(
+            dec.cpu.is_some(),
+            "AV1 must use the software presentation path"
+        );
+
+        let target_sec = 0.72;
+        let frame = unsafe { dec.seek_to(target_sec) }.expect("seek to nonzero AV1 source time");
+        assert!(!frame.is_null(), "nonzero AV1 seek reached EOF");
+        let pts = unsafe { (*frame).best_effort_timestamp };
+        assert_ne!(
+            pts,
+            i64::MIN,
+            "software presentation frame must retain the decoded timestamp"
+        );
+        let time_base = unsafe { dec.tb_sec() };
+        let observed_sec = pts as f64 * time_base;
+        assert!(
+            observed_sec >= target_sec - time_base * 0.5,
+            "seek accepted a pre-target frame: target={target_sec:.3}s observed={observed_sec:.3}s"
+        );
     }
 
     #[test]
