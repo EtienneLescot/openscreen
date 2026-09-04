@@ -178,11 +178,12 @@ describe("removeGeneratedClips", () => {
 	});
 });
 
-describe("the seam only closes under generated media", () => {
-	it("leaves two halves of a recording apart when an ORDINARY clip between them goes", () => {
-		// Cutting a recording into consecutive clips is something this app does on purpose —
-		// `replaceTimeline` builds exactly that so each piece can carry its own zoom. Deleting
-		// a B-roll clip laid between two of them must not collapse the two into one.
+describe("the join is blind to what made the clips contiguous", () => {
+	it("also heals two halves when an ORDINARY clip between them goes", () => {
+		// The accepted cost of the rule, on the record. Two clips of one recording whose media
+		// timecodes meet are one clip whatever put a third between them, so deleting that third
+		// joins them. Nothing is lost: they were indistinguishable — same media, same framing,
+		// one continuing where the other stops — and the film plays identically either way.
 		const base = doc({
 			assets: [
 				...doc().assets,
@@ -216,12 +217,34 @@ describe("the seam only closes under generated media", () => {
 			},
 		];
 		const after = removeClip(base, "broll");
-		expect(after.timeline.clips.map((c) => c.id)).toEqual(["left", "right"]);
+		expect(after.timeline.clips.map((c) => c.id)).toEqual(["left"]);
+		expect(after.timeline.clips[0]).toMatchObject({ sourceStartSec: 0, sourceEndSec: 10 });
 	});
 
-	it("keeps a word that has no clip a no-op", () => {
+	it("leaves them alone when the media does not continue across the join", () => {
 		const base = doc();
-		expect(removeGeneratedClips(base, ["synth_9"])).toBe(base);
+		base.timeline.clips = [
+			{ ...base.timeline.clips[0], id: "left", sourceEndSec: 4, timelineEndSec: 4 },
+			{
+				...base.timeline.clips[0],
+				id: "broll",
+				assetId: "a1",
+				sourceStartSec: 20,
+				sourceEndSec: 22,
+				timelineStartSec: 4,
+				timelineEndSec: 6,
+			},
+			{
+				...base.timeline.clips[0],
+				id: "right",
+				sourceStartSec: 6,
+				sourceEndSec: 10,
+				timelineStartSec: 6,
+				timelineEndSec: 10,
+			},
+		];
+		const after = removeClip(base, "broll");
+		expect(after.timeline.clips.map((c) => c.id)).toEqual(["left", "right"]);
 	});
 });
 

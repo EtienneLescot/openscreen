@@ -14,7 +14,6 @@ import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "
  */
 export type PlaybackSegment = AxcutClip;
 
-import { isGeneratedAssetId } from "../timeline/clip-parts";
 import { type Interval, subtractInterval } from "../timeline/intervals";
 import { keptRawSpans } from "../timeline/programme-time";
 import {
@@ -888,9 +887,7 @@ export function moveClip(
 	const remaining = document.timeline.clips.filter((c) => c.id !== clipId);
 	const bounded = Math.max(0, Math.min(insertIndex, remaining.length));
 	const reordered = [...remaining.slice(0, bounded), movingClip, ...remaining.slice(bounded)];
-	// The seam is where it USED to be, shifted when it moved forward past its own hole.
-	const seam = bounded <= index ? index + 1 : index;
-	return withClipsJoined(document, reordered, movingClip, seam);
+	return withClipsChanged(document, reordered);
 }
 
 // ponytail: duplicate a clip (preserves the original). Used for "split this
@@ -1034,78 +1031,73 @@ export function removeRegion(document: AxcutDocument, kind: RegionKind, id: stri
 /**
  * The document, with its clip list changed to this one.
  *
- * The pass every clip mutation ends with, and the only place the clip list's invariant is
- * enforced: TWO ADJACENT CLIPS THAT ARE ONE CONTINUOUS PIECE OF MEDIA ARE ONE CLIP. Same
- * asset, source ranges that meet, same crop — then they play as one clip already and drawing
- * them as two says nothing. Two identical clips are laid side by side precisely when they are
- * NOT joined in time; joined, there is nothing to tell them apart.
+ * The pass every clip mutation ends with, and where the clip list's one invariant lives:
+ * TWO ADJACENT CLIPS THAT ARE THE SAME MEDIA, THE SAME CROP, AND WHOSE MEDIA TIMECODES MEET
+ * ARE ONE CLIP.
  *
- * It is an invariant rather than a step in a few operations because everything that can
- * create adjacency then gets it for free, and nothing has to remember to ask: deleting the
- * clip between two halves, dragging one of them away, extending a clip until it meets its
- * neighbour. It is also what lets an insertion be completely agnostic about being undone —
- * `insertion.ts` cuts a clip and never learns how the pieces go back together.
+ * Media timecodes, not ruler ones. Clips are always laid back to back here, so every
+ * neighbouring pair touches on the ruler and that says nothing; what carries information is
+ * whether the left clip ENDS in the media where the right one BEGINS. Two clips of one
+ * recording are laid side by side precisely when they do NOT — a piece dropped between them,
+ * a different stretch, a different framing. When they do, and nothing distinguishes them,
+ * they already play as one clip and drawing them as two says nothing at all.
  *
- * The cost, stated so it is a decision: two clips a user joined by hand fuse, and the only
- * way back is to move them apart again before anything else re-lays the list. Rare, and
- * cheaper than a marker on every cut that would have to survive every move.
+ * Why it is safe to apply everywhere rather than at the one edit that needs it: given the
+ * invariant holds, no mutation can make it false in a way that loses anything.
+ * `duplicateClip` is the case that looks dangerous — a copy inserted after its original ends
+ * in the media where the original does, so it could meet the next clip. It cannot: the
+ * original was already adjacent to that clip and did not meet it, or they would be one clip
+ * already. The only states this can surprise are ones that already violated it, which is to
+ * say ones where the two clips were indistinguishable to begin with.
  *
- * ponytail: no razor tool exists, so today this can only ever undo an insertion. Give the cut
- * a marker the day a deliberate split with no gap becomes something a user can make.
+ * The cost, stated so it is a decision: two such clips a user joined by hand fuse, and the
+ * way back is to move them apart. Cheaper than a marker on every cut, which would have to
+ * survive every move that makes it wrong.
  */
 export function withClipsChanged(document: AxcutDocument, clips: AxcutClip[]): AxcutDocument {
-	const laid = resequenceClips(clips);
+	const { clips: joined, absorbed } = joinContiguous(clips);
+	const laid = resequenceClips(joined);
+	const reanchored = absorbed.size === 0 ? document : reanchorRows(document, absorbed);
 	const next: AxcutDocument = {
-		...document,
-		timeline: { ...document.timeline, clips: laid },
+		...reanchored,
+		timeline: { ...reanchored.timeline, clips: laid },
 	};
 	// `rederiveRegionMs` bails on an empty clip list — a guard against a transient wipe
 	// dropping every region — so there is nothing to refresh against.
 	return laid.length === 0 ? next : rederiveRegionMs(next, laid);
 }
 
-/**
- * The same, for a clip that LEFT its place — deleted, or dragged elsewhere. The seam it was
- * filling closes when it was GENERATED media and the two sides are one continuous piece of
- * recording again.
- *
- * Narrow on purpose, and both halves of that narrowness were paid for:
- *
- *   - Only at the seam. A pass over the whole list joins pairs that had nothing to do with
- *     the edit — `duplicateClip` copies a clip that sits before a contiguous neighbour, and
- *     the copy would swallow it.
- *   - Only for generated media. Two contiguous clips of one recording are a state this app
- *     builds ON PURPOSE: `replaceTimeline` cuts a recording into consecutive clips so each
- *     can carry its own zoom. Joining them on the next unrelated delete would collapse
- *     structure the user asked for.
- *
- * What is left is exactly the inverse of what an insertion did, without an insertion having
- * marked anything: generated media leaves no seam behind it. `insertion.ts` cuts a clip and
- * never learns how the pieces go back together.
- */
-export function withClipsJoined(
-	document: AxcutDocument,
-	clips: AxcutClip[],
-	departed: AxcutClip,
-	seam: number,
-): AxcutDocument {
-	const left = clips[seam - 1];
-	const right = clips[seam];
-	if (!isGeneratedAssetId(departed.assetId) || !left || !right || !joinable(left, right)) {
-		return withClipsChanged(document, clips);
+/** Fold every run of same-media, same-crop, media-contiguous clips into one, reporting the
+ *  ids that went away and the clip that now carries their content. */
+function joinContiguous(clips: AxcutClip[]): {
+	clips: AxcutClip[];
+	absorbed: Map<string, string>;
+} {
+	// ARRAY order, not `timelineStartSec`: the list IS the order, and at this point the
+	// positions are still the pre-edit ones. Sorting by them re-sorted a reorder back to
+	// where it came from.
+	const out: AxcutClip[] = [];
+	const absorbed = new Map<string, string>();
+	for (const clip of clips) {
+		const previous = out[out.length - 1];
+		if (previous && joinable(previous, clip)) {
+			out[out.length - 1] = {
+				...previous,
+				sourceEndSec: clip.sourceEndSec,
+				timelineEndSec: previous.timelineEndSec + (clip.timelineEndSec - clip.timelineStartSec),
+				wordRefs: [...previous.wordRefs, ...clip.wordRefs],
+			};
+			absorbed.set(clip.id, previous.id);
+			continue;
+		}
+		out.push(clip);
 	}
-	const merged: AxcutClip = {
-		...left,
-		sourceEndSec: right.sourceEndSec,
-		timelineEndSec: left.timelineEndSec + (right.timelineEndSec - right.timelineStartSec),
-		wordRefs: [...left.wordRefs, ...right.wordRefs],
-	};
-	const joined = [...clips.slice(0, seam - 1), merged, ...clips.slice(seam + 1)];
-	return withClipsChanged(reanchorRows(document, new Map([[right.id, left.id]])), joined);
+	return { clips: out, absorbed };
 }
 
-/** Same media, source ranges that meet, same framing. Crop is the only property a clip
- *  carries that two halves could legitimately disagree on, so it is the whole guard. */
+/** Same media, media timecodes that meet, same framing. Crop is the only property a clip
+ *  carries that two otherwise-identical neighbours could legitimately disagree on, so it is
+ *  the whole of the guard. */
 function joinable(left: AxcutClip, right: AxcutClip): boolean {
 	return (
 		left.assetId === right.assetId &&
@@ -1151,9 +1143,8 @@ function reanchorRows(document: AxcutDocument, absorbed: Map<string, string>): A
  */
 export function removeClip(document: AxcutDocument, clipId: string): AxcutDocument {
 	const oldClips = document.timeline.clips;
-	const removedAt = oldClips.findIndex((c) => c.id === clipId);
-	if (removedAt < 0) return document;
 	const arr = oldClips.filter((c) => c.id !== clipId);
+	if (arr.length === oldClips.length) return document;
 	const next: AxcutDocument = {
 		...document,
 		timeline: {
@@ -1193,7 +1184,7 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 				regions.filter((region) => !(hasCompleteClipAnchor(region) && region.clipId === clipId)),
 		);
 	}
-	return withClipsJoined(next, arr, oldClips[removedAt], removedAt);
+	return withClipsChanged(next, arr);
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {

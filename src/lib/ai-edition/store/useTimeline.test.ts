@@ -191,8 +191,11 @@ describe("useTimeline.moveClip / duplicateClip (delegates to document/timeline.t
 				{
 					id: "clip_b",
 					assetId: "asset_1",
-					sourceStartSec: 10,
-					sourceEndSec: 20,
+					// Does not continue where clip_a stops, on purpose: two clips of one recording
+					// whose media timecodes meet are one clip, so a fixture like that would
+					// collapse under any structural edit.
+					sourceStartSec: 15,
+					sourceEndSec: 25,
 					timelineStartSec: 10,
 					timelineEndSec: 20,
 					wordRefs: [],

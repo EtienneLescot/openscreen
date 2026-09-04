@@ -387,7 +387,11 @@ describe("timeline pure functions", () => {
 
 		/** Three clips, and a zoom straddling the boundary between the last two —
 		 *  stored as TWO fragments, which is the case where a reorder can pull the
-		 *  halves of one pill apart. */
+		 *  halves of one pill apart.
+		 *
+		 *  Their media timecodes deliberately do NOT meet: three clips of one recording that
+		 *  continue into each other are one clip (`withClipsChanged`), so a fixture built that
+		 *  way would collapse on the first structural edit and test nothing. */
 		function straddled(): AxcutDocument {
 			return makeDoc({
 				timeline: {
@@ -395,15 +399,15 @@ describe("timeline pure functions", () => {
 						makeClip({ id: "clip_1", sourceStartSec: 0, sourceEndSec: 20, timelineEndSec: 20 }),
 						makeClip({
 							id: "clip_2",
-							sourceStartSec: 20,
-							sourceEndSec: 40,
+							sourceStartSec: 25,
+							sourceEndSec: 45,
 							timelineStartSec: 20,
 							timelineEndSec: 40,
 						}),
 						makeClip({
 							id: "clip_3",
-							sourceStartSec: 40,
-							sourceEndSec: 60,
+							sourceStartSec: 50,
+							sourceEndSec: 70,
 							timelineStartSec: 40,
 							timelineEndSec: 60,
 						}),
@@ -422,8 +426,8 @@ describe("timeline pure functions", () => {
 						depth: 3,
 						focus: { cx: 0.5, cy: 0.5 },
 						clipId: "clip_2",
-						sourceStartSec: 35,
-						sourceEndSec: 40,
+						sourceStartSec: 40,
+						sourceEndSec: 45,
 					},
 					{
 						id: "zoom_b",
@@ -432,8 +436,8 @@ describe("timeline pure functions", () => {
 						depth: 3,
 						focus: { cx: 0.5, cy: 0.5 },
 						clipId: "clip_3",
-						sourceStartSec: 40,
-						sourceEndSec: 45,
+						sourceStartSec: 50,
+						sourceEndSec: 55,
 					},
 				] as unknown as AxcutDocument["zoomRanges"],
 			});
@@ -509,12 +513,12 @@ describe("timeline pure functions", () => {
 		});
 
 		it("holds after a setClipRange that narrows a fragment's window", () => {
-			const narrowed = setClipSourceRange(straddled(), "clip_2", 20, 37);
+			const narrowed = setClipSourceRange(straddled(), "clip_2", 25, 42);
 			assertAnchorsAgree(narrowed);
-			// zoom_a covered 35–40 of a window that now ends at 37: clamped, kept.
+			// zoom_a covered 40–45 of a window that now ends at 42: clamped, kept.
 			expect(narrowed.zoomRanges.find((z) => z.id === "zoom_a")).toMatchObject({
-				sourceStartSec: 35,
-				sourceEndSec: 37,
+				sourceStartSec: 40,
+				sourceEndSec: 42,
 			});
 		});
 	});
