@@ -202,20 +202,17 @@ export function deriveCaptionCues(
 	const placements = lanePlacements(
 		resolveCaptionLane(document, settings),
 		document.timeline.clips,
-		// `?? []` for the same reason `insertRanges` has one: the key is additive, so a
-		// document written before it — or hand-built, never through the schema — has none.
+		// `?? []` because the key is additive: a document written before it — or hand-built,
+		// never through the schema — simply has none.
 		document.audioTracks ?? [],
 		removedRawSpans(document.timeline.clips, document.timeline.trimRanges),
 	);
 	if (placements.length === 0) return [];
 
 	const transcripts = new Map(document.transcripts.map((t) => [t.assetId, t]));
-	// `?? []` because the key is additive: a document written before it — or a hand-built
-	// one that never went through the schema — simply has no pauses.
-	// CLIPS-derived on both lanes, deliberately. A pause is a held CLIP frame: it
-	// lengthens the ruler under everything, including a voiceover laid over it. Feeding it
-	// placements would measure the pause against the take instead of the film, and land
-	// every voiceover cue early.
+	// What the film no longer contains is CLIPS-derived on both lanes, deliberately: a cut
+	// is authored on the film, and a take laid over it is silent through it without its own
+	// span saying so. Asking the placements instead would measure the cut against the take.
 	// A transcript is only projected once per asset even when several clips draw
 	// from it (line grouping is the expensive part, clipping is cheap).
 	const linesByAsset = new Map<string, CaptionSegment[]>();

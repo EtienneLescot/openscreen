@@ -1,28 +1,18 @@
 // One walk over a voice-over take (issue #560).
 //
-// A take is subject to two opposite forces at once and they must not be two passes. A CUT
-// under it takes time away — step 3 already slices the mix by `removedRawSpans`. An
-// INSERTION inside it adds time: a word added to the take's transcript needs somewhere to
-// be spoken, so the voice stops and resumes on the same word.
+// A CUT under a take takes time away: the voice is silent through it with its own clock
+// still running, which is what keeps the words after a cut landing on the picture they
+// belong to. That is the whole of what this does.
 //
-// What this walk deliberately does NOT do:
+// It used to also add time, for an insertion inside the take. It does not any more: an
+// insertion IS a track of its own (`document/insertionTrack.ts`), so the take arrives here
+// already split into pills that each play an uninterrupted stretch of their file. Both
+// cursors therefore advance together everywhere, and the walk is a subtraction again.
 //
-//   - It does not react to an insertion in the RECORDING lane. A word added to the film
-//     freezes the picture; the take has its own audio and keeps talking, finishing that
-//     much earlier against a picture that has slid. The maintainer settled this: "the
-//     voice-over is not impacted by the insertion in the recording track". A take is as
-//     long as the audio it holds, and nothing under it changes that.
-//   - It does not lengthen the programme. The clips decide the length, full stop. A take
-//     insertion pushes the take's later content later inside the SAME timeline, and
-//     whatever that pushes past the last frame is lost at export — `mix_external_tracks`
-//     clamps every track to the programme. Placing content inside the useful span of the
-//     timeline is the user's job.
-//
-// It runs on the PILL, never on a stored fragment. The document stores one fragment per
-// clip a take covers; growing one fragment leaves its successor's head where it was, and
-// the mixer sums with `+=` at an absolute offset — so a fragment-wise walk ships a take
-// playing on top of itself. `anchorAudioTrackFragments` is untouched and stays correct for
-// the music and loop paths that still read it.
+// It runs on the PILL, never on a stored fragment. The document stores one fragment per clip
+// a take covers, and the mixer sums with `+=` at an absolute offset — so a fragment-wise walk
+// ships a take playing on top of itself. `anchorAudioTrackFragments` is untouched and stays
+// correct for the music and loop paths that still read it.
 
 import type { AxcutAudioTrack } from "../schema";
 import type { RemovedRawSpan } from "./programme-time";
@@ -44,17 +34,7 @@ export interface TakePiece {
 
 const EPSILON_SEC = 1e-9;
 
-/**
- * The take, stretch by stretch, in playback order.
- *
- * Both cursors advance together except inside a `hold`, where the source parks. A `removed`
- * stretch advances BOTH — the cut mutes the take without rewinding it, which is what keeps
- * the words after a cut landing on the picture they belong to (the behaviour step 3 shipped
- * and its tests pin).
- *
- * With no insertions this reduces exactly to `subtractRemoved` over the take's span, which
- * is the property that lets the export and the preview keep their current answers.
- */
+/** The take, stretch by stretch, in playback order: what is heard, and what a cut mutes. */
 export function takeProgramme(
 	pill: Pick<AxcutAudioTrack, "startMs" | "endMs" | "offsetMs">,
 	removed: readonly RemovedRawSpan[],
@@ -63,60 +43,32 @@ export function takeProgramme(
 	const rawEnd = Math.max(rawStart, pill.endMs / 1000);
 	const sourceStart = Math.max(0, pill.offsetMs / 1000);
 
-	// Every boundary the walk has to stop at, on the RAW ruler, resolved sequentially:
-	// an insertion's raw moment depends on the holds before it, so it cannot be mapped in
-	// one pass up front.
-
 	const cuts = [...removed]
 		.filter((span) => span.endSec > rawStart && span.startSec < rawEnd)
 		.sort((a, b) => a.startSec - b.startSec);
 
 	const pieces: TakePiece[] = [];
 	let raw = rawStart;
-	let source = sourceStart;
-	let nextCut = 0;
-
-	const push = (kind: TakePiece["kind"], rawTo: number, sourceTo: number) => {
-		if (rawTo - raw <= EPSILON_SEC) return;
+	// The source clock never parks, so it is a plain shift of the raw one.
+	const push = (kind: TakePiece["kind"], to: number) => {
+		if (to - raw <= EPSILON_SEC) return;
 		pieces.push({
 			kind,
 			rawStartSec: raw,
-			rawEndSec: rawTo,
-			sourceStartSec: source,
-			sourceEndSec: sourceTo,
+			rawEndSec: to,
+			sourceStartSec: sourceStart + (raw - rawStart),
+			sourceEndSec: sourceStart + (to - rawStart),
 		});
-		raw = rawTo;
-		source = sourceTo;
+		raw = to;
 	};
 
-	// A hang is the worst failure a renderer can have. This loop terminates because every
-	// pass either advances `raw` or consumes a boundary, so the passes are bounded by the
-	// boundary count — but that is an argument, and an argument is not a guarantee. A
-	// mutation of the boundary arithmetic span it forever rather than failing an assertion,
-	// so the bound is enforced. Counting passes rather than watching `raw` on purpose: a
-	// pass that consumes a zero-length insertion makes real progress without moving `raw`,
-	// and a no-progress test would cut the walk short on a legitimate document.
-	const maxPasses = 4 * (removed.length + 2);
-	let passes = 0;
-	while (raw < rawEnd - EPSILON_SEC) {
-		if (passes++ > maxPasses) break;
-		// Skip cuts the walk has already passed.
-		while (nextCut < cuts.length && cuts[nextCut].endSec <= raw + EPSILON_SEC) nextCut++;
-
-		const cut = cuts[nextCut];
-
-		// Inside a cut: silent to the cut's end, both cursors running.
-		if (cut && cut.startSec <= raw + EPSILON_SEC) {
-			const to = Math.min(cut.endSec, rawEnd);
-			push("removed", to, source + (to - raw));
-			continue;
-		}
-
-		// Otherwise play up to whichever boundary comes first.
-		let to = rawEnd;
-		if (cut) to = Math.min(to, cut.startSec);
-		push("play", Math.max(raw, to), source + (Math.max(raw, to) - raw));
+	for (const cut of cuts) {
+		// `max(_, raw)` because sorted cuts can still overlap; the second one then starts
+		// behind the cursor and contributes only whatever it reaches past it.
+		push("play", Math.min(Math.max(cut.startSec, raw), rawEnd));
+		push("removed", Math.min(cut.endSec, rawEnd));
 	}
+	push("play", rawEnd);
 
 	return pieces;
 }
@@ -134,8 +86,7 @@ export function takeRulerExtent(pieces: readonly TakePiece[]): {
  * Seconds of the take's FILE the walk consumes.
  *
  * Deliberately not called `spanSec`: that name already means the trim-projected OUTPUT span
- * at the preview's call site, and the fades are measured against the consumed source — feed
- * them a span grown by a hold and the fade-out starts early in the preview only.
+ * at the preview's call site, and the fades are measured against the consumed source.
  */
 export function consumedSourceSec(pieces: readonly TakePiece[]): number {
 	return pieces.reduce((sum, piece) => sum + (piece.sourceEndSec - piece.sourceStartSec), 0);

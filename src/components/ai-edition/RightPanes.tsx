@@ -1254,9 +1254,9 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 
 	const openInsertion = useCallback(
 		(seed: string) => {
-			// ponytail: word insertion ships dev-only until a voice can be synthesized for
-			// the word — without one it only borrows free silence, and once it creates
-			// timeline time (the pause gesture) it is a silent freeze frame. Drop this gate
+			// ponytail: word insertion ships dev-only until a voice can be synthesized for the
+			// word. The media it creates is a test pattern over noise — real media, in the
+			// right place, for the right length, but nobody says the sentence. Drop this gate
 			// when TTS lands.
 			if (!import.meta.env.DEV) return;
 			if (busy || !seed.trim()) return;

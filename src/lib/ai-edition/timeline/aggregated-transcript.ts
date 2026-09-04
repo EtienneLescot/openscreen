@@ -311,10 +311,8 @@ export function buildAggregatedSections(
  * all (STT on a bed is noise we pay for), so a music placement could only ever
  * produce an empty section that reads as a failed transcription.
  *
- * One placement per PLAY PIECE of the take's own walk, which is what makes the words after
- * an insertion map to the raw moment they actually occupy. It used to be one per stored
- * FRAGMENT — equivalent while a take could only lose time, wrong the moment it can gain
- * some, because a fragment's source window knows nothing about the pause before it.
+ * One placement per PLAY PIECE of the take's own walk: a cut under the take splits it into
+ * stretches that sit at different raw moments, and a placement is one uninterrupted shift.
  *
  * A LOOPING take contributes nothing at all. `anchorAudioTrackFragments` deliberately
  * does not advance `offsetMs` across the fragments of a looping track, so their words map
@@ -323,10 +321,9 @@ export function buildAggregatedSections(
  */
 export function voiceoverPlacements(
 	audioTracks: AxcutAudioTrack[],
-	/** What the film no longer contains. Empty is the honest default: with no cuts and no
-	 *  insertions the walk yields one piece per take, which is what this always produced. */
+	/** What the film no longer contains. Empty is the honest default: with no cuts the walk
+	 *  yields one piece per take, which is what this always produced. */
 	removed: readonly RemovedRawSpan[] = [],
-	/** This take's own insertions, by group id. */
 ): TranscriptPlacement[] {
 	return collapseTracksToPills(audioTracks)
 		.filter((pill) => pill.kind === "voiceover" && !pill.loop)
