@@ -34,6 +34,9 @@ import { useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
 import {
+	AUDIO_LANE_PAD_PX,
+	AUDIO_ROW_GAP_PX,
+	AUDIO_ROW_HEIGHT_PX,
 	audioGhostExtent,
 	collapseTracksToPills,
 	packAudioTrackRows,
@@ -141,14 +144,8 @@ const PILL_HANDLE_OUT_PX = PILL_HANDLE_PX + PILL_MOVE_GAP_PX;
 const PILL_CONTENT_MIN_PX = 34;
 /** Edge-snap radius while dragging a pill, in screen px. */
 const PILL_SNAP_PX = 8;
-// One audio pill's height, and the vertical step between stacked rows. The lane
-// grows by a row for each track that overlaps one already placed — see
-// `packAudioTrackRows`.
-const AUDIO_ROW_HEIGHT_PX = 26;
-const AUDIO_ROW_GAP_PX = 3;
-// Breathing room above the first row and below the last, so a pill never sits
-// flush against the lane's rounded edge.
-const AUDIO_LANE_PAD_PX = 3;
+// One audio pill's height, the vertical step between stacked rows, and lane padding
+// are defined in audioTracks.ts and imported above.
 // The size a newly created pill aims for (PILL_CREATE_PX) lives in
 // timeline/newRegionDuration, because the keyboard shortcuts create regions too
 // and they are handled in NewEditorShell, outside this component.

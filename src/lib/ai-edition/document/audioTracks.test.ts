@@ -4,6 +4,7 @@ import {
 	anchorAudioTrackFragments,
 	audioGhostExtent,
 	collapseTracksToPills,
+	computeAudioRowCount,
 	packAudioTrackRows,
 	patchAudioTrack,
 	removeAudioTrack,
@@ -354,5 +355,33 @@ describe("slipAudioOffsetMs", () => {
 		// `offsetMs` is `z.number().int()`; a fractional slip would fail the parse on
 		// the next save rather than at the gesture.
 		expect(Number.isInteger(slipAudioOffsetMs(0, 4_000, 60, 1234.567) ?? 0)).toBe(true);
+	});
+});
+
+describe("computeAudioRowCount", () => {
+	it("returns 1 row for an empty tracks list (showing the empty lane hint)", () => {
+		expect(computeAudioRowCount([])).toBe(1);
+	});
+
+	it("returns 1 row for a single voiceover track", () => {
+		const vo = track({ id: "vo1", kind: "voiceover", startMs: 0, endMs: 5000 });
+		expect(computeAudioRowCount([vo])).toBe(1);
+	});
+
+	it("returns 1 row for a single music track", () => {
+		const bgm = track({ id: "bgm1", kind: "music", startMs: 0, endMs: 5000 });
+		expect(computeAudioRowCount([bgm])).toBe(1);
+	});
+
+	it("returns 2 rows when both voiceover and music tracks are present", () => {
+		const vo = track({ id: "vo1", kind: "voiceover", startMs: 0, endMs: 5000 });
+		const bgm = track({ id: "bgm1", kind: "music", startMs: 0, endMs: 5000 });
+		expect(computeAudioRowCount([vo, bgm])).toBe(2);
+	});
+
+	it("keeps non-overlapping tracks of the same kind on 1 row", () => {
+		const bgm1 = track({ id: "bgm1", kind: "music", startMs: 0, endMs: 5000 });
+		const bgm2 = track({ id: "bgm2", kind: "music", startMs: 6000, endMs: 10000 });
+		expect(computeAudioRowCount([bgm1, bgm2])).toBe(1);
 	});
 });
