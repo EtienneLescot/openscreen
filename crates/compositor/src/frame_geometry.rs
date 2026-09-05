@@ -1296,8 +1296,8 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
     } else if blur01 <= 0.001 {
         (1, placement)
     } else {
-        // Intervalle d'obturateur court, centré sur la frame en cours (max 1.25 frame à 100% de blur)
-        let trail_dt = blur01 * (1.25 / FPS);
+        // Intervalle d'obturateur court, borné à 1 frame (100% blur = 1 frame d'exposition)
+        let trail_dt = blur01 / FPS;
         let prev = place(input.track.at(input.t - trail_dt), g.s_dst_prev).unwrap_or(placement);
         let c_now = placement.upright_center();
         let c_prev = prev.upright_center();
