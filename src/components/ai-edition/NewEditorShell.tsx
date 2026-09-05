@@ -30,6 +30,7 @@ import {
 	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
+import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { isGeneratedAssetId } from "@/lib/ai-edition/timeline/clip-parts";
@@ -128,7 +129,13 @@ export function NewEditorShell() {
 	// v4 shell: three modes (Media / Edit / Rec), a collapsible agent (chat)
 	// column, and a floating facet inspector over the stage.
 	const [mode, setMode] = useState<EditorMode>("edit");
-	const [chatOpen, setChatOpen] = useState(true);
+	const [chatOpen, setChatOpen] = useState(false);
+	const pendingChatPrompt = useChatPromptBus((s) => s.pending);
+	useEffect(() => {
+		if (pendingChatPrompt && !chatOpen) {
+			setChatOpen(true);
+		}
+	}, [pendingChatPrompt, chatOpen]);
 	const [chatWidthPx, setChatWidthPx] = useState(
 		() => Number(localStorage.getItem("os-editor-chat-width")) || 392,
 	);
