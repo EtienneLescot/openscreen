@@ -500,3 +500,22 @@ export function packAudioTrackRows(tracks: Array<{ id: string; startMs: number; 
 	}
 	return { rowOf, rowCount: Math.max(1, rowEnds.length) };
 }
+
+export const AUDIO_ROW_HEIGHT_PX = 26;
+export const AUDIO_ROW_GAP_PX = 3;
+export const AUDIO_LANE_PAD_PX = 3;
+export const AUDIO_ROW_EXPANSION_PX = AUDIO_ROW_HEIGHT_PX + AUDIO_ROW_GAP_PX;
+
+/**
+ * Compute the total stacked rows required to render the project's audio tracks,
+ * mirroring V4Timeline's packing logic (separating voiceovers and background music).
+ */
+export function computeAudioRowCount(tracks: AxcutAudioTrack[]): number {
+	const pills = collapseTracksToPills(tracks);
+	const voice = pills.filter((p) => p.kind === "voiceover");
+	const music = pills.filter((p) => p.kind !== "voiceover");
+	const voiceRows = packAudioTrackRows(voice);
+	const musicRows = packAudioTrackRows(music);
+	const base = voice.length > 0 ? voiceRows.rowCount : 0;
+	return Math.max(1, base + (music.length > 0 ? musicRows.rowCount : 0));
+}

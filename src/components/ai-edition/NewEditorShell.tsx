@@ -5,6 +5,10 @@ import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { useEditorDialogActions } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
+import {
+	AUDIO_ROW_EXPANSION_PX,
+	computeAudioRowCount,
+} from "@/lib/ai-edition/document/audioTracks";
 import { createId } from "@/lib/ai-edition/document/ids";
 import {
 	migrateProjectDataToAxcutDocument,
@@ -106,6 +110,10 @@ function NativePlaybackSync({
 	return null;
 }
 
+export const DEFAULT_TIMELINE_HEIGHT_PX = 392;
+export const MIN_TIMELINE_HEIGHT_PX = 160;
+export const MAX_TIMELINE_HEIGHT_PX = 560;
+
 export function NewEditorShell() {
 	const te = useScopedT("editor");
 	const document = useProjectStore((s) => s.document);
@@ -132,8 +140,39 @@ export function NewEditorShell() {
 	const [chatWidthPx, setChatWidthPx] = useState(
 		() => Number(localStorage.getItem("os-editor-chat-width")) || 392,
 	);
-	const [timelineHeightPx, setTimelineHeightPx] = useState(
-		() => Number(localStorage.getItem("os-editor-timeline-height")) || 308,
+	const [timelineBaseHeightPx, setTimelineBaseHeightPx] = useState(() => {
+		const raw = localStorage.getItem("os-editor-timeline-height");
+		// One-time migration: if legacy 308px default exists without the migration marker,
+		// migrate it once to DEFAULT_TIMELINE_HEIGHT_PX so existing users see all lanes,
+		// but allow them to intentionally choose 308px in the future.
+		// Also migrate intermediate 344px default to DEFAULT_TIMELINE_HEIGHT_PX.
+		const migrated = localStorage.getItem("os-editor-timeline-height-migrated");
+		if (!migrated && (!raw || Number(raw) === 308 || Number(raw) === 344)) {
+			localStorage.setItem("os-editor-timeline-height-migrated", "true");
+			localStorage.setItem("os-editor-timeline-height", String(DEFAULT_TIMELINE_HEIGHT_PX));
+			return DEFAULT_TIMELINE_HEIGHT_PX;
+		}
+		if (raw === "344") {
+			localStorage.setItem("os-editor-timeline-height", String(DEFAULT_TIMELINE_HEIGHT_PX));
+			return DEFAULT_TIMELINE_HEIGHT_PX;
+		}
+		const val = raw ? Number(raw) : 0;
+		if (!val) {
+			return DEFAULT_TIMELINE_HEIGHT_PX;
+		}
+		return Math.min(MAX_TIMELINE_HEIGHT_PX, Math.max(MIN_TIMELINE_HEIGHT_PX, val));
+	});
+
+	// The timeline height automatically expands by AUDIO_ROW_EXPANSION_PX (+29px)
+	// whenever the project transitions between 1 and 2 stacked audio rows (e.g. voiceover + music).
+	const audioRowCount = useMemo(
+		() => computeAudioRowCount(document?.audioTracks ?? []),
+		[document?.audioTracks],
+	);
+	const extraAudioHeightPx = Math.max(0, audioRowCount - 1) * AUDIO_ROW_EXPANSION_PX;
+	const timelineHeightPx = Math.min(
+		MAX_TIMELINE_HEIGHT_PX,
+		Math.max(MIN_TIMELINE_HEIGHT_PX, timelineBaseHeightPx + extraAudioHeightPx),
 	);
 	const [inspectorOpen, setInspectorOpen] = useState(true);
 	const [facet, setFacet] = useState<Facet>("effects");
@@ -1391,23 +1430,27 @@ export function NewEditorShell() {
 		(e: React.PointerEvent) => {
 			e.preventDefault();
 			const startY = e.clientY;
-			const startHeight = timelineHeightPx;
-			let latest = startHeight;
+			const startBase = timelineBaseHeightPx;
+			let latestBase = startBase;
 			const move = (ev: PointerEvent) => {
 				// Dragging the handle up (negative clientY delta) enlarges the
 				// timeline, since it sits below the handle.
-				latest = Math.min(480, Math.max(160, startHeight - (ev.clientY - startY)));
-				setTimelineHeightPx(latest);
+				const renderedTarget = Math.min(
+					MAX_TIMELINE_HEIGHT_PX,
+					Math.max(MIN_TIMELINE_HEIGHT_PX, startBase + extraAudioHeightPx - (ev.clientY - startY)),
+				);
+				latestBase = Math.max(MIN_TIMELINE_HEIGHT_PX, renderedTarget - extraAudioHeightPx);
+				setTimelineBaseHeightPx(latestBase);
 			};
 			const up = () => {
 				window.removeEventListener("pointermove", move);
 				window.removeEventListener("pointerup", up);
-				localStorage.setItem("os-editor-timeline-height", String(latest));
+				localStorage.setItem("os-editor-timeline-height", String(latestBase));
 			};
 			window.addEventListener("pointermove", move);
 			window.addEventListener("pointerup", up);
 		},
-		[timelineHeightPx],
+		[timelineBaseHeightPx, extraAudioHeightPx],
 	);
 
 	const transcriptProps = {
