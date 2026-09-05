@@ -26,6 +26,154 @@ use std::ptr;
 use std::time::Instant;
 use windows::core::Interface;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecodeFrameTestFault {
+    AfterAllocations,
+    PacketAllocNull,
+    FrameAllocNull,
+    CloneNull,
+    EofSendError,
+    AttachBufferRefNull,
+}
+
+#[cfg(test)]
+thread_local! {
+    static DECODE_FRAME_TEST_FAULT: std::cell::Cell<Option<DecodeFrameTestFault>> =
+        const { std::cell::Cell::new(None) };
+    static DECODE_FRAME_TEST_PACKET_RELEASED: std::cell::RefCell<
+        Option<std::sync::Arc<std::sync::atomic::AtomicBool>>
+    > = const { std::cell::RefCell::new(None) };
+    static DECODE_FRAME_TEST_FRAME_RELEASED: std::cell::RefCell<
+        Option<std::sync::Arc<std::sync::atomic::AtomicBool>>
+    > = const { std::cell::RefCell::new(None) };
+    static DECODE_FRAME_TEST_HWDEV_OBSERVER: std::cell::Cell<*mut AVBufferRef> =
+        const { std::cell::Cell::new(ptr::null_mut()) };
+}
+
+#[cfg(test)]
+unsafe extern "C" fn observe_test_buffer_release(opaque: *mut c_void, data: *mut u8) {
+    let released = Box::from_raw(opaque as *mut std::sync::Arc<std::sync::atomic::AtomicBool>);
+    released.store(true, std::sync::atomic::Ordering::SeqCst);
+    drop(Box::from_raw(data));
+}
+
+#[cfg(test)]
+unsafe fn install_decode_frame_lifetime_probes(
+    hwdev: *mut AVBufferRef,
+    pkt: *mut AVPacket,
+    frame: *mut AVFrame,
+) -> Result<()> {
+    let should_fail = DECODE_FRAME_TEST_FAULT
+        .with(|fault| fault.get() == Some(DecodeFrameTestFault::AfterAllocations));
+    if !should_fail {
+        return Ok(());
+    }
+
+    let packet_released = DECODE_FRAME_TEST_PACKET_RELEASED.with(|signal| {
+        signal
+            .borrow()
+            .as_ref()
+            .expect("packet release signal")
+            .clone()
+    });
+    let frame_released = DECODE_FRAME_TEST_FRAME_RELEASED.with(|signal| {
+        signal
+            .borrow()
+            .as_ref()
+            .expect("frame release signal")
+            .clone()
+    });
+    let packet_data = Box::into_raw(Box::new(0u8));
+    let packet_opaque = Box::into_raw(Box::new(packet_released));
+    let packet_buf = av_buffer_create(
+        packet_data,
+        1,
+        Some(observe_test_buffer_release),
+        packet_opaque as *mut c_void,
+        0,
+    );
+    if packet_buf.is_null() {
+        drop(Box::from_raw(packet_data));
+        drop(Box::from_raw(packet_opaque));
+        bail!("test av_buffer_create(packet)");
+    }
+    (*pkt).buf = packet_buf;
+    (*pkt).data = packet_data;
+    (*pkt).size = 1;
+
+    let frame_data = Box::into_raw(Box::new(0u8));
+    let frame_opaque = Box::into_raw(Box::new(frame_released));
+    let frame_buf = av_buffer_create(
+        frame_data,
+        1,
+        Some(observe_test_buffer_release),
+        frame_opaque as *mut c_void,
+        0,
+    );
+    if frame_buf.is_null() {
+        drop(Box::from_raw(frame_data));
+        drop(Box::from_raw(frame_opaque));
+        bail!("test av_buffer_create(frame)");
+    }
+    (*frame).buf[0] = frame_buf;
+    (*frame).data[0] = frame_data;
+
+    let observer = av_buffer_ref(hwdev);
+    if observer.is_null() {
+        bail!("test av_buffer_ref(hwdev)");
+    }
+    DECODE_FRAME_TEST_HWDEV_OBSERVER.with(|slot| slot.set(observer));
+    bail!("injected failure after decode allocations")
+}
+
+#[cfg(test)]
+fn decode_frame_test_fault_is(expected: DecodeFrameTestFault) -> bool {
+    DECODE_FRAME_TEST_FAULT.with(|fault| fault.get() == Some(expected))
+}
+
+unsafe fn decode_packet_alloc() -> *mut AVPacket {
+    #[cfg(test)]
+    if decode_frame_test_fault_is(DecodeFrameTestFault::PacketAllocNull) {
+        return ptr::null_mut();
+    }
+    av_packet_alloc()
+}
+
+unsafe fn decode_frame_alloc() -> *mut AVFrame {
+    #[cfg(test)]
+    if decode_frame_test_fault_is(DecodeFrameTestFault::FrameAllocNull) {
+        return ptr::null_mut();
+    }
+    av_frame_alloc()
+}
+
+unsafe fn clone_decoded_frame(frame: *const AVFrame) -> *mut AVFrame {
+    #[cfg(test)]
+    if decode_frame_test_fault_is(DecodeFrameTestFault::CloneNull) {
+        return ptr::null_mut();
+    }
+    av_frame_clone(frame)
+}
+
+unsafe fn send_decode_eof(dctx: *mut AVCodecContext) -> i32 {
+    #[cfg(test)]
+    if decode_frame_test_fault_is(DecodeFrameTestFault::EofSendError) {
+        return AVERROR_INVALIDDATA;
+    }
+    avcodec_send_packet(dctx, ptr::null())
+}
+
+unsafe fn ref_decode_hw_device(hwdev: *const AVBufferRef) -> *mut AVBufferRef {
+    #[cfg(test)]
+    if decode_frame_test_fault_is(DecodeFrameTestFault::AttachBufferRefNull) {
+        let observer = av_buffer_ref(hwdev);
+        DECODE_FRAME_TEST_HWDEV_OBSERVER.with(|slot| slot.set(observer));
+        return ptr::null_mut();
+    }
+    av_buffer_ref(hwdev)
+}
+
 // Macros libav non générées par bindgen (function-like). Valeurs Windows/MSVC.
 // `AVERROR(EAGAIN)` dépend de la plateforme (cf. `crate::ffi`) ; ce fichier est
 // Windows-only, mais garder une troisième copie de la valeur est ce qui a laissé
@@ -58,6 +206,13 @@ impl Drop for FrameGuard {
     }
 }
 
+struct PacketGuard(*mut AVPacket);
+impl Drop for PacketGuard {
+    fn drop(&mut self) {
+        unsafe { av_packet_free(&mut self.0) };
+    }
+}
+
 /// Décode la n-ième frame d'une source sur NOTRE device (textures échantillonnables).
 /// Sert le harnais de composition (S3+), hors mesure. Retourne une frame indépendante.
 pub fn decode_frame_n(path: &str, gpu: &Gpu, n: u32) -> Result<FrameGuard> {
@@ -71,47 +226,77 @@ unsafe fn decode_frame_n_inner(path: &str, gpu: &Gpu, n: u32) -> Result<FrameGua
         avformat_open_input(&mut fmt, cpath.as_ptr(), ptr::null_mut(), ptr::null_mut()),
         "open_input",
     )?;
-    averr(avformat_find_stream_info(fmt, ptr::null_mut()), "find_stream_info")?;
-    let vidx = av_find_best_stream(fmt, AVMediaType::AVMEDIA_TYPE_VIDEO, -1, -1, ptr::null_mut(), 0);
+    let mut resources = DecoderOpenResources {
+        fmt,
+        dctx: ptr::null_mut(),
+        hwdev: ptr::null_mut(),
+    };
+    averr(
+        avformat_find_stream_info(resources.fmt, ptr::null_mut()),
+        "find_stream_info",
+    )?;
+    let vidx = av_find_best_stream(
+        resources.fmt,
+        AVMediaType::AVMEDIA_TYPE_VIDEO,
+        -1,
+        -1,
+        ptr::null_mut(),
+        0,
+    );
     if vidx < 0 {
         bail!("aucun flux vidéo");
     }
-    let stream = sn_fmt_stream(fmt, vidx);
+    let stream = sn_fmt_stream(resources.fmt, vidx);
     let codecpar = (*stream).codecpar;
-    if !d3d11va_for_codec((*codecpar).codec_id) {
-        avformat_close_input(&mut fmt);
+    let codec_id = (*codecpar).codec_id;
+    if !d3d11va_for_codec(codec_id) {
         bail!(
             "decode_frame_n only supports H.264 D3D11VA (codec_id {})",
-            (*codecpar).codec_id as i32
+            codec_id as i32
         );
     }
     let (dec, dctx) = require_decoder(codecpar)?;
-    averr(avcodec_parameters_to_context(dctx, codecpar), "params_to_ctx")?;
-    allow_d3d11va_h264_baseline(dctx);
+    resources.dctx = dctx;
+    averr(
+        avcodec_parameters_to_context(resources.dctx, codecpar),
+        "params_to_ctx",
+    )?;
+    allow_d3d11va_h264_baseline(resources.dctx);
 
-    let hwdev = attach_d3d11va(dctx, gpu)?;
-    averr(avcodec_open2(dctx, dec, ptr::null_mut()), "avcodec_open2")?;
+    resources.hwdev = attach_d3d11va(resources.dctx, gpu)?;
+    averr(
+        avcodec_open2(resources.dctx, dec, ptr::null_mut()),
+        "avcodec_open2",
+    )?;
 
-    let pkt = av_packet_alloc();
-    let frame = av_frame_alloc();
+    let pkt = PacketGuard(decode_packet_alloc());
+    if pkt.0.is_null() {
+        bail!("av_packet_alloc");
+    }
+    let frame = FrameGuard(decode_frame_alloc());
+    if frame.0.is_null() {
+        bail!("av_frame_alloc");
+    }
+    #[cfg(test)]
+    install_decode_frame_lifetime_probes(resources.hwdev, pkt.0, frame.0)?;
     let mut got: u32 = 0;
     let mut result: *mut AVFrame = ptr::null_mut();
 
     'outer: loop {
-        let r = av_read_frame(fmt, pkt);
+        let r = av_read_frame(resources.fmt, pkt.0);
         if r == AVERROR_EOF {
-            avcodec_send_packet(dctx, ptr::null_mut());
+            averr(send_decode_eof(resources.dctx), "send_eof")?;
         } else {
             averr(r, "read_frame")?;
-            if (*pkt).stream_index != vidx {
-                av_packet_unref(pkt);
+            if (*pkt.0).stream_index != vidx {
+                av_packet_unref(pkt.0);
                 continue;
             }
-            averr(avcodec_send_packet(dctx, pkt), "send_packet")?;
-            av_packet_unref(pkt);
+            averr(avcodec_send_packet(resources.dctx, pkt.0), "send_packet")?;
+            av_packet_unref(pkt.0);
         }
         loop {
-            let r = avcodec_receive_frame(dctx, frame);
+            let r = avcodec_receive_frame(resources.dctx, frame.0);
             if r == AVERROR_EAGAIN || r == AVERROR_EOF {
                 if r == AVERROR_EOF {
                     break 'outer;
@@ -120,18 +305,15 @@ unsafe fn decode_frame_n_inner(path: &str, gpu: &Gpu, n: u32) -> Result<FrameGua
             }
             averr(r, "receive_frame")?;
             if got == n {
-                result = av_frame_clone(frame); // frame indépendante, garde ses refs textures
+                result = clone_decoded_frame(frame.0);
+                if result.is_null() {
+                    bail!("av_frame_clone");
+                }
                 break 'outer;
             }
             got += 1;
         }
     }
-
-    av_frame_free(&mut (frame as *mut _));
-    av_packet_free(&mut (pkt as *mut _));
-    avcodec_free_context(&mut (dctx as *mut _));
-    av_buffer_unref(&mut (hwdev as *mut _));
-    avformat_close_input(&mut fmt);
 
     if result.is_null() {
         bail!("frame {n} introuvable");
@@ -206,7 +388,12 @@ unsafe fn attach_d3d11va(dctx: *mut AVCodecContext, gpu: &Gpu) -> Result<*mut AV
         av_buffer_unref(&mut hwdev);
         return Err(error);
     }
-    (*dctx).hw_device_ctx = av_buffer_ref(hwdev);
+    let dctx_hwdev = ref_decode_hw_device(hwdev);
+    if dctx_hwdev.is_null() {
+        av_buffer_unref(&mut hwdev);
+        bail!("av_buffer_ref(hw_device_ctx)");
+    }
+    (*dctx).hw_device_ctx = dctx_hwdev;
     (*dctx).get_format = Some(get_hw_format);
     Ok(hwdev)
 }
@@ -1615,6 +1802,141 @@ unsafe fn run_multi_inner(
 mod tests {
     use super::*;
 
+    struct DecodeFrameFaultReset;
+
+    impl Drop for DecodeFrameFaultReset {
+        fn drop(&mut self) {
+            DECODE_FRAME_TEST_FAULT.with(|fault| fault.set(None));
+            DECODE_FRAME_TEST_PACKET_RELEASED.with(|signal| *signal.borrow_mut() = None);
+            DECODE_FRAME_TEST_FRAME_RELEASED.with(|signal| *signal.borrow_mut() = None);
+            DECODE_FRAME_TEST_HWDEV_OBSERVER.with(|slot| unsafe {
+                let mut observer = slot.replace(ptr::null_mut());
+                av_buffer_unref(&mut observer);
+            });
+        }
+    }
+
+    fn install_decode_frame_fault(
+        fault: DecodeFrameTestFault,
+        packet_released: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        frame_released: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> DecodeFrameFaultReset {
+        DECODE_FRAME_TEST_FAULT.with(|slot| slot.set(Some(fault)));
+        DECODE_FRAME_TEST_PACKET_RELEASED.with(|slot| *slot.borrow_mut() = Some(packet_released));
+        DECODE_FRAME_TEST_FRAME_RELEASED.with(|slot| *slot.borrow_mut() = Some(frame_released));
+        DecodeFrameFaultReset
+    }
+
+    fn install_simple_decode_frame_fault(fault: DecodeFrameTestFault) -> DecodeFrameFaultReset {
+        install_decode_frame_fault(
+            fault,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum HardwarePrerequisite {
+        Available,
+        Unsupported,
+    }
+
+    const DXGI_ERROR_UNSUPPORTED_CODE: i32 = 0x887A_0004u32 as i32;
+
+    fn classify_hardware_prerequisite(
+        result: windows::core::Result<()>,
+    ) -> windows::core::Result<HardwarePrerequisite> {
+        match result {
+            Ok(()) => Ok(HardwarePrerequisite::Available),
+            Err(error) if error.code().0 == DXGI_ERROR_UNSUPPORTED_CODE => {
+                Ok(HardwarePrerequisite::Unsupported)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn raw_hardware_prerequisite() -> windows::core::Result<()> {
+        use windows::Win32::Foundation::{E_UNEXPECTED, HMODULE};
+        use windows::Win32::Graphics::Direct3D::{
+            D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_1,
+        };
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
+        };
+
+        let levels = [D3D_FEATURE_LEVEL_11_1];
+        let mut device: Option<ID3D11Device> = None;
+        let mut context: Option<ID3D11DeviceContext> = None;
+        let mut got = D3D_FEATURE_LEVEL::default();
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                Some(&levels),
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                Some(&mut got),
+                Some(&mut context),
+            )?;
+        }
+        if device.is_none() || context.is_none() || got != D3D_FEATURE_LEVEL_11_1 {
+            return Err(windows::core::Error::from(E_UNEXPECTED));
+        }
+        Ok(())
+    }
+
+    fn strict_hardware_gpu(test_name: &str) -> Option<Gpu> {
+        match classify_hardware_prerequisite(raw_hardware_prerequisite()) {
+            Ok(HardwarePrerequisite::Unsupported) => {
+                println!(
+                    "NOT_EXECUTED:{test_name}:raw D3D11 preflight returned DXGI_ERROR_UNSUPPORTED (0x887A0004)"
+                );
+                None
+            }
+            Ok(HardwarePrerequisite::Available) => Some(
+                Gpu::create(false)
+                    .unwrap_or_else(|error| panic!("{test_name}: strict Gpu::create failed after successful raw hardware preflight: {error:#}")),
+            ),
+            Err(error) => panic!(
+                "{test_name}: raw D3D11 hardware preflight failed with non-skippable HRESULT {:#010X}: {error}",
+                error.code().0 as u32
+            ),
+        }
+    }
+
+    fn decode_frame_error(path: &std::path::Path, gpu: &Gpu, n: u32) -> anyhow::Error {
+        match decode_frame_n(path.to_str().expect("utf8 path"), gpu, n) {
+            Ok(_) => panic!("decode_frame_n unexpectedly succeeded"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn hardware_prerequisite_classification() {
+        use windows::Win32::Foundation::{E_INVALIDARG, E_OUTOFMEMORY, E_UNEXPECTED};
+
+        assert_eq!(
+            classify_hardware_prerequisite(Ok(())).expect("success classification"),
+            HardwarePrerequisite::Available
+        );
+        let unsupported =
+            windows::core::Error::from(windows::core::HRESULT(DXGI_ERROR_UNSUPPORTED_CODE));
+        assert_eq!(
+            classify_hardware_prerequisite(Err(unsupported))
+                .expect("DXGI_ERROR_UNSUPPORTED classification"),
+            HardwarePrerequisite::Unsupported
+        );
+        for hresult in [E_INVALIDARG, E_OUTOFMEMORY, E_UNEXPECTED] {
+            let error = windows::core::Error::from(hresult);
+            let returned = classify_hardware_prerequisite(Err(error))
+                .expect_err("ordinary failures must remain failures");
+            assert_eq!(returned.code(), hresult);
+        }
+    }
+
     /// L'ordre EST le contrat : tous les candidats zéro-copie d'abord, ceux qui exigent la
     /// mémoire système ensuite (`*_qsv` et `*_mf` sont matériels eux aussi — ce qui les
     /// distingue est le format d'entrée, pas le silicium). Un candidat système remonté
@@ -1837,6 +2159,173 @@ mod tests {
             av_buffer_unref(&mut hwdev);
             avformat_close_input(&mut fmt);
         }
+    }
+
+    #[test]
+    fn decode_frame_n_failure_paths_release_resources() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let Some(gpu) = strict_hardware_gpu("decode_frame_n_failure_paths_release_resources")
+        else {
+            return;
+        };
+        let path = encode_color(
+            &["-c:v", "libopenh264", "-b:v", "200k"],
+            "decode-frame-n-lifetime.mp4",
+        );
+        let packet_released = Arc::new(AtomicBool::new(false));
+        let frame_released = Arc::new(AtomicBool::new(false));
+        let _fault = install_decode_frame_fault(
+            DecodeFrameTestFault::AfterAllocations,
+            Arc::clone(&packet_released),
+            Arc::clone(&frame_released),
+        );
+
+        let error = decode_frame_error(&path, &gpu, 0);
+        assert!(
+            format!("{error:#}").contains("injected failure after decode allocations"),
+            "unexpected injected error: {error:#}"
+        );
+        let mut observer =
+            DECODE_FRAME_TEST_HWDEV_OBSERVER.with(|slot| slot.replace(ptr::null_mut()));
+        assert!(
+            !observer.is_null(),
+            "hardware-device observer was not installed"
+        );
+        let hwdev_ref_count = unsafe { av_buffer_get_ref_count(observer) };
+        let input_handle_released = std::fs::remove_file(&path).is_ok();
+        let packet_was_released = packet_released.load(Ordering::SeqCst);
+        let frame_was_released = frame_released.load(Ordering::SeqCst);
+        unsafe { av_buffer_unref(&mut observer) };
+
+        println!(
+            "RELEASE_OBSERVATION:fmt_handle={input_handle_released}:hwdev_refs={hwdev_ref_count}:packet_callback={packet_was_released}:frame_callback={frame_was_released}"
+        );
+        assert!(
+            input_handle_released
+                && hwdev_ref_count == 1
+                && packet_was_released
+                && frame_was_released,
+            "UNRELEASED_RESOURCE fmt_handle={input_handle_released} hwdev_refs={hwdev_ref_count} packet_callback={packet_was_released} frame_callback={frame_was_released}"
+        );
+
+        let unsupported_path = encode_color(
+            &["-c:v", "libaom-av1", "-cpu-used", "8"],
+            "decode-frame-n-unsupported.webm",
+        );
+        let unsupported_error = decode_frame_error(&unsupported_path, &gpu, 0);
+        let unsupported_message = format!("{unsupported_error:#}");
+        assert!(
+            unsupported_message
+                .contains(&format!("codec_id {}", AVCodecID::AV_CODEC_ID_AV1 as i32)),
+            "unsupported codec id was not preserved before format teardown: {unsupported_message}"
+        );
+        std::fs::remove_file(&unsupported_path).expect("unsupported input handle released");
+
+        for (fault, filename, expected) in [
+            (
+                DecodeFrameTestFault::PacketAllocNull,
+                "decode-frame-n-packet-null.mp4",
+                "av_packet_alloc",
+            ),
+            (
+                DecodeFrameTestFault::FrameAllocNull,
+                "decode-frame-n-frame-null.mp4",
+                "av_frame_alloc",
+            ),
+            (
+                DecodeFrameTestFault::CloneNull,
+                "decode-frame-n-clone-null.mp4",
+                "av_frame_clone",
+            ),
+            (
+                DecodeFrameTestFault::EofSendError,
+                "decode-frame-n-eof-send.mp4",
+                "send_eof",
+            ),
+        ] {
+            let path = encode_color(&["-c:v", "libopenh264", "-b:v", "200k"], filename);
+            let frame_number = if fault == DecodeFrameTestFault::EofSendError {
+                u32::MAX
+            } else {
+                0
+            };
+            let error = {
+                let _fault = install_simple_decode_frame_fault(fault);
+                decode_frame_error(&path, &gpu, frame_number)
+            };
+            let message = format!("{error:#}");
+            assert!(message.contains(expected), "{fault:?}: {message}");
+            std::fs::remove_file(&path)
+                .unwrap_or_else(|error| panic!("{fault:?}: input handle leaked: {error}"));
+        }
+
+        let attach_path = encode_color(
+            &["-c:v", "libopenh264", "-b:v", "200k"],
+            "decode-frame-n-attach-ref-null.mp4",
+        );
+        let attach_fault =
+            install_simple_decode_frame_fault(DecodeFrameTestFault::AttachBufferRefNull);
+        let attach_error = decode_frame_error(&attach_path, &gpu, 0);
+        assert!(
+            format!("{attach_error:#}").contains("av_buffer_ref(hw_device_ctx)"),
+            "unexpected attach error: {attach_error:#}"
+        );
+        let mut attach_observer =
+            DECODE_FRAME_TEST_HWDEV_OBSERVER.with(|slot| slot.replace(ptr::null_mut()));
+        assert!(
+            !attach_observer.is_null(),
+            "attach observer was not installed"
+        );
+        let attach_refs = unsafe { av_buffer_get_ref_count(attach_observer) };
+        unsafe { av_buffer_unref(&mut attach_observer) };
+        drop(attach_fault);
+        std::fs::remove_file(&attach_path).expect("attach-ref-null input handle released");
+        assert_eq!(
+            attach_refs, 1,
+            "UNRELEASED_RESOURCE attach_d3d11va local hwdev refs={attach_refs}"
+        );
+        println!("FAILURE_PATH_ASSERTIONS_COMPLETED");
+    }
+
+    #[test]
+    fn decode_frame_n_returned_frame_keeps_its_buffers() {
+        let Some(gpu) = strict_hardware_gpu("decode_frame_n_returned_frame_keeps_its_buffers")
+        else {
+            return;
+        };
+        let path = encode_color(
+            &["-c:v", "libopenh264", "-b:v", "200k"],
+            "decode-frame-n-returned-frame.mp4",
+        );
+        let frame = decode_frame_n(path.to_str().expect("utf8 path"), &gpu, 0)
+            .unwrap_or_else(|error| panic!("decode first H.264 frame: {error:#}"));
+        assert!(!frame.0.is_null(), "returned frame pointer");
+        let source_buffer = unsafe { (*frame.0).buf[0] };
+        assert!(!source_buffer.is_null(), "returned frame buffer reference");
+        let mut observer = unsafe { av_buffer_ref(source_buffer) };
+        assert!(
+            !observer.is_null(),
+            "observer reference for returned frame buffer"
+        );
+        let refs_with_frame = unsafe { av_buffer_get_ref_count(observer) };
+        drop(frame);
+        let refs_after_frame_drop = unsafe { av_buffer_get_ref_count(observer) };
+        println!(
+            "RETURNED_FRAME_REFS:with_frame={refs_with_frame}:after_frame_drop={refs_after_frame_drop}"
+        );
+        assert_eq!(
+            refs_after_frame_drop + 1,
+            refs_with_frame,
+            "FrameGuard must own one independent AVBuffer reference"
+        );
+        assert!(
+            refs_after_frame_drop >= 1,
+            "observer reference must remain valid"
+        );
+        unsafe { av_buffer_unref(&mut observer) };
+        std::fs::remove_file(path).expect("returned-frame input handle released");
     }
 
     #[test]
@@ -2192,7 +2681,9 @@ mod tests {
 
     #[test]
     fn av1_webm_opens_on_software_path() {
-        let gpu = Gpu::create(false).expect("Hardware GPU");
+        let Some(gpu) = strict_hardware_gpu("av1_webm_opens_on_software_path") else {
+            return;
+        };
         assert_eq!(gpu.backend, Backend::Hardware);
         let path = make_legacy_av1_fixture("tiny-legacy.webm");
         let mut dec = unsafe { Decoder::open(path.to_str().expect("utf8 path"), &gpu) }
@@ -2215,11 +2706,16 @@ mod tests {
             observed_sec >= target_sec - time_base * 0.5,
             "legacy AV1 seek landed before its nonzero source target: target={target_sec:.3}s observed={observed_sec:.3}s"
         );
+        println!("CORE_ASSERTIONS_COMPLETED:av1_webm_opens_on_software_path");
     }
 
     #[test]
     fn av1_software_seek_preserves_the_nonzero_target_timestamp() {
-        let gpu = Gpu::create(false).expect("Hardware GPU");
+        let Some(gpu) =
+            strict_hardware_gpu("av1_software_seek_preserves_the_nonzero_target_timestamp")
+        else {
+            return;
+        };
         assert_eq!(gpu.backend, Backend::Hardware);
         let path = encode_color_for_duration(
             &[
@@ -2257,11 +2753,16 @@ mod tests {
             observed_sec >= target_sec - time_base * 0.5,
             "seek accepted a pre-target frame: target={target_sec:.3}s observed={observed_sec:.3}s"
         );
+        println!(
+            "CORE_ASSERTIONS_COMPLETED:av1_software_seek_preserves_the_nonzero_target_timestamp"
+        );
     }
 
     #[test]
     fn h264_opens_on_d3d11va() {
-        let gpu = Gpu::create(false).expect("Hardware GPU");
+        let Some(gpu) = strict_hardware_gpu("h264_opens_on_d3d11va") else {
+            return;
+        };
         assert_eq!(gpu.backend, Backend::Hardware);
         let path = encode_color(&["-c:v", "libopenh264", "-b:v", "200k"], "tiny.mp4");
         let mut dec = unsafe { Decoder::open(path.to_str().expect("utf8 path"), &gpu) }
@@ -2271,11 +2772,16 @@ mod tests {
             "H.264 on Hardware must keep D3D11VA"
         );
         unsafe { first_decoded_frame(&mut dec) };
+        println!("CORE_ASSERTIONS_COMPLETED:h264_opens_on_d3d11va");
     }
 
     #[test]
     fn current_frame_requires_pixels_and_recovers_after_eof_seek() {
-        let gpu = Gpu::create(false).expect("Hardware GPU");
+        let Some(gpu) =
+            strict_hardware_gpu("current_frame_requires_pixels_and_recovers_after_eof_seek")
+        else {
+            return;
+        };
         assert_eq!(gpu.backend, Backend::Hardware);
         let path = encode_color(
             &["-c:v", "libopenh264", "-b:v", "200k"],
@@ -2313,6 +2819,9 @@ mod tests {
             !dec.cur_frame().is_null(),
             "recovered frame must be presentable"
         );
+        println!(
+            "CORE_ASSERTIONS_COMPLETED:current_frame_requires_pixels_and_recovers_after_eof_seek"
+        );
     }
 
     /// Playhead crossing clips is `Decoder::open` of the next source on the
@@ -2320,7 +2829,9 @@ mod tests {
     /// decoder has been opened and dropped.
     #[test]
     fn switching_h264_then_av1_then_h264_stays_alive() {
-        let gpu = Gpu::create(false).expect("Hardware GPU");
+        let Some(gpu) = strict_hardware_gpu("switching_h264_then_av1_then_h264_stays_alive") else {
+            return;
+        };
         assert_eq!(gpu.backend, Backend::Hardware);
         let h264_path = encode_color(&["-c:v", "libopenh264", "-b:v", "200k"], "switch-h264.mp4");
         let av1_path = make_legacy_av1_fixture("switch-legacy-av1.webm");
@@ -2342,6 +2853,7 @@ mod tests {
             assert!(c.cpu.is_none(), "H.264 after AV1 must keep D3D11VA");
             first_decoded_frame(&mut c);
         }
+        println!("CORE_ASSERTIONS_COMPLETED:switching_h264_then_av1_then_h264_stays_alive");
     }
 }
 
