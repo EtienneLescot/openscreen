@@ -193,8 +193,8 @@
 	background: var(--border);
 }
 .iconBtn {
-	width: 32px;
-	height: 32px;
+	width: var(--topbar-icon);
+	height: var(--topbar-icon);
 	display: grid;
 	place-items: center;
 	border-radius: 9px;
@@ -302,6 +302,58 @@
 	box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+.langAnchor {
+	position: relative;
+	flex-shrink: 0;
+}
+.langBtn {
+	width: auto;
+	padding: 0 8px;
+	gap: 6px;
+	display: inline-flex;
+	align-items: center;
+}
+.langIcon {
+	flex-shrink: 0;
+}
+.langChevron {
+	color: var(--muted);
+	flex-shrink: 0;
+}
+.langMenu {
+	position: absolute;
+	top: calc(100% + 4px);
+	right: 0;
+	min-width: 160px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	box-shadow: var(--elev-pop);
+	padding: 4px;
+	z-index: 60;
+}
+.langMenuItem {
+	display: block;
+	width: 100%;
+	text-align: left;
+	padding: 6px 10px;
+	border: 0;
+	background: transparent;
+	color: var(--fg-2);
+	border-radius: var(--r-sm);
+	cursor: pointer;
+	font: 500 12px var(--font-body);
+	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+}
+.langMenuItem:hover {
+	background: var(--surface-2);
+	color: var(--fg);
+}
+.langMenuItem[data-active="true"] {
+	background: var(--accent-wash);
+	color: var(--accent);
+}
+
 /* One box for every short locale label — see --topbar-lang-label-w. Without it
    the language button resized between "EN", "PT-BR" and the CJK "简中", moving
    everything to its right. */
@@ -330,12 +382,8 @@
 	background: var(--surface-1);
 	border: 1px solid var(--border);
 	border-radius: 11px;
-	/* The only shrinkable item in the bar (everything else is flex-shrink: 0), so
-	   a verbose locale — fr "Enregistrement" is nearly twice "Médias" — narrows
-	   this control instead of shoving Export off the edge of a 1200px window. The
-	   columns stay equal to each other while it happens; only the labels clip. */
-	flex-shrink: 1;
-	min-width: 0;
+	flex-shrink: 0;
+	min-width: fit-content;
 }
 .modeSwitch button {
 	padding: 5px 14px;
@@ -360,6 +408,7 @@
 	grid-template-columns: minmax(0, 1fr);
 	place-items: center;
 	min-width: 0;
+	max-width: 140px;
 	overflow: hidden;
 }
 .modeSwitch button::before {
@@ -367,6 +416,10 @@
 	grid-area: label;
 	font-weight: 600;
 	visibility: hidden;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .modeLabel {
 	grid-area: label;
@@ -385,7 +438,7 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 7px;
-	height: 32px;
+	height: var(--topbar-icon);
 	padding: 0 14px;
 	border-radius: 9px;
 	background: var(--accent);
@@ -404,6 +457,113 @@
 .exportBtn:disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
+}
+
+/* ─── Responsive topbar rules ─── */
+@media (max-width: 1240px) {
+	.topbar {
+		--topbar-gap: 10px;
+		--topbar-project-w: 130px;
+	}
+	.modeSwitch button {
+		padding: 4px 10px;
+	}
+}
+
+@media (max-width: 1080px) {
+	.topbar {
+		--topbar-gap: 8px;
+		--topbar-icon: 30px;
+		--topbar-project-w: 100px;
+		padding-left: calc(12px + var(--titlebar-inset-left, 0px));
+		padding-right: calc(
+			12px + 100vw - env(titlebar-area-width, 100vw) - env(titlebar-area-x, 0px)
+		);
+	}
+	.brand .name {
+		display: none;
+	}
+	.brandBtn {
+		margin: 0;
+		padding: 4px;
+	}
+	.langBtn {
+		padding: 0 5px;
+		gap: 4px;
+	}
+	.langChevron {
+		display: none;
+	}
+	.modeSwitch button {
+		padding: 4px 8px;
+		font-size: 11px;
+		max-width: 90px;
+	}
+	.exportBtn {
+		padding: 0 10px;
+		gap: 5px;
+		font-size: 12px;
+	}
+}
+
+@media (max-width: 960px) {
+	.topbar {
+		--topbar-gap: 6px;
+		--topbar-project-w: 80px;
+		padding-left: calc(8px + var(--titlebar-inset-left, 0px));
+		padding-right: calc(
+			8px + 100vw - env(titlebar-area-width, 100vw) - env(titlebar-area-x, 0px)
+		);
+	}
+	.sep {
+		display: none;
+	}
+	.topbarLead {
+		width: var(--topbar-icon);
+		gap: 0;
+	}
+	.savedLabel {
+		display: none;
+	}
+	.saved {
+		width: auto;
+	}
+	.savedState {
+		gap: 0;
+	}
+	.langIcon {
+		display: none;
+	}
+	.langShort {
+		width: auto;
+		font-size: 11px;
+	}
+}
+
+@media (max-width: 850px) {
+	.topbar {
+		--topbar-gap: 4px;
+		--topbar-project-w: 70px;
+	}
+	.modeSwitch button {
+		padding: 3px 6px;
+		font-size: 10.5px;
+		max-width: 70px;
+	}
+	.exportLabel {
+		display: none;
+	}
+	.exportBtn {
+		padding: 0;
+		width: var(--topbar-icon);
+		justify-content: center;
+	}
+	.langBtn {
+		padding: 0 4px;
+	}
+	.langShort {
+		font-size: 10px;
+	}
 }
 
 /* ─── BODY ─────────────────────────────────────────────────────────── */
