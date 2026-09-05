@@ -104,6 +104,7 @@ const appModule = (rel) => import(pathToFileURL(resolve(APP, rel)).href);
 
 const { formatSec, formatMs } = await appModule("src/lib/ai-edition/timeline/format.ts");
 const { effectiveZoomScale } = await appModule("src/lib/ai-edition/timeline/zoom-scale.ts");
+const { removedRawSpans } = await appModule("src/lib/ai-edition/timeline/programme-time.ts");
 const { buildClipSection, isSilenceWord, SILENCE_THRESHOLD_SEC } = await appModule(
 	"src/lib/ai-edition/timeline/aggregated-transcript.ts",
 );
@@ -332,8 +333,9 @@ const asset = doc.assets[0];
 const clip = doc.timeline.clips[0];
 const totalSec = asset.durationSec;
 const trims = doc.timeline.trimRanges;
+const removed = removedRawSpans(doc.timeline.clips, trims);
 
-const section = buildClipSection(clip, { ...doc.transcript, segments: [] }, asset, trims);
+const section = buildClipSection(clip, { ...doc.transcript, segments: [] }, asset, removed);
 
 const pct = (sec) => Number(((sec / totalSec) * 100).toFixed(4));
 
@@ -354,7 +356,7 @@ const WORDS = section.words.map((cw, i) => {
 		startSec: cw.word.startSec,
 		endSec: cw.word.endSec,
 		kept: cw.kept,
-		trimId: cw.trimId,
+		trimId: cw.trimIds[0] ?? null,
 	};
 });
 
