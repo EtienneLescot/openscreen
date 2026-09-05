@@ -3118,9 +3118,15 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 					decimals={1}
 					suffix=" dB"
 					onChange={(value) => setLiveGain(value)}
-					onCommit={() => {
-						if (liveGain !== null) void tl.setAudioTrackGain(track.id, liveGain);
-						setLiveGain(null);
+					onCommit={async () => {
+						if (liveGain !== null) {
+							const target = liveGain;
+							try {
+								await tl.setAudioTrackGain(track.id, target);
+							} finally {
+								setLiveGain((current) => (current === target ? null : current));
+							}
+						}
 					}}
 				/>
 				<SliderCell
@@ -3132,9 +3138,15 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 					decimals={0}
 					suffix=" ms"
 					onChange={setLiveFadeIn}
-					onCommit={() => {
-						if (liveFadeIn !== null) void tl.updateAudioTrack(track.id, { fadeInMs: liveFadeIn });
-						setLiveFadeIn(null);
+					onCommit={async () => {
+						if (liveFadeIn !== null) {
+							const target = liveFadeIn;
+							try {
+								await tl.updateAudioTrack(track.id, { fadeInMs: target });
+							} finally {
+								setLiveFadeIn((current) => (current === target ? null : current));
+							}
+						}
 					}}
 				/>
 				<SliderCell
@@ -3146,10 +3158,15 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 					decimals={0}
 					suffix=" ms"
 					onChange={setLiveFadeOut}
-					onCommit={() => {
-						if (liveFadeOut !== null)
-							void tl.updateAudioTrack(track.id, { fadeOutMs: liveFadeOut });
-						setLiveFadeOut(null);
+					onCommit={async () => {
+						if (liveFadeOut !== null) {
+							const target = liveFadeOut;
+							try {
+								await tl.updateAudioTrack(track.id, { fadeOutMs: target });
+							} finally {
+								setLiveFadeOut((current) => (current === target ? null : current));
+							}
+						}
 					}}
 				/>
 			</div>
