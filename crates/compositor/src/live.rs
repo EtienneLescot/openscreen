@@ -1096,6 +1096,22 @@ type PendingPrefetch = (usize, std::sync::mpsc::Receiver<Result<PrefetchedClip>>
 /// décodeurs ouvertes plus longtemps que nécessaire.
 const PREFETCH_LEAD_SEC: f64 = 0.75;
 
+/// Durée pendant laquelle la boucle continue de recomposer après un changement en pause, le
+/// temps qu'un effet asynchrone (segmentation webcam) livre son résultat. Généreuse : à
+/// l'échelle d'une pause, une demi-seconde de recomposes ne coûte rien, alors qu'une fenêtre
+/// trop courte laisse l'effet invisible sur une machine lente — exactement le bug d'origine.
+const SETTLE_WINDOW: Duration = Duration::from_millis(500);
+/// Cadence des recomposes dans cette fenêtre : celle de la segmentation (`SEGMENTATION_HZ`),
+/// pas celle de la boucle — recomposer à 250 Hz n'accélérerait pas une inférence limitée à 30 Hz.
+const SETTLE_STEP: Duration = Duration::from_millis(33);
+
+/// Faut-il recomposer alors que RIEN n'a changé ? Oui tant que la fenêtre de stabilisation
+/// court et que la cadence le permet. Extrait de la boucle pour être vérifiable sans GPU.
+fn should_settle(now: Instant, settle_until: Option<Instant>, last_settle: Instant) -> bool {
+    settle_until.is_some_and(|deadline| now < deadline)
+        && now.duration_since(last_settle) >= SETTLE_STEP
+}
+
 /// Démarre le préchargement du clip suivant sur un thread dédié dès qu'on entre dans la
 /// fenêtre `PREFETCH_LEAD_SEC` avant la fin du clip actif — pour que la bascule à la
 /// frontière (`advance_to_next_scene_clip`) trouve les décodeurs déjà ouverts et positionnés
@@ -1348,6 +1364,15 @@ unsafe fn render_thread(
     let mut last_preview_size: (u32, u32) = (0, 0);
     let mut last_ip: Option<InspectorParams> = None;
     let mut last_smoothing: f32 = -1.0; // force la 1re application (0.0 est une valeur valide)
+    // Fenêtre de stabilisation après un changement EN PAUSE. Un seul recompose ne suffit pas
+    // quand l'effet demandé est asynchrone : la segmentation webcam (détourage / flou / fond
+    // personnalisé) démarre son worker au 1er compose, ne SOUMET la frame qu'au 2e et ne
+    // téléverse le masque qu'au 3e — d'où l'effet qui n'apparaissait qu'au scrub suivant, le
+    // scrub étant la seule chose qui recomposait encore.
+    // ponytail: fenêtre fixe plutôt qu'un vrai signal « masque en attente » exposé par les
+    // trois compositeurs ; à remplacer si une machine met plus que ça à inférer.
+    let mut settle_until: Option<Instant> = None;
+    let mut last_settle = Instant::now();
     // La vue live est TOUJOURS pilotée par la scène de l'app. Tant qu'aucune scène n'a été
     // appliquée, on refuse de jouer le layout fixture (POC) : un fallback fixture ne ferait que
     // MASQUER un scene-push cassé. On attend la scène avant de produire le 1er frame.
@@ -1687,6 +1712,15 @@ unsafe fn render_thread(
             }
         } else if first || ip_changed || scene_changed || clip_changed || resized {
             // pause : recompose la frame courante (param / scène / clip / résolution changés).
+            settle_until = Some(now + SETTLE_WINDOW);
+            last_settle = now;
+            let _ = player.recompose(&comp, &cfg);
+            stepped = true;
+        } else if should_settle(now, settle_until, last_settle) {
+            // Rien n'a changé, mais un masque de segmentation peut encore être en vol : on
+            // recompose à la cadence de la segmentation (pas à celle de la boucle) jusqu'à ce
+            // que la fenêtre expire.
+            last_settle = now;
             let _ = player.recompose(&comp, &cfg);
             stepped = true;
         }
@@ -1905,6 +1939,31 @@ pub fn run_standalone(_screen: &str, _webcam: &str, _cursor_json: &str) -> anyho
 
 #[cfg(test)]
 mod tests {
+    use super::{should_settle, SETTLE_STEP, SETTLE_WINDOW};
+    use std::time::Instant;
+
+    /// Le bug d'origine : en pause, un seul recompose par changement, donc le masque de
+    /// segmentation (asynchrone, 3 composes de latence) n'arrivait jamais avant un scrub.
+    #[test]
+    fn settle_recomposes_within_the_window_at_the_segmentation_rate() {
+        let t0 = Instant::now();
+        let deadline = Some(t0 + SETTLE_WINDOW);
+
+        assert!(!should_settle(t0, None, t0), "aucune fenêtre ouverte : rien à faire");
+        assert!(
+            !should_settle(t0 + SETTLE_STEP / 2, deadline, t0),
+            "dans la fenêtre mais trop tôt : on ne recompose pas à la cadence de la boucle",
+        );
+        assert!(
+            should_settle(t0 + SETTLE_STEP, deadline, t0),
+            "dans la fenêtre et la cadence est due : c'est le tour qui livre le masque",
+        );
+        assert!(
+            !should_settle(t0 + SETTLE_WINDOW, deadline, t0),
+            "fenêtre expirée : on retombe en pause inerte plutôt que de recomposer sans fin",
+        );
+    }
+
     use super::*;
 
     fn multiclip_scene() -> Scene {
