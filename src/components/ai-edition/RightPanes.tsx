@@ -2845,7 +2845,7 @@ export function LayoutPane() {
 									style={{
 										flexDirection: "column",
 										gap: 4,
-										padding: 8,
+										padding: "8px 4px",
 										display: "flex",
 										alignItems: "center",
 										// Sans `minWidth: 0` le bouton garde son minimum de
@@ -2871,7 +2871,9 @@ export function LayoutPane() {
 									>
 										{shape.icon}
 									</svg>
-									<span style={{ font: "500 11px/1 var(--font-body)" }}>{ts(shape.labelKey)}</span>
+									<span title={ts(shape.labelKey)} style={{ font: "500 11px/1 var(--font-body)" }}>
+										{ts(shape.labelKey)}
+									</span>
 								</button>
 							);
 						})}
@@ -2926,7 +2928,7 @@ export function LayoutPane() {
 									style={{
 										flexDirection: "column",
 										gap: 4,
-										padding: 8,
+										padding: "8px 4px",
 										display: "flex",
 										alignItems: "center",
 										minWidth: 0,
@@ -2946,7 +2948,9 @@ export function LayoutPane() {
 									>
 										{mode.icon}
 									</svg>
-									<span style={{ font: "500 11px/1 var(--font-body)" }}>{ts(mode.labelKey)}</span>
+									<span title={ts(mode.labelKey)} style={{ font: "500 11px/1 var(--font-body)" }}>
+										{ts(mode.labelKey)}
+									</span>
 								</button>
 							);
 						})}

@@ -1202,6 +1202,17 @@
 	border-color: var(--brand);
 	box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand), transparent 75%);
 }
+/* Same cell, reused for the icon+label rows (camera shape, camera background).
+   `minmax(0, 1fr)` stopped a long label from pushing the grid, but the text still
+   spilled over the button's own border and crowded its neighbour -- « Personnalisé »,
+   « Пользовательский », "Personalizzato" in a 61 px track. Clip it here, once, for
+   every labelled cell instead of hoping each locale stays short. */
+.cursorCell > span {
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 
 /* ─── chat strip + input ───────────────────────────────────────── */
 .chatStrip {
