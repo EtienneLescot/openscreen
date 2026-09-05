@@ -55,11 +55,24 @@ describe("AudioTrackPane reset button", () => {
 			updateAudioTrack,
 		} as unknown as TimelineApi;
 
-		render(
+		const { rerender } = render(
 			<I18nProvider>
 				<AudioTrackPane tl={tl} />
 			</I18nProvider>,
 		);
+
+		const gainSlider = screen.getByRole("slider", { name: "Output level" });
+		const fadeInSlider = screen.getByRole("slider", { name: "Fade in" });
+		const fadeOutSlider = screen.getByRole("slider", { name: "Fade out" });
+
+		// Draft in-progress slider changes without committing
+		fireEvent.change(gainSlider, { target: { value: "3" } });
+		fireEvent.change(fadeInSlider, { target: { value: "1500" } });
+		fireEvent.change(fadeOutSlider, { target: { value: "2000" } });
+
+		expect(gainSlider).toHaveValue("3");
+		expect(fadeInSlider).toHaveValue("1500");
+		expect(fadeOutSlider).toHaveValue("2000");
 
 		const resetBtn = screen.getByRole("button", { name: /reset/i });
 		fireEvent.click(resetBtn);
@@ -72,6 +85,30 @@ describe("AudioTrackPane reset button", () => {
 			muted: false,
 			loop: false,
 		});
+
+		// Draft values are cleared; inputs no longer display the drafted values
+		expect(gainSlider).not.toHaveValue("3");
+		expect(fadeInSlider).not.toHaveValue("1500");
+		expect(fadeOutSlider).not.toHaveValue("2000");
+
+		// When re-rendered with the reset track state, sliders show zeroed defaults
+		const resetTrack: AxcutAudioTrack = {
+			...mockTrack,
+			gainDb: 0,
+			fadeInMs: 0,
+			fadeOutMs: 0,
+			muted: false,
+			loop: false,
+		};
+		rerender(
+			<I18nProvider>
+				<AudioTrackPane tl={{ ...tl, audioTracks: [resetTrack] } as unknown as TimelineApi} />
+			</I18nProvider>,
+		);
+
+		expect(gainSlider).toHaveValue("0");
+		expect(fadeInSlider).toHaveValue("0");
+		expect(fadeOutSlider).toHaveValue("0");
 	});
 
 	it("resets all track parameters under French locale", () => {
@@ -111,11 +148,23 @@ describe("AudioTrackPane reset button", () => {
 			updateAudioTrack,
 		} as unknown as TimelineApi;
 
-		render(
+		const { rerender } = render(
 			<I18nProvider>
 				<AudioTrackPane tl={tl} />
 			</I18nProvider>,
 		);
+
+		const gainSlider = screen.getByRole("slider", { name: /niveau de sortie/i });
+		const fadeInSlider = screen.getByRole("slider", { name: /fondu d['’]entrée/i });
+		const fadeOutSlider = screen.getByRole("slider", { name: /fondu de sortie/i });
+
+		fireEvent.change(gainSlider, { target: { value: "-12" } });
+		fireEvent.change(fadeInSlider, { target: { value: "800" } });
+		fireEvent.change(fadeOutSlider, { target: { value: "1200" } });
+
+		expect(gainSlider).toHaveValue("-12");
+		expect(fadeInSlider).toHaveValue("800");
+		expect(fadeOutSlider).toHaveValue("1200");
 
 		// French label: "Réinitialiser l’audio"
 		const resetBtn = screen.getByRole("button", { name: /réinitialiser l’audio/i });
@@ -129,5 +178,27 @@ describe("AudioTrackPane reset button", () => {
 			muted: false,
 			loop: false,
 		});
+
+		expect(gainSlider).not.toHaveValue("-12");
+		expect(fadeInSlider).not.toHaveValue("800");
+		expect(fadeOutSlider).not.toHaveValue("1200");
+
+		const resetTrack: AxcutAudioTrack = {
+			...mockTrack,
+			gainDb: 0,
+			fadeInMs: 0,
+			fadeOutMs: 0,
+			muted: false,
+			loop: false,
+		};
+		rerender(
+			<I18nProvider>
+				<AudioTrackPane tl={{ ...tl, audioTracks: [resetTrack] } as unknown as TimelineApi} />
+			</I18nProvider>,
+		);
+
+		expect(gainSlider).toHaveValue("0");
+		expect(fadeInSlider).toHaveValue("0");
+		expect(fadeOutSlider).toHaveValue("0");
 	});
 });

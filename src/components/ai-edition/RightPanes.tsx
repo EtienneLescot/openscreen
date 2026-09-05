@@ -3039,6 +3039,13 @@ type TimelineApi = ReturnType<typeof useTimeline>;
 // anyway (`resolveFadeSecs` reduces one that does not fit).
 const FADE_MAX_MS = 5000;
 
+/**
+ * Per-track controls for the selected imported audio track (issue #350). Shown by
+ * the inspector in place of the facet when an audio track is selected (see
+ * FloatingInspector). The header is the generic "Audio track"; the body leads
+ * with the file name, then the volume, fade in/out, mute, and loop controls,
+ * with actions to reset all parameters or delete the track.
+ */
 export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 	const ts = useScopedT("settings");
 	const trackId = tl.selectedAudioTrackId;
