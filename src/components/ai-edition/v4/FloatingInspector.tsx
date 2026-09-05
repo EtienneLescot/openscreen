@@ -1,8 +1,8 @@
 import {
 	AudioLines,
+	Camera,
 	ChevronRight,
 	FileText,
-	Layout as LayoutIcon,
 	Maximize2,
 	MousePointer2,
 	Pencil,
@@ -63,7 +63,7 @@ const FACETS: Array<{ id: Facet; labelKey: string; icon: typeof SlidersHorizonta
 	// Background is a SECTION of this facet now, not a facet of its own — see
 	// VideoEffectsPane for why the split had nowhere to sit.
 	{ id: "effects", labelKey: "effects.title", icon: SlidersHorizontal },
-	{ id: "layout", labelKey: "layout.title", icon: LayoutIcon },
+	{ id: "layout", labelKey: "layout.title", icon: Camera },
 	{ id: "audio", labelKey: "audio.title", icon: AudioLines },
 	{ id: "cursor", labelKey: "cursor.title", icon: MousePointer2 },
 	{ id: "transcript", labelKey: "facets.transcript", icon: FileText },
@@ -117,7 +117,7 @@ export function FloatingInspector({
 	const selection = tl.selection;
 	// An imported audio track is selected (issue #350) — like a region selection it
 	// takes over the inspector body with its own pane (see AudioTrackPane).
-	const audioTrackSelected = tl.selectedAudioTrackId !== null;
+	const audioTrackSelected = Boolean(tl.selectedAudioTrackId);
 	const effectiveOpen = open || selection !== null || audioTrackSelected;
 	return (
 		<div className={styles.inspectorWrap}>
@@ -126,7 +126,7 @@ export function FloatingInspector({
 					{selection ? (
 						<SelectionPane tl={tl} onClose={() => tl.clearSelection()} />
 					) : audioTrackSelected ? (
-						<AudioTrackPane tl={tl} />
+						<AudioTrackPane tl={tl} onClose={() => tl.clearSelection()} />
 					) : (
 						<FacetBody facet={facet} onCollapse={onToggleOpen} transcriptProps={transcriptProps} />
 					)}
@@ -272,19 +272,13 @@ function paneHeader(icon: React.ReactNode, title: string, onClose: () => void, c
 			</h2>
 			<button
 				type="button"
+				className={styles.iconBtn}
 				title={closeLabel}
 				aria-label={closeLabel}
 				onClick={onClose}
 				style={{
-					width: 26,
-					height: 26,
-					display: "grid",
-					placeItems: "center",
-					borderRadius: 8,
-					color: "var(--muted)",
-					background: "transparent",
-					border: 0,
-					cursor: "pointer",
+					width: 28,
+					height: 28,
 				}}
 			>
 				<X size={15} />

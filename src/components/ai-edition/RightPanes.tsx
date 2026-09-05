@@ -7,11 +7,11 @@
 
 import {
 	AudioLines,
+	Camera,
 	Captions as CaptionsIcon,
 	ChevronDown,
 	FileText,
 	HelpCircle,
-	Layout as LayoutIcon,
 	Loader2,
 	Mic,
 	MousePointerClick,
@@ -20,6 +20,7 @@ import {
 	Trash2,
 	Undo2,
 	Video,
+	X,
 } from "lucide-react";
 
 import {
@@ -119,16 +120,29 @@ interface PaneProps {
 	// A control that belongs to the pane as a whole rather than to any one of its
 	// rows, sitting left of the Help button.
 	actions?: ReactNode;
+	onClose?: () => void;
 	children: ReactNode;
 }
 
-function Pane({ title, icon, helpText, actions, children }: PaneProps) {
+function Pane({ title, icon, helpText, actions, onClose, children }: PaneProps) {
 	const ts = useScopedT("settings");
+	const tc = useScopedT("common");
 	const helpLabel = ts("panes.help");
 	const [helpOpen, setHelpOpen] = useState(false);
 	return (
 		<div className={`${styles.pane} ${styles.isActive}`}>
-			<header className={styles.paneHead} style={{ position: "relative" }}>
+			<header
+				className={styles.paneHead}
+				style={{
+					position: "relative",
+					...(onClose ? { paddingRight: "var(--sp-4)" } : {}),
+				}}
+			>
+				{icon ? (
+					<span style={{ display: "inline-flex", alignItems: "center", color: "var(--muted)" }}>
+						{icon}
+					</span>
+				) : null}
 				<h2>{title}</h2>
 				<span style={{ marginLeft: "auto", display: "inline-flex", gap: 4, alignItems: "center" }}>
 					{actions}
@@ -142,8 +156,18 @@ function Pane({ title, icon, helpText, actions, children }: PaneProps) {
 					>
 						<HelpCircle size={14} />
 					</button>
+					{onClose ? (
+						<button
+							type="button"
+							className={styles.iconBtn}
+							title={tc("actions.close")}
+							aria-label={tc("actions.close")}
+							onClick={onClose}
+						>
+							<X size={14} />
+						</button>
+					) : null}
 				</span>
-				<span style={{ display: "none" }}>{icon}</span>
 				{helpOpen ? (
 					<div
 						role="note"
@@ -796,8 +820,17 @@ function CaptionSettingsButton() {
 					{ts("facets.captions")}
 				</button>
 			</PopoverTrigger>
-			<PopoverContent align="start" style={{ width: 340, maxHeight: 520, overflowY: "auto" }}>
-				<CaptionsPane />
+			<PopoverContent
+				align="end"
+				side="bottom"
+				sideOffset={8}
+				collisionPadding={16}
+				animated={false}
+				className="w-auto border-0 bg-transparent p-0 shadow-none z-50"
+			>
+				<div className={styles.captionsPopover}>
+					<CaptionsPane onClose={() => setOpen(false)} />
+				</div>
 			</PopoverContent>
 		</Popover>
 	);
@@ -2741,7 +2774,7 @@ export function LayoutPane() {
 		setLive({ webcamCropPan: pan, webcamCropRegion: cropRegionFor(webcamCrop.width, pan) });
 	};
 	return (
-		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={helpText}>
+		<Pane title={ts("layout.title")} icon={<Camera size={14} />} helpText={helpText}>
 			<div className={styles.sectionLabel}>{ts("layout.preset")}</div>
 			<div className={styles.field}>
 				<label htmlFor="layout-preset">{ts("layout.preset")}</label>
@@ -2847,31 +2880,23 @@ export function LayoutPane() {
 			) : null}
 			{isPip ? (
 				<div className={styles.sliderGrid}>
-					<div className={`${styles.sliderCell} ${styles.full}`}>
-						<div className={styles.head}>
-							<span className={styles.label}>{ts("layout.webcamSize")}</span>
-							<span className={styles.val}>{Math.round(settings.webcamSizePreset)}%</span>
-						</div>
-						<input
-							aria-label={ts("layout.webcamSize")}
-							type="range"
-							min={10}
-							max={50}
-							step={1}
-							defaultValue={settings.webcamSizePreset}
-							disabled={layoutControlsDisabled}
-							onChange={(e) => {
-								const next = Number(e.target.value);
-								setLive({ webcamSizePreset: next });
-								if (isNativeCompositorActive()) {
-									setNativeParam("webcamSize", next / NATIVE_WEBCAM_BASE_PCT);
-								}
-							}}
-							onMouseUp={() => void commit()}
-							onTouchEnd={() => void commit()}
-							onKeyUp={() => void commit()}
-						/>
-					</div>
+					<SliderCell
+						full
+						label={ts("layout.webcamSize")}
+						value={settings.webcamSizePreset}
+						min={10}
+						max={50}
+						step={1}
+						suffix="%"
+						disabled={layoutControlsDisabled}
+						onChange={(next) => {
+							setLive({ webcamSizePreset: next });
+							if (isNativeCompositorActive()) {
+								setNativeParam("webcamSize", next / NATIVE_WEBCAM_BASE_PCT);
+							}
+						}}
+						onCommit={() => void commit()}
+					/>
 				</div>
 			) : null}
 			{/* Le seul contrôle de l'éditeur dont l'effet dépend d'un binaire optionnel : sans la
@@ -3046,7 +3071,7 @@ const FADE_MAX_MS = 5000;
  * with the file name, then the volume, fade in/out, mute, and loop controls,
  * with actions to reset all parameters or delete the track.
  */
-export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
+export function AudioTrackPane({ tl, onClose }: { tl: TimelineApi; onClose?: () => void }) {
 	const ts = useScopedT("settings");
 	const trackId = tl.selectedAudioTrackId;
 	// The document stores one clip-anchored fragment per clip the track covers;
@@ -3093,6 +3118,7 @@ export function AudioTrackPane({ tl }: { tl: TimelineApi }) {
 			title={ts("audioTrack.defaultLabel")}
 			icon={<Music size={14} />}
 			helpText={ts("audioTrack.help")}
+			onClose={onClose ?? (() => tl.clearSelection())}
 		>
 			<div
 				title={fileName}
@@ -3441,6 +3467,7 @@ export function SliderCell({
 	onChange,
 	onCommit,
 	showValue = true,
+	full = false,
 }: {
 	label: string;
 	value: number;
@@ -3455,9 +3482,11 @@ export function SliderCell({
 	/** À passer `false` quand le libellé porte déjà la valeur (certaines chaînes i18n
 	 *  l'interpolent), sans quoi elle s'affiche deux fois. */
 	showValue?: boolean;
+	full?: boolean;
 }) {
+	const pct = Math.max(0, Math.min(100, max > min ? ((value - min) / (max - min)) * 100 : 0));
 	return (
-		<div className={styles.sliderCell}>
+		<div className={`${styles.sliderCell}${full ? ` ${styles.full}` : ""}`}>
 			<div className={styles.head}>
 				<span className={styles.label}>{label}</span>
 				{showValue ? (
@@ -3479,6 +3508,7 @@ export function SliderCell({
 				step={step}
 				value={value}
 				disabled={disabled}
+				style={{ "--slider-pct": `${pct}%` } as CSSProperties}
 				onChange={(e) => onChange(Number(e.target.value))}
 				onMouseUp={onCommit}
 				onTouchEnd={onCommit}

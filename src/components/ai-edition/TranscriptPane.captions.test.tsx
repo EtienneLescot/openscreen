@@ -104,4 +104,16 @@ describe("caption settings on the transcript tab", () => {
 		// mounted whole rather than reimplemented into the popover.
 		expect(await screen.findByText("Show captions")).toBeInTheDocument();
 	});
+
+	it("renders a close button and closes the popover when clicked", async () => {
+		const user = userEvent.setup();
+		mount([TRANSCRIPT]);
+		await user.click(screen.getByRole("button", { name: "Captions" }));
+		expect(await screen.findByText("Show captions")).toBeInTheDocument();
+
+		const closeBtn = screen.getByRole("button", { name: "Close" });
+		expect(closeBtn).toBeInTheDocument();
+		await user.click(closeBtn);
+		expect(screen.queryByText("Show captions")).not.toBeInTheDocument();
+	});
 });
