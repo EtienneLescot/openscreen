@@ -1105,6 +1105,13 @@ const SETTLE_WINDOW: Duration = Duration::from_millis(500);
 /// pas celle de la boucle — recomposer à 250 Hz n'accélérerait pas une inférence limitée à 30 Hz.
 const SETTLE_STEP: Duration = Duration::from_millis(33);
 
+/// Ouvre (ou rouvre) la fenêtre de stabilisation. Les deux appelants — changement en pause et
+/// seek en pause — doivent poser la MÊME paire : un `last_settle` oublié ferait recomposer à la
+/// cadence de la boucle au lieu de celle de la segmentation.
+fn open_settle_window(now: Instant) -> (Option<Instant>, Instant) {
+    (Some(now + SETTLE_WINDOW), now)
+}
+
 /// Faut-il recomposer alors que RIEN n'a changé ? Oui tant que la fenêtre de stabilisation
 /// court et que la cadence le permet. Extrait de la boucle pour être vérifiable sans GPU.
 fn should_settle(now: Instant, settle_until: Option<Instant>, last_settle: Instant) -> bool {
@@ -1600,6 +1607,11 @@ unsafe fn render_thread(
         if let Some(target) = requested {
             if player.present_frame(&comp, &cfg, target)? {
                 stepped = true;
+                // Un seek en pause compose UNE fois, exactement comme un changement de param :
+                // la frame webcam a changé, donc son masque aussi, et il arrivera deux composes
+                // plus tard. Sans cette fenêtre, le masque de la position PRÉCÉDENTE reste
+                // affiché jusqu'à ce qu'une autre action provoque un compose.
+                (settle_until, last_settle) = open_settle_window(now);
             }
             acc = 0.0; // resynchronise l'accumulateur de lecture libre après un seek
         } else if shared.playing.load(Ordering::Relaxed) {
@@ -1712,8 +1724,7 @@ unsafe fn render_thread(
             }
         } else if first || ip_changed || scene_changed || clip_changed || resized {
             // pause : recompose la frame courante (param / scène / clip / résolution changés).
-            settle_until = Some(now + SETTLE_WINDOW);
-            last_settle = now;
+            (settle_until, last_settle) = open_settle_window(now);
             let _ = player.recompose(&comp, &cfg);
             stepped = true;
         } else if should_settle(now, settle_until, last_settle) {
@@ -1939,7 +1950,7 @@ pub fn run_standalone(_screen: &str, _webcam: &str, _cursor_json: &str) -> anyho
 
 #[cfg(test)]
 mod tests {
-    use super::{should_settle, SETTLE_STEP, SETTLE_WINDOW};
+    use super::{open_settle_window, should_settle, SETTLE_STEP, SETTLE_WINDOW};
     use std::time::Instant;
 
     /// Le bug d'origine : en pause, un seul recompose par changement, donc le masque de
@@ -1962,6 +1973,19 @@ mod tests {
             !should_settle(t0 + SETTLE_WINDOW, deadline, t0),
             "fenêtre expirée : on retombe en pause inerte plutôt que de recomposer sans fin",
         );
+    }
+
+    /// Un seek en pause compose aussi UNE seule fois : la frame webcam a changé, son masque
+    /// arrive deux composes plus tard. Le chemin `present_frame` doit donc ouvrir la même
+    /// fenêtre que le chemin « un param a changé », sans recomposer immédiatement.
+    #[test]
+    fn a_paused_seek_opens_the_same_window() {
+        let t0 = Instant::now();
+        let (until, last) = open_settle_window(t0);
+
+        assert!(!should_settle(t0, until, last), "pas de recompose en boucle juste après le seek");
+        assert!(should_settle(t0 + SETTLE_STEP, until, last), "le tour suivant livre le masque");
+        assert!(!should_settle(t0 + SETTLE_WINDOW, until, last), "puis la fenêtre se referme");
     }
 
     use super::*;
