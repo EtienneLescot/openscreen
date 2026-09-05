@@ -576,6 +576,13 @@ The mask comes from the native compositor (ONNX Runtime + the vendored selfie-se
 - [ ] Confirm the tray or menu-bar item can refocus the HUD after it is hidden.
 - [ ] Confirm the HUD and notes window are excluded from captured video when content protection is enabled.
 - [ ] Confirm a physical webcam picture-in-picture records and plays back with the selected layout.
+- [ ] With webcam enabled, start a new recording and confirm the capture-safe floating self-view opens automatically; pause/resume must leave it open, while stop, cancel, restart teardown, camera loss, and HUD destruction must close it.
+- [ ] Disable **Auto-show floating self-view**, start another recording, and confirm it stays closed. Use the HUD's **Show self-view** control to open it, close it from macOS, then reopen it from the HUD. Verify keyboard focus and activation on the same control.
+- [ ] Drag and resize the self-view across all four corners, another Space, and a fullscreen app. Confirm the frameless window stays above ordinary windows and remains within its 240×135–640×360 bounds.
+- [ ] Record a full display at 60 fps over high-contrast content with both HUD and floating self-view visible. Move and resize the self-view during the take, extract frames from the saved file, and prove that neither OpenScreen window appears while the underlying content remains present. Do this final proof with content protection enabled and no testing override.
+- [ ] Repeat capture exclusion for a selected single window, and confirm source capture still starts even when full-display self-exclusion diagnostics are deliberately made unavailable.
+- [ ] Review the helper diagnostics for exclusion strategy, resolution counts, PIDs, bundle identifiers, and window IDs. Confirm they contain no window titles or captured content, and that an intentionally incomplete full-display exclusion fails before recording with localized UI copy.
+- [ ] Simulate secondary webcam-track termination and a rejected self-view camera request; confirm recording continues, all secondary tracks stop, and the failure is non-blocking. Physically disconnect the camera and move across displays when the hardware is available; otherwise mark those two checks skipped, not passed.
 - [ ] Export MP4 and GIF and confirm both files open in a native macOS media viewer.
 - [ ] Confirm closing and relaunching the packaged app does not leave an orphaned capture or editor window.
 - [ ] On the newest supported macOS, confirm the HUD and notes windows are visible on screen rather than blanked by content protection.

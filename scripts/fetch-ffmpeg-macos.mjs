@@ -23,6 +23,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { relocateMacFfmpegInstall } from "./macos-ffmpeg-relocation.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -181,6 +182,10 @@ if (fs.existsSync(path.join(DEST, "include"))) {
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-ffmpeg-"));
 const tarball = path.join(work, `ffmpeg-${VERSION}.tar.xz`);
+// FFmpeg writes the configure prefix into shell/make fragments without quoting
+// it. A normal checkout such as `Vibe coding/openscreen` therefore fails at the
+// final dylib link. The completed SDK is relocated to DEST after installation.
+const stagedDest = path.join(work, "install");
 
 downloadTarball(tarball);
 
@@ -193,7 +198,7 @@ console.log("Configuring (LGPL, shared)…");
 run(
 	"./configure",
 	[
-		`--prefix=${DEST}`,
+		`--prefix=${stagedDest}`,
 		"--enable-shared",
 		"--disable-static",
 		"--disable-doc",
@@ -214,6 +219,7 @@ run(
 		"--enable-videotoolbox",
 		"--enable-audiotoolbox",
 		"--disable-x86asm",
+		"--extra-ldflags=-Wl,-headerpad_max_install_names",
 		`--arch=${process.arch === "arm64" ? "arm64" : "x86_64"}`,
 		"--cc=clang",
 		// Both, not just cflags: the deployment target has to reach the link step too, or
@@ -228,6 +234,8 @@ console.log("Building…");
 const jobs = execFileSync("sysctl", ["-n", "hw.ncpu"], { encoding: "utf8" }).trim();
 run("make", ["-j", jobs], { cwd: src });
 run("make", ["install"], { cwd: src });
+
+relocateMacFfmpegInstall(stagedDest, DEST);
 
 if (!isLgpl(DEST)) {
 	fs.rmSync(DEST, { recursive: true, force: true });

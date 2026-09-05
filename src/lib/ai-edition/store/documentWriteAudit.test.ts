@@ -156,6 +156,9 @@ const DECLARED: WritePath[] = [
 	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
 	// The window is closing and the user answered "save".
 	w("src/components/ai-edition/NewEditorShell.tsx", "unsubSaveBeforeClose", "save", "gesture"),
+	// A fresh recorder hand-off adopts the captured display's native shape before
+	// the editor paints. It is project initialization, not a user edit.
+	w("src/components/ai-edition/recordingImport.ts", "importPendingRecording", "save", "automatic"),
 
 	// The agent's document. The optimistic write is not the edit — the save is, and
 	// it names the pre-agent document as what Ctrl+Z returns to.

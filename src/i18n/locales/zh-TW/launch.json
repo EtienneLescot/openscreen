@@ -52,6 +52,13 @@
 		"camera": "攝影機",
 		"cameraDevice": "攝影機裝置"
 	},
+	"selfView": {
+		"show": "顯示自拍畫面",
+		"hide": "隱藏自拍畫面",
+		"autoShow": "自動顯示浮動自拍畫面",
+		"autoShowHint": "開始錄製時開啟相機預覽",
+		"unavailable": "浮動自拍畫面無法使用"
+	},
 	"cursor": {
 		"useEditableCursor": "使用可編輯游標",
 		"useSystemCursor": "使用系統游標"

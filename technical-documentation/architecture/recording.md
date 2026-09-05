@@ -22,6 +22,8 @@ The HUD starts and controls a recording. The source selector chooses a display o
 
 Electron applies `setContentProtection(true)` to the HUD window (`electron/windows.ts:83`). This keeps the controller out of captures and also makes it invisible in screenshots. For a testing session only, `OPENSCREEN_DISABLE_CONTENT_PROTECTION=1` disables the protection; the code warns that the HUD then appears in captures. The tray icon is the reliable way to refocus OpenScreen or stop a recording when the click-through HUD is not convenient or is not visible.
 
+On macOS, the HUD can also open a floating webcam self-view. Native video PiP was tested first, but the saved-file proof on macOS 26 showed its special window inside a full-display ScreenCaptureKit recording even while the owning application was excluded. The shipped path is therefore a frameless, always-on-top BrowserWindow: 320×180 by default, 240×135 minimum, 640×360 maximum, resizable, and visible across Spaces and fullscreen apps. Main creates it hidden before capture so its native ID participates in self-exclusion; its renderer opens a separate low-resolution camera stream only after an authorized active HUD asks to show it, and stops every secondary track on hide, failure, or teardown. A self-view camera failure is non-blocking and never changes the recorder's own stream. The preference is intentionally an auto-show preference only: disabling it prevents the recording-start action, while the in-recording HUD button can still show or hide the self-view manually.
+
 ## Capture backends
 
 | Platform | Backend | Code | Produces |
@@ -32,6 +34,8 @@ Electron applies `setContentProtection(true)` to the HUD window (`electron/windo
 
 The division is an invariant: the native helper owns capture, timing, and encoding; Electron owns session orchestration, output-path selection, persistence, and editor handoff. When the Linux helper binary is absent, the recorder falls back to the Electron `getDisplayMedia` path, which is the one case where Electron still owns the media.
 
+Full-display macOS capture has an additional invariant: OpenScreen must prove that its own application is excluded before capture begins. Main injects its PID and the native IDs of current BrowserWindows; renderer requests cannot choose them. The helper enumerates off-Space shareable windows, resolves the PID to a ScreenCaptureKit application, expands that match to every running application entry with the same bundle identifier, and constructs `SCContentFilter(display:excludingApplications:exceptingWindows: [])`. The empty `exceptingWindows` array matters: those windows would be added back from an excluded app, not excluded again. A separate `excludingWindows` filter is allowed only when application resolution is unavailable and every requested native window ID resolves. If neither strategy is complete, full-display capture stops with `self-capture-exclusion-failed`; single-window capture continues to use `desktopIndependentWindow` and does not depend on self-exclusion.
+
 ## Helper contract
 
 A native session is a child process boundary. Electron starts the platform helper with one structured JSON request and sends runtime commands on stdin; `stop` finalizes the output. The helper emits newline-delimited JSON events on stdout. The shared shape contains `schemaVersion`, `recordingId`, a `source` (display or window and its bounds), `video`, `audio`, optional `webcam`, optional cursor mode, and `outputs` paths. The helper reports `ready`, `recording-started`, warnings, errors, and `recording-stopped` events. Windows accepts legacy textual start/stop messages during compatibility handling; the structured events are the reference contract.
@@ -41,7 +45,7 @@ Stopping is the part of that boundary that has broken repeatedly (issues #34, #1
 | Contract field or behavior | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | Schema | `schemaVersion: 2` | `schemaVersion: 1` | `schemaVersion: 1` |
-| Source identity | `sourceId`, `displayId`, optional `windowHandle` | `sourceId`, `displayId`, optional `windowId` | **None, and none is possible.** See below |
+| Source identity | `sourceId`, `displayId`, optional `windowHandle` | `sourceId`, `displayId`, optional `windowId`; main-injected exclusion PIDs/window IDs for full displays | **None, and none is possible.** See below |
 | Video | FPS, dimensions, bitrate | FPS, dimensions, bitrate, and `hideSystemCursor` | FPS and optional bitrate; dimensions come from what the compositor negotiates |
 | Audio | System loopback and selected microphone flags/device metadata | System audio and microphone flags/device metadata; microphone support is runtime-gated | System and microphone flags; the microphone is matched by PipeWire `node.description`, not by Chromium device id |
 | Webcam | Native Media Foundation first, exact Electron-resolved DirectShow fallback; muxed into primary MP4 by default | Electron sidecar attached to the session | Electron sidecar attached to the session |

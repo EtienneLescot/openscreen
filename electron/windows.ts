@@ -57,8 +57,8 @@ const CONTENT_PROTECTION_FORCED = process.env["OPENSCREEN_FORCE_CONTENT_PROTECTI
  * partly true regardless — ScreenCaptureKit ignores `sharingType`, so any
  * SCK-based recorder (including *ours*, see
  * `electron/native/screencapturekit/`) captures these windows anyway. The
- * durable fix is to exclude our own windows via `SCContentFilter`'s
- * `excludingWindows:`, which that helper currently passes as `[]`.
+ * durable fix is the helper's application-exclusion filter, with a fully
+ * resolved own-window exclusion filter as its fail-closed fallback.
  */
 const CONTENT_PROTECTION_BREAKS_DISPLAY = (() => {
 	if (process.platform !== "darwin") return false;
@@ -382,6 +382,77 @@ export function createHudOverlayWindow(): BrowserWindow {
 	} else {
 		win.loadFile(path.join(RENDERER_DIST, "index.html"), {
 			query: { windowType: "hud-overlay" },
+		});
+	}
+
+	return win;
+}
+
+/**
+ * Capture-safe macOS webcam self-view.
+ *
+ * This window is deliberately created while still hidden, before a display
+ * recording can start. ScreenCaptureKit can then resolve it as an ordinary
+ * OpenScreen BrowserWindow when the application-exclusion filter is built.
+ * Native video PiP cannot be used here: on macOS 26 its special window is
+ * visible in full-display recordings even when the owning application is
+ * excluded.
+ */
+export function createFloatingSelfViewWindow(): BrowserWindow {
+	const { workArea } = screen.getPrimaryDisplay();
+	const width = 320;
+	const height = 180;
+	const margin = 24;
+	const win = new BrowserWindow({
+		width,
+		height,
+		minWidth: 240,
+		minHeight: 135,
+		maxWidth: 640,
+		maxHeight: 360,
+		x: workArea.x + workArea.width - width - margin,
+		y: workArea.y + workArea.height - height - margin,
+		frame: false,
+		// Electron's macOS `panel` type adds the non-activating panel style mask.
+		// Unlike a normal hidden BrowserWindow, it is explicitly designed to float
+		// above fullscreen apps and appear on every Space. This window is macOS-only
+		// (the controller is created only in the Darwin boot path).
+		type: "panel",
+		backgroundColor: "#050608",
+		resizable: true,
+		movable: true,
+		fullscreenable: false,
+		alwaysOnTop: true,
+		skipTaskbar: true,
+		hasShadow: true,
+		show: false,
+		title: "OpenScreen self-view",
+		webPreferences: {
+			preload: path.join(__dirname, "preload.mjs"),
+			additionalArguments: [ASSET_BASE_URL_ARG],
+			nodeIntegration: false,
+			contextIsolation: true,
+			backgroundThrottling: false,
+		},
+	});
+
+	win.setAspectRatio(16 / 9);
+	applyContentProtection(win, "floating self-view");
+	if (process.platform === "darwin") {
+		// NSFloatingWindowLevel can still fall behind a maximized app or a native
+		// fullscreen Space. The self-view is an explicit recording control, so use
+		// Electron's documented fullscreen-safe level while recording and keep the
+		// all-Spaces behavior below. Capture safety comes from ScreenCaptureKit's
+		// application filter and content protection, not from the window level.
+		win.setAlwaysOnTop(true, "screen-saver", 1);
+		win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+	}
+
+	if (VITE_DEV_SERVER_URL) {
+		win.loadURL(VITE_DEV_SERVER_URL + "?windowType=floating-self-view");
+	} else {
+		win.loadFile(path.join(RENDERER_DIST, "index.html"), {
+			query: { windowType: "floating-self-view" },
 		});
 	}
 

@@ -45,6 +45,7 @@
 		"microphoneDenied": "マイクへのアクセスが拒否されました。音声なしで録画を続行します。",
 		"cameraDenied": "カメラのアクセスが拒否されました。ウェブカメラなしで録画を続行します。",
 		"permissionDenied": "録画の権限が拒否されました。画面録画を許可してください。",
+		"selfCaptureExclusionFailed": "OpenScreen 自身のウィンドウを全画面録画から安全に除外できなかったため、録画を開始しませんでした。",
 		"cameraDisconnected": "ウェブカメラが切断されました。",
 		"cameraNotFound": "カメラが見つかりません。",
 		"cameraCaptureUnavailable": "カメラを開けませんでした。カメラなしで録画します。",

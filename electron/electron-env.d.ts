@@ -87,6 +87,23 @@ interface Window {
 			accessibilityTrusted: boolean;
 			error?: string;
 		}>;
+		showFloatingSelfView: (deviceId?: string) => Promise<{
+			success: boolean;
+			error?: string;
+		}>;
+		hideFloatingSelfView: () => Promise<{ success: boolean; error?: string }>;
+		getFloatingSelfViewState: () => Promise<{ open: boolean }>;
+		onFloatingSelfViewStateChanged: (callback: (state: { open: boolean }) => void) => () => void;
+		onFloatingSelfViewCommand: (
+			callback: (command: { visible: boolean; requestId: number; deviceId?: string }) => void,
+		) => () => void;
+		reportFloatingSelfViewReady: (
+			requestId: number,
+		) => Promise<{ success: boolean; error?: string }>;
+		reportFloatingSelfViewFailed: (
+			requestId: number,
+		) => Promise<{ success: boolean; error?: string }>;
+		closeFloatingSelfViewWindow: () => Promise<{ success: boolean; error?: string }>;
 		assetBaseUrl: string;
 		storeRecordedVideo: (
 			videoData: ArrayBuffer,

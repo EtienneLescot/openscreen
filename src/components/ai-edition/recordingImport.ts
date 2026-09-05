@@ -14,7 +14,12 @@
 // derived `currentVideoPath`); the only renderer that still needs the session
 // after this point is the CLI runner, which lives in its own process.
 
+import { toFileUrl } from "@/components/video-editor/projectPersistence";
+import { replaceTimeline as replaceTimelineOp } from "@/lib/ai-edition/document/timeline";
+import { patchEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { probeVideoDimensions, probeVideoDuration } from "@/lib/ai-edition/timeline/duration";
+import { toAspectRatioToken } from "@/utils/aspectRatioUtils";
 
 /**
  * Imports the recording the HUD handed over into a new project, and consumes the
@@ -35,28 +40,58 @@ export async function importPendingRecording(): Promise<boolean> {
 	const label = screenPath.split(/[\\/]/).pop() || "Recording";
 	await useProjectStore.getState().createProject(`Recording ${new Date().toLocaleString()}`);
 	await useProjectStore.getState().addAsset(screenPath, label);
+
+	// A Mac display is commonly not 16:9 (the current built-in panel records at
+	// 2940×1912). Starting every recording project at 16:9 therefore adds wide
+	// side bars before the user's intentional 8% padding is applied, making the
+	// padding look different horizontally and vertically. New recording projects
+	// should start in the recording's own shape; existing projects retain their
+	// stored format. Probe before the editor paints when possible, and keep the
+	// dynamic `native` token as the safe fallback until normal metadata probing
+	// fills the asset dimensions.
+	const importedDocument = useProjectStore.getState().document;
+	if (importedDocument) {
+		const sourceUrl = toFileUrl(screenPath);
+		const [dimensions, durationSec] = await Promise.all([
+			probeVideoDimensions(sourceUrl),
+			probeVideoDuration(sourceUrl),
+		]);
+		const nativeAspect = dimensions
+			? toAspectRatioToken(dimensions.width, dimensions.height)
+			: null;
+		let framedDocument = patchEditorSettings(importedDocument, {
+			aspectRatio: nativeAspect ?? "native",
+		});
+
+		// The import already has the source mounted for metadata probing, so use
+		// that result to seed the timeline in the same atomic save. Waiting for a
+		// later preview `loadedmetadata` event can strand the editor at 0:00 with
+		// "No Webcam" even though both recording files are healthy. A 60-second
+		// placeholder preserves the existing WebM fallback and is corrected by the
+		// normal metadata callback when the real duration becomes available.
+		if (framedDocument.timeline.clips.length === 0 && framedDocument.assets.length > 0) {
+			const knownDuration = durationSec ?? 60;
+			const primaryAssetId = framedDocument.project.primaryAssetId ?? framedDocument.assets[0]?.id;
+			const withDuration = primaryAssetId
+				? {
+						...framedDocument,
+						assets: framedDocument.assets.map((asset) =>
+							asset.id === primaryAssetId ? { ...asset, durationSec: knownDuration } : asset,
+						),
+					}
+				: framedDocument;
+			framedDocument = replaceTimelineOp(
+				withDuration,
+				[{ startSec: 0, endSec: knownDuration }],
+				"Auto-imported recording",
+			);
+		}
+		const saved = await useProjectStore.getState().saveDocument(framedDocument, { history: false });
+		if (!saved) throw new Error("Could not save the recording's native frame shape");
+	}
 	// Consumed: the recording now lives in a project. Cleared here rather than
 	// after the timeline seed below so a failure down there can't hand the same
 	// recording to the next editor window.
 	await api.setCurrentRecordingSession(null);
-
-	// ponytail: MediaRecorder WebMs ship with duration = NaN until
-	// fix-webm-duration patches the EBML header; until that flows through the
-	// asset, drop a default 60s clip into the timeline so the editor isn't stuck
-	// on "No clips yet" the moment the user lands in the project. Real duration
-	// overwrites this when handleLoadedMetadata fires with a finite value.
-	const doc = useProjectStore.getState().document;
-	if (doc && doc.timeline.clips.length === 0 && doc.assets.length > 0) {
-		// `history: false`. Nothing here is an edit: the user finished a recording and the
-		// editor built them a project around it, unattended, on mount. Recording it left a
-		// brand-new project sitting at `past.length === 1` before the user had touched
-		// anything, so their FIRST Ctrl+Z restored the state before the seed -- an empty
-		// timeline -- and the persist that follows an undo wrote that empty timeline to disk.
-		await useProjectStore
-			.getState()
-			.replaceTimeline([{ startSec: 0, endSec: 60 }], "Auto-imported recording", {
-				history: false,
-			});
-	}
 	return true;
 }

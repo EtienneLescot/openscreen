@@ -52,6 +52,13 @@
 		"camera": "Câmera",
 		"cameraDevice": "Dispositivo de câmera"
 	},
+	"selfView": {
+		"show": "Mostrar minha imagem",
+		"hide": "Ocultar minha imagem",
+		"autoShow": "Mostrar automaticamente a imagem flutuante",
+		"autoShowHint": "Abre a prévia da câmera ao iniciar a gravação",
+		"unavailable": "A imagem flutuante não está disponível"
+	},
 	"cursor": {
 		"useEditableCursor": "Usar cursor editável",
 		"useSystemCursor": "Usar cursor do sistema"

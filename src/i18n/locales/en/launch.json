@@ -52,6 +52,13 @@
 		"camera": "Camera",
 		"cameraDevice": "Camera device"
 	},
+	"selfView": {
+		"show": "Show self-view",
+		"hide": "Hide self-view",
+		"autoShow": "Auto-show floating self-view",
+		"autoShowHint": "Open your camera preview when recording starts",
+		"unavailable": "Floating self-view is unavailable"
+	},
 	"cursor": {
 		"useEditableCursor": "Use editable cursor",
 		"useSystemCursor": "Use system cursor"

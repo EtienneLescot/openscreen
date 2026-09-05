@@ -52,6 +52,13 @@
 		"camera": "Fotocamera",
 		"cameraDevice": "Dispositivo fotocamera"
 	},
+	"selfView": {
+		"show": "Mostra anteprima personale",
+		"hide": "Nascondi anteprima personale",
+		"autoShow": "Mostra automaticamente l’anteprima mobile",
+		"autoShowHint": "Apre l’anteprima della fotocamera all’avvio della registrazione",
+		"unavailable": "L’anteprima personale mobile non è disponibile"
+	},
 	"cursor": {
 		"useEditableCursor": "Usa cursore modificabile",
 		"useSystemCursor": "Usa cursore di sistema"

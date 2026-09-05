@@ -26,6 +26,8 @@ export interface UserPreferences {
 	preferSoftwareEncoder: boolean;
 	/** Stop showing the notice that recording fell back to software encoding */
 	hideSoftwareEncoderFallbackNotice: boolean;
+	/** Automatically show the macOS floating webcam self-view when recording starts */
+	floatingSelfViewEnabled: boolean;
 }
 
 export const DEFAULT_PREFS: UserPreferences = {
@@ -38,6 +40,7 @@ export const DEFAULT_PREFS: UserPreferences = {
 	trayLayout: "horizontal",
 	preferSoftwareEncoder: false,
 	hideSoftwareEncoderFallbackNotice: false,
+	floatingSelfViewEnabled: true,
 };
 
 /** Parses stored preferences without throwing on malformed JSON. */
@@ -99,6 +102,10 @@ export function loadUserPreferences(): UserPreferences {
 			typeof raw.hideSoftwareEncoderFallbackNotice === "boolean"
 				? raw.hideSoftwareEncoderFallbackNotice
 				: DEFAULT_PREFS.hideSoftwareEncoderFallbackNotice,
+		floatingSelfViewEnabled:
+			typeof raw.floatingSelfViewEnabled === "boolean"
+				? raw.floatingSelfViewEnabled
+				: DEFAULT_PREFS.floatingSelfViewEnabled,
 	};
 }
 

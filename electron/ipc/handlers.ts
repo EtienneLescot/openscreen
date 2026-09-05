@@ -54,6 +54,7 @@ import type { CursorTelemetryReader } from "../ai-edition/deep-agent/service";
 import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "../diagnostics/main-log-buffer";
+import type { FloatingSelfViewController } from "../floatingSelfView";
 import { mainT } from "../i18n";
 import { getInstallChannel } from "../install-channel";
 import { RECORDINGS_DIR } from "../main";
@@ -1506,6 +1507,16 @@ function attachNativeMacCaptureOutputDrain(proc: ChildProcessWithoutNullStreams)
 	proc.once("error", cleanup);
 }
 
+class NativeMacCaptureStartError extends Error {
+	constructor(
+		message: string,
+		readonly code?: string,
+	) {
+		super(message);
+		this.name = "NativeMacCaptureStartError";
+	}
+}
+
 function waitForNativeMacCaptureStart(proc: ChildProcessWithoutNullStreams) {
 	return new Promise<void>((resolve, reject) => {
 		const timer = setTimeout(() => {
@@ -1521,7 +1532,12 @@ function waitForNativeMacCaptureStart(proc: ChildProcessWithoutNullStreams) {
 			}
 			if (event.event === "error") {
 				cleanup();
-				reject(new Error(String(event.message ?? event.code ?? "Native macOS capture failed")));
+				reject(
+					new NativeMacCaptureStartError(
+						String(event.message ?? event.code ?? "Native macOS capture failed"),
+						typeof event.code === "string" ? event.code : undefined,
+					),
+				);
 			}
 		};
 
@@ -1822,7 +1838,56 @@ export function registerIpcHandlers(
 	getCountdownOverlayWindow?: () => BrowserWindow | null,
 	onRecordingStateChange?: (recording: boolean, sourceName: string) => void,
 	_switchToHud?: () => void,
+	floatingSelfViewController?: FloatingSelfViewController,
 ) {
+	ipcMain.handle("floating-self-view-show", async (event, deviceId?: unknown) => {
+		if (process.platform !== "darwin") {
+			return { success: false, error: "unsupported-platform" };
+		}
+		if (!floatingSelfViewController) {
+			return { success: false, error: "self-view-unavailable" };
+		}
+		return floatingSelfViewController.show(event.sender, deviceId);
+	});
+
+	ipcMain.handle("floating-self-view-hide", (event) => {
+		if (process.platform !== "darwin" || !floatingSelfViewController) {
+			return { success: false, error: "unsupported-platform" };
+		}
+		return floatingSelfViewController.hide(event.sender);
+	});
+
+	ipcMain.handle("floating-self-view-state", () => {
+		return floatingSelfViewController?.getState() ?? { open: false };
+	});
+
+	ipcMain.handle("floating-self-view-ready", (event, requestId: unknown) => {
+		return (
+			floatingSelfViewController?.handleReady(event.sender, requestId) ?? {
+				success: false,
+				error: "self-view-unavailable",
+			}
+		);
+	});
+
+	ipcMain.handle("floating-self-view-failed", (event, requestId: unknown) => {
+		return (
+			floatingSelfViewController?.handleFailure(event.sender, requestId) ?? {
+				success: false,
+				error: "self-view-unavailable",
+			}
+		);
+	});
+
+	ipcMain.handle("floating-self-view-window-close", (event) => {
+		return (
+			floatingSelfViewController?.handleWindowClose(event.sender) ?? {
+				success: false,
+				error: "self-view-unavailable",
+			}
+		);
+	});
+
 	async function requestScreenAccess() {
 		if (process.platform !== "darwin") {
 			return { success: true, granted: true, status: "granted" };
@@ -2761,6 +2826,15 @@ export function registerIpcHandlers(
 				...request,
 				schemaVersion: 1,
 				recordingId,
+				excludedApplicationProcessIds: request.source.type === "display" ? [process.pid] : [],
+				excludedWindowIds:
+					request.source.type === "display"
+						? BrowserWindow.getAllWindows()
+								.map((window) => window.getMediaSourceId().match(/^window:(\d+):/)?.[1])
+								.filter((id): id is string => Boolean(id))
+								.map(Number)
+								.filter((id) => Number.isSafeInteger(id) && id > 0)
+						: [],
 				source: {
 					...request.source,
 					bounds,
@@ -2852,7 +2926,11 @@ export function registerIpcHandlers(
 			nativeMacPauseRanges = [];
 			nativeMacIsPaused = false;
 			await stopCursorRecording();
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+				errorCode: error instanceof NativeMacCaptureStartError ? error.code : undefined,
+			};
 		}
 	});
 

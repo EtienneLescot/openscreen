@@ -224,6 +224,10 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 		})),
 		getAppInfo: vi.fn(async () => appInfoState.value),
 		checkForUpdates: updateCheckMock,
+		showFloatingSelfView: vi.fn(async () => ({ success: true })),
+		hideFloatingSelfView: vi.fn(async () => ({ success: true })),
+		getFloatingSelfViewState: vi.fn(async () => ({ open: false })),
+		onFloatingSelfViewStateChanged: vi.fn(() => () => undefined),
 		setHudOverlaySize: vi.fn(),
 		setHudOverlayIgnoreMouseEvents: vi.fn(),
 		onHudOverlayCursor: vi.fn((callback) => {

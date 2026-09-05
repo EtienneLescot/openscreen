@@ -6,6 +6,10 @@ export type NativeMacSourceType = "display" | "window";
 export type NativeMacRecordingRequest = {
 	schemaVersion: 1;
 	recordingId?: number;
+	/** Main-process injected. Renderer callers must not populate capture exclusions. */
+	excludedApplicationProcessIds?: number[];
+	/** Main-process injected native BrowserWindow IDs used only as a safe fallback. */
+	excludedWindowIds?: number[];
 	source: {
 		type: NativeMacSourceType;
 		sourceId: string;
@@ -89,6 +93,7 @@ export type NativeMacRecordingStartResult = {
 	path?: string;
 	helperPath?: string;
 	error?: string;
+	errorCode?: string;
 };
 
 export function parseMacWindowIdFromSourceId(sourceId?: string | null) {

@@ -1,4 +1,4 @@
-import { Check, Languages, NotepadText, Settings } from "lucide-react";
+import { Check, Languages, NotepadText, PictureInPicture2, Settings } from "lucide-react";
 import { memo } from "react";
 import { formatTimePadded } from "../../utils/timeUtils";
 import { Button } from "../ui/button";
@@ -432,6 +432,34 @@ export const HudRecordingControls = memo(function HudRecordingControls({
 				</button>
 			</Tooltip>
 		</div>
+	);
+});
+
+export const HudSelfViewButton = memo(function HudSelfViewButton({
+	open,
+	disabled,
+	label,
+	onClick,
+}: {
+	open: boolean;
+	disabled: boolean;
+	label: string;
+	onClick: () => void;
+}) {
+	return (
+		<Tooltip content={label}>
+			<button
+				type="button"
+				data-testid="launch-floating-self-view-button"
+				aria-label={label}
+				aria-pressed={open}
+				disabled={disabled}
+				onClick={onClick}
+				className={`${hudAuxIconBtnClasses} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#10b981] focus-visible:ring-offset-2 focus-visible:ring-offset-[#14171c]`}
+			>
+				<PictureInPicture2 size={16} className={open ? "text-[#10b981]" : "text-white/60"} />
+			</button>
+		</Tooltip>
 	);
 });
 

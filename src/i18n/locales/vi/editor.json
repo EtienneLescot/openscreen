@@ -49,6 +49,7 @@
 		"cameraCaptureUnavailable": "Không thể mở máy ảnh. Đang ghi mà không có máy ảnh.",
 		"microphoneDefaulted": "Không xác định được micrô đã chọn. Đang ghi từ đầu vào mặc định.",
 		"permissionDenied": "Quyền ghi hình bị từ chối. Vui lòng cho phép ghi màn hình.",
+		"selfCaptureExclusionFailed": "Không thể bắt đầu ghi vì OpenScreen không thể loại trừ an toàn các cửa sổ của chính ứng dụng khỏi bản ghi toàn màn hình.",
 		"accessibilityAllowAndRetry": "Cho phép OpenScreen truy cập Trợ năng, sau đó nhấn ghi lại để bắt đầu đếm ngược.",
 		"selectSource": "Vui lòng chọn một nguồn để ghi"
 	},

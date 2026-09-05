@@ -45,6 +45,7 @@
 		"microphoneDenied": "마이크 접근이 거부되었습니다. 오디오 없이 녹화를 계속합니다.",
 		"cameraDenied": "카메라 접근이 거부되었습니다. 웹캠 없이 녹화를 계속합니다.",
 		"permissionDenied": "녹화 권한이 거부되었습니다. 화면 녹화를 허용해 주세요.",
+		"selfCaptureExclusionFailed": "OpenScreen 자체 창을 전체 화면 캡처에서 안전하게 제외할 수 없어 녹화를 시작하지 않았습니다.",
 		"cameraDisconnected": "웹캠 연결이 끊어졌습니다.",
 		"cameraNotFound": "카메라를 찾을 수 없습니다.",
 		"cameraCaptureUnavailable": "카메라를 열 수 없습니다. 카메라 없이 녹화합니다.",

@@ -22,6 +22,8 @@ export interface HudDeviceSettingsLabels {
 	cameraUnavailable: string;
 	preview: string;
 	previewUnavailable: string;
+	floatingSelfView: string;
+	floatingSelfViewHint: string;
 	about: string;
 	checkForUpdates: string;
 	checkingForUpdates: string;
@@ -95,9 +97,12 @@ export const HudDeviceSettings = memo(function HudDeviceSettings({
 	versionLabel,
 	canCheckForUpdates,
 	checkingForUpdates,
+	showFloatingSelfViewSetting,
+	floatingSelfViewEnabled,
 	onSelectMic,
 	onSelectCamera,
 	onCheckForUpdates,
+	onFloatingSelfViewEnabledChange,
 	onClose,
 	panelRef,
 }: {
@@ -113,9 +118,12 @@ export const HudDeviceSettings = memo(function HudDeviceSettings({
 	versionLabel: string | null;
 	canCheckForUpdates: boolean;
 	checkingForUpdates: boolean;
+	showFloatingSelfViewSetting: boolean;
+	floatingSelfViewEnabled: boolean;
 	onSelectMic: (device: MicrophoneDevice) => void;
 	onSelectCamera: (device: CameraDevice) => void;
 	onCheckForUpdates: () => void;
+	onFloatingSelfViewEnabledChange: (enabled: boolean) => void;
 	onClose: () => void;
 	panelRef: (el: HTMLDivElement | null) => void;
 }) {
@@ -216,6 +224,22 @@ export const HudDeviceSettings = memo(function HudDeviceSettings({
 						unavailableLabel={labels.previewUnavailable}
 					/>
 				</>
+			) : null}
+
+			{showFloatingSelfViewSetting ? (
+				<label className={styles.hudPreferenceRow}>
+					<span>
+						<span className={styles.hudPreferenceLabel}>{labels.floatingSelfView}</span>
+						<span className={styles.hudPreferenceHint}>{labels.floatingSelfViewHint}</span>
+					</span>
+					<input
+						type="checkbox"
+						data-testid="floating-self-view-preference"
+						checked={floatingSelfViewEnabled}
+						onChange={(event) => onFloatingSelfViewEnabledChange(event.currentTarget.checked)}
+						className={styles.hudPreferenceCheckbox}
+					/>
+				</label>
 			) : null}
 
 			{/* The HUD has no other settings surface, and an app the user cannot ask "which

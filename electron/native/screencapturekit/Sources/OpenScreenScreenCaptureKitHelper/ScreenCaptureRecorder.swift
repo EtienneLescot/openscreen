@@ -65,12 +65,34 @@ struct RecordingRequest: Decodable {
 
 	let schemaVersion: Int?
 	let recordingId: Int?
+	let excludedApplicationProcessIds: [Int32]
+	let excludedWindowIds: [UInt32]
 	let source: Source
 	let video: Video
 	let audio: Audio
 	let webcam: Webcam
 	let cursor: Cursor
 	let outputs: Outputs
+
+	private enum CodingKeys: String, CodingKey {
+		case schemaVersion, recordingId, excludedApplicationProcessIds, excludedWindowIds
+		case source, video, audio, webcam, cursor, outputs
+	}
+
+	init(from decoder: Decoder) throws {
+		let container = try decoder.container(keyedBy: CodingKeys.self)
+		let exclusionFields = try CaptureExclusionRequestFields(from: decoder)
+		schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+		recordingId = try container.decodeIfPresent(Int.self, forKey: .recordingId)
+		excludedApplicationProcessIds = exclusionFields.applicationProcessIDs
+		excludedWindowIds = exclusionFields.windowIDs
+		source = try container.decode(Source.self, forKey: .source)
+		video = try container.decode(Video.self, forKey: .video)
+		audio = try container.decode(Audio.self, forKey: .audio)
+		webcam = try container.decode(Webcam.self, forKey: .webcam)
+		cursor = try container.decode(Cursor.self, forKey: .cursor)
+		outputs = try container.decode(Outputs.self, forKey: .outputs)
+	}
 }
 
 enum HelperError: Error, CustomStringConvertible {
@@ -81,6 +103,16 @@ enum HelperError: Error, CustomStringConvertible {
 	case invalidSourceType(String)
 	case permissionDenied(String)
 	case writerSetupFailed(String)
+	case selfCaptureExclusionFailed(String)
+
+	var code: String {
+		switch self {
+		case .selfCaptureExclusionFailed:
+			return "self-capture-exclusion-failed"
+		default:
+			return "helper-error"
+		}
+	}
 
 	var description: String {
 		switch self {
@@ -97,6 +129,8 @@ enum HelperError: Error, CustomStringConvertible {
 		case .permissionDenied(let message):
 			return message
 		case .writerSetupFailed(let message):
+			return message
+		case .selfCaptureExclusionFailed(let message):
 			return message
 		}
 	}
@@ -149,7 +183,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
 		let content = try await SCShareableContent.excludingDesktopWindows(
 			false,
-			onScreenWindowsOnly: true
+			onScreenWindowsOnly: false
 		)
 		let target = try makeCaptureTarget(from: content)
 		outputWidth = target.width
@@ -387,7 +421,71 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			guard let display = content.displays.first(where: { $0.displayID == displayId }) else {
 				throw HelperError.sourceNotFound("No ScreenCaptureKit display found for id \(displayId).")
 			}
-			let filter = SCContentFilter(display: display, excludingWindows: [])
+			let applicationIdentities = content.applications.map {
+				CaptureExclusionApplication(
+					processID: $0.processID,
+					bundleIdentifier: $0.bundleIdentifier
+				)
+			}
+			let resolution: CaptureExclusionResolution
+			do {
+				resolution = try resolveCaptureExclusion(
+					requestedProcessIDs: request.excludedApplicationProcessIds,
+					requestedWindowIDs: request.excludedWindowIds,
+					applications: applicationIdentities,
+					availableWindowIDs: content.windows.map(\.windowID)
+				)
+			} catch {
+				emit([
+					"event": "capture-exclusion-resolution",
+					"strategy": "failed",
+					"requestedProcessIds": request.excludedApplicationProcessIds,
+					"requestedWindowIds": request.excludedWindowIds,
+					"availableApplicationCount": content.applications.count,
+					"availableWindowCount": content.windows.count,
+				])
+				throw HelperError.selfCaptureExclusionFailed(
+					"OpenScreen could not safely exclude itself from this full-display recording."
+				)
+			}
+
+			let filter: SCContentFilter
+			switch resolution.strategy {
+			case .applications(let bundleIdentifiers, let processIDs):
+				let bundleSet = Set(bundleIdentifiers)
+				let excludedApplications = content.applications.filter {
+					bundleSet.contains($0.bundleIdentifier)
+				}
+				filter = SCContentFilter(
+					display: display,
+					excludingApplications: excludedApplications,
+					exceptingWindows: []
+				)
+				emit([
+					"event": "capture-exclusion-resolution",
+					"strategy": "applications",
+					"requestedProcessIds": resolution.requestedProcessIDs,
+					"resolvedProcessIds": processIDs,
+					"bundleIdentifiers": bundleIdentifiers,
+					"matchedApplicationCount": resolution.matchedApplicationCount,
+				])
+			case .windows(let windowIDs):
+				let windowSet = Set(windowIDs)
+				let excludedWindows = content.windows.filter { windowSet.contains($0.windowID) }
+				filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
+				emit([
+					"event": "capture-exclusion-resolution",
+					"strategy": "windows",
+					"requestedProcessIds": resolution.requestedProcessIDs,
+					"requestedWindowIds": resolution.requestedWindowIDs,
+					"resolvedWindowIds": windowIDs,
+					"matchedWindowCount": resolution.matchedWindowCount,
+				])
+			case .none:
+				throw HelperError.selfCaptureExclusionFailed(
+					"OpenScreen did not receive a safe exclusion target for this full-display recording."
+				)
+			}
 			let size = captureSize(
 				for: filter,
 				fallbackPointSize: display.frame.size,
@@ -850,7 +948,7 @@ struct OpenScreenScreenCaptureKitHelper {
 			try await recorder.start()
 			await stopTask.value
 		} catch let error as HelperError {
-			emitError(code: "helper-error", message: error.description)
+			emitError(code: error.code, message: error.description)
 			exit(1)
 		} catch {
 			emitError(code: "helper-error", message: "\(error)")

@@ -47,6 +47,7 @@
 		"cameraCaptureUnavailable": "Impossible d'ouvrir la caméra. Enregistrement sans elle.",
 		"microphoneDefaulted": "Micro choisi non identifié. Enregistrement de l'entrée par défaut.",
 		"permissionDenied": "Permission d'enregistrement refusée. Veuillez autoriser l'enregistrement d'écran.",
+		"selfCaptureExclusionFailed": "L’enregistrement n’a pas démarré car OpenScreen n’a pas pu exclure ses propres fenêtres de la capture plein écran en toute sécurité.",
 		"accessibilityAllowAndRetry": "Autorisez l'accès Accessibilité pour OpenScreen, puis appuyez de nouveau sur enregistrer pour lancer le compte à rebours.",
 		"selectSource": "Veuillez sélectionner une source à enregistrer"
 	},

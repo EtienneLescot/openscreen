@@ -52,6 +52,13 @@
 		"camera": "カメラ",
 		"cameraDevice": "カメラデバイス"
 	},
+	"selfView": {
+		"show": "セルフビューを表示",
+		"hide": "セルフビューを非表示",
+		"autoShow": "フローティングセルフビューを自動表示",
+		"autoShowHint": "録画開始時にカメラプレビューを開きます",
+		"unavailable": "フローティングセルフビューを利用できません"
+	},
 	"cursor": {
 		"useEditableCursor": "編集可能なカーソルを使う",
 		"useSystemCursor": "システムカーソルを使う"

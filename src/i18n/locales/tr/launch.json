@@ -52,6 +52,13 @@
 		"camera": "Kamera",
 		"cameraDevice": "Kamera cihazı"
 	},
+	"selfView": {
+		"show": "Kendimi göster",
+		"hide": "Kendimi gizle",
+		"autoShow": "Yüzen öz görünümü otomatik göster",
+		"autoShowHint": "Kayıt başladığında kamera önizlemesini açar",
+		"unavailable": "Yüzen öz görünüm kullanılamıyor"
+	},
 	"cursor": {
 		"useEditableCursor": "Düzenlenebilir imleci kullan",
 		"useSystemCursor": "Sistem imlecini kullan"

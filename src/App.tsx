@@ -6,6 +6,7 @@ import { installBrowserShims } from "./native/browserShim";
 installBrowserShims();
 
 import { CountdownOverlay } from "./components/launch/CountdownOverlay.tsx";
+import { FloatingSelfViewWindow } from "./components/launch/FloatingSelfViewWindow";
 import { LaunchWindow } from "./components/launch/LaunchWindow";
 import { NotesWindow } from "./components/launch/NotesWindow.tsx";
 import { SourceSelector } from "./components/launch/SourceSelector";
@@ -55,6 +56,13 @@ export default function App() {
 			document.documentElement.style.background = "transparent";
 			document.getElementById("root")?.style.setProperty("background", "transparent");
 		}
+		if (type === "floating-self-view") {
+			document.documentElement.style.height = "100%";
+			document.documentElement.style.overflow = "hidden";
+			document.body.style.height = "100%";
+			document.body.style.margin = "0";
+			document.body.style.overflow = "hidden";
+		}
 
 		// HUD is a fixed-size BrowserWindow; pin the document shell and hide overflow
 		// so the renderer can't introduce scrollbars (see issue #305).
@@ -86,6 +94,8 @@ export default function App() {
 				return <SourceSelector />;
 			case "countdown-overlay":
 				return <CountdownOverlay />;
+			case "floating-self-view":
+				return <FloatingSelfViewWindow />;
 			case "cli-export":
 				return (
 					<Suspense fallback={null}>
