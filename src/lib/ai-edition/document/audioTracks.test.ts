@@ -384,4 +384,10 @@ describe("computeAudioRowCount", () => {
 		const bgm2 = track({ id: "bgm2", kind: "music", startMs: 6000, endMs: 10000 });
 		expect(computeAudioRowCount([bgm1, bgm2])).toBe(1);
 	});
+
+	it("stacks overlapping tracks of the same kind on 2 rows", () => {
+		const bgm1 = track({ id: "bgm1", kind: "music", startMs: 0, endMs: 5000 });
+		const bgm2 = track({ id: "bgm2", kind: "music", startMs: 3000, endMs: 8000 });
+		expect(computeAudioRowCount([bgm1, bgm2])).toBe(2);
+	});
 });
