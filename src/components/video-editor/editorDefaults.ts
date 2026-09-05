@@ -50,7 +50,7 @@ export const DEFAULT_EDITOR_LAYOUT_SETTINGS: {
 	cropRegion: typeof DEFAULT_CROP_REGION;
 	wallpaper: string;
 } = {
-	padding: 50,
+	padding: 0,
 	aspectRatio: "16:9",
 	cropRegion: DEFAULT_CROP_REGION,
 	wallpaper: DEFAULT_WALLPAPER,

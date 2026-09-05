@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceTimeline as replaceTimelineOp } from "@/lib/ai-edition/document/timeline";
 import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema";
+import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { undo } from "@/lib/ai-edition/store/undo";
 import { clearHistory, past } from "@/lib/ai-edition/store/undoStack";
@@ -161,6 +162,10 @@ describe("what the recording import leaves on the undo stack", () => {
 
 		expect(past).toHaveLength(0);
 		expect(undo()).toBe(false);
+		expect(getEditorSettings(useProjectStore.getState().document)).toMatchObject({
+			wallpaper: "/wallpapers/wallpaper2.jpg",
+			padding: 0,
+		});
 	});
 
 	it("still has its clip after the first Ctrl+Z", async () => {

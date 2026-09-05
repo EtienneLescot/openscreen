@@ -33,7 +33,7 @@ import {
 	type WebcamSizePreset,
 } from "@/components/video-editor/types";
 import { DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
-import { DEFAULT_WALLPAPER } from "@/lib/wallpaper";
+import { DEFAULT_WALLPAPER, DEFAULT_WEBCAM_WALLPAPER } from "@/lib/wallpaper";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
 import { clamp01 } from "@/utils/math";
 import type { AxcutDocument } from "../schema";
@@ -124,7 +124,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	showBlur: false,
 	motionBlurAmount: 0.2,
 	borderRadius: 40,
-	padding: 50,
+	padding: 0,
 	cropRegion: DEFAULT_CROP_REGION,
 	webcamLayoutPreset: DEFAULT_WEBCAM_LAYOUT_PRESET,
 	webcamMaskShape: DEFAULT_WEBCAM_MASK_SHAPE,
@@ -136,7 +136,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	webcamCropPan: DEFAULT_CROP_PAN,
 	audioGainDb: 0,
 	webcamBackgroundMode: DEFAULT_WEBCAM_BACKGROUND_MODE,
-	webcamWallpaper: DEFAULT_WALLPAPER,
+	webcamWallpaper: DEFAULT_WEBCAM_WALLPAPER,
 	webcamBlurIntensity: DEFAULT_WEBCAM_BLUR_INTENSITY,
 	cursor: {
 		size: DEFAULT_CURSOR_SIZE,

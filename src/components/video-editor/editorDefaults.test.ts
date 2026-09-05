@@ -11,6 +11,11 @@ import {
 import { normalizeProjectEditor } from "./projectPersistence";
 
 describe("editor defaults SSOT", () => {
+	it("starts new projects with the orange wallpaper and no padding", () => {
+		expect(DEFAULT_EDITOR_LAYOUT_SETTINGS.wallpaper).toBe("/wallpapers/wallpaper2.jpg");
+		expect(DEFAULT_EDITOR_LAYOUT_SETTINGS.padding).toBe(0);
+	});
+
 	it("keeps history defaults aligned with editor defaults", () => {
 		expect(INITIAL_EDITOR_STATE).toMatchObject({
 			...DEFAULT_EDITOR_APPEARANCE_SETTINGS,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
-import { documentSchema } from "../schema";
+import { createEmptyDocument, documentSchema } from "../schema";
 import {
 	migrateAxcutDocumentToProjectData,
 	migrateProjectDataToAxcutDocument,
@@ -235,6 +235,14 @@ describe("migrateProjectDataToAxcutDocument", () => {
 });
 
 describe("migrateAxcutDocumentToProjectData", () => {
+	it("uses the current layout defaults when the document has no legacy editor settings", () => {
+		const doc = createEmptyDocument({ projectId: "new-project", title: "New project" });
+		const back = migrateAxcutDocumentToProjectData(doc);
+
+		expect(back.editor.wallpaper).toBe("/wallpapers/wallpaper2.jpg");
+		expect(back.editor.padding).toBe(0);
+	});
+
 	it("round-trips trimRanges back to trimRegions", () => {
 		const v2 = makeV2Project({
 			editor: {
