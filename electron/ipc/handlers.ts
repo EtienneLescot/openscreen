@@ -77,6 +77,10 @@ import {
 import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { toHelperRect } from "../native-bridge/helperCoordinates";
+import {
+	isMacScreenProbeUnavailable,
+	readMacScreenCaptureAccess,
+} from "../native-bridge/screen/macScreenAccess";
 import { scoreDeviceNameMatch } from "../recording/deviceNameMatching";
 import {
 	isSalvageableFragmentedCapture,
@@ -91,6 +95,11 @@ import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
+import {
+	resolveScreenAccessStatus,
+	ScreenPromptMarker,
+	shouldRaiseScreenPrompt,
+} from "./screenAccessPrompt";
 
 const PROJECT_FILE_EXTENSION = "openscreen";
 export const SHORTCUTS_FILE = path.join(app.getPath("userData"), "shortcuts.json");
@@ -575,6 +584,68 @@ type AttachNativeMacWebcamRecordingInput = {
 
 let selectedSource: SelectedSource | null = null;
 let selectedDesktopSource: DesktopCapturerSource | null = null;
+/** Whether this launch has already raised macOS' Screen Recording prompt. */
+let screenPromptRaisedThisLaunch = false;
+
+/**
+ * Settles once the startup TCC ask (the microphone prompt in main.ts) has been
+ * answered. macOS will not stack a second permission alert: a Screen Recording
+ * prompt raised while the mic alert is still up is silently dropped, and
+ * `app.focus({ steal: true })` yanks activation from the alert the user is
+ * reading. First launch hits exactly this — mic prompt at startup, Record
+ * clicked moments later — and it is the one launch whose prompt the marker
+ * would then write off for good.
+ */
+let startupMediaPromptGate: Promise<unknown> = Promise.resolve();
+
+export function setStartupMediaPromptGate(gate: Promise<unknown>) {
+	startupMediaPromptGate = gate.catch(() => {
+		// A failed ask still settles the gate; the screen prompt proceeds.
+	});
+}
+/** Lazily opened so the userData path is only touched once the app needs it. */
+let screenPromptMarkerInstance: ScreenPromptMarker | null = null;
+
+/** Same flag windows.ts gates every show() on: no window server in the e2e runs. */
+const IS_HEADLESS = process.env.HEADLESS === "true";
+
+function getScreenPromptMarker(): ScreenPromptMarker {
+	screenPromptMarkerInstance ??= new ScreenPromptMarker(app.getPath("userData"));
+	return screenPromptMarkerInstance;
+}
+
+/** Options the renderer passes to `open-source-selector`. */
+export interface SourceSelectorOptions {
+	/**
+	 * The renderer has finished waiting on macOS' prompt, so the "permission is required"
+	 * dialog may open. Held back until then only because System Settings opening over that
+	 * prompt is the bug this path exists to fix -- and the renderer, which owns the retry
+	 * budget, is the only side that knows when the wait is over.
+	 */
+	screenPromptWaitElapsed?: boolean;
+}
+
+export interface ScreenAccessResult {
+	success: boolean;
+	granted: boolean;
+	/** What the OS actually said. Never bent to steer the caller. */
+	status: string;
+	/**
+	 * Whether THIS call raised macOS' own prompt, which may still be unanswered.
+	 * This, and not `status`, is what tells a caller to keep polling: macOS keeps
+	 * reporting the permission as absent for the whole time its prompt is on screen.
+	 * Scoped to the raising call so every other request — the second click of a
+	 * launch included — reaches the Settings dialog without sitting out the wait.
+	 */
+	promptRaised: boolean;
+	/**
+	 * The permission is held, but this process cannot see it -- its cached read predates
+	 * the grant, so capture in this process would still fail. Only ever true on macOS.
+	 */
+	requiresRelaunch?: boolean;
+	error?: string;
+}
+
 let lastEnumeratedSources = new Map<string, DesktopCapturerSource>();
 let currentProjectPath: string | null = null;
 let currentRecordingSession: RecordingSession | null = null;
@@ -1823,40 +1894,132 @@ export function registerIpcHandlers(
 	onRecordingStateChange?: (recording: boolean, sourceName: string) => void,
 	_switchToHud?: () => void,
 ) {
-	async function requestScreenAccess() {
+	/**
+	 * Raises macOS' Screen Recording prompt, and records that it was raised.
+	 *
+	 * The recording path warms the same `getSources` call before starting the native
+	 * capture helper, and deliberately still does: routing it through here would steal
+	 * window focus at the instant a recording begins. It can therefore raise the prompt
+	 * without leaving a mark, which costs at most one wait on a prompt macOS declines to
+	 * redraw -- and it is only reachable after the selector, so this function has almost
+	 * always run first.
+	 *
+	 * Raised from THIS process rather than from the capture helper. `desktopCapturer` is
+	 * the app's own call into Chromium, which calls `CGRequestScreenCaptureAccess()` under
+	 * it, so TCC records the grant against the app bundle's designated requirement. A bare
+	 * child binary asking on its own behalf is what pins a row to a raw cdhash, which
+	 * survives reinstalls and reads to the user as a permission that is on and does not work.
+	 */
+	function raiseScreenRecordingPrompt() {
+		const mainWin = getMainWindow();
+		if (mainWin && !mainWin.isDestroyed()) {
+			if (mainWin.isMinimized()) {
+				mainWin.restore();
+			}
+			// Same HEADLESS guard every other show() in the app respects: the macOS
+			// Playwright specs run with no window server to steal activation from.
+			if (!IS_HEADLESS) {
+				if (!mainWin.isVisible()) {
+					mainWin.show();
+				}
+				mainWin.focus();
+			}
+		}
+		if (!IS_HEADLESS) {
+			app.focus({ steal: true });
+		}
+
+		// The only call that raises the prompt. It settles in milliseconds whether or not
+		// the prompt is still on screen, and rejects outright where the permission is
+		// missing, so nothing can be learned from awaiting it -- the answer is read back
+		// from a fresh process instead.
+		desktopCapturer
+			.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
+			.catch(() => {
+				// Permission probing failure is reported by the explicit status read.
+			});
+
+		screenPromptRaisedThisLaunch = true;
+		getScreenPromptMarker().recordRaised(new Date().toISOString());
+	}
+
+	async function requestScreenAccess(): Promise<ScreenAccessResult> {
 		if (process.platform !== "darwin") {
-			return { success: true, granted: true, status: "granted" };
+			return { success: true, granted: true, status: "granted", promptRaised: false };
 		}
 
 		try {
-			const status = systemPreferences.getMediaAccessStatus("screen");
+			// Two reads, and the difference between them is load bearing.
+			//
+			// `getMediaAccessStatus("screen")` is Chromium's `CGPreflightScreenCaptureAccess()`,
+			// which caches its answer for the life of this process: once it has said no it
+			// says no until the app is relaunched, whatever the user does in System Settings.
+			// The probe spawns a fresh process for every read, so it reports the permission as
+			// it stands now. See screenAccessPrompt.ts for why this is the whole bug.
+			const probe = await readMacScreenCaptureAccess();
+			const appStatus = systemPreferences.getMediaAccessStatus("screen");
+			const status = resolveScreenAccessStatus(probe, appStatus);
+
+			if (isMacScreenProbeUnavailable(probe.status)) {
+				console.warn(
+					`[screen-access] permission probe unavailable (status=${probe.status}${
+						probe.error ? `, error=${probe.error}` : ""
+					}); falling back to the app's own status=${appStatus}.`,
+				);
+			}
+
 			if (status === "granted") {
-				return { success: true, granted: true, status };
+				// Held, but this process may not be able to use it: a grant made after the app
+				// started is invisible to the cached read the capture stack goes through. The
+				// disagreement between the two reads is exactly that situation, and it is the
+				// only reliable signal macOS leaves us that a relaunch is needed.
+				return {
+					success: true,
+					granted: true,
+					status,
+					promptRaised: false,
+					requiresRelaunch: appStatus !== "granted",
+				};
 			}
 
-			// Screen recording has no askForMediaAccess equivalent, so trigger the
-			// TCC prompt without opening OpenScreen's source selector above it.
-			if (status === "not-determined") {
-				const mainWin = getMainWindow();
-				if (mainWin && !mainWin.isDestroyed()) {
-					if (!mainWin.isVisible()) {
-						mainWin.show();
-					}
-					mainWin.focus();
-				}
-				app.focus({ steal: true });
-				desktopCapturer
-					.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
-					.catch(() => {
-						// Permission probing failure is reported by the explicit status check below.
-					});
-				return { success: true, granted: false, status: "not-determined" };
+			const raiseNow = shouldRaiseScreenPrompt({
+				status,
+				raisedThisLaunch: screenPromptRaisedThisLaunch,
+				raisedBefore: getScreenPromptMarker().hasRaisedBefore(),
+			});
+			if (raiseNow) {
+				// Claim the launch's single raise before awaiting anything, so a
+				// concurrent request cannot start a second one while this waits.
+				screenPromptRaisedThisLaunch = true;
+				// Queue behind the startup mic alert (see startupMediaPromptGate).
+				// The marker is recorded inside the raise, on the other side of this
+				// await — recording it here would burn the machine's one prompt on
+				// an ask macOS never drew.
+				await startupMediaPromptGate;
+				raiseScreenRecordingPrompt();
 			}
 
-			return { success: true, granted: false, status };
+			// `status` is what the OS actually said, always. Whether the caller should keep
+			// polling rides on `promptRaised` instead -- a separate field for a separate
+			// question, so no branch here has to misreport the permission to keep the
+			// renderer's retry loop alive. Scoped to the call that raised the prompt: a
+			// sticky per-launch value would arm the wait on every later click too, making
+			// each one sit out the full retry budget before the dialog it was owed at once.
+			return {
+				success: true,
+				granted: false,
+				status,
+				promptRaised: raiseNow,
+			};
 		} catch (error) {
 			console.error("Failed to request screen access:", error);
-			return { success: false, granted: false, status: "unknown", error: String(error) };
+			return {
+				success: false,
+				granted: false,
+				status: "unknown",
+				promptRaised: false,
+				error: String(error),
+			};
 		}
 	}
 
@@ -2043,7 +2206,7 @@ export function registerIpcHandlers(
 		return access;
 	});
 
-	ipcMain.handle("open-source-selector", async () => {
+	ipcMain.handle("open-source-selector", async (_event, options?: SourceSelectorOptions) => {
 		// Nothing to open on Linux WHEN THE NATIVE HELPER IS THERE. The selector's
 		// own `desktopCapturer.getSources()` raises a portal dialog — a SECOND
 		// one, for a session that is thrown away — and whatever it returns cannot
@@ -2058,8 +2221,43 @@ export function registerIpcHandlers(
 		}
 
 		const access = await requestScreenAccess();
+
+		// Held, but not by this process. Chromium's capture stack reads the permission
+		// through a value cached before the grant existed, so opening the picker here
+		// produces a source list it cannot fill and no way out of it. Apple's guidance --
+		// and the warning System Settings prints beside the toggle -- is to relaunch, so
+		// offer exactly that instead of a picker that cannot work.
+		if (access.granted && access.requiresRelaunch) {
+			const mainWin = getMainWindow();
+			const messageOptions = {
+				type: "info",
+				buttons: ["Restart OpenScreen", "Later"],
+				defaultId: 0,
+				cancelId: 1,
+				message: "Screen Recording permission granted",
+				detail:
+					"macOS applies this permission when OpenScreen restarts. Restart now to choose a screen or window.",
+			} satisfies Electron.MessageBoxOptions;
+			const result =
+				mainWin && !mainWin.isDestroyed()
+					? await dialog.showMessageBox(mainWin, messageOptions)
+					: await dialog.showMessageBox(messageOptions);
+			if (result.response === 0) {
+				app.relaunch();
+				app.quit();
+			}
+			return { opened: false, reason: "screen-access-relaunch-required", access };
+		}
+
 		if (!access.granted) {
-			if (process.platform === "darwin" && access.status !== "not-determined") {
+			// Withheld only while macOS' own prompt from this launch may still be on screen:
+			// opening System Settings over it is the bug this whole path exists to fix. Every
+			// other refusal gets the dialog immediately, including the second click of a
+			// launch and every launch after the first.
+			if (
+				process.platform === "darwin" &&
+				(!access.promptRaised || options?.screenPromptWaitElapsed === true)
+			) {
 				const mainWin = getMainWindow();
 				const messageOptions = {
 					type: "warning",

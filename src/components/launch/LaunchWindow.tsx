@@ -39,7 +39,10 @@ import {
 	HUD_STACK_GAP,
 } from "./hudGeometry";
 import styles from "./LaunchWindow.module.css";
-import { openSourceSelectorWithPermissionRetry } from "./openSourceSelectorFlow";
+import {
+	type OpenSourceSelectorResult,
+	openSourceSelectorWithPermissionRetry,
+} from "./openSourceSelectorFlow";
 
 // Locale list is computed once at module load; keeping the reference stable lets
 // the language menu sit behind a memo boundary.
@@ -586,15 +589,28 @@ export function LaunchWindow() {
 		};
 	}, [applySelectedSource, recording, toggleRecording]);
 
+	// One flow at a time, shared by the Record button and the source chip. The
+	// permission wait keeps this promise pending for seconds while the button
+	// stays live, and every extra click used to start a concurrent retry loop —
+	// all of them fighting over recordAfterSourceSelectionRef.
+	const sourceSelectorFlowRef = useRef<Promise<OpenSourceSelectorResult> | null>(null);
 	const openSourceSelector = useCallback(async () => {
-		if (window.electronAPI) {
-			return await openSourceSelectorWithPermissionRetry({
-				openSourceSelector: () => window.electronAPI.openSourceSelector(),
-				requestScreenAccess: () => window.electronAPI.requestScreenAccess(),
-			});
+		if (!window.electronAPI) {
+			return { opened: false, reason: "electron-api-unavailable" };
 		}
 
-		return { opened: false, reason: "electron-api-unavailable" };
+		if (sourceSelectorFlowRef.current) {
+			return sourceSelectorFlowRef.current;
+		}
+
+		const flow = openSourceSelectorWithPermissionRetry({
+			openSourceSelector: (options) => window.electronAPI.openSourceSelector(options),
+			requestScreenAccess: () => window.electronAPI.requestScreenAccess(),
+		}).finally(() => {
+			sourceSelectorFlowRef.current = null;
+		});
+		sourceSelectorFlowRef.current = flow;
+		return flow;
 	}, []);
 
 	const handleRecordButtonClick = useCallback(

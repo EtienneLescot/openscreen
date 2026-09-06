@@ -9,6 +9,8 @@ macOS native recording will use a ScreenCaptureKit helper with the same process 
 3. The helper owns ScreenCaptureKit/AVFoundation capture, timing, encoding, and muxing.
 4. Electron persists the resulting media/session manifest and reports helper errors explicitly.
 
+The helper has one non-recording mode: `openscreen-screencapturekit-helper --screen-access-status` prints `{"event":"screen-access","granted":<bool>}` and exits. `CGPreflightScreenCaptureAccess()` caches its answer for the life of the calling process, so Electron's own read can never observe a Screen Recording grant made after launch — a helper spawned per read has no cache to be stale (`electron/native-bridge/screen/macScreenAccess.ts`).
+
 Helper locations:
 
 1. `OPENSCREEN_SCK_CAPTURE_EXE`, for local development and diagnostics.

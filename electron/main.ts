@@ -57,6 +57,7 @@ import {
 	exportDiagnosticFile,
 	getSelectedDesktopSource,
 	registerIpcHandlers,
+	setStartupMediaPromptGate,
 } from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
 import { registerSttIpc, shutdownStt } from "./stt";
@@ -1192,10 +1193,15 @@ appReady?.then(async () => {
 	if (process.platform === "darwin") {
 		const micStatus = systemPreferences.getMediaAccessStatus("microphone");
 		if (micStatus !== "granted") {
-			systemPreferences
-				.askForMediaAccess("microphone")
-				.then((granted) => console.info(`[permissions] microphone granted=${granted}`))
-				.catch((error) => console.warn("[permissions] microphone request failed:", error));
+			// The Screen Recording prompt queues behind this ask — macOS will not
+			// stack a second permission alert, so raising it mid-mic-prompt shows
+			// nothing and (worse) records a prompt that never appeared.
+			setStartupMediaPromptGate(
+				systemPreferences
+					.askForMediaAccess("microphone")
+					.then((granted) => console.info(`[permissions] microphone granted=${granted}`))
+					.catch((error) => console.warn("[permissions] microphone request failed:", error)),
+			);
 		}
 	}
 

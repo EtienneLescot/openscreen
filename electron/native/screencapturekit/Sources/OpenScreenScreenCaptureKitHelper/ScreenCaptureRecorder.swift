@@ -814,9 +814,34 @@ struct OpenScreenScreenCaptureKitHelper {
 		_ = CGMainDisplayID()
 	}
 
+	/// The flag that turns this helper into a one-shot answer to "may we record the
+	/// screen", printed as the usual single JSON line and nothing else.
+	private static let screenAccessStatusFlag = "--screen-access-status"
+
 	static func main() async {
 		do {
 			initializeCoreGraphicsWindowServerConnection()
+
+			// Answered from a process that exists for one read and then dies, because a FRESH
+			// PROCESS is the only place the answer can be trusted.
+			// `CGPreflightScreenCaptureAccess()` caches its result for the life of the calling
+			// process: once it has answered false it answers false forever, whatever the user
+			// does in System Settings afterwards. The app is long-lived, and Chromium's
+			// `getMediaAccessStatus("screen")` goes through that same function, so from the
+			// first miss until the next relaunch the app cannot observe its own permission
+			// being granted. That staleness -- not the missing prompt alone -- is what left
+			// the permission unreachable without a restart.
+			//
+			// Deliberately BEFORE the macOS 13 guard and the request decode below: the question
+			// is asked on every macOS the app supports, and answering it needs neither
+			// ScreenCaptureKit nor a recording request.
+			if CommandLine.arguments.count == 2, CommandLine.arguments[1] == screenAccessStatusFlag {
+				emit([
+					"event": "screen-access",
+					"granted": CGPreflightScreenCaptureAccess(),
+				])
+				exit(0)
+			}
 
 			guard CommandLine.arguments.count == 2 else {
 				throw HelperError.invalidArguments

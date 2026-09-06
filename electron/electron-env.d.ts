@@ -37,13 +37,29 @@ interface Window {
 		switchToEditor: () => Promise<void>;
 		switchToHud: () => Promise<void>;
 		startNewRecording: () => Promise<{ success: boolean; error?: string }>;
-		openSourceSelector: () => Promise<{
+		openSourceSelector: (options?: {
+			/**
+			 * The renderer has finished waiting on macOS' Screen Recording prompt, so the
+			 * "permission is required" dialog may open. Held back until then only because
+			 * System Settings opening over that prompt is the bug this path exists to fix.
+			 */
+			screenPromptWaitElapsed?: boolean;
+		}) => Promise<{
 			opened: boolean;
 			reason?: string;
 			access?: {
 				success: boolean;
 				granted: boolean;
+				/** What the OS actually said. Never bent to steer the caller. */
 				status: string;
+				/**
+				 * macOS' own prompt was raised by this very call and may still be unanswered. This, and
+				 * not `status`, is what tells the renderer to keep polling: macOS reports the
+				 * permission as absent for the whole time its prompt is on screen.
+				 */
+				promptRaised: boolean;
+				/** Granted, but this process cannot see it until the app is relaunched. */
+				requiresRelaunch?: boolean;
 				error?: string;
 			};
 		}>;
@@ -75,7 +91,16 @@ interface Window {
 		requestScreenAccess: () => Promise<{
 			success: boolean;
 			granted: boolean;
+			/** What the OS actually said. Never bent to steer the caller. */
 			status: string;
+			/**
+			 * macOS' own prompt was raised by this very call and may still be unanswered. This, and
+			 * not `status`, is what tells the renderer to keep polling: macOS reports the
+			 * permission as absent for the whole time its prompt is on screen.
+			 */
+			promptRaised: boolean;
+			/** Granted, but this process cannot see it until the app is relaunched. */
+			requiresRelaunch?: boolean;
 			error?: string;
 		}>;
 		requestNativeMacCursorAccess: () => Promise<{
