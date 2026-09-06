@@ -76,6 +76,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // HUD/tray/menu. Parsed before any GUI side effects; see electron/cli/.
 const cliCommand = parseCliArgs(process.argv, app.isPackaged ? 1 : 2);
 
+// Optimize V8 heap allocation to reduce memory footprint across processes.
+app.commandLine.appendSwitch("js-flags", "--optimize-for-size");
+
 // Use Screen & System Audio Recording permissions instead of the CoreAudio Tap API on macOS.
 // Tap needs NSAudioCaptureUsageDescription in the parent app's Info.plist, which breaks when
 // running from a terminal/IDE during dev.
