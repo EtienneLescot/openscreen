@@ -21,7 +21,10 @@ import {
 	type NativeLinuxRecordingRequest,
 	portalCursorMode,
 } from "../../src/lib/nativeLinuxRecording";
-import type { NativeMacRecordingRequest } from "../../src/lib/nativeMacRecording";
+import {
+	collectMacCaptureExcludedWindowIds,
+	type NativeMacRecordingRequest,
+} from "../../src/lib/nativeMacRecording";
 import type { NativeWindowsRecordingRequest } from "../../src/lib/nativeWindowsRecording";
 import {
 	type CursorCaptureMode,
@@ -2757,10 +2760,19 @@ export function registerIpcHandlers(
 						null)
 					: getSelectedDisplay();
 			const bounds = request.source.bounds ?? sourceDisplay?.bounds ?? getSelectedSourceBounds();
+			const captureExcludedWindowSourceIds: string[] = [];
+			if (request.source.type === "display") {
+				for (const window of [getMainWindow(), getNotesWindow()]) {
+					if (window && !window.isDestroyed()) {
+						captureExcludedWindowSourceIds.push(window.getMediaSourceId());
+					}
+				}
+			}
 			const config: NativeMacRecordingRequest = {
 				...request,
 				schemaVersion: 1,
 				recordingId,
+				excludedWindowIds: collectMacCaptureExcludedWindowIds(captureExcludedWindowSourceIds),
 				source: {
 					...request.source,
 					bounds,
@@ -2788,6 +2800,7 @@ export function registerIpcHandlers(
 			console.info("[native-sck] starting macOS capture", {
 				helperPath,
 				source: config.source,
+				excludedWindowIds: config.excludedWindowIds,
 				audio: config.audio,
 				webcam: config.webcam,
 				cursor: config.cursor,

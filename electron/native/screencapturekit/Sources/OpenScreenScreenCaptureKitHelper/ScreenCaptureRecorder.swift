@@ -65,6 +65,7 @@ struct RecordingRequest: Decodable {
 
 	let schemaVersion: Int?
 	let recordingId: Int?
+	let excludedWindowIds: [UInt32]?
 	let source: Source
 	let video: Video
 	let audio: Audio
@@ -387,7 +388,22 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			guard let display = content.displays.first(where: { $0.displayID == displayId }) else {
 				throw HelperError.sourceNotFound("No ScreenCaptureKit display found for id \(displayId).")
 			}
-			let filter = SCContentFilter(display: display, excludingWindows: [])
+			let requestedWindowIDs = request.excludedWindowIds ?? []
+			let resolvedWindowIDs = resolveCaptureExcludedWindowIDs(
+				requestedWindowIDs: requestedWindowIDs,
+				availableWindowIDs: content.windows.map(\.windowID)
+			)
+			let resolvedWindowIDSet = Set(resolvedWindowIDs)
+			let excludedWindows = content.windows.filter {
+				resolvedWindowIDSet.contains($0.windowID)
+			}
+			let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
+			emit([
+				"event": "capture-window-exclusion",
+				"requestedWindowIds": requestedWindowIDs,
+				"resolvedWindowIds": resolvedWindowIDs,
+				"excludedWindowCount": excludedWindows.count,
+			])
 			let size = captureSize(
 				for: filter,
 				fallbackPointSize: display.frame.size,

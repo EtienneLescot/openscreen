@@ -6,6 +6,8 @@ export type NativeMacSourceType = "display" | "window";
 export type NativeMacRecordingRequest = {
 	schemaVersion: 1;
 	recordingId?: number;
+	/** Main-process injected native BrowserWindow IDs excluded from display capture. */
+	excludedWindowIds?: number[];
 	source: {
 		type: NativeMacSourceType;
 		sourceId: string;
@@ -90,6 +92,29 @@ export type NativeMacRecordingStartResult = {
 	helperPath?: string;
 	error?: string;
 };
+
+export function collectMacCaptureExcludedWindowIds(
+	mediaSourceIds: ReadonlyArray<string | null | undefined>,
+) {
+	const windowIds: number[] = [];
+	const seen = new Set<number>();
+	for (const sourceId of mediaSourceIds) {
+		const windowId = parseMacWindowIdFromSourceId(sourceId);
+		if (
+			windowId === null ||
+			!Number.isSafeInteger(windowId) ||
+			windowId <= 0 ||
+			windowId > 0xffff_ffff ||
+			seen.has(windowId)
+		) {
+			continue;
+		}
+
+		seen.add(windowId);
+		windowIds.push(windowId);
+	}
+	return windowIds;
+}
 
 export function parseMacWindowIdFromSourceId(sourceId?: string | null) {
 	if (!sourceId?.startsWith("window:")) {
