@@ -176,8 +176,15 @@ function isAtDeploymentTarget(dir) {
 	const build = execFileSync("vtool", ["-show-build", bin], { encoding: "utf8" });
 	const minos = /minos (\d+(?:\.\d+)+)/.exec(build)?.[1];
 	if (minos === undefined) return false;
-	const toNum = (v) => v.split(".").reduce((acc, part) => acc * 100 + Number(part), 0);
-	return toNum(minos) <= toNum(MACOS_DEPLOYMENT_TARGET);
+	const compareVersions = (a, b) => {
+		const left = a.split(".").map(Number);
+		const right = b.split(".").map(Number);
+		for (let i = 0; i < Math.max(left.length, right.length); i++) {
+			if ((left[i] ?? 0) !== (right[i] ?? 0)) return (left[i] ?? 0) - (right[i] ?? 0);
+		}
+		return 0;
+	};
+	return compareVersions(minos, MACOS_DEPLOYMENT_TARGET) <= 0;
 }
 
 if (process.platform !== "darwin") {

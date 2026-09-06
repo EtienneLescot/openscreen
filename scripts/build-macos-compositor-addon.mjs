@@ -291,7 +291,7 @@ function stageFfmpegBinary(outDir, ffmpegDir) {
 		const fileDeps = execFileSync("otool", ["-L", file], { encoding: "utf8" })
 			.split("\n")
 			.map((line) => line.trim().split(" ")[0])
-			.filter((p) => p.startsWith("/") && /lib(av|sw)\w+\.\d+\.dylib$/.test(p));
+			.filter((p) => /(^\/|@executable_path).*lib(av|sw)\w+\.\d+\.dylib$/.test(p));
 		for (const dep of fileDeps) {
 			execFileSync("install_name_tool", ["-change", dep, `@rpath/${path.basename(dep)}`, file]);
 		}
