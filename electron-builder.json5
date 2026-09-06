@@ -58,7 +58,23 @@
   // needs a system libvips we don't provide and breaks on CI/local ("vips-cpp.42 not found"), so we
   // let electron-builder use the prebuilt instead of recompiling.
   "buildDependenciesFromSource": false,
-  "compression": "normal",
+  "compression": "maximum",
+  // Strip unused Chromium locale pak files (saves ~20 MB). Only package locales supported by OpenScreen.
+  "electronLanguages": [
+    "en-US",
+    "fr",
+    "ar",
+    "es",
+    "it",
+    "ja",
+    "ko",
+    "pt-BR",
+    "ru",
+    "tr",
+    "vi",
+    "zh-CN",
+    "zh-TW"
+  ],
   "directories": {
     "output": "release/${version}",
     // Electron-builder's default, spelled out because the appx target depends on it:
@@ -72,6 +88,16 @@
   "files": [
     "dist",
     "dist-electron",
+    // Exclude documentation assets that Vite copied from public/ (saves ~8 MB)
+    "!dist/demo.gif",
+    "!dist/preview*.png",
+    // Exclude assets already bundled into extraResources (saves ~17 MB duplicate in asar)
+    "!dist/wallpapers/**",
+    "!dist/cursors/**",
+    "!dist/mediapipe/**",
+    // Exclude dead-weight node_modules: all frontend and electron code is pre-bundled by Vite (saves ~238 MB)
+    "!node_modules/**",
+    "!**/node_modules/**",
     "!*.png",
     "!preview*.png",
     "!*.md",
@@ -369,7 +395,7 @@
         // in the app spawns. Shipping it added a large binary to every Windows
         // installer, plus an LGPL redistribution obligation, for a file no
         // shipped code opens.
-        "filter": ["win32-*/*", "!win32-*/ffmpeg.exe"]
+        "filter": ["win32-*/*", "!win32-*/ffmpeg.exe", "!win32-*/ffmpeg-shared.exe"]
       }
     ],
     // The D3D11 compositor addon deliberately does NOT travel through `files` into
