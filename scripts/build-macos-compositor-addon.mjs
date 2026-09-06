@@ -131,6 +131,26 @@ function installAtomically(from, to) {
 }
 
 /**
+ * Every Mach-O load command that points outside the OS's own prefixes. `otool -D`/`-L`
+ * both echo the filename on the first line, so both lists skip it.
+ */
+function absolutePaths(file) {
+	const id = execFileSync("otool", ["-D", file], { encoding: "utf8" })
+		.split("\n")
+		.slice(1) // first line is the filename echoed back
+		.map((l) => l.trim())
+		.filter(Boolean);
+	const deps = execFileSync("otool", ["-L", file], { encoding: "utf8" })
+		.split("\n")
+		.slice(1) // ditto
+		.map((l) => l.trim().split(" ")[0])
+		.filter(Boolean);
+	return [...id, ...deps].filter(
+		(p) => p.startsWith("/") && !p.startsWith("/usr/lib/") && !p.startsWith("/System/"),
+	);
+}
+
+/**
  * Vendors the ffmpeg dylibs next to the addon and rewrites every install name to
  * `@rpath`, so the packaged app loads its own copies instead of a build-machine path.
  *
@@ -204,22 +224,6 @@ function vendorFfmpegDylibs(nodePath, ffmpegDir) {
 	// the id above — nor any future non-ffmpeg dependency that arrives absolute.
 	// Assert the real invariant instead: nothing outside the OS's own prefixes
 	// may be referenced by absolute path.
-	const absolutePaths = (file) => {
-		const id = execFileSync("otool", ["-D", file], { encoding: "utf8" })
-			.split("\n")
-			.slice(1) // first line is the filename echoed back
-			.map((l) => l.trim())
-			.filter(Boolean);
-		const deps = execFileSync("otool", ["-L", file], { encoding: "utf8" })
-			.split("\n")
-			.slice(1) // ditto
-			.map((l) => l.trim().split(" ")[0])
-			.filter(Boolean);
-		return [...id, ...deps].filter(
-			(p) => p.startsWith("/") && !p.startsWith("/usr/lib/") && !p.startsWith("/System/"),
-		);
-	};
-
 	for (const file of [nodePath, ...names.map((n) => path.join(outDir, n))]) {
 		const remaining = absolutePaths(file);
 		if (remaining.length > 0) {
@@ -231,6 +235,79 @@ function vendorFfmpegDylibs(nodePath, ffmpegDir) {
 	}
 	console.log(`Vendored ${names.length} ffmpeg dylibs next to ${path.basename(nodePath)}`);
 	console.log(`No absolute build-machine paths remain in ${path.basename(nodePath)} or its dylibs`);
+}
+
+/**
+ * Stages the SDK's `ffmpeg` BINARY next to the addon's vendored dylibs, so the packaged
+ * app has the CLI that `resolveFfmpeg()` (electron/media/audioPeaks.ts) and native STT
+ * audio extraction (electron/stt/extractAudio.ts) spawn.
+ *
+ * Without it the .app carries libav*.dylib but no executable, and every transcription on
+ * a machine without a system ffmpeg dies with FfmpegUnavailableError — the failure the
+ * renderer can only show as "Failed to fetch" (#616). Windows never had this gap: its
+ * installer ships `ffmpeg-shared.exe` beside the DLLs it links.
+ *
+ * The binary leaves `make install` referencing the SDK's lib/ — by absolute path or by
+ * `@executable_path/../lib/`, depending on the configure — and neither survives the move
+ * into electron-builder's extraResources. Rewriting every lib reference to `@rpath/<name>`
+ * and adding `@loader_path` points it at the very dylibs `vendorFfmpegDylibs` put beside
+ * it, whose ids already are `@rpath/<name>`.
+ */
+function stageFfmpegBinary(outDir, ffmpegDir) {
+	const from = path.join(ffmpegDir, "bin", "ffmpeg");
+	if (!fs.existsSync(from)) {
+		throw new Error(`No ffmpeg binary at ${from}; the SDK tree is incomplete.`);
+	}
+	const to = path.join(outDir, "ffmpeg");
+	installAtomically(from, to);
+	fs.chmodSync(to, 0o755);
+
+	const deps = execFileSync("otool", ["-L", to], { encoding: "utf8" })
+		.split("\n")
+		.map((line) => line.trim().split(" ")[0])
+		.filter((p) => /(^\/|@executable_path).*lib(av|sw)\w+\.\d+\.dylib$/.test(p));
+	if (deps.length === 0) {
+		throw new Error(`${to} links no ffmpeg dylib — nothing to rewrite, which is wrong.`);
+	}
+	// The CLI links more of the SDK than the addon does (libavdevice, libpostproc, …).
+	// `vendorFfmpegDylibs` staged only what the addon needs, so copy anything still
+	// missing — with the same `@rpath/<name>` id and inter-library rewrites, so the
+	// chain resolves the same way the addon's set does.
+	const copied = [];
+	for (const dep of deps) {
+		const name = path.basename(dep);
+		const staged = path.join(outDir, name);
+		if (fs.existsSync(staged)) continue;
+		const sdkLib = path.join(ffmpegDir, "lib", name);
+		if (!fs.existsSync(sdkLib)) {
+			throw new Error(`Missing ${sdkLib}; the binary links it but the SDK does not ship it.`);
+		}
+		fs.copyFileSync(sdkLib, staged);
+		fs.chmodSync(staged, 0o755);
+		execFileSync("install_name_tool", ["-id", `@rpath/${name}`, staged]);
+		copied.push(staged);
+	}
+	for (const file of [...copied, to]) {
+		const fileDeps = execFileSync("otool", ["-L", file], { encoding: "utf8" })
+			.split("\n")
+			.map((line) => line.trim().split(" ")[0])
+			.filter((p) => p.startsWith("/") && /lib(av|sw)\w+\.\d+\.dylib$/.test(p));
+		for (const dep of fileDeps) {
+			execFileSync("install_name_tool", ["-change", dep, `@rpath/${path.basename(dep)}`, file]);
+		}
+		execFileSync("install_name_tool", ["-add_rpath", "@loader_path", file]);
+		// install_name_tool invalidates the signature; re-sign ad-hoc.
+		execFileSync("codesign", ["--force", "--sign", "-", file]);
+	}
+
+	const remaining = absolutePaths(to);
+	if (remaining.length > 0) {
+		throw new Error(
+			`${path.basename(to)} still references build-machine paths after rewriting: ` +
+				remaining.join(", "),
+		);
+	}
+	console.log(`Staged ffmpeg binary at ${to} (rewritten to @rpath beside the vendored dylibs)`);
 }
 
 /**
@@ -270,6 +347,7 @@ installAtomically(builtDylib, archDest);
 // Only the arch-tagged copy ships (mac `extraResources`, filter `darwin-*/*`), so that
 // is the one that gets its dylibs and its @rpath.
 vendorFfmpegDylibs(archDest, macFfmpegDir);
+stageFfmpegBinary(archBinDir, macFfmpegDir);
 
 console.log(`Built  ${builtDylib}`);
 console.log(`Copied ${dest}`);

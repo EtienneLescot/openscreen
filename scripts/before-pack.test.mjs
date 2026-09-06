@@ -288,3 +288,44 @@ describe("MAC_MIN_OS_FLOOR", () => {
 		expect(norm(MAC_MIN_OS_FLOOR)).toBe(norm(declared));
 	});
 });
+
+// #616: a macOS .app that ships the libav dylibs but no ffmpeg CLI transcribes nothing on
+// machines without a system ffmpeg — resolveFfmpeg() finds no candidate, native extraction
+// throws, and the renderer can only show "Failed to fetch". The payload guard is the only
+// thing that can catch that before the DMG exists; this pins it to the requirement.
+describe("MAC_REQUIRED", () => {
+	it("demands the ffmpeg CLI, and names transcription as what breaks without it", () => {
+		const { MAC_REQUIRED } = testing();
+		const entry = MAC_REQUIRED.find((req) => req.match("ffmpeg"));
+		expect(entry, "MAC_REQUIRED has no entry matching a file named 'ffmpeg'").toBeDefined();
+		expect(entry.breaks).toContain("#616");
+	});
+
+	it("refuses a payload that has everything except the ffmpeg binary", () => {
+		const { MAC_REQUIRED, checkNativePayload } = testing();
+		// One satisfying file per requirement, spelled out rather than derived from the
+		// matchers (which cannot be inverted) — except the ffmpeg CLI, deliberately absent.
+		const files = Object.fromEntries(
+			[
+				"compositor_view.node",
+				"whisper-stt-server",
+				"libggml-base.dylib",
+				"openscreen-screencapturekit-helper",
+				...["avcodec", "avformat", "avutil", "swresample", "swscale", "avfilter"].map(
+					(lib, i) => `lib${lib}.${62 - i}.dylib`,
+				),
+			].map((name) => [name, Buffer.from("x")]),
+		);
+		withPayload(files, (dir) => {
+			expect(() =>
+				checkNativePayload({
+					dir,
+					required: MAC_REQUIRED,
+					osLabel: "macOS",
+					bundleNoun: "the .app",
+					emptyDirFix: "unused",
+				}),
+			).toThrow(/ffmpeg CLI/);
+		});
+	});
+});
