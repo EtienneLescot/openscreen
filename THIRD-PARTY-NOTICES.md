@@ -71,7 +71,7 @@ distributed by their own registries, not redistributed inside our binaries.
 
 - **Components**: `selfie_segmentation.tflite`,
   `selfie_segmentation_landscape.tflite` and the `selfie_segmentation_landscape.onnx`
-  derived from them, shipped inside `app.asar` under `dist/mediapipe/`.
+  derived from them, shipped under `resources/mediapipe/`.
 - **License**: Apache-2.0 — <https://google.github.io/mediapipe/solutions/selfie_segmentation>.
   Copyright The MediaPipe Authors.
 - The `.onnx` is a **derived work**, generated from the vendored `.tflite` by
