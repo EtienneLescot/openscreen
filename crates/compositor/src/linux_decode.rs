@@ -40,6 +40,62 @@ extern "C" {
 /// `timestamp` comme un timestamp absolu (AV_TIME_BASE = microsecondes).
 const SEEK_SET: i32 = 0;
 
+/// Ce que la boucle d'avance de `decode_at` doit faire de la frame qu'elle vient
+/// de décoder.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum SeekStep {
+    /// La frame est due : l'adopter, puis continuer à chercher mieux.
+    Adopt,
+    /// La frame dépasse la cible et on tient déjà la frame due : s'arrêter sans
+    /// l'adopter.
+    Stop,
+    /// La frame dépasse la cible mais on ne tient rien — la cible précède la
+    /// première frame du flux. L'adopter en repli et s'arrêter.
+    AdoptAndStop,
+}
+
+/// Tolérance d'égalité entre un pts et la cible, en secondes.
+///
+/// La cible est reconstruite en flottant (`idx / fps`, via un aller-retour par les
+/// microsecondes) et le pts est un entier multiplié par la timebase : deux frames
+/// « au même instant » ne tombent donc pas sur le même `f64`. Une microseconde est
+/// quatre ordres de grandeur sous la période la plus courte qu'on rencontre
+/// (1/240 s) et dix ordres au-dessus de l'erreur de représentation, donc elle
+/// sépare « la même frame » de « la frame d'après » sans ambiguïté.
+const PTS_EPSILON_SEC: f64 = 1e-6;
+
+/// Décision pure de la sémantique de hold pour le chemin de SEEK — pendant de
+/// `timeline_walk::frame_step`, qui l'applique au pompage séquentiel. Extraite pour
+/// la même raison : c'est ici que vivent les cas limites, et les tester ne doit
+/// demander ni ffmpeg ni fichier.
+///
+/// L'invariant est celui de tout le crate : à l'instant t on affiche la DERNIÈRE
+/// frame dont le pts est ≤ t, jamais une frame encore à venir.
+///
+/// S'ARRÊTER SUR LA CIBLE, PAS APRÈS. Une frame qui tombe SUR la cible est due, et
+/// rien de plus tard ne peut faire mieux : on l'adopte et on s'arrête. Continuer
+/// à décoder « au cas où » coûterait une frame de plus, et surtout laisserait le
+/// décodeur UNE FRAME PLUS LOIN — or `decode_at` ne fait pas que rendre une image,
+/// il positionne le flux pour le pompage séquentiel qui suit
+/// (`next_frame`/`peek_next_time_sec`). Un seul appel avançant d'une frame de trop
+/// décalait la suite de l'export : mesuré 47 frames modifiées sur 3600.
+pub(crate) fn seek_step(pts_sec: f64, target_sec: f64, have_candidate: bool) -> SeekStep {
+    // Au-delà de la cible : c'est une frame du futur. On tient déjà la frame due,
+    // sauf si la cible précède la première frame du flux — alors celle-ci est le
+    // meilleur choix disponible.
+    if pts_sec > target_sec + PTS_EPSILON_SEC {
+        return if have_candidate { SeekStep::Stop } else { SeekStep::AdoptAndStop };
+    }
+    // Sur la cible (à l'epsilon près) : due, et rien de mieux ne viendra.
+    if pts_sec >= target_sec - PTS_EPSILON_SEC {
+        return SeekStep::AdoptAndStop;
+    }
+    // Avant la cible : due pour l'instant, mais une frame plus tardive peut encore
+    // l'être aussi — c'est ce parcours qui, sur une source à cadence variable,
+    // finit par tenir la bonne frame au lieu de sauter à celle d'après.
+    SeekStep::Adopt
+}
+
 /// Cherche la vidéo du fichier, ouvre le décodeur, et rend un état prêt à
 /// décoder. La struct expose `decode_at(frame_idx)` qui seek + décode jusqu'à
 /// la frame `frame_idx` (0-indexée depuis le début du flux).
@@ -307,8 +363,10 @@ impl SwDecoder {
     }
 
     /// Seek vers la keyframe la plus proche AVANT `frame_idx`, puis décode
-    /// jusqu'à atteindre la frame demandée. Le seek est résolu par
-    /// `av_seek_frame` avec `SEEK_SET | BACKWARD` (cherche le keyframe
+    /// jusqu'à la frame DUE à cet instant : la dernière dont le pts est ≤ la
+    /// cible, jamais une frame encore à venir (même invariant que
+    /// `timeline_walk::frame_step`, cf. la boucle plus bas). Le seek est résolu
+    /// par `av_seek_frame` avec `SEEK_SET | BACKWARD` (cherche le keyframe
     /// précédent le timestamp demandé). Renvoie une `AVFrame` allouée par
     /// `av_frame_alloc` que le caller doit libérer via `free_frame` —
     /// ou laisser `vk_frames::VkFrames::present` consommer (qui réécrit
@@ -334,9 +392,10 @@ impl SwDecoder {
         //
         // Sans BACKWARD, ffmpeg se cale sur la première position indexée AU NIVEAU OU
         // APRÈS la cible, au lieu de la keyframe qui la précède. La boucle d'avance
-        // ci-dessous s'arrête dès que `pts >= target`, condition alors satisfaite par la
-        // toute première frame décodée : elle ne fait plus rien et `decode_at` rend la
-        // keyframe SUIVANTE. L'erreur est d'un GOP entier.
+        // ci-dessous n'a alors plus rien à avancer — la toute première frame décodée
+        // dépasse déjà la cible, et faute de frame antérieure à tenir elle est rendue
+        // telle quelle : `decode_at` rend la keyframe SUIVANTE. L'erreur est d'un GOP
+        // entier.
         //
         // D'où le symptôme asymétrique signalé : l'écran porte une keyframe toutes les
         // ~1,78 s, la webcam toutes les ~6,73 s, donc l'écart y est ~4x plus grand. Et
@@ -419,6 +478,22 @@ impl SwDecoder {
             loop {
                 let recv_r = avcodec_receive_frame(self.dec, frame);
                 if recv_r == 0 {
+                    let pts_sec = (*frame).best_effort_timestamp as f64 * self.stream_timebase;
+                    // SÉMANTIQUE DE HOLD, cf. `seek_step`. L'ancienne condition
+                    // (`>= cible`, testée APRÈS adoption) rendait la première frame
+                    // AU-DELÀ de la cible. Sur une source à cadence constante
+                    // l'écart est d'une période (16 ms à 60 fps) et ne se voit pas ;
+                    // sur une source à cadence VARIABLE il vaut tout le trou. La
+                    // webcam (`MediaRecorder`) et les captures macOS sont déjà VFR,
+                    // et la capture Linux le devient — un seek tombant dans un trou
+                    // rendait une image du FUTUR, jusqu'à plusieurs centaines de ms
+                    // en avance.
+                    let step = seek_step(pts_sec, target_ts_seconds, !found.is_null());
+                    // On tient déjà la frame due : s'arrêter sans adopter. Le
+                    // nettoyage après la boucle libère `frame`.
+                    if step == SeekStep::Stop {
+                        break 'outer;
+                    }
                     if found.is_null() {
                         found = av_frame_alloc();
                         if found.is_null() {
@@ -442,7 +517,9 @@ impl SwDecoder {
                     av_frame_unref(found);
                     av_frame_move_ref(found, frame);
                     av_frame_unref(frame);
-                    if (*found).best_effort_timestamp as f64 * self.stream_timebase >= target_ts_seconds {
+                    // Repli : la frame adoptée dépasse déjà la cible (celle-ci
+                    // précède la première frame du flux), rien de mieux ne viendra.
+                    if step == SeekStep::AdoptAndStop {
                         break 'outer;
                     }
                 } else if recv_r == -11 {
@@ -517,5 +594,97 @@ mod tests {
     fn open_sur_chemin_inexistant_renvoie_err() {
         let r = SwDecoder::open("Z:/does/not/exist.mp4");
         assert!(r.is_err());
+    }
+
+    /// LA garde anti-régression du seek en cadence variable.
+    ///
+    /// Un trou de 500 ms — une frame tenue à 10,0 s, la suivante seulement à
+    /// 10,5 s, ce que produit une capture qui a perdu des frames sous charge.
+    /// Chercher au milieu du trou doit rendre la frame TENUE, pas celle d'après :
+    /// à 10,2 s c'est bien l'image de 10,0 s qui est à l'écran.
+    ///
+    /// L'ancienne condition (`pts >= cible`) rendait ici la frame de 10,5 s, soit
+    /// 300 ms de futur. Invisible en cadence constante (l'écart y vaut une
+    /// période), franc dès que la source a des trous.
+    #[test]
+    fn un_seek_dans_un_trou_rend_la_frame_tenue_pas_celle_du_futur() {
+        assert_eq!(seek_step(10.0, 10.2, false), SeekStep::Adopt);
+        assert_eq!(seek_step(10.5, 10.2, true), SeekStep::Stop);
+    }
+
+    /// Une frame qui tombe SUR la cible est due, et on s'arrête là.
+    ///
+    /// C'est le cas NORMAL, pas un cas limite : `Decoder::seek_to` quantifie la
+    /// cible en index de frame (`round(secondes * fps)`), donc sur une source à
+    /// cadence constante chaque seek tombe pile sur un pts.
+    #[test]
+    fn une_frame_pile_sur_la_cible_est_due_et_arrete_la_recherche() {
+        assert_eq!(seek_step(0.4, 0.4, false), SeekStep::AdoptAndStop);
+        assert_eq!(seek_step(0.4, 0.4, true), SeekStep::AdoptAndStop);
+    }
+
+    /// L'égalité se juge à l'epsilon près, sinon elle ne se produit jamais.
+    ///
+    /// La cible est reconstruite en flottant et le pts est un entier fois la
+    /// timebase : ils encadrent le même instant sans jamais coïncider au bit près.
+    /// Sans tolérance, une frame un cheveu SOUS la cible repart pour un tour et le
+    /// décodeur finit une frame trop loin — le défaut qui a modifié 47 frames sur
+    /// 3600 dans un export réel avant que ce test n'existe.
+    #[test]
+    fn l_egalite_avec_la_cible_tolere_l_erreur_de_representation() {
+        let target = 3.0 / 60.0;
+        for delta in [-1e-12, -1e-9, 0.0, 1e-12, 1e-9] {
+            assert_eq!(
+                seek_step(target + delta, target, true),
+                SeekStep::AdoptAndStop,
+                "un ecart de {delta:e} s doit compter comme « sur la cible »"
+            );
+        }
+    }
+
+    /// Cadence constante : on s'arrête EXACTEMENT sur la frame cible, comme avant
+    /// la sémantique de hold. Ce n'est pas qu'une question d'image rendue —
+    /// `decode_at` positionne aussi le flux pour le pompage séquentiel qui suit,
+    /// donc s'arrêter un cran plus loin décalerait tout l'export. C'est ce qui
+    /// garantit qu'aucun export existant ne bouge d'un octet.
+    #[test]
+    fn en_cadence_constante_on_s_arrete_pile_sur_la_cible() {
+        let target = 3.0 / 60.0;
+        let mut adopted: Option<f64> = None;
+        let mut decoded = 0;
+        for i in 0..10 {
+            let pts = i as f64 / 60.0;
+            decoded += 1;
+            match seek_step(pts, target, adopted.is_some()) {
+                SeekStep::Adopt => adopted = Some(pts),
+                SeekStep::AdoptAndStop => {
+                    adopted = Some(pts);
+                    break;
+                }
+                SeekStep::Stop => break,
+            }
+        }
+        assert_eq!(adopted, Some(target), "la frame due est celle qui porte la cible");
+        assert_eq!(decoded, 4, "4 frames decodees (0..=3), pas une de plus");
+    }
+
+    /// Une cible antérieure à la première frame du flux ne doit pas rendre `Err` :
+    /// il n'y a pas de frame due, la première disponible est le meilleur choix.
+    /// C'est le seul cas où l'on adopte une frame du futur, faute de mieux.
+    #[test]
+    fn une_cible_avant_la_premiere_frame_rend_la_premiere_frame() {
+        assert_eq!(seek_step(5.0, 0.0, false), SeekStep::AdoptAndStop);
+    }
+
+    /// Un flux sans pts exploitable donne `best_effort_timestamp == i64::MIN`, qui
+    /// converti en secondes est très négatif — donc toujours « due », donc adopté
+    /// jusqu'à l'EOF, et `decode_at` rend la dernière frame. Comportement
+    /// inchangé, vérifié ici pour qu'un futur remaniement ne le casse pas en
+    /// silence.
+    #[test]
+    fn un_flux_sans_pts_continue_de_rendre_la_derniere_frame() {
+        let sans_pts = i64::MIN as f64 * 1e-6;
+        assert_eq!(seek_step(sans_pts, 0.0, true), SeekStep::Adopt);
+        assert_eq!(seek_step(sans_pts, 1_000.0, true), SeekStep::Adopt);
     }
 }

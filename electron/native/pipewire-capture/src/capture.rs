@@ -9,15 +9,27 @@
 //! recording of anything.
 //!
 //! So the output rate comes from a monotonic clock instead. [`Capture::advance`]
-//! asks what frame index the wall clock is on and encodes forward to it, holding
-//! the last staged picture across the gap. That is why [`crate::encoder`] splits
-//! conversion from encoding: a held frame costs an upload and an encode (1.4 ms
-//! here) but not the colour conversion (3.6 ms), which is the expensive part.
+//! asks what frame index the wall clock is on and stamps the staged picture with
+//! THAT index as its PTS, holding the last picture across a gap. That is why
+//! [`crate::encoder`] splits conversion from encoding: a held frame costs an
+//! upload and an encode (1.4 ms here) but not the colour conversion (3.6 ms),
+//! which is the expensive part.
+//!
+//! WALL-CLOCK PTS, NOT A FRAME COUNTER. The PTS is the clock's frame index, not
+//! a running count of frames written — and the two stop agreeing the moment a
+//! tick is missed. If the loop is starved under load, an encode runs long, or the
+//! screen sits static between wakeups, the next write JUMPS its PTS to the real
+//! index and the container stores the skipped slots as that frame's duration. So
+//! the file's length always equals real elapsed time: a dropped frame becomes one
+//! longer-held frame, never a deleted slice of the timeline. Encoding a running
+//! counter instead silently time-compressed recordings under load and desynced
+//! the screen from audio, webcam and the cursor overlay (issue #511). Playback is
+//! variable-rate, which the editor and compositor already seek/play by decoded
+//! PTS (the same path the webcam, itself VFR, has always taken).
 //!
 //! The clock is ours, not the compositor's. `SPA_META_Header.pts` is more precise
-//! per frame, but pause/resume and — once Stage 2's audio lands — the audio
-//! epoch all live on this process's monotonic clock, and quantising to 1/60 s
-//! makes the difference between the two immaterial.
+//! per frame, but pause/resume and the audio epoch all live on this process's
+//! monotonic clock, and quantising to 1/fps makes the difference immaterial.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -147,14 +159,6 @@ impl AudioMix {
     }
 }
 
-/// Frames encoded in one `advance` before returning to the event loop.
-///
-/// Without a bound, a long stall would be paid back in a single burst that also
-/// blocks `stop` for as long as it takes. At the measured 1.4 ms per held frame
-/// this is ~11 ms of work per wakeup, which still catches up eight times faster
-/// than real time while leaving the loop responsive.
-const MAX_CATCHUP_FRAMES: u32 = 8;
-
 pub struct Selection {
     pub backend: Backend,
     /// One line per backend the ladder tried and refused, in order.
@@ -185,8 +189,16 @@ fn default_bitrate(width: i32, height: i32, fps: i32) -> i64 {
 
 pub struct Summary {
     pub path: PathBuf,
+    /// The video timeline's length: the last PTS + 1 frame, in ms. With
+    /// wall-clock PTS this tracks real elapsed time even when frames were
+    /// dropped, so it — not the encoded frame count — is what the file lasts.
     pub duration_ms: u64,
+    /// Frames actually encoded. Under variable-rate output this can be FEWER than
+    /// `duration_ms * fps`: a stall is one held frame spanning many slots.
     pub frames: u64,
+    /// Real wall-clock time the recording ran, excluding paused spans. Compared
+    /// against `duration_ms` to flag a regression to time-compression (#511).
+    pub wall_clock_ms: u64,
     pub stats: EncodeStats,
 }
 
@@ -232,6 +244,13 @@ pub struct Capture {
 pub enum StageOutcome {
     /// A new frame was staged; `advance` will encode it.
     Staged,
+    /// The recording is paused, so the incoming frame was deliberately ignored and
+    /// the held picture kept frozen at the pause instant (pause is app-side, but the
+    /// compositor keeps streaming). A distinct outcome on purpose: it is NOT
+    /// `Staged` — nothing new was staged, so a caller counting encoded frames must
+    /// not tally it — and NOT `Dropped` — nothing failed, so it must not count
+    /// toward the import-failure budget that ends a recording.
+    Frozen,
     /// A recoverable per-frame failure — one dmabuf the GPU could not map, or a
     /// transient EAGAIN. The frame is skipped and `advance` holds the previously
     /// staged one forward, so a single bad frame costs one frame, not the whole
@@ -380,6 +399,29 @@ impl Capture {
     /// dmabuf the GPU cannot map) returns `Ok(Dropped)` rather than `Err`, so it
     /// costs one frame, not the recording; a genuine encoder error still errors.
     pub fn stage(&mut self, frame: &shim::Frame) -> Result<StageOutcome, String> {
+        // A paused recording must not ingest new pixels. The compositor keeps
+        // streaming while the app is paused — pause is app-side — so frames still
+        // arrive here; staging one would move the held picture to POST-pause
+        // content, which the tail write in `finish` would then encode into the
+        // file if a stop follows a pause with no resume. The user expects pause
+        // to hold that privacy boundary, so the staged picture is frozen at the
+        // pause instant instead.
+        //
+        // Its own `Frozen`, not `Dropped` and not `Staged`. Not `Dropped`: that is
+        // the GPU-import failure signal, which warns per frame and ends the
+        // recording past MAX_CONSECUTIVE_IMPORT_FAILURES, so a pause longer than
+        // that many frames would abort the file — nothing failed here. Not `Staged`
+        // either: nothing was staged, so anything downstream that counts encoded
+        // frames or reasons about import health must be able to tell a freeze from
+        // a real frame rather than have it hidden behind `Staged`.
+        //
+        // Ahead of the dmabuf path so the freeze covers the zero-copy route as
+        // well, and so `mark_started` stays untouched: a pause that arrives
+        // before the first frame must leave the capture unstarted.
+        if self.paused_at.is_some() {
+            return Ok(StageOutcome::Frozen);
+        }
+
         // Zero-copy dmabuf path: import the tiled GPU buffer into an NV12 VAAPI
         // surface (the VPP crops a window to its committed rectangle) and hand it
         // to the encoder as-is — no swscale. See issue #507.
@@ -468,27 +510,37 @@ impl Capture {
         self.epoch.is_some()
     }
 
-    /// Encodes forward to the current clock position. Returns how many frames
-    /// were written.
+    /// Stamps the staged picture at the wall clock's current frame index and
+    /// encodes it. Returns 1 if a frame was written this call, 0 otherwise.
+    ///
+    /// ONE ENCODE PER CALL, STAMPED FROM THE CLOCK. The PTS is `current_index()`
+    /// — the frame index real time is on — not a running counter. When the loop
+    /// is serviced every tick the indices come out consecutive and the file
+    /// looks constant-rate; when ticks were missed (loop starved, slow encode,
+    /// static screen) `next_index` JUMPS past the skipped slots and the container
+    /// records them as this frame's duration. That jump is what keeps the file's
+    /// length equal to real elapsed time under drops, with no unbounded catch-up
+    /// burst to block `stop` (issue #511). Several arrivals inside one 1/fps slot
+    /// collapse to one write, which is the correct quantisation.
     pub fn advance(&mut self) -> Result<u32, String> {
         if self.paused_at.is_some() || !self.encoder.has_staged_frame() {
             return Ok(0);
         }
         let target = self.current_index();
-        let mut written = 0;
         let Some(muxer) = self.muxer.as_mut() else {
             return Ok(0);
         };
-        while self.next_index <= target && written < MAX_CATCHUP_FRAMES {
+        let mut written = 0;
+        if target >= self.next_index {
             let track = self.video_track;
             self.encoder
-                .encode_staged(self.next_index, |packet| muxer.write(track, packet))?;
-            self.next_index += 1;
+                .encode_staged(target, |packet| muxer.write(track, packet))?;
+            self.next_index = target + 1;
             self.frames_written += 1;
-            written += 1;
+            written = 1;
         }
 
-        // Audio is NOT bounded the way video is. A held video frame can be
+        // Audio is NOT quantised the way video is. A held video frame can be
         // recreated at any time; a missed audio sample cannot, and the ring
         // drops the oldest once it fills. Draining every wakeup keeps it far
         // from that cap — at 48 kHz a 16 ms tick carries about 768 samples.
@@ -556,6 +608,37 @@ impl Capture {
             .take()
             .ok_or_else(|| "capture was already finished".to_owned())?;
 
+        // Close the tail. Stamp one final held frame at the current wall-clock
+        // index so the file's last PTS reflects real elapsed time even when the
+        // loop's final heartbeat landed a few ticks before stop — otherwise a
+        // recording that ended during a quiet spell would be short by that gap.
+        // Runs even when stopped while PAUSED: `current_index()` freezes at the
+        // pause boundary, so the active time up to the pause still reaches the
+        // timeline (a stop can follow a pause with no resume in between). The
+        // staged picture is the last PRE-pause frame — `stage` is gated on pause —
+        // so this cannot leak post-pause content into the file.
+        if self.encoder.has_staged_frame() {
+            let target = self.current_index();
+            if target >= self.next_index {
+                let track = self.video_track;
+                self.encoder
+                    .encode_staged(target, |packet| muxer.write(track, packet))?;
+                self.next_index = target + 1;
+                self.frames_written += 1;
+            }
+        }
+
+        // Snapshot the active wall-clock time HERE, before the flush below.
+        // Draining audio, the encoder and the mp4 trailer can take tens of ms on
+        // a long recording, and `elapsed_active` keeps ticking through it; reading
+        // it afterwards would make a slow flush look like a timeline divergence
+        // (issue #512). The video timeline (`next_index`) is already frozen at the
+        // tail write above, so this is the moment the two are meant to agree.
+        let wall_clock_ms = self
+            .elapsed_active()
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0);
+
         // Audio first: whatever is still in the rings is real recorded sound,
         // and draining it before the video flush keeps both ending at roughly
         // the same timestamp. `flush` lets the mix take unevenly-filled inputs,
@@ -573,26 +656,38 @@ impl Capture {
 
         Ok(Summary {
             path: self.path.clone(),
-            // From the frames actually written, not from the clock: those are
-            // the same number only when the machine kept up, and the file's real
-            // duration is the one the app should be told about.
-            duration_ms: (self.frames_written as u64 * 1000) / self.fps.max(1) as u64,
+            // From the timeline, not the frame count: the last PTS is
+            // `next_index - 1`, so the presentation spans `next_index` frames.
+            // With wall-clock PTS this equals real elapsed time even when frames
+            // were dropped — which the old `frames_written / fps` did not, and is
+            // the bug being fixed (#511).
+            duration_ms: (self.next_index as u64 * 1000) / self.fps.max(1) as u64,
             frames: self.frames_written,
+            wall_clock_ms,
             stats: self.encoder.stats(),
         })
     }
 
     /// Output frame index the wall clock is currently on, excluding paused time.
+    /// `-1` before the first frame is staged, so `advance` writes nothing.
     fn current_index(&self) -> i64 {
-        let Some(epoch) = self.epoch else {
-            return -1;
-        };
-        let mut elapsed = epoch.elapsed();
-        elapsed = elapsed.saturating_sub(self.paused_total);
+        match self.elapsed_active() {
+            Some(elapsed) => (elapsed.as_nanos() as i64 * self.fps as i64) / 1_000_000_000,
+            None => -1,
+        }
+    }
+
+    /// Wall-clock time since the first staged frame, with paused spans removed.
+    /// `None` until the timeline has started. The single source of both the PTS
+    /// clock (`current_index`) and the divergence telemetry (`wall_clock_ms`), so
+    /// the two cannot drift apart by construction.
+    fn elapsed_active(&self) -> Option<Duration> {
+        let epoch = self.epoch?;
+        let mut elapsed = epoch.elapsed().saturating_sub(self.paused_total);
         if let Some(since) = self.paused_at {
             elapsed = elapsed.saturating_sub(since.elapsed());
         }
-        (elapsed.as_nanos() as i64 * self.fps as i64) / 1_000_000_000
+        Some(elapsed)
     }
 }
 
@@ -709,9 +804,11 @@ mod tests {
     }
 
     #[test]
-    fn a_static_screen_still_produces_frames() {
+    fn a_static_screen_still_produces_frames_and_tracks_wall_clock() {
         // The whole reason the clock drives the output: one staged frame, no
-        // further arrivals, and the file must still fill with frames.
+        // further arrivals, and the file's DURATION must still track real time.
+        // Under variable-rate output a long static gap is one held frame, so the
+        // event loop's heartbeat is simulated — a tick every ~30 ms.
         let output = std::env::temp_dir().join("openscreen-capture-static.mp4");
         let (mut capture, _) =
             Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
@@ -720,12 +817,18 @@ mod tests {
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))
             .expect("stage");
 
-        std::thread::sleep(Duration::from_millis(150));
-        let written = capture.advance().expect("advance");
-        assert!(written >= 3, "150 ms at 30 fps should hold at least 3 frames, wrote {written}");
+        for _ in 0..5 {
+            std::thread::sleep(Duration::from_millis(30));
+            capture.advance().expect("advance");
+        }
 
         let summary = capture.finish().expect("finish");
-        assert_eq!(summary.frames, written as u64);
+        assert!(summary.frames >= 1, "a static screen must still produce frames, got {}", summary.frames);
+        assert!(
+            summary.duration_ms >= 130,
+            "the timeline must track the ~150 ms elapsed, got {} ms",
+            summary.duration_ms
+        );
         let _ = std::fs::remove_file(&output);
     }
 
@@ -759,7 +862,7 @@ mod tests {
         assert!(written >= 1, "the cropped picture should have been encoded, wrote {written}");
 
         let summary = capture.finish().expect("finish");
-        assert_eq!(summary.frames, written as u64);
+        assert!(summary.frames >= 1, "the cropped picture must reach the file, got {}", summary.frames);
         let _ = std::fs::remove_file(&output);
     }
 
@@ -1081,7 +1184,11 @@ mod tests {
     }
 
     #[test]
-    fn catch_up_is_bounded_so_a_stall_cannot_block_stop() {
+    fn a_long_stall_is_one_jump_not_a_burst_or_a_deleted_span() {
+        // A stall (the loop starved under load) must not be paid back as an
+        // unbounded catch-up burst that blocks `stop`, nor — the #511 bug — as a
+        // deleted slice of the timeline. Wall-clock PTS represents it as a single
+        // held frame whose PTS jumps to real time: one encode, honest duration.
         let output = std::env::temp_dir().join("openscreen-capture-catchup.mp4");
         let (mut capture, _) =
             Capture::start(&output, 320, 240, 60, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
@@ -1090,10 +1197,126 @@ mod tests {
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))
             .expect("stage");
 
-        // 500 ms at 60 fps is 30 frames due; one advance must not write them all.
+        // 500 ms at 60 fps is 30 slots due; a single advance writes ONE frame
+        // stamped at the real index, not 30 duplicates.
         std::thread::sleep(Duration::from_millis(500));
         let written = capture.advance().expect("advance");
-        assert_eq!(written, MAX_CATCHUP_FRAMES);
+        assert_eq!(written, 1, "a stall is one time-stamped frame, not a burst");
+
+        let summary = capture.finish().expect("finish");
+        assert!(
+            summary.duration_ms >= 480,
+            "duration must track the ~500 ms elapsed, got {} ms",
+            summary.duration_ms
+        );
+        assert!(
+            summary.frames <= 3,
+            "the stall must not be backfilled with duplicates, encoded {} frames",
+            summary.frames
+        );
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn frames_arriving_while_paused_are_not_staged() {
+        // A paused recording must not ingest new pixels. The compositor keeps
+        // streaming while the app is paused, so frames still arrive; staging one
+        // would move the held picture to post-pause content, which the tail write
+        // in finish() could then encode when a stop follows a pause (#512). Pause
+        // must hold that privacy boundary — the staged picture freezes.
+        let output = std::env::temp_dir().join("openscreen-capture-pause-stage.mp4");
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
+                .expect("start");
+
+        // Pause BEFORE any frame is staged, then a frame arrives during the pause.
+        capture.pause();
+        let staged = capture.stage(&frame(320, 240, shim::constants().video_format_bgrx));
+        assert_eq!(
+            staged.expect("staging while paused is a no-op, not an error"),
+            StageOutcome::Frozen,
+            "a frame arriving while paused is Frozen — not Staged (nothing staged) nor Dropped (nothing failed)",
+        );
+        assert!(!capture.started(), "a frame received while paused must not start the timeline");
+
+        let summary = capture.finish().expect("finish");
+        assert_eq!(summary.frames, 0, "nothing captured while paused may reach the file");
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn finishing_while_paused_still_records_the_active_time_before_the_pause() {
+        // Stop can arrive while paused — the user pauses, then decides to stop
+        // without resuming. The active time between the last heartbeat and the
+        // pause must still reach the timeline; dropping it would compress the
+        // file and desync the screen from audio (#511), the same class of bug.
+        // current_index() freezes at the pause boundary, so the tail write is
+        // both safe and required while paused.
+        let output = std::env::temp_dir().join("openscreen-capture-pause-finish.mp4");
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 60, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
+                .expect("start");
+        capture
+            .stage(&frame(320, 240, shim::constants().video_format_bgrx))
+            .expect("stage");
+
+        // ~200 ms of active time passes WITHOUT a heartbeat servicing it (loop
+        // starved), then the user pauses and stops.
+        std::thread::sleep(Duration::from_millis(200));
+        capture.pause();
+        let summary = capture.finish().expect("finish");
+
+        assert!(
+            summary.duration_ms >= 180,
+            "the ~200 ms active before the pause must reach the timeline, got {} ms",
+            summary.duration_ms
+        );
+        let skew = (summary.duration_ms as i64 - summary.wall_clock_ms as i64).abs();
+        assert!(
+            skew <= 60,
+            "duration {} ms and wall-clock {} ms diverged by {} ms",
+            summary.duration_ms, summary.wall_clock_ms, skew
+        );
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn sparse_wakeups_do_not_compress_the_timeline() {
+        // THE regression guard for #511. advance() is serviced only a couple of
+        // times, far less often than the frame rate, as if the event loop were
+        // starved under load. The old frame-index PTS produced a file shorter
+        // than real time (55.2 s for 61 s in the field report); wall-clock PTS
+        // keeps duration ~= elapsed, and the wall-clock telemetry agrees with it.
+        let output = std::env::temp_dir().join("openscreen-capture-sparse.mp4");
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 60, Some(1_000_000), Some(Backend::Software), Vec::new(), None)
+                .expect("start");
+        capture
+            .stage(&frame(320, 240, shim::constants().video_format_bgrx))
+            .expect("stage");
+
+        std::thread::sleep(Duration::from_millis(200));
+        capture.advance().expect("advance");
+        std::thread::sleep(Duration::from_millis(200));
+        capture.advance().expect("advance");
+
+        let summary = capture.finish().expect("finish");
+        // ~400 ms of real time, honoured despite only a couple of encoded frames.
+        assert!(
+            summary.duration_ms >= 360,
+            "the timeline compressed: {} ms for ~400 ms of capture",
+            summary.duration_ms
+        );
+        // Duration and measured wall-clock must agree within a small epsilon —
+        // the invariant the `timeline-divergence` warning (main.rs) watches.
+        let skew = (summary.duration_ms as i64 - summary.wall_clock_ms as i64).abs();
+        assert!(
+            skew <= 60,
+            "duration {} ms and wall-clock {} ms diverged by {} ms",
+            summary.duration_ms, summary.wall_clock_ms, skew
+        );
+        // Variable-rate, not a duplicate burst: far fewer than 400 ms × 60 fps.
+        assert!(summary.frames < 10, "expected a handful of held frames, got {}", summary.frames);
         let _ = std::fs::remove_file(&output);
     }
 }

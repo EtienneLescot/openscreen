@@ -149,8 +149,9 @@ pub enum Event {
         timestamp_ms: u64,
         path: String,
         duration_ms: u64,
-        /// Frames written to the file, including any duplicated to hold the
-        /// constant frame rate.
+        /// Frames actually encoded. Output is variable-rate (each frame stamped
+        /// with its wall-clock PTS), so under drops this can be FEWER than
+        /// `duration_ms * fps` — a stall is one held frame spanning many slots.
         frames: u64,
         /// Frames the compositor delivered that the encoder never saw, because a
         /// newer one replaced them in the mailbox first. A non-zero value here
