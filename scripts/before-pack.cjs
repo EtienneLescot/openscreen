@@ -129,7 +129,7 @@ const MAC_REQUIRED = [
 		what: "the LGPL ffmpeg CLI (spawned for waveform peaks and STT audio extraction)",
 		breaks:
 			"transcription falls back to the renderer decode or fails outright on machines with no\n" +
-			"system ffmpeg, shown to the user only as \"Failed to fetch\" (#616)",
+			'system ffmpeg, shown to the user only as "Failed to fetch" (#616)',
 		fix: "Build it with:\n\n    npm run build:native:compositor:mac\n\nwhich stages the SDK's ffmpeg beside the vendored dylibs.",
 	},
 ];
