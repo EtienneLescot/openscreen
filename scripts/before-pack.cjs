@@ -106,6 +106,12 @@ const MAC_REQUIRED = [
 		fix: FIX_MAC,
 	})),
 	{
+		match: (name) => /^libavdevice\.\d+\.dylib$/.test(name),
+		what: "the LGPL libavdevice dylib the ffmpeg CLI links",
+		breaks: "ffmpeg dies in dyld before main(), so waveform and STT extraction cannot start",
+		fix: FIX_MAC,
+	},
+	{
 		match: (name) => name === "whisper-stt-server",
 		what: "the whisper.cpp STT helper",
 		breaks: "transcription and captions fail with a developer error shown to end users",
