@@ -270,24 +270,25 @@ function stageFfmpegBinary(outDir, ffmpegDir) {
 		throw new Error(`${to} links no ffmpeg dylib — nothing to rewrite, which is wrong.`);
 	}
 	// The CLI links more of the SDK than the addon does (libavdevice, libpostproc, …).
-	// `vendorFfmpegDylibs` staged only what the addon needs, so copy anything still
-	// missing — with the same `@rpath/<name>` id and inter-library rewrites, so the
-	// chain resolves the same way the addon's set does.
-	const copied = [];
-	for (const dep of deps) {
+	// Refresh every direct dependency, including files vendorFfmpegDylibs already staged.
+	// The output directory persists between local builds, so keeping an existing file could
+	// mix a new CLI with an old SDK dylib or preserve a half-rewritten file from an interrupted
+	// run. Replacing the complete set also gives every file the same atomic-install guarantee
+	// as the addon and CLI.
+	const stagedLibraries = [];
+	for (const dep of new Set(deps)) {
 		const name = path.basename(dep);
 		const staged = path.join(outDir, name);
-		if (fs.existsSync(staged)) continue;
 		const sdkLib = path.join(ffmpegDir, "lib", name);
 		if (!fs.existsSync(sdkLib)) {
 			throw new Error(`Missing ${sdkLib}; the binary links it but the SDK does not ship it.`);
 		}
-		fs.copyFileSync(sdkLib, staged);
+		installAtomically(sdkLib, staged);
 		fs.chmodSync(staged, 0o755);
 		execFileSync("install_name_tool", ["-id", `@rpath/${name}`, staged]);
-		copied.push(staged);
+		stagedLibraries.push(staged);
 	}
-	for (const file of [...copied, to]) {
+	for (const file of [...stagedLibraries, to]) {
 		const fileDeps = execFileSync("otool", ["-L", file], { encoding: "utf8" })
 			.split("\n")
 			.map((line) => line.trim().split(" ")[0])
@@ -300,12 +301,14 @@ function stageFfmpegBinary(outDir, ffmpegDir) {
 		execFileSync("codesign", ["--force", "--sign", "-", file]);
 	}
 
-	const remaining = absolutePaths(to);
-	if (remaining.length > 0) {
-		throw new Error(
-			`${path.basename(to)} still references build-machine paths after rewriting: ` +
-				remaining.join(", "),
-		);
+	for (const file of [...stagedLibraries, to]) {
+		const remaining = absolutePaths(file);
+		if (remaining.length > 0) {
+			throw new Error(
+				`${path.basename(file)} still references build-machine paths after rewriting: ` +
+					remaining.join(", "),
+			);
+		}
 	}
 	console.log(`Staged ffmpeg binary at ${to} (rewritten to @rpath beside the vendored dylibs)`);
 }

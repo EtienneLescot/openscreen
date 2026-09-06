@@ -311,6 +311,7 @@ describe("MAC_REQUIRED", () => {
 				"whisper-stt-server",
 				"libggml-base.dylib",
 				"openscreen-screencapturekit-helper",
+				"libavdevice.62.dylib",
 				...["avcodec", "avformat", "avutil", "swresample", "swscale", "avfilter"].map(
 					(lib, i) => `lib${lib}.${62 - i}.dylib`,
 				),
@@ -326,6 +327,33 @@ describe("MAC_REQUIRED", () => {
 					emptyDirFix: "unused",
 				}),
 			).toThrow(/ffmpeg CLI/);
+		});
+	});
+
+	it("refuses a payload whose ffmpeg CLI is missing libavdevice", () => {
+		const { MAC_REQUIRED, checkNativePayload } = testing();
+		const files = Object.fromEntries(
+			[
+				"compositor_view.node",
+				"ffmpeg",
+				"whisper-stt-server",
+				"libggml-base.dylib",
+				"openscreen-screencapturekit-helper",
+				...["avcodec", "avformat", "avutil", "swresample", "swscale", "avfilter"].map(
+					(lib, i) => `lib${lib}.${62 - i}.dylib`,
+				),
+			].map((name) => [name, Buffer.from("x")]),
+		);
+		withPayload(files, (dir) => {
+			expect(() =>
+				checkNativePayload({
+					dir,
+					required: MAC_REQUIRED,
+					osLabel: "macOS",
+					bundleNoun: "the .app",
+					emptyDirFix: "unused",
+				}),
+			).toThrow(/libavdevice/);
 		});
 	});
 });
