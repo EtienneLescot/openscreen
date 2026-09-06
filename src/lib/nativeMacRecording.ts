@@ -88,6 +88,8 @@ export type NativeMacRecordingStartResult = {
 	recordingId?: number;
 	path?: string;
 	helperPath?: string;
+	/** The helper could not resolve the selected device and is using the system default. */
+	microphoneDefaulted?: boolean;
 	error?: string;
 };
 

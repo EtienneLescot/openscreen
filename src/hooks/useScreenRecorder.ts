@@ -1365,6 +1365,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				await window.electronAPI.stopNativeMacRecording(true);
 				return true;
 			}
+			if (result.microphoneDefaulted) {
+				toast.error(t("recording.microphoneDefaulted"));
+			}
 
 			// The IPC call above only resolves once the helper's stdout confirms its
 			// screen capture has truly started (see waitForNativeMacCaptureStart in
