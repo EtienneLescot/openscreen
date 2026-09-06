@@ -25,6 +25,9 @@ const MIN_FRAME_SEC: f64 = 0.005;
 const DEFAULT_SEARCH_SEC: f64 = 0.01;
 const TARGET_GRAINS: usize = 8;
 const PASSTHROUGH_EPSILON: f64 = 1e-3;
+const DECODE_BUDGET_SLACK: f64 = 8.0;
+const MIN_DECODE_BUDGET_SEC: u64 = 60;
+const MAX_DECODE_BUDGET_SEC: u64 = 3600 * 8;
 
 pub type PlanarPcm = Vec<Vec<f32>>;
 
@@ -307,14 +310,58 @@ unsafe fn decode_clip_audio_inner(
     // décalage inter-pistes est absorbé là, pas ici.
     let seek_tb_sec = tracks[0].tb_sec;
     let seek_stream_index = tracks[0].stream_index;
+    // Where decoding actually starts. The budget below scales with the amount
+    // of input the loop will consume, which is the requested window on the
+    // happy path — but when a failed seek forces a reset to t=0 the loop must
+    // decode the whole file from the start (mix_aligned_tracks then trims the
+    // samples before source_start_sec). Sizing the budget on the window alone
+    // would starve an unseekable-but-healthy long file: a 1 s window inside a
+    // 3 h recording would get the 60 s floor while having to decode 3 h.
+    let mut decode_start_sec = source_start_sec;
     if seek_tb_sec > 0.0 {
         let target = (source_start_sec / seek_tb_sec).floor() as i64;
         if av_seek_frame(fmt, seek_stream_index, target, AVSEEK_FLAG_BACKWARD) >= 0 {
             for track in tracks.iter_mut() {
                 avcodec_flush_buffers(track.dctx);
             }
+        } else {
+            eprintln!(
+                "[openscreen-compositor] decode_clip_audio: av_seek_frame a échoué (target={target}), tentative de retour à t=0"
+            );
+            // A failed seek can flush the demuxer's packet queue and leave it
+            // mid-way through its fallback scan, so the next `av_read_frame` is
+            // not guaranteed to resume at t=0 — leading audio could be silently
+            // omitted. Reset to the start and flush every decoder; if even that
+            // reset fails, abort rather than risk an export that starts
+            // mid-stream.
+            if av_seek_frame(fmt, seek_stream_index, 0, AVSEEK_FLAG_BACKWARD) < 0 {
+                avformat_close_input(&mut fmt);
+                bail!(
+                    "decode_clip_audio: av_seek_frame a échoué (target={target}) puis le retour à t=0 a échoué — abandon"
+                );
+            }
+            decode_start_sec = 0.0;
+            for track in tracks.iter_mut() {
+                avcodec_flush_buffers(track.dctx);
+            }
         }
     }
+
+    // Anti-loop guard: a container whose audio track is truncated or corrupt at
+    // end-of-stream can make `av_read_frame` never return AVERROR_EOF, so
+    // `decoder_eof` never propagates and the loop spins at 100% CPU forever.
+    // A TIME budget, not an iteration count: `av_read_frame` can be slow on a
+    // corrupt stream, so a count would either never fire or cut healthy long
+    // clips short. The budget scales with the requested window
+    // (`DECODE_BUDGET_SLACK`), with a floor (`MIN_DECODE_BUDGET_SEC`) and a hard
+    // ceiling (`MAX_DECODE_BUDGET_SEC`, so a WebM reporting duration = Infinity
+    // cannot disable it).
+    let loop_start = std::time::Instant::now();
+    let span_sec = (source_end_sec - decode_start_sec).max(0.0);
+    let loop_budget_secs = ((span_sec * DECODE_BUDGET_SLACK) as u64)
+        .max(MIN_DECODE_BUDGET_SEC)
+        .min(MAX_DECODE_BUDGET_SEC);
+    let loop_budget = std::time::Duration::from_secs(loop_budget_secs);
 
     let mut packet = av_packet_alloc();
     let mut frame = av_frame_alloc();
@@ -324,6 +371,20 @@ unsafe fn decode_clip_audio_inner(
     // piste dont il porte l'index. On continue tant qu'AU MOINS une piste a encore quelque
     // chose à produire.
     while tracks.iter().any(|t| !t.reached_end && !t.decoder_eof) {
+        if loop_start.elapsed() > loop_budget {
+            // A real stall, not a slow decode: abort rather than emit a
+            // truncated/silent clip. The downstream pipelines already degrade a
+            // `bail!` here into their documented silent-fallback path in one
+            // place, instead of inventing an invisible one.
+            av_frame_free(&mut frame);
+            av_packet_free(&mut packet);
+            avformat_close_input(&mut fmt);
+            bail!(
+                "decode_clip_audio: decode loop exceeded {loop_budget_secs}s budget \
+                 (source_end={source_end_sec}s) — aborting to avoid exporting a \
+                 truncated clip"
+            );
+        }
         if !input_eof {
             let read = av_read_frame(fmt, packet);
             if read == AVERROR_EOF {
