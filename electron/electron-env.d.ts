@@ -179,6 +179,7 @@ interface Window {
 			session?: import("../src/lib/recordingSession").RecordingSession;
 			message?: string;
 			discarded?: boolean;
+			recovered?: boolean;
 			error?: string;
 		}>;
 		attachNativeMacWebcamRecording: (payload: {
